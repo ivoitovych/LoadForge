@@ -1,7 +1,7 @@
 # LoadForge — Development Plan
 
-**Status:** revision 5 — full review pass; determinism scoping corrected, orphaned-worker
-safety gap closed
+**Status:** revision 6 — second maintainer review; FP environment, crash-survivable
+evidence and verification duty cycle added
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -62,6 +62,23 @@ information. It corrected two substantive errors of my own and closed one gap:
 | **Orphaned workers.** F9 protected the supervisor from dying workers but never addressed the controller dying — leaving workers at full thermal load with no ceiling enforced. Closed with `PR_SET_PDEATHSIG`, IPC-EOF detection, a controller heartbeat, and a T7 test that `SIGKILL`s the controller. | **Safety — the one new risk the process split created** |
 | Graph workloads were listed wholesale as `BitExact`. Split: integer results (BFS distances, component labels) are; PageRank is floating-point, and BFS *trees* depend on frontier order. | Correctness of the contract |
 | Stale cross-references: F1 cited tier T5 for determinism (T6 since rev. 2); §11 still listed closed questions as open. | Housekeeping |
+
+**Revision 6** incorporates a second maintainer review, which verdicted the design ready
+for M0 and raised refinements rather than architectural objections. Three become new
+findings; two correct errors of mine:
+
+| Change | Origin |
+|---|---|
+| **F15 — the FP environment must be asserted, not assumed.** Rounding mode, x86 MXCSR FTZ/DAZ, ARM FPCR FZ/DN, and the fact that **libm transcendentals are not bit-reproducible** — the concrete trap being FFT twiddle factors from `std::cos`. Per-ISA scoping alone does not cover any of this. | Review — **new finding**, gap in rev. 5 |
+| **F16 — total-machine death.** The controller/worker split survives every process-level failure and none of the machine-level ones. A kernel panic four hours into a run leaves no evidence if telemetry is RAM-only. Closed with a compact append-only crash journal at ~150 KB/hour. | Review — **new finding**, gap in rev. 5 |
+| **F17 — verification perturbs what it measures.** A slow scalar oracle running continuously distorts the Load Signature in benchmark mode. Split into continuous-cheap and sampled-expensive, with the duty cycle recorded. | Review — **new finding**, gap in rev. 5 |
+| **F3 remediation advice corrected.** Rev. 5 suggested `CAP_PERFMON` for RAPL package power. `CAP_PERFMON` governs `perf_event_open`, not sysfs file permissions — different mechanism, different fix. Remediation is now per-provider. | Review — **rev. 5 was wrong** |
+| **Topology is shared and immutable**, discovered once by the controller before fork. Rev. 5's diagram wrongly placed it inside the worker; the controller needs it for telemetry attribution, crash diagnostics and fingerprinting. | Review — **rev. 5 was wrong** |
+| Stress kernels use ISA FMA intrinsics rather than `std::fma`, which guarantees IEEE semantics but not the hardware instruction; fault-isolation conclusions reworded as evidence rather than proof, with non-reproducible transients defined as a real outcome; README status and CI tense corrected. | Review |
+
+The review's other two points were already fixed in revision 5, which it had not seen:
+§11's stale question list, and the cross-architecture bit-exactness claim in
+`determinism.md`.
 
 ---
 
@@ -204,8 +221,25 @@ where CI runs exposes no real telemetry at all.
 
 - An explicit **capability model**. At startup LoadForge probes each source and records
   `available / permission-denied / unsupported`, reporting the resulting capability set
-  **before** a long run starts. "Package power unavailable — run as root or grant
-  CAP_PERFMON" beats a silently empty column.
+  **before** a long run starts. A silently empty column is the worst outcome.
+
+- **Remediation advice must be per-provider, and revision 5 got this wrong.** It
+  previously suggested "run as root or grant `CAP_PERFMON`" for package power.
+  `CAP_PERFMON` governs `perf_event_open`; it does nothing about filesystem permissions
+  on a sysfs node. The two are different mechanisms with different fixes, and package
+  power is reachable by *either*:
+
+  | Provider | Failure mode | Correct remediation |
+  |---|---|---|
+  | RAPL via sysfs (`/sys/class/powercap/.../energy_uj`) | `EACCES` — the node is `0400 root` | Run privileged, or a udev rule / group ownership granting read |
+  | RAPL via PMU (`power/energy-pkg/`) | `EACCES`/`EPERM` from `perf_event_open` | `CAP_PERFMON`, or lower `perf_event_paranoid` |
+  | PMU counters (IPC, cache, branch) | same | same as above |
+  | hwmon | usually readable; failure is normally *identification*, not permission | Report which node was found and what it could not be matched to |
+  | EDAC | driver absent on many consumer platforms | `unsupported`, not `permission-denied` — do not advise a fix that cannot work |
+
+  Each capability error carries the remediation for the provider that actually failed.
+  Advising a fix that cannot possibly work is worse than saying nothing, because the
+  user will try it and conclude the tool is broken.
 - Every metric is **nullable**, and every consumer — scoring, ranking, explore
   objectives — handles absence. An objective whose metric is unavailable fails loudly
   at configuration time, never silently as zero.
@@ -535,6 +569,101 @@ convincing thermal result arrives at M2b.
 
 ---
 
+#### F15 — The floating-point environment must be asserted, not assumed *(high — new in rev. 6)*
+
+*Raised by the maintainer review. Applies before M2b.*
+
+Scoping determinism per ISA path (F1) handles lane geometry. It does not handle the
+machine's floating-point *state*, which changes results just as effectively and is
+invisible in the source: rounding mode, x86 MXCSR FTZ/DAZ, ARM FPCR FZ/DN, subnormal
+handling. A dependency built with `-ffast-math` can set flush-to-zero process-wide at
+load time — the project's own flag policy governs only the project's own translation
+units.
+
+A second, easily-missed case: **libm transcendentals are not bit-reproducible** across
+implementations, versions or architectures — they are not correctly rounded and nothing
+requires them to be. The concrete trap is FFT twiddle factors computed with
+`std::cos`/`std::sin`, since golden vectors are compared *across* machines by definition.
+
+Resolution: an explicit `FpEnvironment` asserted at startup and re-asserted after any
+point where a third party could have changed it, recorded in the run fingerprint (F12);
+and no libm transcendentals on any bit-compared path — deterministic in-project
+implementations, exact recurrences, or committed offline-generated tables instead.
+`sqrt` and basic arithmetic are exempt: IEEE 754 specifies them exactly.
+
+An `FpEnvironment` assertion failure is a **configuration error reported at startup**,
+never a verification failure. Full contract in [`determinism.md`](determinism.md).
+
+---
+
+#### F16 — Total-machine death destroys the most valuable evidence *(high — new in rev. 6)*
+
+*Raised by the maintainer review. Applies before serious multi-hour stress runs.*
+
+The controller/worker split (F9) elegantly survives a workload SIGSEGV, SIGBUS, deadlock
+or OOM-kill. It does nothing for the failure mode a reliability tester most wants to
+capture: **kernel panic, hard lock, spontaneous reboot, or power loss.** Both processes
+vanish together.
+
+Draft §41 asks for telemetry to live in RAM or tmpfs to avoid SSD wear. Taken literally
+that means a machine which panics after four hours — the single most valuable run the
+tool will ever produce — leaves **no evidence at all**.
+
+The tension is resolvable, because the two requirements are not actually in conflict at
+realistic volumes:
+
+- A **compact append-only crash journal** on persistent storage, flushed and `fsync`ed
+  every few seconds. Not the full telemetry stream — just enough to reconstruct the last
+  moments: monotonic timestamp, current phase and workload, last verified block, latest
+  telemetry sample (temperature, power, frequency), corrected/uncorrected ECC counts, and
+  worker heartbeat state.
+- At roughly 200 bytes every 5 seconds that is about **150 KB per hour** — utterly
+  negligible against any SSD endurance concern, and several orders of magnitude below
+  what the workloads themselves would generate if they touched storage.
+- Full telemetry stays in RAM and is written once at the end, exactly as the draft wants.
+- Optional **remote sink** (a socket) for the case where the machine may not come back at
+  all, or where storage itself is suspect.
+- On startup, an unterminated journal from a previous run is detected and surfaced:
+  *"previous run ended abnormally at t=4h12m, phase `stencil`, package 98 °C, 3 corrected
+  ECC errors in the preceding minute"* — which is a finding in its own right.
+
+The journal must be small, append-only, and never rewritten in place, so that a machine
+dying mid-write loses at most the last record.
+
+---
+
+#### F17 — Verification perturbs what it measures *(medium — new in rev. 6)*
+
+*Raised by the maintainer review.*
+
+The independent-oracle doctrine (F11) has a cost the plan had not accounted for: a
+scalar, unvectorized oracle is *slow by design*, and running it continuously on the same
+machine consumes cores, pollutes cache, draws power and shifts scheduling. In benchmark
+mode that directly corrupts the Load Signature — the measurement the mode exists to
+produce.
+
+Verification is therefore split by cost, and its cost is measured rather than assumed:
+
+| Class | Examples | Duty cycle |
+|---|---|---|
+| **Continuous, cheap** | Running checksums, invariants, residual norms, sequence numbers | Always on; overhead budgeted and asserted to stay negligible |
+| **Sampled, expensive** | Independent scalar oracle over sampled blocks, recomputation | Periodic, at a configured and recorded rate |
+
+And the mode semantics of §4.4 extend to it:
+
+- **Benchmark** — expensive oracle work runs *outside* measurement windows, so the Load
+  Signature reflects the workload rather than the verifier. Where that is impossible, the
+  verification duty cycle is reported alongside the signature.
+- **Stress** — oracle work is simply part of the load, which is fine and arguably
+  desirable; a mixed verify-and-compute load is realistic.
+- **Explore** — expensive verification must be held constant across evaluations, or it
+  becomes a confounding variable in the search (F5).
+
+**The verification duty cycle is a recorded field of every run**, so two runs are never
+compared without knowing whether they verified at the same rate.
+
+---
+
 ## 3. Principles adopted
 
 1. **Framework first, breadth second.** One workload end to end beats twelve stubs.
@@ -545,7 +674,12 @@ convincing thermal result arrives at M2b.
 5. **Every metric is nullable**; absence is first-class and reported (F3).
 6. **The tool must be able to accuse itself** — self-test before any long run (F2).
 7. **Supervision is out-of-process**, because workers are expected to die (F9).
-8. **Test code is product code.**
+8. **Evidence must survive the machine**, not just the process (F16).
+9. **The measurement must not be the thing measured** — verification cost is bounded,
+   recorded, and kept out of benchmark windows (F17).
+10. **Conclusions are reported as evidence with confidence, never as verdicts**
+    ([`verification.md`](verification.md)).
+11. **Test code is product code.**
 
 ---
 
@@ -559,23 +693,34 @@ convincing thermal result arrives at M2b.
 │  Orchestration: config · phase schedule · run control         │
 │  Telemetry: capability model · sampler · timeline             │
 │  Safety: limits · watchdog · emergency stop · child reaping   │
-│  Results: aggregation · schema · reporters                    │
+│  Results: aggregation · schema · reporters · crash journal    │
 └───────────────────────────┬───────────────────────────────────┘
                             │ shared memory (heartbeats, status)
                             │ pipe (verification + error records)
+                            │ + immutable TOPOLOGY SNAPSHOT
 ┌───────────────────────────▼───────────────────────────────────┐
 │                     WORKER PROCESS(ES)                        │
 │  Workloads (Layer 2)  ·  Primitives (Layer 1)                 │
 │  Verification: oracle · residual · checksum · invariant       │
 │  Scheduler: worker pool · affinity · barriers · heartbeats    │
-│  Topology: logical CPUs · cores · SMT · caches · NUMA · P/E   │
 └───────────────────────────┬───────────────────────────────────┘
                             │
 ┌───────────────────────────▼───────────────────────────────────┐
 │  ►► PLATFORM ◄◄  Linux host introspection & control ONLY      │
 │  sysfs · procfs · perf_event · edac · affinity · mmap/NUMA    │
 └───────────────────────────────────────────────────────────────┘
+
+  TOPOLOGY is discovered ONCE by the controller before fork, and is
+  immutable and SHARED — both processes need it. (Revision 5's diagram
+  wrongly showed it inside the worker.)
 ```
+
+**Topology is a shared, immutable snapshot** — not worker-owned. The controller needs it
+just as much as the worker does: to attribute telemetry to cores, to describe affinity in
+results, to build the run fingerprint, and to make sense of a crash ("worker on core 11,
+NUMA node 1, died with SIGBUS"). Discovering it once before fork also removes it as a
+source of variation — a re-spawned worker sees byte-identical topology, and two runs on
+the same machine cannot disagree about what the machine is.
 
 ### 4.2 What the platform boundary is — and is not
 
@@ -733,7 +878,7 @@ generation — the project uses classic headers.
 | Sanitizers | ASan+UBSan, **TSan**, separate CI jobs | TSan is essential; the codebase is threaded by construction. |
 | Static analysis | `clang-tidy`, warnings-as-errors, `clang-format` | All present. |
 | FP flags | `-ffp-contract=off`; **explicit FMA intrinsics** in FMA-stressing kernels; `-ffast-math`/`-Ofast` banned | F1. |
-| Runtime dependencies | **No third-party runtime dependencies** | Draft §44, with the wording the review recommends — the promise that can actually be kept. Enforced by a CI check on the linked binary. |
+| Runtime dependencies | **No third-party runtime dependencies** | Draft §44, with the wording the review recommends — the promise that can actually be kept. To be enforced by a CI check on the linked binary (lands at M0). |
 
 ### 5.1 Licensing — `GPL-3.0-or-later`
 
@@ -745,7 +890,7 @@ move to a future GPL version without tracking down every contributor.
 
 - **SPDX headers on every source file** from the first commit:
   `// SPDX-License-Identifier: GPL-3.0-or-later`. Cheap now, tedious to backfill.
-  Enforced by a CI check.
+  To be enforced by a CI check (lands at M0).
 - **Every vendored dependency must be GPL-compatible**, verified in CI rather than
   assumed. Current plan is clean: `toml++` is MIT (compatible, and MIT code may be
   combined into a GPL work), GoogleTest is BSD-3-Clause (compatible, and test-only —
@@ -793,7 +938,7 @@ lightweight mechanism the Linux kernel uses. A CLA — which asks contributors t
 or license rights to the project owner — is heavier, deters casual contributors, and is
 only worth its friction if the project intends to relicense or dual-license later. Since
 that option has been declined outright, a CLA would be pure cost. **Decided: DCO,
-permanently.** A CI check enforces the sign-off.
+permanently.** A CI check will enforce the sign-off (lands at M0).
 
 Note that `-or-later` still permits adopting a future FSF-published GPL version without
 contacting contributors. That is not "relicensing" in the sense declined above, and it
@@ -882,6 +1027,7 @@ LoadForge/
 │   ├── platform/                   # ►► Linux host introspection & control ONLY ◄◄
 │   │   ├── fs/                     #    fixture-swappable reader for sysfs/procfs
 │   │   ├── sysfs/  procfs/  perf_events/  edac/
+│   │   ├── fpenv/                  #    rounding mode, MXCSR/FPCR assertion (F15)
 │   │   ├── affinity/  memory/      #    mmap, huge pages, NUMA, mlock
 │   │   ├── process/                #    fork/exec, signals, reaping (F9)
 │   │   └── clock/
@@ -890,7 +1036,8 @@ LoadForge/
 │   │   ├── orchestration/          #    phase schedule, run control
 │   │   ├── safety/                 #    limits, watchdog, e-stop, child kill
 │   │   ├── supervision/            #    heartbeats, crash classification, OOM vs fault
-│   │   └── results/                #    schema, fingerprint, aggregation (F12)
+│   │   ├── results/                #    schema, fingerprint, aggregation (F12)
+│   │   └── journal/                #    append-only crash journal (F16)
 │   │
 │   ├── worker/                     # ── worker process ──
 │   │   ├── scheduler/              #    pool, affinity, barriers, heartbeat emit
@@ -1076,10 +1223,10 @@ for coverage.
 | **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, **CONTRIBUTING + issue/PR templates (§5.2)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; patch-coverage gate active; scalar build passing on both arches |
 | **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
 | **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **minimal telemetry capability probe** | `loadforge stress --test compression` runs end to end; oracle, fault-injection, determinism and supervision tiers pass; capability set reported at start |
-| **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam** | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
-| **M3** | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; whole-project coverage gate activated |
+| **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **`FpEnvironment` contract (F15)**; first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
+| **M3** | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)**, **per-provider remediation (F3)**, **verification duty cycle (F17)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; whole-project coverage gate activated |
 | **M4** | Workload breadth | Remaining workloads (3–11) + primitives layer | Each has an independent oracle, invariants, determinism and fault-injection tests |
-| **M5** | Dynamic mixed + cycling | Flagship mixed test (§17), thermal/power cycling (§35) | A five-hour schedule completes with continuous verification |
+| **M5** | Dynamic mixed + cycling | Flagship mixed test (§17), thermal/power cycling (§35), **crash journal (F16)** — required before serious multi-hour runs | A five-hour schedule completes with continuous verification |
 | **M6** | Explore | Search strategy, objectives, drift correction, confidence reporting (F5) | Repeatable worst-case discovery with reported variance on real hardware |
 | **M7** | Hardening / 1.0 | Docs, packaging, manual hardware validation | Multi-machine validation; no known correctness defects |
 
@@ -1112,7 +1259,12 @@ research-flavoured one and is correctly last.
 | ~~Portability seams rot, making "add ARM later" a rewrite~~ | — | **Retired** | ARM is a first-class target with CI, so the seams cannot rot unnoticed |
 | ARM adds telemetry surface with no free hardware to validate it | Medium | Medium | ARM CI validates correctness; real ARM telemetry stays a T11 manual item on a cheap physical board |
 | Outside contribution weakens a determinism or verification contract | Medium | Medium | §5.2: PR template, CONTRIBUTING rules, and T3/T5/T6 tiers that fail loudly |
-| Vendored dependency turns out GPL-incompatible | Medium | Low | §5.1: licence compatibility checked in CI, not assumed |
+| A dependency sets FTZ/DAZ process-wide, silently changing every FP result | High | Medium | F15: `FpEnvironment` asserted at startup and re-asserted after library load |
+| Golden vectors diverge across machines via libm transcendentals | Medium | **High if unaddressed** | F15: no libm transcendentals on bit-compared paths; deterministic in-project routines or committed tables |
+| Kernel panic destroys the evidence of the most valuable run | **High** | Medium | F16: compact append-only crash journal, ~150 KB/hour, optional remote sink |
+| Oracle cost distorts the Load Signature it is measured alongside | Medium | Medium | F17: cheap/expensive split, duty cycle recorded, expensive work outside benchmark windows |
+| Fault-isolation output overstates certainty and is confidently wrong in public | Medium | Medium | `verification.md`: evidence-and-confidence reporting, never bare verdicts |
+| Vendored dependency turns out GPL-incompatible | Medium | Low | §5.1: licence compatibility to be checked in CI, not assumed |
 
 ---
 

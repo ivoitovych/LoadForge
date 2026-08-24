@@ -185,6 +185,49 @@ real, valuable and cheap guarantee: the `LOADFORGE_SIMD=scalar` CI job builds on
 architectures, so comparing its outputs turns the portability job into a
 **cross-architecture determinism check** at no extra cost.
 
+### The floating-point environment contract
+
+Scoping determinism per ISA path handles lane geometry. It does **not** handle the
+machine's floating-point *state*, which is equally capable of changing results and is
+not visible in the source.
+
+LoadForge establishes and asserts an explicit `FpEnvironment` at startup, records it in
+the run fingerprint, and re-asserts it after any point where a third party could have
+changed it (library load, plugin, a workload that deliberately alters it):
+
+| Property | Required state | Why it matters |
+|---|---|---|
+| Rounding mode | round-to-nearest, ties-to-even | Anything else silently changes every result. |
+| x86 MXCSR **FTZ** (flush-to-zero) | off | Subnormal results become zero. A library built with `-ffast-math` can set this process-wide at load time — the flag policy in §4 governs *our* build, not a dependency's. |
+| x86 MXCSR **DAZ** (denormals-are-zero) | off | Same, on inputs. |
+| ARM FPCR **FZ** | off | ARM's flush-to-zero equivalent. |
+| ARM FPCR **DN** (default NaN) | off | Changes NaN payload propagation, which checksums see. |
+| Subnormal handling | IEEE-conformant on both | The x86/ARM pair only agrees if both are conformant. |
+
+An assertion failure here is a **configuration error reported at startup**, never a
+verification failure — a machine with FTZ forced on is not a faulty machine.
+
+### Transcendental functions are not reproducible — avoid them on verified paths
+
+`sin`, `cos`, `exp`, `log` and friends from libm are **not** guaranteed to return
+identical bits across implementations, versions, or architectures. They are not
+correctly rounded and no standard requires them to be.
+
+This has a specific and easily-missed consequence: **FFT twiddle factors computed with
+`std::cos`/`std::sin` are not reproducible across machines.** Nor is any workload seeding
+data from a transcendental. Golden vectors are compared *across* machines and CI runners
+by definition, so this breaks them silently.
+
+Rules for any code path whose output is compared bit-exactly:
+
+- **No libm transcendentals.** Use an in-project deterministic implementation, an exact
+  algebraic recurrence with periodic correction, or a precomputed table generated
+  offline and committed.
+- If a workload genuinely needs a transcendental as part of the load it is stressing,
+  it declares `BoundedResidual` and does not pretend otherwise.
+- Basic arithmetic and `sqrt` are exempt: they *are* correctly rounded and specified by
+  IEEE 754, so they reproduce exactly.
+
 ### Consequences to keep in mind
 
 - **Golden vectors are per ISA path.** One recorded set of bits cannot serve scalar,
@@ -219,8 +262,18 @@ single FMA. It changes results depending on compiler and flags, and gives nothin
 return that cannot be had deliberately.
 
 **Explicit FMA** — `std::fma`, `_mm256_fmadd_pd`, `vfmaq_f64` — is fully specified by
-IEEE 754 (one rounding, not two) and therefore perfectly deterministic. It exercises the
-FMA units exactly as hard.
+IEEE 754 (one rounding, not two) and therefore perfectly deterministic.
+
+**For stress kernels, use the ISA intrinsic, not `std::fma`.** They are numerically
+identical, but `std::fma` only *guarantees* the IEEE semantics — not that you get the
+hardware instruction. Without the right `-m` flags it can compile to a libm call and a
+software implementation, which is orders of magnitude slower and stresses nothing. Since
+saturating the FMA units is the entire point of those kernels, name the instruction:
+
+| Context | Use |
+|---|---|
+| Stress kernel — the FMA units are the target | `_mm256_fmadd_pd`, `_mm512_fmadd_pd`, `vfmaq_f64` |
+| Reference oracle, portable and general numerical code | `std::fma` — correctness and portability matter, speed does not |
 
 So `-ffp-contract=off` does **not** mean "no FMA in LoadForge." It means FMA is used
 *on purpose, where written*, which is both deterministic and better for a project whose

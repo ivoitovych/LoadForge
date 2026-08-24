@@ -150,13 +150,44 @@ work:
 
 | Re-run | If it fails | If it passes |
 |---|---|---|
-| Same core, same thread count | Reproducible fault, likely that core or its cache | — |
-| **Different core** | Not core-local — suspect memory, uncore, power delivery | **Core-local fault — strong signal, name that core** |
-| **Single-threaded** | Deterministic and reproducible — strongest possible evidence | Concurrency-dependent — could be hardware, could be a LoadForge bug; escalate accordingly |
+| Same core, same thread count | Reproducible — proceed to the next re-run | **Non-reproducible transient** — see below |
+| **Different core** | Not core-local; *consistent with* memory, uncore, or power-delivery involvement | *Consistent with* a core-local fault — name the core, but see the caveats |
+| **Single-threaded** | Deterministic and reproducible — the strongest evidence available | Concurrency-dependent; could be hardware, could be a LoadForge bug — escalate accordingly |
 
-The reproduction pattern *is* the diagnosis. This is also why the determinism contract
-matters so much: without single-thread reproducibility, the most informative row of that
-table is unavailable.
+### These are diagnostic signals, not proof
+
+The wording above is deliberate. "Fails on core 5, passes on core 11" is **evidence
+consistent with** a core-local fault, not a demonstration of one. The same pattern is
+produced by:
+
+- an affinity-dependent bug in LoadForge itself;
+- different NUMA placement, and therefore different memory, on the two cores;
+- different temperature or achieved frequency between the two;
+- different shared-cache or CCX/cluster topology;
+- plain timing differences.
+
+Every conclusion is therefore reported with an explicit **confidence** and the evidence
+behind it, never as a bare verdict. LoadForge says what it observed and what that is
+consistent with; the user, who knows their machine, draws the conclusion. A tool that
+overstates its certainty here will eventually be confidently wrong in public, which
+costs more than being useful slightly less often.
+
+### Non-reproducible transients are a real outcome, not an undefined one
+
+If the fault does not reproduce even on the same core, single-threaded, with the same
+seed and regenerated data, it is recorded as a **non-reproducible transient** with full
+provenance — not discarded, and not escalated to a hardware verdict.
+
+This branch matters more than it looks: on marginal hardware it is a common outcome, and
+it is exactly the signature of a genuine single-event upset, a marginal timing path that
+only fails at a particular temperature, or a rare race. A tool that silently drops what
+it cannot reproduce would throw away its most interesting data. Transients are counted,
+rate-tracked across the run, and correlated with temperature, frequency and ECC events —
+a rising transient rate is itself a finding.
+
+The reproduction pattern is the *diagnosis input*. This is also why the determinism
+contract matters so much: without single-thread reproducibility, the most informative row
+of that table is unavailable.
 
 This is the mechanism that makes counter-based RNG mandatory — a failing block must be
 regenerable in isolation, without replaying the whole run.

@@ -20,12 +20,17 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 | **Public API** | Not defined |
 | **Usable** | No |
 
-This repository currently contains two documents and nothing else:
+This repository contains documents and project scaffolding — **no source code, and no CI
+workflows yet**. Both land at M0.
 
 | Document | What it is |
 |---|---|
-| [`docs/DESIGN-DRAFT.md`](docs/DESIGN-DRAFT.md) | The original project description — a **working draft**, not a specification |
-| [`docs/PLAN.md`](docs/PLAN.md) | The development plan: a critical review of that draft, the architecture, the directory layout, the testing strategy, and the milestones |
+| [`docs/PLAN.md`](docs/PLAN.md) | The development plan and design of record: a critical review of the draft, the architecture, the directory layout, the testing strategy, milestones and risks |
+| [`docs/DESIGN-DRAFT.md`](docs/DESIGN-DRAFT.md) | The original project description — a **working draft**, preserved verbatim; parts are superseded by the plan |
+| [`docs/determinism.md`](docs/determinism.md) | The determinism contract — normative, required reading before touching numerical code |
+| [`docs/verification.md`](docs/verification.md) | The verification doctrine — oracles vs golden vectors, fault injection, fault isolation |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute, and the three rules that are not obvious |
+| [`LICENSE`](LICENSE) | GPL-3.0-or-later |
 
 Start with `docs/PLAN.md` if you want to know where the project is going and why.
 
@@ -179,11 +184,12 @@ The full strategy, including coverage targets and the test tier model, is in
   vendored and header-only; test-only dependencies are pinned and never linked into the
   shipped binary.
 
-CI runs the full matrix — **{x86-64, ARM64} × {GCC, Clang}** — plus sanitizer jobs.
-Running on ARM matters for more than portability: ARM64 is weakly ordered where x86-64
-is total-store-ordered, so a memory-ordering bug that x86 would hide shows up there. In
-a tool like this that is worth a great deal, because such a bug is indistinguishable
-from the hardware fault the tool claims to have found.
+CI **will** run the full matrix — **{x86-64, ARM64} × {GCC, Clang}** — plus sanitizer
+jobs. (No workflows exist yet; they land at M0.) Running on ARM matters for more than
+portability: ARM64 is weakly ordered where x86-64 is total-store-ordered, so a
+memory-ordering bug that x86 would hide shows up there. In a tool like this that is
+worth a great deal, because such a bug is indistinguishable from the hardware fault the
+tool claims to have found.
 
 ---
 
