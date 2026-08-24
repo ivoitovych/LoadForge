@@ -24,7 +24,7 @@ This repository currently contains two documents and nothing else:
 
 | Document | What it is |
 |---|---|
-| [`LoadForge-Integrated-Hardware-Reliability-Load-Test-Suite.md`](LoadForge-Integrated-Hardware-Reliability-Load-Test-Suite.md) | The original project description — a **working draft**, not a specification |
+| [`docs/DESIGN-DRAFT.md`](docs/DESIGN-DRAFT.md) | The original project description — a **working draft**, not a specification |
 | [`docs/PLAN.md`](docs/PLAN.md) | The development plan: a critical review of that draft, the architecture, the directory layout, the testing strategy, and the milestones |
 
 Start with `docs/PLAN.md` if you want to know where the project is going and why.
@@ -140,14 +140,22 @@ This is a tool whose entire purpose is to tell you the truth about your hardware
 A false "verification error" destroys its value as surely as a missed one. The
 project therefore treats its own test suite as a first-class deliverable:
 
-- **High measured coverage**, enforced as a CI gate that can only ratchet upward.
+- **Independent reference oracles.** Every workload has a second, deliberately simple
+  implementation derived from the mathematical definition. A blocked, vectorized GEMM is
+  never verified by calling a blocked, vectorized GEMM again — that proves determinism,
+  not correctness.
 - **Fault injection** — every verification path has a negative test that deliberately
-  corrupts data and asserts the corruption is caught.
-- **Determinism tests** — identical results across differing thread counts and repeated runs.
-- **Golden vectors** pinning numerical behaviour of every workload.
+  corrupts data and asserts the corruption is caught *and classified correctly*.
+- **Determinism tests** — each workload declares a determinism class, and the tests
+  enforce exactly what was declared.
+- **Out-of-process supervision.** A reliability tester should expect its workers to die.
+  A controller process survives worker crashes and reports the telemetry leading up to
+  them — which is the most valuable output the tool can produce.
 - **Fixture-driven platform tests** — synthetic `/sys` and `/proc` trees, so telemetry
   parsing is testable on machines (and CI runners) that expose no real sensors.
 - **Sanitizers**, including ThreadSanitizer, on a heavily multithreaded codebase.
+- **Coverage gates** on changed lines from day one, tightening to per-module thresholds
+  as modules mature.
 
 The full strategy, including coverage targets and the test tier model, is in
 [`docs/PLAN.md`](docs/PLAN.md).
@@ -158,10 +166,13 @@ The full strategy, including coverage targets and the test tier model, is in
 
 Not yet fixed — proposed in the plan and open for review:
 
-- Linux (kernel with `sysfs`/`procfs`; specific telemetry features degrade gracefully)
+- Linux (kernel with `sysfs`/`procfs`; individual telemetry sources are probed at
+  startup and degrade gracefully when unavailable)
 - A C++20 compiler (GCC 13+ / Clang 18+ proposed)
 - CMake 3.24+
-- No runtime dependencies beyond libc and libstdc++; test-only dependencies fetched at configure time
+- **No third-party runtime dependencies.** The small amount of third-party code used is
+  vendored and header-only; test-only dependencies are pinned and never linked into the
+  shipped binary.
 
 ---
 
@@ -179,7 +190,10 @@ Use it deliberately.
 
 ## License
 
-Not yet chosen. This needs to be settled before any public release.
+**Not yet chosen — this repository is currently public with no license**, which means
+default copyright applies: the code and documents here may not be legally used, forked
+or contributed to. Settling this is the most pressing open item; see question 2 in
+[`docs/PLAN.md`](docs/PLAN.md#10-open-questions--owner-decision-needed).
 
 ---
 
