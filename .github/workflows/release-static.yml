@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: release-static
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  static:
+    # F19: the static artifact is what makes LoadForge usable from live and
+    # rescue media, where the userspace ABI is whatever the medium carries.
+    # Built on every change so it cannot rot.
+    name: static artifact / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build g++-13
+      - env: { CC: gcc-13, CXX: g++-13 }
+        run: cmake --preset static
+      - run: cmake --build --preset static
+      - name: Verify it is genuinely static and runs
+        run: |
+          bin=build/static/loadforge
+          file "$bin"
+          if ldd "$bin" 2>&1 | grep -qv 'not a dynamic executable'; then
+            echo "binary is dynamically linked" >&2; ldd "$bin"; exit 1
+          fi
+          "$bin" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loadforge-static-${{ matrix.runner }}
+          path: build/static/loadforge

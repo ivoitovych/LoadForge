@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+function(loadforge_enable_sanitizers target)
+  if(LOADFORGE_SANITIZER STREQUAL "none")
+    return()
+  elseif(LOADFORGE_SANITIZER STREQUAL "address")
+    set(_flags -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+  elseif(LOADFORGE_SANITIZER STREQUAL "thread")
+    set(_flags -fsanitize=thread -fno-omit-frame-pointer)
+  else()
+    message(FATAL_ERROR "LOADFORGE_SANITIZER must be none|address|thread, got '${LOADFORGE_SANITIZER}'")
+  endif()
+  target_compile_options(${target} PRIVATE ${_flags} -g)
+  target_link_options(${target} PRIVATE ${_flags})
+endfunction()

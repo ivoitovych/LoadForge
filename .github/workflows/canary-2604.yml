@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: canary-26.04
+on:
+  schedule: [{ cron: '0 4 * * 1' }]
+  workflow_dispatch:
+
+jobs:
+  forward-compat:
+    # NON-BLOCKING by design. The reference platform is 24.04 (docs/platforms.md
+    # §4); 26.04 brings GCC 15 and glibc 2.43, and its runner images are Public
+    # Preview. This job makes the adaptation work visible before it is urgent
+    # rather than discovered when someone finally needs a newer distro.
+    name: Ubuntu 26.04 forward-compatibility (advisory)
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04, ubuntu-26.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
+      - run: cmake --preset debug
+      - run: cmake --build --preset debug
+      - run: ctest --preset debug

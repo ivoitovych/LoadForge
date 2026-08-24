@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: portability
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  scalar:
+    # Proves no ISA intrinsic has leaked into portable code. Without this the
+    # seams rot within months and adding an architecture becomes a rewrite.
+    name: scalar-only / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build g++-13
+      - env: { CC: gcc-13, CXX: g++-13 }
+        run: cmake --preset simd-scalar
+      - run: cmake --build --preset simd-scalar
+      - run: ctest --preset simd-scalar
+      - name: No x86 intrinsics in portable code
+        if: matrix.runner == 'ubuntu-24.04'
+        run: |
+          if grep -rn --include='*.cpp' --include='*.hpp' -E '\b(__m128|__m256|__m512|_mm_|_mm256_|_mm512_)' src/ \
+             | grep -v 'src/primitives/simd/x86/'; then
+            echo "x86 intrinsics outside src/primitives/simd/x86/" >&2
+            exit 1
+          fi

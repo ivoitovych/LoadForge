@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+Checks: >
+  bugprone-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -misc-include-cleaner,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -readability-magic-numbers
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^src/.*'
+FormatStyle: file

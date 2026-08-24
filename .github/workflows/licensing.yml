@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: licensing
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  spdx:
+    name: SPDX headers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every source file carries an SPDX identifier
+        run: |
+          missing=0
+          while IFS= read -r f; do
+            head -3 "$f" | grep -q 'SPDX-License-Identifier: GPL-3.0-or-later' || {
+              echo "missing SPDX header: $f"; missing=1; }
+          done < <(find src tests cmake -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.cmake' \))
+          exit $missing
+
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Every commit is signed off
+        run: |
+          missing=0
+          for c in $(git rev-list ${{ github.event.pull_request.base.sha }}..HEAD); do
+            git log -1 --format='%(trailers:key=Signed-off-by)' "$c" | grep -q . || {
+              echo "missing Signed-off-by: $(git log -1 --oneline "$c")"
+              echo "  add it with: git commit -s --amend  (see CONTRIBUTING.md)"
+              missing=1; }
+          done
+          exit $missing
+
+  attribution:
+    name: No AI/vendor attribution
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Commit metadata is free of vendor attribution
+        run: |
+          bad=0
+          for c in $(git rev-list -n 50 HEAD); do
+            hdr=$(git cat-file commit "$c" | sed '/^$/q')
+            echo "$hdr" | grep -qiE '^(author|committer) .*(noreply@anthropic|@users\.noreply\.github\.com>.*bot)' && {
+              echo "vendor identity in $c"; bad=1; }
+            git log -1 --format='%B' "$c" | grep -qiE 'co-authored-by:.*(anthropic|noreply@)' && {
+              echo "attribution trailer in $c"; bad=1; }
+          done
+          exit $bad
+
+  dependency-licences:
+    name: Dependency licences are GPL-compatible
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: NOTICE lists every vendored component
+        run: |
+          test -f NOTICE || { echo "NOTICE missing"; exit 1; }
+          if [ -d third_party ]; then
+            for d in third_party/*/; do
+              name=$(basename "$d")
+              grep -q "$name" NOTICE || { echo "third_party/$name not recorded in NOTICE"; exit 1; }
+            done
+          fi

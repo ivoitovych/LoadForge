@@ -1,0 +1,37 @@
+LoadForge
+Copyright (C) 2026 Iaroslav Voitovych
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See LICENSE for the full text.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+LoadForge has NO third-party runtime dependencies. The shipped binary links only
+against libc and libstdc++ (and, in the static build, not even those
+dynamically). Components below are build- or test-time only and are never linked
+into the released executable.
+
+  GoogleTest / GoogleMock
+    Role     : test framework (test-only, not linked into the binary)
+    Licence  : BSD-3-Clause  -- GPL-compatible
+    Version  : pinned in cmake/Dependencies.cmake (LOADFORGE_GTEST_TAG)
+    Source   : https://github.com/google/googletest
+    Obtained : system package where available, otherwise FetchContent at the
+               pinned tag. Skipped entirely with -DLOADFORGE_BUILD_TESTS=OFF,
+               so an offline or live-media build needs no network.
+
+  gcovr
+    Role     : coverage measurement and the 100% gate (CI only)
+    Licence  : BSD-3-Clause  -- GPL-compatible
+
+  mull
+    Role     : mutation testing (CI only, nightly)
+    Licence  : Apache-2.0  -- GPL-compatible
+
+No component is vendored under third_party/ yet. When one is, it is pinned to an
+exact version and recorded here; CI fails if a third_party/ directory exists
+without a corresponding entry.

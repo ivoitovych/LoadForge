@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: sanitizers
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  sanitize:
+    name: ${{ matrix.preset }} / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        # TSan is required, not optional: this project is threaded by
+        # construction, and a data race here is indistinguishable from the
+        # hardware fault the tool claims to have found.
+        preset: [asan, tsan]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build clang-18
+      - env: { CC: clang-18, CXX: clang++-18 }
+        run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }}

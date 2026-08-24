@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.runner }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both architectures are first-class (docs/PLAN.md §4.5). ARM64 matters
+        # beyond portability: it is weakly ordered where x86-64 is TSO, so it
+        # gives memory-ordering bugs an opportunity to manifest.
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build g++-13 clang-18
+      - name: Configure
+        env:
+          CC:  ${{ matrix.compiler == 'gcc' && 'gcc-13' || 'clang-18' }}
+          CXX: ${{ matrix.compiler == 'gcc' && 'g++-13' || 'clang++-18' }}
+        run: cmake --preset debug
+      - name: Build
+        run: cmake --build --preset debug
+      - name: Test
+        run: ctest --preset debug
+
+  format-and-tidy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build clang-format-18 clang-tidy-18
+      - name: clang-format
+        run: find src tests -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror
+      - name: Configure for compile_commands.json
+        run: cmake --preset debug
+      - name: clang-tidy
+        run: find src -name '*.cpp' | xargs clang-tidy-18 -p build/debug
