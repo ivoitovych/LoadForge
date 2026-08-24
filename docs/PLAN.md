@@ -1,7 +1,7 @@
 # LoadForge — Development Plan
 
-**Status:** revision 7 — third maintainer review; verification-input integrity and the
-runtime-ABI question added
+**Status:** revision 8 — 100% coverage gate adopted; platform strategy and supported
+components recorded
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -92,6 +92,13 @@ ready for M0. One finding is fundamental; the rest correct or sharpen existing t
 | **Error records split into `ExactBitCorruption` and `NumericalVerificationFailure`.** XOR delta and popcount are meaningless for a bounded FP breach, where no expected bit pattern exists; those fields are now null and reported not-applicable rather than fabricated. | Review — **rev. 6 was internally inconsistent** with its own determinism scoping |
 | **EOF does not detect a live-but-wedged controller** — a wedged process holds its descriptors open. Only the heartbeat does. Rev. 6 mis-attributed the coverage. | Review — **rev. 6 was wrong** |
 | **Cross-architecture bit-exactness scoped to a numerical domain**: `float`/`double`, finite, subnormals per contract, NaNs canonicalized, `long double` prohibited — x86-64's 80-bit x87 type and AArch64's binary128 are not comparable. | Review |
+
+**Revision 8** records two owner decisions:
+
+| Decision | Consequence |
+|---|---|
+| **100% line and branch coverage, gated from M0**, with code and tests landing in the same change | §7.3 rewritten; tiered thresholds and patch coverage withdrawn as unnecessary. Mutation testing promoted to the primary quality metric, because at 100% coverage the coverage number itself stops carrying information. `platform/`'s ≥80% excuse is withdrawn — every syscall error path must be forceable by a test. |
+| **Develop against practical versions; adapt on demand** | New [`platforms.md`](platforms.md) — an audit of the actual development platform, a supported-components table, and the line between what can be deferred and what cannot. Ubuntu 26.04 becomes a non-blocking CI canary rather than a target. |
 
 ---
 
@@ -1156,6 +1163,8 @@ LoadForge/
 │   ├── sanitizers.yml              # asan+ubsan, tsan — both arches (§4.5)
 │   ├── portability.yml             # LOADFORGE_SIMD=scalar on both arches
 │   ├── release-static.yml         # fully static artifact, built + smoke-tested (F19)
+│   ├── canary-2604.yml            # Ubuntu 26.04 forward-compat, NON-blocking
+│   └── mutation.yml               # nightly mull run, tracked mutation score
 │   ├── licensing.yml               # SPDX headers, dep compatibility, DCO (§5.1, §5.2)
 │   └── coverage.yml                # patch + module coverage gates
 │
@@ -1177,6 +1186,7 @@ LoadForge/
 │   ├── architecture.md
 │   ├── determinism.md              # the F1 contract — required contributor reading
 │   ├── verification.md             # oracle vs golden vector doctrine (F11)
+│   ├── platforms.md                # supported components, adaptation policy
 │   ├── telemetry-sources.md        # every source, its privilege, its fallback
 │   ├── result-schema.md            # versioned schema + run fingerprint (F12)
 │   ├── testing.md  safety.md
@@ -1326,37 +1336,100 @@ create, so it gets an explicit test rather than a hopeful comment.
 hostile cases: AMD, ARM64, no `hwmon`, `EACCES` on `energy_uj`, a counter that wraps
 mid-sample, a sensor that disappears mid-run, EDAC present and absent.
 
-### 7.3 Coverage policy
+### 7.3 Coverage policy — 100%, enforced from the first commit
 
-Revision 1 proposed a ratchet-only rule from M0. The maintainer review is right that
-this is counterproductive: a trivial M0 module at 100% makes every subsequent
-partially-developed module unlandable. Replaced with a three-part policy:
+**Decision (revision 8): 100% line and 100% branch coverage, as a hard CI gate, from
+M0.** Not a target, not a ratchet toward a number — a gate. Revisions 2–7 proposed
+tiered thresholds and patch coverage; those are withdrawn as unnecessary complexity once
+the standard is simply *all of it*.
 
-**1. Patch coverage (the primary gate, active from M0).** Lines changed by a pull
-request must be ≥ 85% covered. This scales with the work actually being done and never
-blocks legitimate incremental development.
+Alongside it, the **same-change rule**: code and its tests land together, in the same
+pull request, or neither lands. There is no "tests to follow."
 
-**2. Per-module absolute thresholds, applied once a module reaches maturity** (declared
-at its milestone exit, not before):
+#### Why this is the right call for this project specifically
 
-| Area | Line | Branch |
-|---|---:|---:|
-| `core/`, `config/`, `verification/`, `statistics/` | ≥ 95% | ≥ 90% |
-| `telemetry/`, `topology/`, `controller/`, `worker/` | ≥ 90% | ≥ 85% |
-| `workloads/`, `primitives/` | ≥ 90% | ≥ 80% |
-| `platform/` | ≥ 80% | — |
-| `main/`, `reporters/` | ≥ 90% | ≥ 85% |
+Retrofitting tests onto existing code is not merely slower — it produces *worse* tests.
+Tests written against code that already exists tend to encode what the code does,
+including its bugs, because the author reads the implementation to work out what to
+assert. Tests written alongside the code encode what it is *supposed* to do. For a tool
+whose only product is a claim about someone else's hardware, that difference is the whole
+ballgame.
 
-**3. Whole-project gate of ≥ 90% line / ≥ 85% branch, activated at M3** — once the
-framework is complete enough for the number to be meaningful.
+It also eliminates the failure mode the owner named: a later multi-pass campaign to lift
+coverage, which arrives when the code is least understood and the deadline is nearest.
 
-Supporting rules: uncovered lines need a reviewed exclusion with a reason; coverage is
-reported per pull request as a delta; **mutation testing** (`mull`) is a stretch goal on
-`verification/` and `config/`, the two places where an assertion-free passing test would
-be most dangerous.
+#### Making 100% honest rather than theatrical
 
-Most importantly: the T3/T5/T6/T7 tiers are considered **stronger evidence of quality
-than any coverage number**, and a milestone may not exit on coverage alone.
+100% coverage is easy to fake and the project must not fake it. Three mechanisms:
+
+**1. Exception-branch handling, so the number is real.** Raw gcov branch coverage on C++
+counts compiler-generated exception edges from nearly every call, which are largely
+unreachable by design and make 100% branch coverage meaningless-but-unattainable. The
+gate therefore runs `gcovr --exclude-throw-branches --exclude-unreachable-branches`.
+With those excluded, 100% branch coverage is both achievable and a genuine statement
+about the code's own decisions.
+
+**2. Exclusions are individually justified, counted, and ratcheted.** Anything genuinely
+unreachable — a defensive `default:` on an exhaustive enum, an `abort()` path — carries
+an inline exclusion marker *with a written reason*. The **total exclusion count is
+reported in CI and may only decrease** without explicit review. A rising exclusion count
+is exactly how a 100% gate rots into decoration, so it is measured directly.
+
+**3. Mutation testing becomes the primary quality metric.** This matters more than it
+first appears: **at 100% coverage, coverage stops carrying information.** It can no
+longer distinguish a thorough test from one that executes a line and asserts nothing —
+every line is covered either way. The only remaining signal is whether the tests actually
+*detect change*, which is what mutation testing measures.
+
+So `mull` is promoted from stretch goal to a first-class metric, run nightly across the
+project with a tracked mutation score, and gating on `verification/`, `config/`,
+`safety/` and `controller/supervision/`. A surviving mutant is a test-suite defect and is
+triaged like a bug.
+
+#### Architectural consequences — these are features, not costs
+
+A 100% gate is not free, and two of its costs land as design pressure that improves the
+result:
+
+- **`platform/` must be 100% too**, which is only possible if every syscall is issued
+  through an injectable surface where `EACCES`, short reads, `EINTR` and `ENOMEM` can be
+  *forced* by a test. Revision 6 excused this layer at ≥80% "because some paths need real
+  hardware." Under the new gate that excuse is gone, and the resulting design — a
+  platform layer whose every error path has been deliberately exercised — is precisely
+  what a tool that reports hardware faults should have.
+- **Every error path must be reachable by construction.** Code that cannot be driven into
+  its own failure branch is code that has never been shown to handle failure. Making it
+  reachable is the point, not an inconvenience.
+
+#### Oracle-first: near-TDD where it actually matters
+
+Strict test-first is **not** mandated project-wide; for a SIMD kernel, writing the
+vectorized code and then its tests is perfectly reasonable, and the same-change rule
+already provides the ratchet.
+
+But there is one place where test-first is strongly recommended, because an existing
+requirement already implies it. F11 demands the reference oracle be **derived
+independently from the specification**, never transcribed from the optimized
+implementation. The cleanest possible guarantee of that independence is to **write the
+oracle first**, before the optimized kernel exists to be copied from. Independence stops
+being a discipline the reviewer must police and becomes a property of the order in which
+the work was done.
+
+So: oracle and its tests first, optimized implementation second. That is TDD in the one
+place where the project already needed it for a different reason.
+
+#### Where the gate does not apply
+
+Exploratory spikes are legitimate and should not be strangled. They live on throwaway
+branches, are never merged, and are marked as such. The rule is not "all code ever
+written is tested" — it is **nothing untested reaches `main`**.
+
+#### The standing caveat, unchanged
+
+Coverage remains **necessary and not sufficient**. The T3/T5/T6/T7 tiers — oracle, fault
+injection, determinism, supervision — are still stronger evidence of quality than any
+coverage number, and a milestone may not exit on coverage alone. 100% simply removes
+coverage as a place to hide.
 
 ### 7.4 What CI cannot test — stated plainly
 
@@ -1382,7 +1455,7 @@ for coverage.
 
 | # | Milestone | Contents | Exit criterion |
 |---|---|---|---|
-| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; patch-coverage gate active; scalar build passing on both arches |
+| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; **100% line and branch coverage gate active and passing**; scalar build passing on both arches; static artifact built |
 | **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
 | **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **input-integrity re-verification (F18)** + minimal telemetry capability probe | `loadforge stress --test compression` runs end to end; oracle, fault-injection, determinism and supervision tiers pass; capability set reported at start |
 | **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **`FpEnvironment` contract (F15)**; first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
@@ -1415,7 +1488,8 @@ research-flavoured one and is correctly last.
 | Scope collapse under 12-workload breadth | High | High | F4 vertical slice; M-gates |
 | Explore mode produces confident nonsense | Medium | High | F5 deferred to M6, variance reporting |
 | Silent regression via untested SIMD paths | Medium | Medium | Per-ISA runners; golden vectors per ISA |
-| Coverage gate gamed by assertion-free tests | Medium | Medium | Mutation testing; T3/T5/T6/T7 weighted above coverage |
+| **100% coverage achieved with assertion-free tests** | Medium | **High if unmitigated** | §7.3: at 100% the coverage number carries no information, so mutation testing becomes the primary metric; exclusion count reported and ratcheted |
+| 100% gate makes exploratory work painful and gets circumvented | Low | Medium | §7.3: spikes live on throwaway branches; the rule is nothing untested reaches `main`, not that no untested code is ever written |
 | Damage to poorly-cooled user hardware | Medium | Low | Conservative defaults, controller safety, clear warnings |
 | Memory-ordering bug indistinguishable from the hardware fault it "found" | Fatal to credibility | **Low** *(was Medium)* | §4.5: explicit memory orders, mandatory TSan, **and the suite now runs on genuinely weakly-ordered ARM hardware every push** |
 | ~~Portability seams rot, making "add ARM later" a rewrite~~ | — | **Retired** | ARM is a first-class target with CI, so the seams cannot rot unnoticed |

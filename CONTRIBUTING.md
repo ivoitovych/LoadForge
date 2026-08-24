@@ -42,8 +42,11 @@ See [`docs/verification.md`](docs/verification.md).
 
 Every workload declares one of:
 
-- `BitExact` — identical bits across thread counts and repeat runs
-- `BitExactFixedDecomposition` — identical bits for a given tile configuration
+- `BitExact` — identical bits across thread counts, repeat runs, ISA paths **and
+  architectures** (integer and discrete results only)
+- `BitExactFixedDecomposition` — identical bits **within one ISA path** for a given
+  decomposition. SIMD width is part of the decomposition: AVX2, NEON and AVX-512 build
+  different reduction trees and cannot match bit-for-bit
 - `BoundedResidual` — reproducible only within a derived tolerance
 
 A pull request may not silently move a workload to a weaker class. Thread-count
@@ -51,8 +54,10 @@ invariance is not pedantry: it is what allows a failing result to be reproduced
 single-threaded, which is the most valuable diagnostic step the tool has.
 
 Also: `-ffast-math` and `-Ofast` are banned outright. `-ffp-contract=off` is set
-project-wide, and FMA is exercised through **explicit** intrinsics (`std::fma`,
-`_mm256_fmadd_pd`, `vfmaq_f64`) so it is both deterministic and fully stressed.
+project-wide, and FMA is exercised **explicitly** so it is both deterministic and fully
+stressed. In stress kernels use the ISA intrinsic (`_mm256_fmadd_pd`, `vfmaq_f64`), which
+guarantees the hardware instruction; `std::fma` guarantees the IEEE semantics but may
+compile to a slow software call, so keep it for oracles and portable code.
 
 See [`docs/determinism.md`](docs/determinism.md).
 
@@ -123,7 +128,14 @@ Non-negotiable review standards:
   class, and fault-injection coverage.
 - Anything touching the platform layer needs fixture tests, including the hostile
   fixtures (missing sensors, `EACCES`, wrapping counters).
-- Changed lines must be ≥ 85% covered.
+- **Coverage is 100%, gated.** Code and its tests land together in the same pull
+  request. There is no "tests to follow" — that campaign never comes, and tests written
+  later encode what the code *does* (bugs included) rather than what it should do.
+- Anything genuinely unreachable needs an inline exclusion marker **with a written
+  reason**. The total exclusion count is reported in CI and may only go down.
+- For a new workload, **write the reference oracle and its tests first**. F11 requires
+  the oracle to be derived independently from the specification; writing it before the
+  optimized kernel exists is the cleanest guarantee of that.
 
 The full test suite must pass on **{x86-64, ARM64} × {GCC 13, Clang 18}** plus the
 sanitizer jobs.
@@ -157,7 +169,8 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
-Reference platform is **Ubuntu 24.04 LTS** — GCC 13.3, Clang 18.1, CMake 3.28.
+Reference platform is **Ubuntu 24.04 LTS** — GCC 13.3, Clang 18.1, CMake 3.28. The full
+supported-components table is in [`docs/platforms.md`](docs/platforms.md).
 
 ## Conduct
 

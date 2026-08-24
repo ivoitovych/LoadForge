@@ -29,6 +29,7 @@ workflows yet**. Both land at M0.
 | [`docs/DESIGN-DRAFT.md`](docs/DESIGN-DRAFT.md) | The original project description — a **working draft**, preserved verbatim; parts are superseded by the plan |
 | [`docs/determinism.md`](docs/determinism.md) | The determinism contract — normative, required reading before touching numerical code |
 | [`docs/verification.md`](docs/verification.md) | The verification doctrine — oracles vs golden vectors, fault injection, fault isolation |
+| [`docs/platforms.md`](docs/platforms.md) | Supported components, the platform audit, and what may be adapted later versus what must be right now |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute, and the three rules that are not obvious |
 | [`LICENSE`](LICENSE) | GPL-3.0-or-later |
 
@@ -164,8 +165,10 @@ project therefore treats its own test suite as a first-class deliverable:
 - **Fixture-driven platform tests** — synthetic `/sys` and `/proc` trees, so telemetry
   parsing is testable on machines (and CI runners) that expose no real sensors.
 - **Sanitizers**, including ThreadSanitizer, on a heavily multithreaded codebase.
-- **Coverage gates** on changed lines from day one, tightening to per-module thresholds
-  as modules mature.
+- **100% line and branch coverage**, gated in CI from the first commit. Code and its
+  tests land in the same change — there is no later campaign to lift coverage.
+- **Mutation testing** as the primary quality metric, because at 100% coverage the
+  coverage number can no longer tell a thorough test from an empty one.
 
 The full strategy, including coverage targets and the test tier model, is in
 [`docs/PLAN.md`](docs/PLAN.md).

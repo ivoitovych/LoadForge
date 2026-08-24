@@ -13,8 +13,9 @@ e.g. T1 unit, T3 oracle, T5 fault injection, T6 determinism, T7 supervision.
 
 - [ ] Commits are signed off (`git commit -s`) — see [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [ ] New files carry `// SPDX-License-Identifier: GPL-3.0-or-later`
-- [ ] Changed lines are ≥ 85% covered
+- [ ] **100% line and branch coverage** — tests land in this same PR, not later
 - [ ] Passes on {x86-64, ARM64} × {GCC 13, Clang 18}, plus ASan/UBSan and TSan
+- [ ] Any unreachable line carries an exclusion marker **with a written reason**
 
 ## If this touches `verification/`
 
@@ -25,7 +26,7 @@ e.g. T1 unit, T3 oracle, T5 fault injection, T6 determinism, T7 supervision.
 ## If this adds or changes a workload
 
 - [ ] Has an **independent reference oracle**, derived from the mathematical definition
-      rather than transcribed from the optimized implementation
+      rather than transcribed from the optimized implementation — ideally **written first**
 - [ ] Declares a determinism class, and does not weaken an existing one
 - [ ] Has invariant / metamorphic tests
 - [ ] Vectorized paths keep a working scalar fallback
