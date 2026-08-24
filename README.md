@@ -17,7 +17,7 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 |---|---|
 | **Phase** | M0 done; M1 (core framework + supervision) next |
 | **Code** | Build system, CI, config primitives, CLI skeleton |
-| **Tests** | 62, at 100% line and branch coverage |
+| **Tests** | 100% line and branch coverage, gated in CI |
 | **Public API** | Not defined |
 | **Usable** | Not yet — no workloads until M2a |
 

@@ -12,12 +12,7 @@ Checks: >
   -readability-identifier-length,
   -misc-include-cleaner,
   -cppcoreguidelines-avoid-magic-numbers,
-  -readability-magic-numbers,
-  -bugprone-easily-swappable-parameters
-# bugprone-easily-swappable-parameters is disabled deliberately: it fires on
-# run(..., std::ostream& out, std::ostream& err), which is the conventional
-# shape for a testable CLI entry point. Contorting that API to satisfy the check
-# would make the code worse, not safer.
+  -readability-magic-numbers
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/src/.*'
 FormatStyle: file

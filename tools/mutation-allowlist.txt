@@ -1,8 +1,15 @@
 # Reviewed-equivalent mutants: survivors that cannot be killed by any test
 # because the mutation does not change observable behaviour.
 #
-# Format: one "path:line:column" per line, with the justification directly above
-# it as a comment. Entries are reviewed like code. The count is reported by CI
-# and, per docs/PLAN.md §7.3, may only decrease without explicit review.
+# Format: one key per line, as
+#     path:line:column:MutatorName
+# with the justification directly above it as a comment. The mutator name is
+# part of the key on purpose -- different operators can fire at the same
+# location, and a location-only key would silently excuse an unrelated mutant.
+#
+# Entries are reviewed like code. The count is reported by CI and, per
+# docs/PLAN.md §7.3, may only decrease without explicit review. A STALE entry --
+# one whose mutant no longer survives -- fails the build: an allowlist that
+# outlives its mutant is a permission nobody reviewed.
 #
 # Empty. Any surviving mutant currently fails the build.

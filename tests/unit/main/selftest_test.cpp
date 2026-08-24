@@ -29,11 +29,32 @@ TEST(CoreDigest, HexMatchesTheNumericDigest) {
   EXPECT_EQ(reconstructed, value);
 }
 
+TEST(Fnv1a, MatchesPublishedTestVectors) {
+  // INDEPENDENT known-answer vectors, not self-consistency. The first version
+  // of selftest.cpp used an offset basis of 1469598103934665603 -- nineteen
+  // digits instead of twenty -- and every test still passed, because they all
+  // compared the implementation against itself and one of them embedded the
+  // same wrong constant.
+  //
+  // These values come from the FNV specification, not from this code.
+  EXPECT_EQ(kFnvOffsetBasis, 0xcbf29ce484222325ULL);
+  EXPECT_EQ(kFnvPrime, 0x100000001b3ULL);
+  EXPECT_EQ(fnv1a("", kFnvOffsetBasis), 0xcbf29ce484222325ULL);
+  EXPECT_EQ(fnv1a("a", kFnvOffsetBasis), 0xaf63dc4c8601ec8cULL);
+  EXPECT_EQ(fnv1a("foobar", kFnvOffsetBasis), 0x85944171f73967e8ULL);
+}
+
+TEST(Fnv1a, ChainsAcrossCalls) {
+  // core_digest folds the corpus by threading the hash through successive
+  // calls, so chaining must equal hashing the concatenation.
+  EXPECT_EQ(fnv1a("bar", fnv1a("foo", kFnvOffsetBasis)), fnv1a("foobar", kFnvOffsetBasis));
+}
+
 TEST(CoreDigest, IsNotTrivial) {
-  // A digest of zero or of the bare FNV offset would mean the corpus never
+  // A digest of zero or of the bare offset basis would mean the corpus never
   // reached the hash.
   EXPECT_NE(core_digest(), 0U);
-  EXPECT_NE(core_digest(), 1469598103934665603ULL);
+  EXPECT_NE(core_digest(), kFnvOffsetBasis);
 }
 
 }  // namespace

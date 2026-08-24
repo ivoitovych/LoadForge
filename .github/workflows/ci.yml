@@ -36,6 +36,16 @@ jobs:
       - name: Test
         run: ctest --preset debug
 
+  tooling:
+    # The trust chain tests itself: mutation-gate.sh decides whether the test
+    # suite is good enough, so a bug in it silently weakens every other
+    # guarantee. It had exactly such a bug.
+    name: trust-chain tooling
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./tests/tools/test_tooling.sh
+
   format-and-tidy:
     runs-on: ubuntu-24.04
     steps:

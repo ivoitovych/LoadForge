@@ -13,7 +13,9 @@ jobs:
       - run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build g++-13
-          pipx install gcovr || pip install --break-system-packages gcovr
+          # Pinned: a gcovr release can change branch accounting and thereby change
+          # what "100% branch coverage" means, with no repository change at all.
+          pip install --break-system-packages 'gcovr==8.6'
       - env: { CC: gcc-13, CXX: g++-13 }
         run: cmake --preset coverage
       - run: cmake --build --preset coverage

@@ -10,20 +10,6 @@
 namespace loadforge::selftest {
 namespace {
 
-// FNV-1a. Chosen because it is exactly specified, has no tuning parameters and
-// no endianness dependence at this width, so any difference between two runs is
-// a difference in the inputs rather than in the hash.
-constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
-constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
-
-constexpr std::uint64_t fold(std::uint64_t hash, std::string_view text) noexcept {
-  for (const char c : text) {
-    hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(c));
-    hash *= kFnvPrime;
-  }
-  return hash;
-}
-
 constexpr std::array<std::string_view, 16> kCorpus{
     "500ms", "30s", "20m",  "5h",     "0s", "  20m  ", "2562047788015h", "1h30m",
     "8GiB",  "70%", "1024", "512MiB", "0%", "8GB",     "-1GiB",          "",
@@ -31,18 +17,39 @@ constexpr std::array<std::string_view, 16> kCorpus{
 
 }  // namespace
 
-std::uint64_t core_digest() noexcept {
-  std::uint64_t hash = kFnvOffset;
-  for (const std::string_view input : kCorpus) {
-    hash = fold(hash, input);
+// FNV-1a. Chosen because it is exactly specified, has no tuning parameters and
+// no endianness dependence at this width, so any difference between two runs is
+// a difference in the inputs rather than in the hash.
+std::uint64_t fnv1a(std::string_view text, std::uint64_t basis) noexcept {
+  std::uint64_t hash = basis;
+  for (const char c : text) {
+    hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(c));
+    hash *= kFnvPrime;
+  }
+  return hash;
+}
 
+std::uint64_t core_digest() {
+  std::uint64_t hash = kFnvOffsetBasis;
+  for (const std::string_view input : kCorpus) {
+    hash = fnv1a(input, hash);
+
+    // Explicit if/else rather than a ternary: the ternary form produced a
+    // never-entered branch pair in the coverage data, and an unreachable branch
+    // that nobody can explain is exactly what the 100% gate exists to surface.
     const auto duration = core::parse_duration(input);
-    hash = duration ? fold(hash, core::to_string(duration.value()))
-                    : fold(hash, core::describe(duration.error()));
+    if (duration) {
+      hash = fnv1a(core::to_string(duration.value()), hash);
+    } else {
+      hash = fnv1a(core::describe(duration.error()), hash);
+    }
 
     const auto size = core::parse_byte_size(input);
-    hash =
-        size ? fold(hash, core::to_string(size.value())) : fold(hash, core::describe(size.error()));
+    if (size) {
+      hash = fnv1a(core::to_string(size.value()), hash);
+    } else {
+      hash = fnv1a(core::describe(size.error()), hash);
+    }
   }
   return hash;
 }

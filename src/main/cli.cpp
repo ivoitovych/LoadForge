@@ -38,6 +38,13 @@ std::vector<std::string_view> collect_args(std::span<char* const> argv) {
   return args;
 }
 
+// bugprone-easily-swappable-parameters fires on the adjacent ostream
+// references. (out, err) is the conventional shape for a testable CLI entry
+// point, and contorting it to satisfy the check would make the code worse. This
+// is suppressed here rather than project-wide so the check can still catch a
+// genuinely dangerous pair elsewhere -- particularly in the platform and
+// control code still to come.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int run(std::span<const std::string_view> args, std::ostream& out, std::ostream& err) {
   if (args.empty()) {
     print_usage(out);

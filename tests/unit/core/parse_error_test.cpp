@@ -32,9 +32,10 @@ TEST(ParseError, DescriptionsAreDistinct) {
 
 TEST(ParseError, IsTotalForValuesOutsideTheEnumerators) {
   // The underlying type is uint8_t, so 200 is representable and this cast is
-  // well defined even though it names no enumerator. (999 would NOT be
-  // representable and the cast itself would be undefined -- the kind of detail
-  // that turns a defensive test into the bug it was guarding against.)
+  // well defined even though it names no enumerator. (For an enum with a fixed
+  // underlying type, an out-of-range value is converted to that type first
+  // rather than being undefined -- CWG 2338 -- so 999 would also have been
+  // defined, just truncated. 200 is used because it says what it means.)
   //
   // describe() must stay total: if someone adds an enumerator and forgets this
   // function, the result should be a usable string, not a fall off the end of a
