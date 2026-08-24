@@ -180,10 +180,25 @@ arithmetic rather than being imposed:
   within an ISA path and only bounded across paths.
 
 **The scalar path is bit-identical across x86-64 and ARM64 for every class except
-`BoundedResidual`** — it is pure IEEE 754 with no lane structure to differ. This is a
-real, valuable and cheap guarantee: the `LOADFORGE_SIMD=scalar` CI job builds on both
-architectures, so comparing its outputs turns the portability job into a
-**cross-architecture determinism check** at no extra cost.
+`BoundedResidual`** — it has no lane structure to differ. This is a real, valuable and
+cheap guarantee: the `LOADFORGE_SIMD=scalar` CI job builds on both architectures, so
+comparing its outputs turns the portability job into a **cross-architecture determinism
+check** at no extra cost.
+
+**It holds over a defined numerical domain, not universally.** "Pure IEEE 754" is not
+quite enough on its own, and the exceptions are specific:
+
+| Constraint | Why |
+|---|---|
+| `float` and `double` only | — |
+| **`long double` prohibited** on any architecture-neutral bit-exact path | It is not one format. x86-64 uses the 80-bit x87 extended type; AArch64 uses IEEE binary128. They are not comparable and never will be. |
+| Finite values | — |
+| Subnormals per the `FpEnvironment` contract | Both architectures must be IEEE-conformant; see below. |
+| **NaNs canonicalized, or tested separately** | IEEE 754 does not fully specify which NaN payload an operation propagates, and targets differ. A checksum over a buffer containing NaNs can legitimately differ across architectures. |
+
+Where a workload must handle NaNs or infinities as part of what it exercises, it either
+canonicalizes them before any bit comparison, or tests that behaviour in a separate
+architecture-specific check rather than inside the cross-architecture claim.
 
 ### The floating-point environment contract
 

@@ -64,14 +64,16 @@ the maths, ideally before or independently of the optimized version.
 | Particles | Barnes-Hut / neighbour lists | Direct O(n²) force summation on a particle subset |
 | Ray tracing | BVH traversal | Brute-force ray/primitive intersection for sampled pixels |
 | Sort | Parallel radix / merge | Permutation check + ordering check — **never a second sort** |
-| Compression | Optimized codec | Byte-exact round-trip identity (self-oracular) |
+| Compression | Optimized codec | Byte-exact round-trip identity **plus input re-verification** — see §4a |
 | Graph | Parallel BFS / PageRank | Scalar BFS on a subgraph; triangle inequality |
 | Monte-Carlo | Vectorized batches | Scalar replay of a fixed-seed subset |
 
-Note that compression is **self-oracular**: `decompress(compress(x)) == x` is exact,
-byte-for-byte, needs no tolerance and no second implementation. That is the strongest and
-cheapest verification available anywhere in the suite, and it is why compression is the
-first workload built (F14).
+Compression is often described as *self-oracular* — `decompress(compress(x)) == x` is
+exact, byte-for-byte, needs no tolerance and no second implementation. **That description
+is withdrawn, because it is not true in the way that matters here.** See §4a: a round
+trip validates the codec, not the integrity of the input it consumed. It is still the
+right first workload (F14), and still the cheapest strong check in the suite — it is just
+not complete on its own.
 
 ---
 
@@ -94,6 +96,44 @@ records the wrong answer and the test passes forever.
 Both are kept. Their roles are never conflated. Regenerating a golden vector is a
 deliberate, reviewed act (`tools/gen-golden/`) and a PR that regenerates one must say
 why.
+
+## 4a. The input can be corrupted too — verify it, don't trust it
+
+The oracle doctrine above assumes the verifier and the workload are reading *correct
+input*. If they are not, both agree perfectly on the wrong answer:
+
+```text
+generate X  →  bit flip in RAM  →  X′
+               compress(X′) → C  →  decompress(C) → X′
+               compare X′ with X′            →  PASSES
+```
+
+The corruption became the truth. And this is not a compression quirk — it is general:
+
+- **Dense linear**: `A` is corrupted to `A′`. The solver produces `x` satisfying
+  `A′x = b`, so the residual `‖A′x − b‖` is *small*. Corruption redefined the problem
+  instead of failing the check.
+- **Stencil, particles**: a corrupted initial state evolves into a self-consistent but
+  wrong trajectory, and the conservation invariants still hold.
+- **Sort**: a corrupted key sorts correctly into the wrong place; the output is still an
+  ordered permutation of the *corrupted* input.
+
+For a tool built to detect RAM corruption this is the sharpest possible failure, so
+**input integrity is verified, never assumed** (`PLAN.md` F18):
+
+1. **Regenerate and compare.** Counter-based RNG (F8) makes input a pure function of
+   `(seed, index)`, so truth is regenerable at any time without storing it. Input buffers
+   are re-verified against regenerated truth at a configured, recorded interval.
+2. **Checksum where regeneration is impractical** — weaker, and known to be weaker: it
+   narrows the window rather than closing it, though a corrupted checksum fails safe by
+   raising a false alarm rather than hiding a real one.
+3. **Protect the control state.** Seeds, indices, tolerances and expected checksums are
+   tiny and catastrophic to lose — a corrupted seed makes regeneration produce different
+   data and reports a hardware fault that never happened. They are controller-owned,
+   stored redundantly with majority vote, and re-validated on every use.
+4. **Report which side failed.** An error record states whether the *input* or the
+   *output* was found corrupt. They implicate different things and the user needs to know
+   which was seen.
 
 ---
 
@@ -133,6 +173,11 @@ Tier T5 requires, for each mechanism:
 - Corrupt one byte of a compressed block → the round-trip must fail.
 - Drop an atomic increment → the graph consistency check must notice.
 - Perturb a particle's velocity → the momentum invariant must catch it.
+- **Corrupt the *input* buffer after generation → input re-verification must catch it
+  (F18).** This is the negative test for §4a, and without it the round-trip check is
+  proven only against a corruption it cannot see.
+- **Corrupt a stored seed → the control-state majority vote must repair or reject it**,
+  and must not emit a hardware-fault report.
 
 And, since revision 2, the classification must also be right: a single-bit flip must be
 *reported as* a single-bit flip, not as generic corruption.
@@ -196,19 +241,49 @@ regenerable in isolation, without replaying the whole run.
 
 ## 8. Error records carry full provenance
 
-An error report without provenance cannot be triaged. Every record includes:
+An error report without provenance cannot be triaged. Every record carries the common
+fields:
 
 ```text
 logical CPU                physical core              NUMA node
 buffer address             offset within buffer       iteration index
-expected bytes             actual bytes               XOR delta
-popcount of delta          workload + version         RNG seed
-isolation result           telemetry at time of error
+workload + version         RNG seed                   ISA dispatch path
+isolation result           confidence                 telemetry at time of error
+input-integrity status     verification duty cycle
+```
+
+### Two failure types, and only one of them has bits to compare
+
+A single record shape cannot serve both verification contracts (§5), and pretending
+otherwise produces meaningless fields:
+
+**`ExactBitCorruption`** — an exact comparison failed, so the expected bits are genuinely
+known. Adds:
+
+```text
+expected bytes    actual bytes    XOR delta    popcount of delta    bit classification
 ```
 
 The XOR delta and its population count matter more than they look: a single-bit flip, a
 multi-bit error within one word, and whole-cache-line corruption implicate different
 hardware, and the delta is what distinguishes them.
+
+**`NumericalVerificationFailure`** — a bounded check exceeded its tolerance. There is
+**no expected bit pattern**: the scalar oracle and the vectorized implementation
+legitimately differ in their low bits, as [`determinism.md`](determinism.md) sets out.
+Adds instead:
+
+```text
+residual magnitude    derived tolerance    ratio (residual / tolerance)
+which invariant or norm failed             condition number, where meaningful
+```
+
+For this type the XOR, popcount and bit-classification fields are **null and reported as
+not-applicable** — never zero, never fabricated. A tool that prints a bit classification
+derived from a floating-point tolerance breach is inventing evidence, and the whole
+credibility argument of §1 depends on not doing that.
+
+Corrected-ECC counts before and after the run accompany both types (F13).
 
 Corrected-ECC counts before and after the run are recorded alongside (F13) — a
 verification failure accompanied by rising corrected-ECC is a very different finding
@@ -231,6 +306,8 @@ broken build from a genuine finding.
 
 Adding or changing a workload:
 
+- [ ] **Input integrity is verified, not assumed** (§4a) — input regenerable from
+      `(seed, index)`, or checksummed; control state protected
 - [ ] Has an independent reference oracle, **derived from the specification**
 - [ ] Declares `exact` or `bounded`; bounded tolerances are derived, not chosen
 - [ ] Has invariant / metamorphic tests (T4) beyond the oracle
@@ -241,3 +318,6 @@ Adding or changing a workload:
 Touching `src/verification/`:
 
 - [ ] A fault-injection test accompanies the change. Required regardless of coverage.
+- [ ] If it touches error records, the correct type is emitted —
+      `ExactBitCorruption` **or** `NumericalVerificationFailure` (§8), never bit fields
+      fabricated for a bounded breach.

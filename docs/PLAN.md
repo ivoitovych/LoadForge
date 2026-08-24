@@ -1,7 +1,7 @@
 # LoadForge — Development Plan
 
-**Status:** revision 6 — second maintainer review; FP environment, crash-survivable
-evidence and verification duty cycle added
+**Status:** revision 7 — third maintainer review; verification-input integrity and the
+runtime-ABI question added
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -79,6 +79,19 @@ findings; two correct errors of mine:
 The review's other two points were already fixed in revision 5, which it had not seen:
 §11's stale question list, and the cross-architecture bit-exactness claim in
 `determinism.md`.
+
+**Revision 7** incorporates a third maintainer review, which again verdicted the design
+ready for M0. One finding is fundamental; the rest correct or sharpen existing text:
+
+| Change | Origin |
+|---|---|
+| **F18 — corrupted input can silently redefine the expected answer.** `compress(X′) → decompress → X′` compared against `X′` passes perfectly; the residual `‖A′x − b‖` is small when `A` itself was corrupted. For a tool built to detect RAM corruption this is a hole through the middle of M2a. Closed by verifying input against regenerated truth, and protecting control state. | Review — **new finding, fundamental**; withdraws my "self-oracular" claim |
+| **F19 — the runtime-platform question is about ABI, not kernel.** A 24.04-linked binary demands `GLIBC_2.39`/`GLIBCXX_3.4.33` symbols absent on 22.04 and will not start there, whatever the kernel. Resolved with a fully static release artifact, verified buildable here. | Review — **new finding**, and it affects M0 |
+| **F17 generalized from verification to all observer activity** — telemetry sampling, `perf_event` reads, journal `fsync`, remote sink. The F16/F17 tension is resolved by mode, as §4.4 resolved the cool-down question. | Review — rev. 6 was too narrow |
+| **`PR_SET_PDEATHSIG` lifecycle.** It is not retroactive, and its "parent" is the creating *thread*, not the process. Both are races. Settled: `prctl` first, then verify `getppid()`; fork workers from a long-lived thread, before the controller starts background threads. | Review — closes a race in rev. 6 |
+| **Error records split into `ExactBitCorruption` and `NumericalVerificationFailure`.** XOR delta and popcount are meaningless for a bounded FP breach, where no expected bit pattern exists; those fields are now null and reported not-applicable rather than fabricated. | Review — **rev. 6 was internally inconsistent** with its own determinism scoping |
+| **EOF does not detect a live-but-wedged controller** — a wedged process holds its descriptors open. Only the heartbeat does. Rev. 6 mis-attributed the coverage. | Review — **rev. 6 was wrong** |
+| **Cross-architecture bit-exactness scoped to a numerical domain**: `float`/`double`, finite, subnormals per contract, NaNs canonicalized, `long double` prohibited — x86-64's 80-bit x87 type and AArch64's binary128 are not comparable. | Review |
 
 ---
 
@@ -390,13 +403,33 @@ Workers therefore carry a dead-man's switch, belt and braces:
   worker the moment its parent dies — no cooperation required, and it survives the
   controller being `SIGKILL`ed.
 - Independently, the worker treats **EOF on the controller IPC channel** as an
-  immediate, unconditional stop. This covers the case where the controller is alive but
-  wedged, and the case where `PR_SET_PDEATHSIG` is lost across an unexpected re-parent.
+  immediate, unconditional stop. This covers a controller that has *died* without the
+  signal arriving — for instance if `PR_SET_PDEATHSIG` was lost across an unexpected
+  re-parent. *(Revision 6 wrongly claimed EOF also covers a live-but-wedged controller.
+  It does not: a wedged process holds its file descriptors open and no EOF is ever
+  delivered. Only the heartbeat below detects that case.)*
 - The worker's own bounded-interval check includes "has the controller issued a
-  heartbeat within N intervals"; if not, it exits rather than waiting to be told.
+  heartbeat within N intervals"; if not, it exits rather than waiting to be told. **This
+  is the only layer that detects a controller which is alive but stuck.**
 
-None of these are optional. A test in tier T7 kills the controller with `SIGKILL` and
-asserts that every worker is gone within a bounded time.
+**Two Linux specifics that must be honoured, or the first layer is a race** — both
+raised by the maintainer review and settled here rather than discovered at M1:
+
+- **`PR_SET_PDEATHSIG` is not retroactive.** If the parent dies before the child gets
+  to the `prctl` call, no signal is ever generated and the worker is orphaned at birth.
+  The child therefore calls `prctl` as its *first* action after `fork`, and then
+  immediately verifies `getppid()` still equals the expected controller PID — exiting at
+  once if it does not. Setting it without that check leaves the window open.
+- **The "parent" is the creating *thread*, not the process.** If the thread that forked
+  the worker exits, the signal fires even though the controller is perfectly healthy —
+  killing workers for no reason. Workers are therefore forked by a thread guaranteed to
+  outlive the run, and **workers are spawned before the controller starts any background
+  threads**. That ordering also avoids the wider hazard of `fork()` from a multithreaded
+  C++ process, where another thread may hold a lock the child can never see released.
+
+None of these are optional. Tier T7 kills the controller with `SIGKILL` and asserts every
+worker is gone within a bounded time; a second test wedges the controller without killing
+it, and asserts the heartbeat layer catches it.
 
 Documentation must state plainly that software thermal protection is a backstop
 *behind* the CPU's own throttling and thermal shutdown, never a substitute.
@@ -462,7 +495,7 @@ Concrete pairings:
 | Particles | Barnes-Hut / neighbour lists | Direct O(n²) force summation on a small particle subset |
 | Ray tracing | BVH traversal | Brute-force ray/primitive intersection for sampled pixels |
 | Sort | Parallel radix / merge | Permutation check + ordering check (no second sort) |
-| Compression | Optimized codec | Byte-exact round-trip identity (self-oracular) |
+| Compression | Optimized codec | Byte-exact round-trip identity **plus input re-verification** (F18 — the round trip alone validates the codec, not the input) |
 | Graph | Parallel BFS / PageRank | Scalar BFS on a subgraph; triangle-inequality invariant |
 | Monte-Carlo | Vectorized batches | Scalar replay of a fixed seed subset |
 
@@ -632,11 +665,37 @@ dying mid-write loses at most the last record.
 
 ---
 
-#### F17 — Verification perturbs what it measures *(medium — new in rev. 6)*
+#### F17 — The observer perturbs what it measures *(medium — generalized in rev. 7)*
 
-*Raised by the maintainer review.*
+*Raised by the maintainer review; broadened at its second prompting.*
 
-The independent-oracle doctrine (F11) has a cost the plan had not accounted for: a
+Revision 6 scoped this to verification cost. The review is right that verification is
+only one observer among several, and the others are just as capable of distorting a
+careful benchmark:
+
+| Observer | Cost it imposes |
+|---|---|
+| Expensive scalar oracle | Cores, cache, power (the original F17) |
+| Telemetry sampling | Syscalls and sysfs reads per sample, per source |
+| `perf_event` counter reads | Syscalls; on some platforms an IPI |
+| Crash-journal `fsync` every few seconds (F16) | Blocking I/O, wakeups, potential scheduler disturbance |
+| Optional remote sink | Network stack, interrupts, softirq wakeups |
+
+**All observer activity is budgeted, measured and recorded** — not just the oracle. The
+telemetry sample rate, the journal flush interval and the measured controller overhead
+are fields of every run, for the same reason the verification duty cycle is: two runs
+must never be compared without knowing what was watching them.
+
+There is a genuine tension between F16 and F17 — the crash journal wants frequent
+`fsync`, the benchmark wants none — and §4.4 resolves it the same way it resolved the
+cool-down question. **Benchmark** runs are minutes long and repeatable, so a benchmark
+lost to a panic is simply re-run: flush on window boundaries, not inside them.
+**Stress** runs are hours long and irreplaceable, so journal frequency wins and observer
+overhead is irrelevant against a workload saturating the machine. The modes want
+opposite things and each gets what it needs.
+
+The original finding, unchanged: the independent-oracle doctrine (F11) has a cost the
+plan had not accounted for: a
 scalar, unvectorized oracle is *slow by design*, and running it continuously on the same
 machine consumes cores, pollutes cache, draws power and shifts scheduling. In benchmark
 mode that directly corrupts the Load Signature — the measurement the mode exists to
@@ -664,6 +723,105 @@ compared without knowing whether they verified at the same rate.
 
 ---
 
+#### F18 — Corrupted input can silently redefine the expected answer *(blocking — new in rev. 7)*
+
+*Raised by the maintainer review. The most important finding since F11, and it corrects
+an overclaim I made twice.*
+
+Revisions 2–6 called compression's round trip "self-oracular" and "the strongest and
+cheapest verification available anywhere in the suite." That is **wrong**, and the
+counter-example is devastatingly simple:
+
+```text
+generate X  →  bit flip in RAM  →  X′
+               compress(X′) → C
+               decompress(C) → X′
+               compare X′ against X′   →  PASSES
+```
+
+The corruption became the truth. A round trip proves the **codec** is correct; it proves
+nothing about the integrity of the **source buffer**. For a tool whose entire purpose is
+detecting RAM corruption, that is a hole straight through the middle of the first
+milestone.
+
+The same defect is not specific to compression. It applies wherever the verifier reads
+the same buffer the workload read:
+
+| Workload | The silent failure |
+|---|---|
+| Compression | Source corrupted before compression; round trip agrees with itself |
+| Dense linear | `A` corrupted to `A′`; `x` now solves `A′x = b`, so the residual `‖A′x − b‖` is *small*. Corruption redefined the problem rather than failing the check |
+| Stencil / particles | Corrupted initial state produces a self-consistent but wrong trajectory; invariants still hold |
+| Sort | Corrupted key sorts correctly into the wrong position; output is still a sorted permutation of the *corrupted* input |
+
+**Resolution — verification-input integrity.** The mechanism already exists; F8's
+counter-based RNG makes input data a pure function of `(seed, index)`, so truth can be
+*regenerated* rather than trusted:
+
+1. **Input buffers are periodically re-verified against regenerated truth**, not merely
+   used. Frequency is a configured, recorded parameter — this is expensive-class
+   verification under F17.
+2. **Where input cannot be regenerated** (it was read, derived, or is too costly), it
+   carries a checksum computed at generation time and re-verified before use. Note this
+   is strictly weaker: a corrupted checksum yields a false alarm, which is the safe
+   direction, but the covered window is narrower.
+3. **Control state is redundantly protected and controller-owned.** Seeds, indices,
+   tolerances, and expected checksums are small and catastrophic to lose: a corrupted
+   seed makes regeneration produce different data and reports a hardware fault that never
+   happened. Store them triplicated with majority vote, in the controller's address space,
+   and re-validate on every use.
+4. **Error records distinguish input corruption from output corruption**, because the
+   two implicate different things and the user needs to know which was seen.
+
+Compression's round trip keeps its value — it still catches corruption during
+compression, during decompression, of the compressed buffer, and codec bugs. It is
+simply not *complete*, and pairing it with input re-verification closes the window it
+cannot see. It remains the right first workload (F14); the claim "self-oracular" is
+withdrawn.
+
+---
+
+#### F19 — The runtime platform question is about ABI, not kernel version *(high — new in rev. 7)*
+
+*Raised by the maintainer review. Affects M0's release-build strategy.*
+
+Open question 11 was framed as "minimum supported kernel". That framing is wrong, and
+the real constraint is more consequential: **userspace ABI.**
+
+Measured on this reference platform:
+
+| | Ubuntu 24.04 (reference) | Ubuntu 22.04 |
+|---|---|---|
+| glibc | **2.39** — symbols up to `GLIBC_2.39` | 2.35 |
+| libstdc++ | up to `GLIBCXX_3.4.33` | up to `GLIBCXX_3.4.30` |
+
+A binary linked on 24.04 acquires versioned symbol requirements that simply do not exist
+on 22.04, and fails to start there — regardless of kernel version. glibc's own guidance
+is to build on the oldest system you intend to support. So "reference platform" and
+"minimum runtime" are two different decisions, and only the first has been made.
+
+This matters because the draft (§4) explicitly wants LoadForge usable from **live and
+rescue media**, where the userspace is whatever the medium happens to carry.
+
+**Resolution: a fully static release build**, which dissolves the question rather than
+answering it.
+
+- Verified on this container: a C++20 binary using `std::thread` links `-static` and runs
+  clean. LoadForge is an unusually good candidate — it deliberately has **no third-party
+  runtime dependencies**, performs no DNS or NSS lookups, and never `dlopen`s, which are
+  the three things that make static glibc problematic.
+- The project's existing no-runtime-dependencies principle and the live-media goal turn
+  out to converge on the same artifact.
+- Dynamic builds remain the default for distribution packaging, where the distro owns the
+  ABI question anyway.
+
+So: **develop and CI on 24.04; ship a static artifact for live media; declare 24.04 as
+the minimum only for the dynamically-linked build.** A CI job builds and smoke-tests the
+static artifact so it cannot rot. Decide before M0's release-build strategy is written —
+which is why this is a finding rather than a deferred question.
+
+---
+
 ## 3. Principles adopted
 
 1. **Framework first, breadth second.** One workload end to end beats twelve stubs.
@@ -674,12 +832,14 @@ compared without knowing whether they verified at the same rate.
 5. **Every metric is nullable**; absence is first-class and reported (F3).
 6. **The tool must be able to accuse itself** — self-test before any long run (F2).
 7. **Supervision is out-of-process**, because workers are expected to die (F9).
-8. **Evidence must survive the machine**, not just the process (F16).
-9. **The measurement must not be the thing measured** — verification cost is bounded,
+8. **Input is verified, never trusted** — corrupted input must not become the expected
+   answer (F18).
+9. **Evidence must survive the machine**, not just the process (F16).
+10. **The measurement must not be the thing measured** — verification cost is bounded,
    recorded, and kept out of benchmark windows (F17).
-10. **Conclusions are reported as evidence with confidence, never as verdicts**
+11. **Conclusions are reported as evidence with confidence, never as verdicts**
     ([`verification.md`](verification.md)).
-11. **Test code is product code.**
+12. **Test code is product code.**
 
 ---
 
@@ -871,6 +1031,7 @@ generation — the project uses classic headers.
 | Language | C++20 | Draft §44. GCC 13.3 / Clang 18.1 per the reference platform. |
 | Build | **CMake ≥ 3.28** + Ninja, `CMakePresets.json` | Matches the 24.04 baseline; presets keep local and CI builds identical. |
 | **License** | **`GPL-3.0-or-later`** | Owner decision. See §5.1. |
+| **Release artifact** | **Dynamic** (distro packaging) **+ fully static** (live/rescue media) | F19 — verified buildable here; LoadForge has no third-party runtime deps, no NSS/DNS and no `dlopen`, which is what usually makes static glibc painful. |
 | **Target architectures** | **x86-64 and ARM64**, both first-class | Free `ubuntu-24.04-arm` CI makes ARM validation cost nothing, and running on weakly-ordered hardware is a far stronger memory-ordering check than TSan alone. See §4.5. |
 | **Test framework** | **GoogleTest + GMock** (confirmed) — pinned to an exact revision, system-installed fallback, `LOADFORGE_BUILD_TESTS=OFF` path | GMock matters for the platform fakes (F3) and the supervision tier (T7). Pinning and the fallback keep offline / live-media builds working. BSD-3-Clause, GPL-compatible, test-only. |
 | TOML | **Vendored pinned header-only parser** (e.g. `toml++`) in `third_party/` | The review is right that hand-rolling a parser is needless risk. Vendoring keeps third-party *external* dependencies at zero. |
@@ -994,6 +1155,7 @@ LoadForge/
 │   │                               #       × {gcc-13, clang-18}
 │   ├── sanitizers.yml              # asan+ubsan, tsan — both arches (§4.5)
 │   ├── portability.yml             # LOADFORGE_SIMD=scalar on both arches
+│   ├── release-static.yml         # fully static artifact, built + smoke-tested (F19)
 │   ├── licensing.yml               # SPDX headers, dep compatibility, DCO (§5.1, §5.2)
 │   └── coverage.yml                # patch + module coverage gates
 │
@@ -1220,9 +1382,9 @@ for coverage.
 
 | # | Milestone | Contents | Exit criterion |
 |---|---|---|---|
-| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, **CONTRIBUTING + issue/PR templates (§5.2)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; patch-coverage gate active; scalar build passing on both arches |
-| **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
-| **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **minimal telemetry capability probe** | `loadforge stress --test compression` runs end to end; oracle, fault-injection, determinism and supervision tiers pass; capability set reported at start |
+| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; patch-coverage gate active; scalar build passing on both arches |
+| **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
+| **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **input-integrity re-verification (F18)** + minimal telemetry capability probe | `loadforge stress --test compression` runs end to end; oracle, fault-injection, determinism and supervision tiers pass; capability set reported at start |
 | **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **`FpEnvironment` contract (F15)**; first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
 | **M3** | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)**, **per-provider remediation (F3)**, **verification duty cycle (F17)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; whole-project coverage gate activated |
 | **M4** | Workload breadth | Remaining workloads (3–11) + primitives layer | Each has an independent oracle, invariants, determinism and fault-injection tests |
@@ -1264,6 +1426,10 @@ research-flavoured one and is correctly last.
 | Kernel panic destroys the evidence of the most valuable run | **High** | Medium | F16: compact append-only crash journal, ~150 KB/hour, optional remote sink |
 | Oracle cost distorts the Load Signature it is measured alongside | Medium | Medium | F17: cheap/expensive split, duty cycle recorded, expensive work outside benchmark windows |
 | Fault-isolation output overstates certainty and is confidently wrong in public | Medium | Medium | `verification.md`: evidence-and-confidence reporting, never bare verdicts |
+| **Corrupted input silently becomes the expected answer, so real corruption passes** | **Fatal to purpose** | **High if unaddressed** | F18: regenerate-and-compare input verification; redundant controller-owned control state |
+| Corrupted seed or tolerance reports a hardware fault that never happened | High | Low | F18: control state triplicated with majority vote, re-validated on use |
+| Release binary will not start on the user's live/rescue medium | Medium | **High if dynamic-only** | F19: fully static release artifact, built and smoke-tested in CI |
+| Orphaned worker from a `PR_SET_PDEATHSIG` race holds the machine at full load | High | Medium | F9: `prctl` first then `getppid()` check; fork from a long-lived thread before controller threads start |
 | Vendored dependency turns out GPL-incompatible | Medium | Low | §5.1: licence compatibility to be checked in CI, not assumed |
 
 ---
@@ -1297,12 +1463,15 @@ research-flavoured one and is correctly last.
     workload group in the mixed test? Per-group isolation gives better fault containment
     and attribution; one process is simpler and cheaper to synchronize.
     *Recommendation: single worker process at M1, revisit at M5.*
-11. **Minimum supported kernel** *(new)*. The reference platform is 24.04, but LoadForge
-    is explicitly intended to run from live/rescue media (draft §4), which may carry
-    older or newer kernels than the build host. Telemetry interfaces differ across
-    kernel generations. *Recommendation: build on 24.04, but declare a minimum runtime
-    kernel — 5.15 (22.04 LTS) is a reasonable floor — and let the capability model (F3)
-    absorb the rest.*
+11. **Minimum runtime platform** *(reframed in rev. 7 — was "minimum supported kernel")*.
+    The review is right that the binding constraint is **userspace ABI, not kernel
+    version**: a 24.04-linked binary needs `GLIBC_2.39` and `GLIBCXX_3.4.33` symbols that
+    22.04 does not have, and will not start there whatever the kernel. **F19 resolves the
+    hard part** with a fully static release artifact for live/rescue media. What remains
+    for you to confirm is narrower: *is Ubuntu 24.04 the declared minimum for the
+    **dynamically-linked** build?* *Recommendation: yes — with the static artifact
+    covering everything older, and 5.15 named as a runtime kernel floor for telemetry
+    expectations only.*
 
 ---
 
