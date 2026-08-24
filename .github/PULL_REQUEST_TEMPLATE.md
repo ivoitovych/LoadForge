@@ -34,7 +34,10 @@ e.g. T1 unit, T3 oracle, T5 fault injection, T6 determinism, T7 supervision.
 ## If this touches atomics or shared state
 
 - [ ] Every atomic operation names its memory order explicitly
-- [ ] Any lock-free construct carries a reviewed ordering argument in a comment
+- [ ] Anything weaker than `seq_cst` has a **documented synchronization argument** and a
+      **dedicated test exercising the intended ordering protocol**
+- [ ] If this introduces a lock-free protocol: measurement is cited showing the simple
+      (mutex / `seq_cst`) version was actually a bottleneck
 
 ## If this touches `platform/` or telemetry
 

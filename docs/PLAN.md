@@ -1,6 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 9 — fourth maintainer review; input-integrity lifecycle closed
+**Status:** revision 10 — fifth maintainer review; TSan/ARM evidence claim corrected
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -47,7 +47,7 @@ new evidence:
 
 | Decision | Consequence |
 |---|---|
-| **ARM64 promoted to a first-class target** | Revision 3 deferred ARM on the assumption that validating it required hardware the project lacks. **GitHub provides `ubuntu-24.04-arm` runners free for public repositories** (GA since August 2025), so ARM CI costs nothing. This does more than add a target: it retires the highest-severity risk in §9, because weak-memory-ordering bugs become detectable by running on weakly-ordered hardware instead of only approximated by TSan. See §4.5. |
+| **ARM64 promoted to a first-class target** | Revision 3 deferred ARM on the assumption that validating it required hardware the project lacks. **GitHub provides `ubuntu-24.04-arm` runners free for public repositories** (GA since August 2025), so ARM CI costs nothing. It gives weak-memory-ordering bugs an opportunity to manifest on weakly-ordered hardware. *(Revision 9 corrects this entry: it **reduces** rather than retires that risk — see §4.5.)* |
 | **Test framework: GoogleTest + GMock** | Confirmed. Pinned revision, system-installed fallback, `LOADFORGE_BUILD_TESTS=OFF` path for offline/live-media builds. Closes Q6. |
 | **Contributions welcome — issues, forks, PRs** | `CONTRIBUTING.md`, issue and PR templates, a code of conduct, and **DCO sign-off** rather than a CLA. See §5.2. |
 | **Commercial / dual licensing declined outright** | GPL-3.0-or-later permanently; no CLA, ever. The only deadline-bearing question, closed deliberately. See §5.2. |
@@ -111,6 +111,18 @@ objection and declared the design phase finishable. One finding is substantive:
 
 Their closing framing is adopted verbatim into §7.3: *100% coverage is a minimum
 completeness condition, not evidence by itself that the tests are good.*
+
+**Revision 10** incorporates a fifth maintainer review, whose verdict was to stop
+reviewing and start M0. One correction is technical:
+
+| Change | Origin |
+|---|---|
+| **The ARM/TSan claim was overstated, and revision 4 was wrong.** TSan is a dynamic *data-race* detector, not a weak-memory model checker — it does not enumerate permitted executions. ARM64 CI gives ordering bugs an *opportunity* to manifest; a rare-but-legal reordering may never occur in a run. They are **complementary evidence, not proof**, the risk is **reduced not retired**, and its likelihood goes back to Medium. | Review — **rev. 4 was wrong** |
+| **New rule:** anything weaker than `seq_cst` needs a documented synchronization argument *and* a dedicated ordering test. Added beyond the review: a standing preference for **not writing lock-free protocols at all** — mutexes and `seq_cst` by default, weaker orderings only where measured. Now principle 8. | Review, extended |
+| **Mutation gate given a precise rule: zero unexplained surviving mutants** — each killed by a better test or explicitly classified equivalent with reviewed justification, with the classified count reported and ratcheted. A percentage threshold would license a standing population of unexamined survivors, exactly the defect the 100% coverage rule avoids. | Review |
+| **"Every syscall through an injectable surface" narrowed** to platform-facing syscalls and platform-owned error paths — taken literally it reinstated the whole-OS abstraction §4.2 explicitly rejects. Writing `run.json` does not become fake-syscall architecture for coverage's sake. | Review — wording conflict |
+| F18's input bracket noted as itself an observer: in benchmark mode the opening and closing checks sit outside the timed window while the input stays immutable across it. | Review |
+| Duplicate corrected-ECC sentence removed; §11's leftover "minimum kernel" renamed to match Q11. | Review — housekeeping |
 
 ---
 
@@ -818,6 +830,11 @@ counter-based RNG makes input data a pure function of `(seed, index)`, so truth 
    the opening check and fails the closing one localizes the corruption **to the
    consumption window**, distinguishing "the input was already bad" from "the input went
    bad while the workload was reading it". Those implicate different hardware.
+
+   **The bracket is itself an observer (F17).** In benchmark mode the opening and closing
+   checks sit *outside* the timed measurement window, while the input stays immutable
+   across it — so the integrity guarantee holds without the verifier distorting the
+   measurement it brackets. In stress mode the checks are simply part of the load.
 2. **Where input cannot be regenerated** (it was read, derived, or is too costly), it
    carries a checksum computed at generation time and re-verified before use. Note this
    is strictly weaker: a corrupted checksum yields a false alarm, which is the safe
@@ -909,14 +926,17 @@ which is why this is a finding rather than a deferred question.
 5. **Every metric is nullable**; absence is first-class and reported (F3).
 6. **The tool must be able to accuse itself** — self-test before any long run (F2).
 7. **Supervision is out-of-process**, because workers are expected to die (F9).
-8. **Input is verified, never trusted** — corrupted input must not become the expected
+8. **Prefer boring concurrency.** Mutexes and `seq_cst` by default; weaker orderings only
+   where measurement demands it, and then with a written argument and a dedicated test
+   (§4.5). A concurrency bug here is indistinguishable from a hardware fault.
+9. **Input is verified, never trusted** — corrupted input must not become the expected
    answer (F18).
-9. **Evidence must survive the machine**, not just the process (F16).
-10. **The measurement must not be the thing measured** — verification cost is bounded,
+10. **Evidence must survive the machine**, not just the process (F16).
+11. **The measurement must not be the thing measured** — verification cost is bounded,
    recorded, and kept out of benchmark windows (F17).
-11. **Conclusions are reported as evidence with confidence, never as verdicts**
+12. **Conclusions are reported as evidence with confidence, never as verdicts**
     ([`verification.md`](verification.md)).
-12. **Test code is product code.**
+13. **Test code is product code.**
 
 ---
 
@@ -1012,8 +1032,9 @@ architectures.
 
 #### Why this is worth more than one extra target
 
-Free ARM CI does not merely add a platform. It **materially retires the highest-severity
-item in the risk register**.
+Free ARM CI **materially reduces** the highest-severity item in the risk register. It
+does not retire it, and revision 4 overstated this — the correction is recorded here
+rather than quietly edited away, because the difference matters.
 
 Revision 3 identified memory-ordering discipline as the most expensive thing to get
 wrong: x86-64 is total-store-ordered, ARM64 is weakly ordered, and code that is
@@ -1021,11 +1042,34 @@ wrong: x86-64 is total-store-ordered, ARM64 is weakly ordered, and code that is
 elsewhere. For this project that failure mode is uniquely bad — **a memory-ordering bug
 in LoadForge is indistinguishable from the hardware fault it claims to have found.**
 
-Without ARM hardware the only defence was ThreadSanitizer on x86, which models a weak
-memory model and catches a useful subset. With ARM CI the test suite runs on genuinely
-weakly-ordered hardware on every push. That is a categorically stronger check, and it
-arrives free. Deferring ARM would have meant carrying that risk for the entire life of
-the project and then discovering the accumulated bugs all at once.
+**What the two mechanisms actually give, stated precisely:**
+
+| Mechanism | What it does | What it does *not* do |
+|---|---|---|
+| **ARM64 CI** | Executes the code on a weakly-ordered architecture, giving ordering bugs an *opportunity* to manifest | Explore reorderings systematically. A rare-but-legal reordering may simply never occur during a run — passing ARM CI is not proof |
+| **ThreadSanitizer** | Dynamic **data-race** detection; instruments memory accesses and synchronization, and understands atomics and their orderings | Model weak memory. It is not a model checker and does not enumerate permitted executions — revision 4's claim that it "models a weak memory model" was wrong |
+
+They are **complementary evidence, not proof**. Neither establishes that a lock-free
+protocol is correct. Explicit memory-order reasoning and dedicated concurrency tests
+remain required, and the residual risk stays in §9 at a reduced likelihood rather than
+being marked away.
+
+**The rule that follows:**
+
+> Any use of an atomic weaker than `seq_cst` must carry a **documented synchronization
+> argument** and a **dedicated test exercising the intended ordering protocol**.
+
+And the stronger mitigation, which is a design preference rather than a test:
+**prefer not to write lock-free protocols at all.** Default to mutexes and `seq_cst`
+atomics; reach for `relaxed`/`acquire`/`release` only when measurement shows the simple
+version is actually a bottleneck, and then pay the full cost of the argument and the
+test. In a project where a concurrency bug is indistinguishable from a hardware fault,
+the cheapest defence by a wide margin is having less clever concurrency to be wrong
+about.
+
+Deferring ARM would still have been the wrong call: it would have meant carrying that
+reduced-but-real risk for the project's whole life and discovering the accumulated bugs
+at once.
 
 The same argument applies to cache-line geometry: ARM64 may be 64 or 128 bytes, and the
 false-sharing and coherence primitives depend on getting it right. On x86 a hardcoded
@@ -1452,9 +1496,22 @@ every line is covered either way. The only remaining signal is whether the tests
 *detect change*, which is what mutation testing measures.
 
 So `mull` is promoted from stretch goal to a first-class metric, run nightly across the
-project with a tracked mutation score, and gating on `verification/`, `config/`,
-`safety/` and `controller/supervision/`. A surviving mutant is a test-suite defect and is
-triaged like a bug.
+project and gating on `verification/`, `config/`, `safety/` and
+`controller/supervision/`.
+
+**The gate is not a percentage.** A mutation-score threshold ("95% of mutants killed")
+has the same defect as a coverage threshold: it licenses a standing population of
+unexamined survivors. The rule mirrors the coverage policy instead:
+
+> **Zero unexplained surviving mutants.**
+
+Every survivor is resolved one of two ways — **killed** by an improved test, or
+**explicitly classified** as equivalent or non-actionable with a reviewed written
+justification. Nothing is left in an unexamined third state.
+
+As with coverage exclusions, **the count of classified-equivalent mutants is reported in
+CI and may only decrease** without review. A surviving mutant is a test-suite defect and
+is triaged like a bug.
 
 #### Architectural consequences — these are features, not costs
 
@@ -1462,7 +1519,10 @@ A 100% gate is not free, and two of its costs land as design pressure that impro
 result:
 
 - **`platform/` must be 100% too**, which is only possible if every syscall is issued
-  through an injectable surface where `EACCES`, short reads, `EINTR` and `ENOMEM` can be
+  through an injectable surface — **platform-facing syscalls and the error paths the
+  platform layer owns, not ordinary file I/O such as writing `run.json`** (§4.2 rejects
+  that abstraction and the coverage gate does not reinstate it) — where `EACCES`, short
+  reads, `EINTR` and `ENOMEM` can be
   *forced* by a test. Revision 6 excused this layer at ≥80% "because some paths need real
   hardware." Under the new gate that excuse is gone, and the resulting design — a
   platform layer whose every error path has been deliberately exercised — is precisely
@@ -1578,7 +1638,7 @@ research-flavoured one and is correctly last.
 | **100% coverage achieved with assertion-free tests** | Medium | **High if unmitigated** | §7.3: at 100% the coverage number carries no information, so mutation testing becomes the primary metric; exclusion count reported and ratcheted |
 | 100% gate makes exploratory work painful and gets circumvented | Low | Medium | §7.3: spikes live on throwaway branches; the rule is nothing untested reaches `main`, not that no untested code is ever written |
 | Damage to poorly-cooled user hardware | Medium | Low | Conservative defaults, controller safety, clear warnings |
-| Memory-ordering bug indistinguishable from the hardware fault it "found" | Fatal to credibility | **Low** *(was Medium)* | §4.5: explicit memory orders, mandatory TSan, **and the suite now runs on genuinely weakly-ordered ARM hardware every push** |
+| Memory-ordering bug indistinguishable from the hardware fault it "found" | **Fatal to credibility** | **Medium** *(rev. 4 wrongly lowered this to Low)* | §4.5: explicit memory orders; documented synchronization argument **and** a dedicated ordering test for anything weaker than `seq_cst`; a standing preference for not writing lock-free protocols at all. ARM CI and TSan are complementary evidence that *reduces* exposure — neither is proof |
 | ~~Portability seams rot, making "add ARM later" a rewrite~~ | — | **Retired** | ARM is a first-class target with CI, so the seams cannot rot unnoticed |
 | ARM adds telemetry surface with no free hardware to validate it | Medium | Medium | ARM CI validates correctness; real ARM telemetry stays a T11 manual item on a cheap physical board |
 | Outside contribution weakens a determinism or verification contract | Medium | Medium | §5.2: PR template, CONTRIBUTING rules, and T3/T5/T6 tiers that fail loudly |
@@ -1642,7 +1702,7 @@ Still nothing implemented, by design.
 
 **Every question that gates M0 is now answered.** Licence, toolchain, architectures,
 test framework and contribution model are settled (§10); the four remaining questions —
-privilege policy, milestone confirmation, worker granularity, minimum kernel — all bite
+privilege policy, milestone confirmation, worker granularity, minimum runtime platform — all bite
 at M1 or later and each has a stated default.
 
 **M0 begins on the owner's word:** repository scaffolding, `CMakeLists.txt` and presets,

@@ -71,7 +71,24 @@ compiles fine and fails rarely and non-deterministically on ARM. In this project
 failure mode is uniquely dangerous: **a memory-ordering bug in LoadForge is
 indistinguishable from the hardware fault it claims to have found.**
 
-CI runs the full suite on both architectures and under ThreadSanitizer. Both must pass.
+CI runs the full suite on both architectures and under ThreadSanitizer. Both must pass —
+but understand what that does and does not establish:
+
+- **ARM64 CI** gives ordering bugs an *opportunity* to manifest on weakly-ordered
+  hardware. A rare-but-legal reordering may simply never occur during a run.
+- **ThreadSanitizer** is a dynamic **data-race** detector that understands atomics and
+  synchronization. It is not a model checker and does not enumerate permitted executions.
+
+They are complementary evidence, **not proof**. So:
+
+> Any atomic weaker than `seq_cst` needs a **documented synchronization argument** and a
+> **dedicated test exercising the intended ordering protocol**.
+
+And the cheapest defence of all: **prefer not to write lock-free protocols.** Default to
+mutexes and `seq_cst`. Reach for `relaxed`/`acquire`/`release` only when measurement shows
+the simple version is a real bottleneck — then pay for the argument and the test. In this
+project a concurrency bug is indistinguishable from a hardware fault, so having less
+clever concurrency to be wrong about is worth more than any amount of testing it.
 
 ---
 

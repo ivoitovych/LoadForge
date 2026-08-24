@@ -309,8 +309,6 @@ not-applicable** — never zero, never fabricated. A tool that prints a bit clas
 derived from a floating-point tolerance breach is inventing evidence, and the whole
 credibility argument of §1 depends on not doing that.
 
-Corrected-ECC counts before and after the run accompany both types (F13).
-
 Corrected-ECC counts before and after the run are recorded alongside (F13) — a
 verification failure accompanied by rising corrected-ECC is a very different finding
 from one without.
