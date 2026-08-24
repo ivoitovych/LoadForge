@@ -122,8 +122,27 @@ For a tool built to detect RAM corruption this is the sharpest possible failure,
 **input integrity is verified, never assumed** (`PLAN.md` F18):
 
 1. **Regenerate and compare.** Counter-based RNG (F8) makes input a pure function of
-   `(seed, index)`, so truth is regenerable at any time without storing it. Input buffers
-   are re-verified against regenerated truth at a configured, recorded interval.
+   `(seed, index)`, so truth is regenerable at any time without storing it.
+
+   **The governing invariant is temporal, not just spatial:**
+
+   > An input block must remain independently verifiable until every result derived from
+   > it has passed verification.
+
+   Periodic sampling is not enough. If the input is corrupted, consumed, and then
+   modified or freed, a later check finds nothing and the wrong result has already been
+   accepted. So bracket the consumption window instead of sampling it:
+
+   ```text
+   regenerate/check  →  consume  →  verify result  →  regenerate/check again
+   ```
+
+   The source block stays immutable across the bracket — not modified, reused or freed —
+   or, where that is impractical, is regenerated at output-verification time instead.
+
+   A block that passes the opening check and fails the closing one localizes corruption
+   **to the consumption window**, which is a different finding from an input that was
+   already bad.
 2. **Checksum where regeneration is impractical** — weaker, and known to be weaker: it
    narrows the window rather than closing it, though a corrupted checksum fails safe by
    raising a false alarm rather than hiding a real one.
@@ -131,6 +150,13 @@ For a tool built to detect RAM corruption this is the sharpest possible failure,
    tiny and catastrophic to lose — a corrupted seed makes regeneration produce different
    data and reports a hardware fault that never happened. They are controller-owned,
    stored redundantly with majority vote, and re-validated on every use.
+
+   Redundancy only counts if the copies fail independently: separate cache lines at
+   minimum, separate pages preferably, spread across NUMA nodes where available, each
+   copy independently checksummed so a known-bad copy is excluded rather than voted with,
+   and never all written by one `memcpy`. A three-way disagreement stops the run rather
+   than picking a winner. See `PLAN.md` F18 for the full placement rules and the honest
+   limit — the voting code runs on the suspect machine too.
 4. **Report which side failed.** An error record states whether the *input* or the
    *output* was found corrupt. They implicate different things and the user needs to know
    which was seen.

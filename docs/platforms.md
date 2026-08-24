@@ -91,11 +91,17 @@ built against.
 | Component | Developed against | Minimum supported | Adaptation | Notes |
 |---|---|---|---|---|
 | Architecture | **x86-64**, **ARM64** | both first-class | design | SVE and 32-bit ARM out of scope |
-| Distribution | Ubuntu 24.04.4 LTS | any, via static build | build | |
+| Distribution userspace | Ubuntu 24.04.4 LTS | **independent**, via static build | build | Userspace only — see the note below |
 | glibc (dynamic build) | **2.39** | 2.39 | build | A 24.04-linked binary cannot start on 22.04 (F19) |
-| glibc (static build) | 2.39 | **none** | build | No NSS/DNS/`dlopen`, so static linking is clean — verified |
+| Host glibc (static build) | 2.39 | **no host requirement** | build | No NSS/DNS/`dlopen`, so static linking is clean — verified |
 | Kernel | 6.18 (dev host) | **5.15** | capability | A floor for *telemetry expectations*, not a hard block |
 | cgroup | v2 | v2 | capability | v1 detected and reported unsupported for limits |
+
+> **What the static build does and does not solve.** It removes the **host glibc and
+> libstdc++ ABI requirement** — nothing more. Kernel ABI, CPU ISA and architecture
+> requirements still apply in full: the static x86-64 artifact will not run on ARM64, and
+> a kernel too old to expose an interface still cannot expose it. "Independent of
+> distribution userspace" is the precise claim; "runs on any Linux" is not.
 
 ### Test and build dependencies
 
@@ -104,7 +110,7 @@ built against.
 | GoogleTest + GMock | Pinned revision, system fallback, `BUILD_TESTS=OFF` path | BSD-3-Clause | **No** — test only |
 | toml++ | Vendored, pinned, header-only | MIT | Yes — vendored, not a third-party *dependency* |
 | gcovr | CI-installed | BSD | No |
-| mull | CI-installed, nightly | Apache-2.0 | No |
+| mull | CI-installed, nightly | Apache-2.0 | No — Ubuntu AArch64 packages exist, so the ARM64 leg is covered |
 
 All GPL-compatible (§5.1). Third-party **runtime** dependencies remain zero.
 
@@ -152,7 +158,11 @@ runners. It is a large jump:
 3. **The static build already removes the pressure.** F19 means the runtime floor is not
    set by the build host, so there is no compatibility reason to chase the newest.
 
-**But a 26.04 job runs in CI as a non-blocking canary.** GCC 15 will produce diagnostics
+One status note that reinforces the decision: **the `ubuntu-26.04` and `ubuntu-26.04-arm`
+runner images are currently Public Preview**, not stable images. Gating on a preview
+runner would be unwise regardless of the toolchain jump.
+
+**So a 26.04 job runs in CI as a non-blocking canary.** GCC 15 will produce diagnostics
 GCC 13 does not, and with `-Werror` those would be build failures — so the job warns
 rather than gates. This is the "adapt on demand" strategy with an early-warning signal
 attached: the adaptation work is *visible* before it becomes urgent, rather than

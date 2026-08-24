@@ -51,6 +51,18 @@ is associative, so accumulation order does not matter. Required for: integer ari
 sorting, compression, hashing, checksums, and the **integer** graph results (BFS
 distances, connected-component labels).
 
+**With one C++ qualification that must not be skipped.** Integer arithmetic is
+associative *mathematically*; in C++, **signed integer overflow is undefined behaviour**,
+and a compiler entitled to assume it cannot happen may optimize differently on different
+targets. An overflowing `int64_t` reduction is not portable, not associative in practice,
+and not `BitExact` — it is undefined. The contract is therefore explicit:
+
+> `BitExact` arithmetic uses fixed-width **unsigned** modular arithmetic, checked
+> arithmetic, or operands proven not to overflow.
+
+This is the same line the project already draws in refusing to rely on undefined
+behaviour anywhere (draft §40), and UBSan — a required CI job — enforces it directly.
+
 For graph workloads, note the qualifier: only *order-independent* outputs qualify. A BFS
 distance array is a property of the graph and is `BitExact`; a BFS *tree* (which parent
 each vertex was reached from) depends on frontier ordering and is not. Checksum the

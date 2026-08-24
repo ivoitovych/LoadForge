@@ -1,7 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 8 — 100% coverage gate adopted; platform strategy and supported
-components recorded
+**Status:** revision 9 — fourth maintainer review; input-integrity lifecycle closed
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -100,6 +99,19 @@ ready for M0. One finding is fundamental; the rest correct or sharpen existing t
 | **100% line and branch coverage, gated from M0**, with code and tests landing in the same change | §7.3 rewritten; tiered thresholds and patch coverage withdrawn as unnecessary. Mutation testing promoted to the primary quality metric, because at 100% coverage the coverage number itself stops carrying information. `platform/`'s ≥80% excuse is withdrawn — every syscall error path must be forceable by a test. |
 | **Develop against practical versions; adapt on demand** | New [`platforms.md`](platforms.md) — an audit of the actual development platform, a supported-components table, and the line between what can be deferred and what cannot. Ubuntu 26.04 becomes a non-blocking CI canary rather than a target. |
 
+**Revision 9** incorporates a fourth maintainer review, which found no architectural
+objection and declared the design phase finishable. One finding is substantive:
+
+| Change | Origin |
+|---|---|
+| **F18 gains a temporal invariant.** Revision 8 said input is "periodically re-verified", which closes the spatial gap but not the temporal one: verify → corrupt → consume → buffer freed, and the periodic check never sees it. Now: *an input block must remain independently verifiable until every result derived from it has passed verification* — the consumption window is bracketed, not sampled. | Review — **the one genuinely important point** |
+| **Triplication needs placement rules.** Three adjacent copies share a cache line, page or DRAM row and fail together. Now: separate lines, preferably separate pages, spread across NUMA nodes, each independently checksummed, never written by one `memcpy`, three-way disagreement is a hard failure. | Review — rev. 8 was naive |
+| **`BitExact` needs a C++ qualification.** Integer arithmetic is associative mathematically, but signed overflow is *undefined behaviour* in C++, so an overflowing `int64_t` reducer is not portable at all. Contract: unsigned modular, checked, or proven not to overflow. UBSan enforces it. | Review — **a real hole** in rev. 5's reasoning |
+| Stale coverage text (M0 "patch-coverage gate", M3 "whole-project gate activated", §11) removed; F1's `std::fma` prose brought in line with the normative document; static-build scope narrowed to *host userspace ABI only*; 26.04 runners noted as Public Preview. | Review — housekeeping |
+
+Their closing framing is adopted verbatim into §7.3: *100% coverage is a minimum
+completeness condition, not evidence by itself that the tests are good.*
+
 ---
 
 ## 2. Review of the project description
@@ -140,8 +152,15 @@ The two goals are not in conflict, because there are two different things named 
 - **Implicit contraction** — the compiler fusing `a*b+c` at its own discretion.
   Varies by compiler, version and optimization level; a determinism hazard with no
   compensating benefit.
-- **Explicit FMA** — `std::fma`, `_mm256_fmadd_pd`, and friends. Fully deterministic
-  (single rounding, specified by IEEE 754), and exercises the FMA units just as hard.
+- **Explicit FMA** — `std::fma`, `_mm256_fmadd_pd`, `vfmaq_f64`. Fully deterministic:
+  one rounding rather than two, specified by IEEE 754.
+
+  **Determinism and hardware pressure are separate properties, and only the first comes
+  free.** `std::fma` guarantees the IEEE semantics but *not* the hardware instruction — it
+  can compile to a libm call and a software implementation, which is orders of magnitude
+  slower and stresses nothing. Where saturating the FMA units is the objective, the ISA
+  intrinsic is required. `std::fma` is for oracles and portable code. See
+  [`determinism.md`](determinism.md), which is normative on this.
 
 **Resolution: `-ffp-contract=off` *plus* explicit FMA intrinsics in the workloads that
 intend to stress FMA.** This gives full FMA pressure *and* reproducibility across
@@ -765,9 +784,40 @@ the same buffer the workload read:
 counter-based RNG makes input data a pure function of `(seed, index)`, so truth can be
 *regenerated* rather than trusted:
 
-1. **Input buffers are periodically re-verified against regenerated truth**, not merely
-   used. Frequency is a configured, recorded parameter — this is expensive-class
-   verification under F17.
+1. **Input buffers are re-verified against regenerated truth**, not merely used.
+   Frequency is a configured, recorded parameter — this is expensive-class verification
+   under F17.
+
+   **But periodic checking closes only the spatial gap, not the temporal one**, and
+   revision 8 stopped short here. Consider:
+
+   ```text
+   verify input OK  →  bit flips  →  workload consumes corrupted input
+                    →  buffer modified / reused / freed  →  periodic check never sees it
+   ```
+
+   The corruption is gone before anything looks for it, and the wrong result it produced
+   has already been accepted. The governing invariant is therefore stronger than
+   "periodically":
+
+   > **An input block must remain independently verifiable until every result derived
+   > from it has passed verification.**
+
+   In practice that means bracketing the consumption window rather than sampling it:
+
+   ```text
+   regenerate/check  →  consume  →  verify result  →  regenerate/check again
+   ```
+
+   with the source block held immutable — not modified, reused or freed — across the
+   whole bracket. Where holding it is impractical, the individual input block is
+   regenerated *at output-verification time* instead, which achieves the same thing
+   without keeping the buffer alive.
+
+   The bracket also yields a diagnostic the periodic scheme cannot: an input that passes
+   the opening check and fails the closing one localizes the corruption **to the
+   consumption window**, distinguishing "the input was already bad" from "the input went
+   bad while the workload was reading it". Those implicate different hardware.
 2. **Where input cannot be regenerated** (it was read, derived, or is too costly), it
    carries a checksum computed at generation time and re-verified before use. Note this
    is strictly weaker: a corrupted checksum yields a false alarm, which is the safe
@@ -777,6 +827,26 @@ counter-based RNG makes input data a pure function of `(seed, index)`, so truth 
    seed makes regeneration produce different data and reports a hardware fault that never
    happened. Store them triplicated with majority vote, in the controller's address space,
    and re-validate on every use.
+
+   **Triplication only helps if the copies can fail independently**, and three adjacent
+   copies cannot — they may share a cache line, a page, a DRAM row, or the same failing
+   rank. Placement is therefore part of the requirement:
+
+   - copies on **different cache lines** at minimum, **different pages** preferably, and
+     separated by more than one page so they do not share a DRAM row;
+   - on a NUMA machine, spread across **different nodes** where available;
+   - each copy **independently checksummed**, so a copy known to be bad is *excluded*
+     rather than voted with — a 2-of-3 vote among two good copies and one silently bad
+     one is much weaker than a 2-of-2 vote among two verified ones;
+   - **never all written through a single `memcpy`-like operation**, which would make one
+     faulty store corrupt all three;
+   - a three-way disagreement is a **hard failure, not a guess** — the run stops and says
+     so rather than picking a winner.
+
+   The honest limit: the voting code itself runs on the machine under suspicion, so this
+   reduces the probability of silently trusting corrupted control state rather than
+   eliminating it. Physical separation is what makes the reduction real rather than
+   nominal.
 4. **Error records distinguish input corruption from output corruption**, because the
    two implicate different things and the user needs to know which was seen.
 
@@ -1426,10 +1496,27 @@ written is tested" — it is **nothing untested reaches `main`**.
 
 #### The standing caveat, unchanged
 
-Coverage remains **necessary and not sufficient**. The T3/T5/T6/T7 tiers — oracle, fault
-injection, determinism, supervision — are still stronger evidence of quality than any
-coverage number, and a milestone may not exit on coverage alone. 100% simply removes
-coverage as a place to hide.
+> **100% coverage is a minimum completeness condition, not evidence by itself that the
+> tests are good.**
+
+That phrasing is the one to keep. Coverage says every line and branch was *reached*; it
+says nothing about whether anything was *checked*. The quality evidence comes from the
+combination:
+
+```text
+100% coverage        every path reached
++ assertions         something is actually checked
++ mutation testing   the checks detect breakage
++ fault injection    corruption is caught and classified
++ independent oracles    the algorithm is right, not merely consistent
++ property/invariant tests   the maths holds
++ determinism tests  the contract is not silently weakened
++ supervision tests  the crash paths work
+```
+
+Each answers a question the others cannot. The T3/T5/T6/T7 tiers remain stronger evidence
+than any coverage number, and a milestone may not exit on coverage alone. 100% simply
+removes coverage as a place to hide.
 
 ### 7.4 What CI cannot test — stated plainly
 
@@ -1455,11 +1542,11 @@ for coverage.
 
 | # | Milestone | Contents | Exit criterion |
 |---|---|---|---|
-| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; **100% line and branch coverage gate active and passing**; scalar build passing on both arches; static artifact built |
+| **M0** | Foundation | Scaffolding, CMake + presets, CI, **100% line/branch coverage gate**, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; **100% line and branch coverage gate active and passing**; scalar build passing on both arches; static artifact built |
 | **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
 | **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **input-integrity re-verification (F18)** + minimal telemetry capability probe | `loadforge stress --test compression` runs end to end; oracle, fault-injection, determinism and supervision tiers pass; capability set reported at start |
 | **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **`FpEnvironment` contract (F15)**; first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
-| **M3** | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)**, **per-provider remediation (F3)**, **verification duty cycle (F17)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; whole-project coverage gate activated |
+| **M3** | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)**, **per-provider remediation (F3)**, **verification duty cycle (F17)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; 100% gate still passing; **mutation gating extended** beyond the M0 set |
 | **M4** | Workload breadth | Remaining workloads (3–11) + primitives layer | Each has an independent oracle, invariants, determinism and fault-injection tests |
 | **M5** | Dynamic mixed + cycling | Flagship mixed test (§17), thermal/power cycling (§35), **crash journal (F16)** — required before serious multi-hour runs | A five-hour schedule completes with continuous verification |
 | **M6** | Explore | Search strategy, objectives, drift correction, confidence reporting (F5) | Repeatable worst-case discovery with reported variance on real hardware |
@@ -1559,7 +1646,7 @@ privilege policy, milestone confirmation, worker granularity, minimum kernel —
 at M1 or later and each has a stated default.
 
 **M0 begins on the owner's word:** repository scaffolding, `CMakeLists.txt` and presets,
-the CI matrix across {x86-64, ARM64} × {GCC 13, Clang 18}, the patch-coverage gate,
+the CI matrix across {x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate,
 clang-tidy and clang-format, the SPDX / licence / DCO checks, the scalar-SIMD
 portability-and-cross-arch-determinism job, and the ADR seed.
 
