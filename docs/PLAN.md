@@ -713,25 +713,34 @@ move to a future GPL version without tracking down every contributor.
   shipped on live/rescue media, which the draft (§4) explicitly contemplates — the
   media must carry the source or a written offer.
 
-**One consequence worth stating plainly rather than discovering later.** GPL is a good
-fit for a standalone diagnostic tool and is the natural licence for something this close
-to the Linux ecosystem. It does, however, prevent LoadForge from being embedded as a
-library inside proprietary QA or manufacturing test tooling — and hardware vendors and
-board manufacturers are a plausible audience for exactly this kind of suite. That may be
-precisely the intent; it is worth being a deliberate choice rather than a surprise. If a
-reusable engine is ever split out, LGPL for that component while the CLI stays GPL is
-the conventional resolution, and it is far easier to do that at the split than to
-relicense afterwards.
+**The consequence, now a settled choice rather than an open risk.** GPL prevents
+LoadForge from being *shipped* embedded inside proprietary QA or manufacturing-test
+tooling without releasing source. Revision 4 declines commercial and dual licensing
+outright, so this is intended (§5.2). It does not restrict *use*: internal validation,
+production-line and fleet use carry no obligation, because GPL obligations attach to
+distribution.
 
-Because the repository has **no outside contributions yet**, the licence remains
-trivially changeable today. That stops being true the moment the first external patch
-is accepted — and §5.2 opens the door to exactly that, so any licence change must happen
-first.
+The licence is therefore fixed. It remains formally changeable only until the first
+outside contribution is accepted, and no change is planned or wanted.
 
 ### 5.2 Contribution model
 
 **Decision: contributions welcome — issues, forks and pull requests.** This makes
 several things load-bearing that would otherwise be optional.
+
+**Commercial and dual-licensing: explicitly declined (revision 4).** The question was
+raised and closed deliberately rather than left to lapse: LoadForge is
+**GPL-3.0-or-later and nothing else**, permanently. There will be no CLA, no copyright
+assignment, and no proprietary-licensing track. This settles the only decision on the
+list that carried a real deadline — a CLA can only be adopted before outside
+contributions arrive, and the project is now open to them.
+
+One clarification, since revision 3 stated the consequence more harshly than the licence
+actually does: **the GPL restricts distribution, not use.** A hardware vendor, board
+manufacturer or lab may run LoadForge internally on a production line, in validation, or
+across a fleet, with no obligation whatsoever — internal use triggers nothing. What is
+foreclosed is *shipping* LoadForge embedded inside a proprietary product without
+releasing the corresponding source. That is the intended outcome, not a side effect.
 
 **DCO, not a CLA.** Contributors sign off commits with
 `Signed-off-by: Name <email>` (`git commit -s`), certifying they have the right to
@@ -739,12 +748,13 @@ submit the work under the project's licence. This is the
 [Developer Certificate of Origin](https://developercertificate.org/), the same
 lightweight mechanism the Linux kernel uses. A CLA — which asks contributors to assign
 or license rights to the project owner — is heavier, deters casual contributors, and is
-only worth its friction if the project intends to relicense or dual-license later. If a
-proprietary-licensing option is ever wanted, that decision must be made **now**, because
-retrofitting a CLA means contacting every past contributor.
+only worth its friction if the project intends to relicense or dual-license later. Since
+that option has been declined outright, a CLA would be pure cost. **Decided: DCO,
+permanently.** A CI check enforces the sign-off.
 
-*Recommendation: DCO. It matches GPL's spirit and keeps the barrier low.* A CI check
-enforces the sign-off.
+Note that `-or-later` still permits adopting a future FSF-published GPL version without
+contacting contributors. That is not "relicensing" in the sense declined above, and it
+remains available.
 
 **A hardware-failure issue template is the highest-value piece here.** LoadForge's most
 important inbound report is "my machine failed your test", and such a report is useless
@@ -1063,6 +1073,7 @@ research-flavoured one and is correctly last.
 | **4** | **Architectures** | **x86-64 and ARM64, both first-class.** Free `ubuntu-24.04-arm` CI for public repos removed the reason to defer — §4.5 | **4** *(reverses rev. 3)* |
 | **6** | **Test framework** | **GoogleTest + GMock**, pinned, with system fallback and tests-off build | **4** |
 | — | **Contribution model** | **Open** — issues, forks, PRs; **DCO** sign-off, not a CLA — §5.2 | **4** |
+| — | **Commercial / dual licensing** | **Declined outright.** GPL-3.0-or-later only, permanently; no CLA, ever. The one deadline-bearing question, closed deliberately — §5.2 | **4** |
 | 7 | Cool-downs in the default schedule | Resolved by mode semantics — §4.4 | 2 |
 | 8 | Repository name casing | Keep `LoadForge`; binary and namespace `loadforge` | 2 |
 
