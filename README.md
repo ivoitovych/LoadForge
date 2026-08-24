@@ -1,0 +1,189 @@
+# LoadForge
+
+**A lightweight, composable, self-verifying hardware reliability and load-testing framework for Linux.**
+
+LoadForge builds complete, realistic computational workloads to stress the whole
+CPU–cache–memory complex, continuously verifies that the machine still computes
+*correctly* under that stress, and records how the physical machine reacted —
+power, temperature, frequency, throttling, bandwidth — on a single common timeline.
+
+---
+
+## Project status
+
+> **Pre-alpha — design stage. There is no code yet.**
+
+| | |
+|---|---|
+| **Phase** | Planning / architecture |
+| **Code** | None yet |
+| **Public API** | Not defined |
+| **Usable** | No |
+
+This repository currently contains two documents and nothing else:
+
+| Document | What it is |
+|---|---|
+| [`LoadForge-Integrated-Hardware-Reliability-Load-Test-Suite.md`](LoadForge-Integrated-Hardware-Reliability-Load-Test-Suite.md) | The original project description — a **working draft**, not a specification |
+| [`docs/PLAN.md`](docs/PLAN.md) | The development plan: a critical review of that draft, the architecture, the directory layout, the testing strategy, and the milestones |
+
+Start with `docs/PLAN.md` if you want to know where the project is going and why.
+
+---
+
+## The idea
+
+Many stress tools report the same thing:
+
+```text
+CPU utilization: 100%
+```
+
+That number says almost nothing. Two workloads can both pin every core at 100%
+while producing radically different physical conditions inside the machine — one
+drawing 72 W and heating the die at 4.8 °C/s, the other drawing 49 W but
+saturating DRAM and the cache-coherence fabric.
+
+LoadForge is built to answer the questions that actually matter:
+
+- Which workload causes the highest package power?
+- Which heats the silicon fastest, and which reaches the highest equilibrium temperature?
+- Which stresses DRAM and the memory controller hardest?
+- Which generates the most cache-coherency traffic?
+- Which triggers the most thermal or power throttling?
+- **And can this machine execute all of them correctly, for hours, without a single wrong bit?**
+
+---
+
+## What makes it different
+
+**Real algorithms, not busy loops.** Reliability tests are complete computational
+workloads — dense linear algebra, FFT, PDE stencils, graph traversal, ray tracing —
+each exercising the whole hardware complex but with a *different distribution of
+pressure* across it.
+
+**Self-verifying computation.** A test does not merely produce heat. It continually
+proves the hardware is producing correct results, using residuals, mathematical
+invariants, exact checksums, and round-trip identities. The goal is to catch silent
+data corruption, not just crashes and hangs.
+
+**Load Signature, not a percentage.** Every test emits a multidimensional record of
+hardware pressure — power, energy, frequency, peak and equilibrium temperature,
+temperature rise rate, memory bandwidth, IPC, cache and branch miss rates,
+throttling time, verification errors.
+
+**Deliberate workload diversity.** There is no single universal maximum-load program.
+A memory-latency workload leaves execution units idle; a compute-dense SIMD workload
+barely touches DRAM. LoadForge ships roughly a dozen whole-system workloads with
+different dominant characteristics.
+
+**Automatic worst-case search.** Rather than assuming in advance which instruction
+sequence is worst, LoadForge can search the space of workload mixtures to find what
+stresses *your particular machine* hardest.
+
+**Lightweight and native.** C++20 and Linux interfaces. No Python runtime, no JVM,
+no heavyweight numerical framework, no large dependency graph.
+
+---
+
+## Planned test suite
+
+Twelve integrated reliability workloads:
+
+| # | Workload | Dominant character |
+|---:|---|---|
+| 1 | Dense linear algebra | FP / SIMD / FMA, compute-bound |
+| 2 | Sparse solver | Memory latency, irregular access |
+| 3 | FFT / spectral transform | Shifting locality, transposes |
+| 4 | Finite-difference / PDE stencil | Sustained RAM bandwidth |
+| 5 | Particle / N-body | Mixed FP, irregular, dynamic |
+| 6 | CPU ray tracing | Branch-heavy, unpredictable control flow |
+| 7 | Sorting / merge / database-style | Integer, writes, TLB pressure |
+| 8 | Compression / integrity pipeline | Integer, bit manipulation, exact round-trip |
+| 9 | Graph / network analysis | Coherence traffic, pointer chasing |
+| 10 | Monte-Carlo simulation | Parallel bursts + synchronized reductions |
+| 11 | Adaptive mesh / dynamic structures | Continuously changing workload shape |
+| 12 | **Dynamic mixed-system test** | Different workloads on different cores, rotating |
+
+Beneath these sits a layer of small primitive kernels (integer, FP, SIMD, cache,
+memory, branch, atomic) used for calibration, diagnosis, and automatic workload
+construction — not as the user-facing reliability tests.
+
+---
+
+## Planned operating modes
+
+```bash
+loadforge benchmark                        # short controlled characterization
+loadforge stress --hours 5                 # long reliability verification
+loadforge explore --objective temperature  # search for the worst-case workload
+```
+
+---
+
+## Scope
+
+**In scope for the first version:** CPU execution units, the full cache hierarchy,
+the memory subsystem and controller, virtual-memory machinery, the multicore
+interconnect and coherence fabric, and platform-level behaviour (power, frequency,
+thermal, cooling).
+
+**Deliberately out of scope for now:** SSD testing (the suite actively minimizes
+persistent writes), discrete GPU testing (keeps LoadForge usable on live media and
+systems without proprietary drivers), and generic PCIe saturation.
+
+---
+
+## Testing and quality commitment
+
+This is a tool whose entire purpose is to tell you the truth about your hardware.
+A false "verification error" destroys its value as surely as a missed one. The
+project therefore treats its own test suite as a first-class deliverable:
+
+- **High measured coverage**, enforced as a CI gate that can only ratchet upward.
+- **Fault injection** — every verification path has a negative test that deliberately
+  corrupts data and asserts the corruption is caught.
+- **Determinism tests** — identical results across differing thread counts and repeated runs.
+- **Golden vectors** pinning numerical behaviour of every workload.
+- **Fixture-driven platform tests** — synthetic `/sys` and `/proc` trees, so telemetry
+  parsing is testable on machines (and CI runners) that expose no real sensors.
+- **Sanitizers**, including ThreadSanitizer, on a heavily multithreaded codebase.
+
+The full strategy, including coverage targets and the test tier model, is in
+[`docs/PLAN.md`](docs/PLAN.md).
+
+---
+
+## Requirements
+
+Not yet fixed — proposed in the plan and open for review:
+
+- Linux (kernel with `sysfs`/`procfs`; specific telemetry features degrade gracefully)
+- A C++20 compiler (GCC 13+ / Clang 18+ proposed)
+- CMake 3.24+
+- No runtime dependencies beyond libc and libstdc++; test-only dependencies fetched at configure time
+
+---
+
+## Safety notice
+
+LoadForge is designed to drive hardware to sustained maximum power and thermal load.
+On a system with inadequate cooling, a failing fan, degraded thermal paste, or an
+unstable overclock, that is exactly the condition most likely to expose the problem —
+which is the point, but it carries real risk. The suite will include configurable
+temperature ceilings, memory limits, watchdogs, and emergency stop, and it will never
+intentionally rely on undefined behaviour or unsafe hardware register manipulation.
+Use it deliberately.
+
+---
+
+## License
+
+Not yet chosen. This needs to be settled before any public release.
+
+---
+
+## Contributing
+
+The project is at the planning stage; the most useful contribution right now is
+review of [`docs/PLAN.md`](docs/PLAN.md) — particularly the open questions at the end.
