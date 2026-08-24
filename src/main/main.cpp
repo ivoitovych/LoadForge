@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <cstddef>
 #include <iostream>
-#include <string_view>
-#include <vector>
+#include <span>
 
 #include "main/cli.hpp"
 
 int main(int argc, char** argv) {
-  std::vector<std::string_view> args;
-  args.reserve(static_cast<std::size_t>(argc > 0 ? argc - 1 : 0));
-  for (int i = 1; i < argc; ++i) {
-    args.emplace_back(argv[i]);
-  }
-  return loadforge::cli::run(args, std::cout, std::cerr);
+  const std::span<char* const> raw{argv, static_cast<std::size_t>(argc)};
+  return loadforge::cli::run(loadforge::cli::collect_args(raw), std::cout, std::cerr);
 }

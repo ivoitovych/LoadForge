@@ -11,17 +11,20 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 
 ## Project status
 
-> **Pre-alpha — design stage. There is no code yet.**
+> **Pre-alpha — M0 (foundation) complete. No workloads yet.**
 
 | | |
 |---|---|
-| **Phase** | Planning / architecture |
-| **Code** | None yet |
+| **Phase** | M0 done; M1 (core framework + supervision) next |
+| **Code** | Build system, CI, config primitives, CLI skeleton |
+| **Tests** | 62, at 100% line and branch coverage |
 | **Public API** | Not defined |
-| **Usable** | No |
+| **Usable** | Not yet — no workloads until M2a |
 
-This repository contains documents and project scaffolding — **no source code, and no CI
-workflows yet**. Both land at M0.
+What exists is the foundation: CMake with seven presets, eight CI workflows across
+{x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate, and the first core module.
+The workloads themselves begin at M2a. See [`docs/PLAN.md`](docs/PLAN.md) for the
+milestone sequence.
 
 | Document | What it is |
 |---|---|
@@ -187,8 +190,9 @@ The full strategy, including coverage targets and the test tier model, is in
   vendored and header-only; test-only dependencies are pinned and never linked into the
   shipped binary.
 
-CI **will** run the full matrix — **{x86-64, ARM64} × {GCC, Clang}** — plus sanitizer
-jobs. (No workflows exist yet; they land at M0.) Running on ARM matters for more than
+CI runs the full matrix — **{x86-64, ARM64} × {GCC, Clang}** — plus sanitizer jobs, a
+scalar-only portability build, a cross-architecture determinism check, licence and DCO
+checks, and a static release artifact. Running on ARM matters for more than
 portability: ARM64 is weakly ordered where x86-64 is total-store-ordered, so a
 memory-ordering bug that x86 would hide shows up there. In a tool like this that is
 worth a great deal, because such a bug is indistinguishable from the hardware fault the

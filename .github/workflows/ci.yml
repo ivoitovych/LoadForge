@@ -44,6 +44,10 @@ jobs:
       - name: clang-format
         run: find src tests -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror
       - name: Configure for compile_commands.json
+        # Configure with clang: CompilerWarnings.cmake adds GCC-only flags
+        # (-Wduplicated-cond, -Wlogical-op, -Wuseless-cast) under GNU, and
+        # clang-tidy would reject them as unknown warning options.
+        env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug
       - name: clang-tidy
         run: find src -name '*.cpp' | xargs clang-tidy-18 -p build/debug

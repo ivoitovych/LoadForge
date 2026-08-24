@@ -8,6 +8,7 @@ add_executable(loadforge_unit_tests
   unit/core/duration_test.cpp
   unit/core/byte_size_test.cpp
   unit/main/cli_test.cpp
+  unit/main/selftest_test.cpp
 )
 target_link_libraries(loadforge_unit_tests PRIVATE loadforge_cli GTest::gtest_main GTest::gmock)
 loadforge_set_fp_contract(loadforge_unit_tests)

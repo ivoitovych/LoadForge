@@ -34,6 +34,7 @@ add_library(loadforge_core STATIC
   src/core/parse_error.cpp
   src/core/duration.cpp
   src/core/byte_size.cpp
+  src/core/parse_number.cpp
 )
 target_include_directories(loadforge_core PUBLIC src)
 loadforge_set_warnings(loadforge_core)
@@ -45,7 +46,7 @@ if(LOADFORGE_SIMD STREQUAL "scalar")
 endif()
 
 # ---- cli --------------------------------------------------------------------
-add_library(loadforge_cli STATIC src/main/cli.cpp)
+add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp)
 target_link_libraries(loadforge_cli PUBLIC loadforge_core)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)

@@ -2,6 +2,9 @@
 #include "main/cli.hpp"
 
 #include <ostream>
+#include <vector>
+
+#include "main/selftest.hpp"
 
 namespace loadforge::cli {
 namespace {
@@ -22,6 +25,19 @@ void print_usage(std::ostream& out) {
 
 }  // namespace
 
+std::vector<std::string_view> collect_args(std::span<char* const> argv) {
+  if (argv.empty()) {
+    return {};
+  }
+  const std::span<char* const> without_program = argv.subspan(1);
+  std::vector<std::string_view> args;
+  args.reserve(without_program.size());
+  for (const char* arg : without_program) {
+    args.emplace_back(arg);
+  }
+  return args;
+}
+
 int run(std::span<const std::string_view> args, std::ostream& out, std::ostream& err) {
   if (args.empty()) {
     print_usage(out);
@@ -35,6 +51,12 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
   const std::string_view command = args.front();
   if (command == "--version" || command == "-V") {
     out << kVersion << "\n";
+    return kOk;
+  }
+  if (command == "--selftest-digest") {
+    // Cross-architecture determinism check: the scalar build must produce an
+    // identical digest on x86-64 and ARM64. See docs/determinism.md.
+    out << selftest::core_digest_hex() << "\n";
     return kOk;
   }
   if (command == "--help" || command == "-h") {

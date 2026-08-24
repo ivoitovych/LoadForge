@@ -29,3 +29,32 @@ jobs:
             echo "x86 intrinsics outside src/primitives/simd/x86/" >&2
             exit 1
           fi
+      - name: Emit determinism digest
+        run: ./build/simd-scalar/loadforge --selftest-digest > digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.runner }}
+          path: digest.txt
+
+  cross-arch-determinism:
+    # docs/determinism.md: the scalar path must be bit-identical across x86-64
+    # and ARM64. Building on both proves nothing on its own -- the outputs have
+    # to actually be compared, which is what this job does.
+    name: scalar digest identical across architectures
+    needs: scalar
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: 'digest-*', path: digests }
+      - name: Compare
+        run: |
+          x86=$(cat digests/digest-ubuntu-24.04/digest.txt)
+          arm=$(cat digests/digest-ubuntu-24.04-arm/digest.txt)
+          echo "x86-64 : $x86"
+          echo "ARM64  : $arm"
+          if [ "$x86" != "$arm" ]; then
+            echo "::error::scalar path is NOT bit-identical across architectures" >&2
+            exit 1
+          fi
+          echo "scalar path is bit-identical across architectures"
+          echo "### Cross-arch scalar digest: \`$x86\`" >> "$GITHUB_STEP_SUMMARY"

@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -22,6 +23,26 @@ Outcome invoke(const std::vector<std::string_view>& args) {
   std::ostringstream err;
   const int code = run(args, out, err);
   return {code, out.str(), err.str()};
+}
+
+TEST(CollectArgs, EmptyArgvYieldsNoArguments) {
+  // POSIX permits execve with an empty argv. Unguarded, subspan(1) here would
+  // be undefined behaviour.
+  EXPECT_TRUE(collect_args({}).empty());
+}
+
+TEST(CollectArgs, ProgramNameOnlyYieldsNoArguments) {
+  std::array<char*, 1> argv{const_cast<char*>("loadforge")};
+  EXPECT_TRUE(collect_args(argv).empty());
+}
+
+TEST(CollectArgs, DropsProgramNameAndKeepsTheRest) {
+  std::array<char*, 3> argv{const_cast<char*>("loadforge"), const_cast<char*>("--version"),
+                            const_cast<char*>("extra")};
+  const auto args = collect_args(argv);
+  ASSERT_EQ(args.size(), 2U);
+  EXPECT_EQ(args[0], "--version");
+  EXPECT_EQ(args[1], "extra");
 }
 
 TEST(Cli, NoArgumentsPrintsUsageAndSucceeds) {
@@ -46,6 +67,18 @@ TEST(Cli, HelpFlagPrintsUsage) {
     EXPECT_EQ(r.code, 0) << flag;
     EXPECT_NE(r.out.find("Usage:"), std::string::npos) << flag;
   }
+}
+
+TEST(Cli, SelftestDigestPrintsAStableHexDigest) {
+  const Outcome first = invoke({"--selftest-digest"});
+  EXPECT_EQ(first.code, 0);
+  EXPECT_TRUE(first.err.empty());
+  EXPECT_EQ(first.out.size(), 17U) << "expected 16 hex digits and a newline";
+
+  // The whole point of this command is that the value does not move: CI
+  // compares it across architectures.
+  const Outcome second = invoke({"--selftest-digest"});
+  EXPECT_EQ(second.out, first.out);
 }
 
 TEST(Cli, UnknownArgumentFailsAndSuggestsHelp) {

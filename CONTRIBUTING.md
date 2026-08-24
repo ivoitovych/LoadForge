@@ -2,9 +2,11 @@
 
 Contributions are welcome — issues, forks and pull requests alike.
 
-**Current status: the project is at the design stage. There is no code yet.** Right now
-the most valuable contribution is review of [`docs/PLAN.md`](docs/PLAN.md), especially
-the open questions at the end. Once M0 lands, the rules below apply to code.
+**Current status: M0 (foundation) is complete.** The build system, CI and the first core
+module are in place; workloads begin at M2a. The rules below apply to code now.
+
+Review of [`docs/PLAN.md`](docs/PLAN.md) is still valuable, particularly the open
+questions at the end.
 
 ---
 
@@ -177,8 +179,6 @@ nuisances. Use the **unsupported platform** template; a capture of your `/sys` t
 which is one of the most useful contributions available.
 
 ## Building
-
-Once M0 lands:
 
 ```bash
 cmake --preset debug        # or: release, asan, tsan, coverage, simd-scalar
