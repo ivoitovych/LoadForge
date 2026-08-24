@@ -1,0 +1,116 @@
+name: Hardware failure report
+description: LoadForge reported a verification error, crash or hang on your machine
+title: "[hardware] "
+labels: ["hardware-failure", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you — this is the report the project exists to receive.
+
+        A verification failure is only actionable with provenance, so most fields below
+        are required. If LoadForge printed an error record, paste it whole rather than
+        summarising it: the core number, buffer offset and XOR delta are the diagnosis.
+
+  - type: dropdown
+    id: selftest
+    attributes:
+      label: Did `loadforge selftest` pass?
+      description: >
+        This is the first triage question. It separates a broken build or an
+        unsupported machine from a genuine hardware finding. Please run it before
+        filing.
+      options:
+        - "Yes — selftest passed, the failure came during a real run"
+        - "No — selftest itself failed"
+        - "I have not run selftest yet"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What happened?
+      options:
+        - "Verification error (wrong result detected)"
+        - "Crash (SIGSEGV / SIGBUS / abort)"
+        - "Hang or stalled worker"
+        - "Uncorrected ECC / machine-check event"
+        - "Rising corrected-ECC count with no verification failure"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-records
+    attributes:
+      label: Error record(s)
+      description: >
+        Paste verbatim, including core, NUMA node, buffer offset, expected vs actual
+        bytes, XOR delta and popcount.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: isolation
+    attributes:
+      label: Fault-isolation result
+      description: >
+        LoadForge re-runs a failing unit of work on the same core, a different core,
+        and single-threaded. The reproduction pattern is the diagnosis — please paste
+        that output. If it did not run, say so.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: run-json
+    attributes:
+      label: run.json
+      description: >
+        Attach or paste it. It carries the LoadForge version, the run fingerprint
+        (compiler, ISA path, CPU, microcode, kernel, governor, AC vs battery, boost
+        state) and the telemetry capability set — all of which triage needs.
+      render: json
+    validations:
+      required: true
+
+  - type: input
+    id: ecc
+    attributes:
+      label: Corrected ECC counts, before and after the run
+      description: "From /sys/devices/system/edac/ — or 'not available' if the platform has no EDAC."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: reproducible
+    attributes:
+      label: Does it reproduce?
+      options:
+        - "Every run"
+        - "Most runs"
+        - "Occasionally"
+        - "Seen once"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Machine context
+      description: >
+        Anything relevant that run.json cannot know: overclock or XMP/EXPO profile,
+        cooling setup and its condition, recent BIOS or firmware changes, whether the
+        machine has been unstable elsewhere, ambient temperature if unusual.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Before submitting
+      options:
+        - label: I understand a report without the error record and run.json usually cannot be triaged
+          required: true

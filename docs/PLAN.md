@@ -1,6 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 3 — owner decisions on license, toolchain and architecture scope
+**Status:** revision 4 — ARM64 promoted to a first-class target; contribution model settled
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -40,7 +40,16 @@ close them and add concrete engineering requirements:
 |---|---|
 | **License: GPL** → `GPL-3.0-or-later` | `LICENSE` added (verbatim FSF text). SPDX headers on every source file; a CI check that every vendored dependency is GPL-compatible. See §5.1. |
 | **Toolchain: Ubuntu 24.04 LTS as the reference platform** | GCC 13.3 / Clang 18.1 / CMake 3.28 / libstdc++ 13 — all verified present in the development container. Fixes which C++20 library features are actually usable. See §5. |
-| **ARM: not implemented now, but the door stays open** | No ARM code, no ARM CI, no ARM telemetry sources. But portability seams are designed in from M0, because two of them — memory-ordering discipline and cache-line assumptions — cannot be retrofitted cheaply. See §4.5. |
+| ~~**ARM: not implemented now, door stays open**~~ | **Superseded by revision 4** — the premise (that validating ARM needs unavailable hardware) turned out to be false. |
+
+**Revision 4** settles the remaining questions and reverses one revision-3 decision on
+new evidence:
+
+| Decision | Consequence |
+|---|---|
+| **ARM64 promoted to a first-class target** | Revision 3 deferred ARM on the assumption that validating it required hardware the project lacks. **GitHub provides `ubuntu-24.04-arm` runners free for public repositories** (GA since August 2025), so ARM CI costs nothing. This does more than add a target: it retires the highest-severity risk in §9, because weak-memory-ordering bugs become detectable by running on weakly-ordered hardware instead of only approximated by TSan. See §4.5. |
+| **Test framework: GoogleTest + GMock** | Confirmed. Pinned revision, system-installed fallback, `LOADFORGE_BUILD_TESTS=OFF` path for offline/live-media builds. Closes Q6. |
+| **Contributions welcome — issues, forks, PRs** | `CONTRIBUTING.md`, issue and PR templates, a code of conduct, and **DCO sign-off** rather than a CLA. See §5.2. |
 
 ---
 
@@ -566,65 +575,83 @@ This closes open question 7 from revision 1: comparable rise rates belong to ben
 and explore; the five-hour stress schedule should *not* squander time cooling between
 phases, and its recorded slopes are labelled contextual.
 
-### 4.5 Portability seams — ARM deferred, door held open
+### 4.5 Dual-architecture support — x86-64 and ARM64
 
-**Decision: v1 targets x86-64 only.** No ARM implementation, no ARM CI, no ARM
-telemetry sources, no ARM SIMD kernels. ARM64 is a plausible later target and the
-design must not foreclose it.
+**Decision (revision 4): ARM64 is a first-class supported target from M0**, not a
+deferred one. Revision 3 deferred it because validating ARM appeared to require
+hardware the project does not have. That premise is false: **GitHub provides
+`ubuntu-24.04-arm` hosted runners free of charge for public repositories**, generally
+available since August 2025. LoadForge is a public repository, so ARM CI costs nothing
+and requires no infrastructure — the same reference platform (Ubuntu 24.04) on both
+architectures.
 
-"Door open" is worth almost nothing as an intention and quite a lot as a small number
-of concrete constraints. Most portability work is genuinely cheap to defer. **Two items
-are not**, and both must be honoured from the first commit, because retrofitting them
-across a mature multithreaded codebase is brutal:
+#### Why this is worth more than one extra target
 
-#### Must be done now
+Free ARM CI does not merely add a platform. It **materially retires the highest-severity
+item in the risk register**.
 
-**1. Memory-ordering discipline.** x86-64 is total-store-ordered; ARM64 is weakly
-ordered. Code that is *accidentally* correct on x86 — relying on TSO rather than on
-explicit ordering — compiles fine and fails on ARM, often rarely and
-non-deterministically. This is the single most expensive thing to fix later, and for a
-tool whose purpose is diagnosing rare non-deterministic faults it would be
-catastrophic: a memory-ordering bug in LoadForge is indistinguishable from the
-hardware fault it claims to have found.
+Revision 3 identified memory-ordering discipline as the most expensive thing to get
+wrong: x86-64 is total-store-ordered, ARM64 is weakly ordered, and code that is
+*accidentally* correct by relying on TSO fails rarely and non-deterministically
+elsewhere. For this project that failure mode is uniquely bad — **a memory-ordering bug
+in LoadForge is indistinguishable from the hardware fault it claims to have found.**
 
-Rules from M0:
-- Every atomic operation states its memory order explicitly. No bare `std::atomic`
-  operations relying on the `seq_cst` default by omission — the order is a documented
-  design decision each time.
-- No hand-rolled lock-free structures without an explicit ordering argument recorded in
-  a comment and reviewed.
-- ThreadSanitizer is a required CI job, not optional. TSan models a weak memory model
-  and catches a useful subset of these on x86 hardware.
+Without ARM hardware the only defence was ThreadSanitizer on x86, which models a weak
+memory model and catches a useful subset. With ARM CI the test suite runs on genuinely
+weakly-ordered hardware on every push. That is a categorically stronger check, and it
+arrives free. Deferring ARM would have meant carrying that risk for the entire life of
+the project and then discovering the accumulated bugs all at once.
 
-**2. No hardcoded cache-line size.** x86-64 is 64 bytes; ARM64 is 64 *or* 128
-(Apple silicon is 128). False sharing, padding and alignment are load-bearing concerns
-in this project — `coherence.pingpong` and the false-sharing primitives exist precisely
-to exercise them. A hardcoded `64` would silently produce a *wrong test* on ARM rather
-than a build failure. Cache-line and cache-level geometry are read from topology at
-runtime (already required by §4.1), never assumed.
+The same argument applies to cache-line geometry: ARM64 may be 64 or 128 bytes, and the
+false-sharing and coherence primitives depend on getting it right. On x86 a hardcoded
+`64` silently produces a *wrong test*; on ARM CI it produces a *failing test*.
 
-#### Cheap to defer, but seams kept clean
+#### Architecture-dependent work
 
-| Seam | Requirement now | Deferred |
-|---|---|---|
-| **SIMD kernels** | Every vectorized kernel has a **scalar reference path** that always compiles and runs. x86 intrinsics live only under `primitives/simd/x86/`; `__m256d` and friends never appear in portable code. | NEON/SVE implementations |
-| **Timing** | Portable code uses `std::chrono::steady_clock`. `rdtsc` is confined to the platform layer and is never the portable time source. | `cntvct_el0` |
-| **Telemetry sources** | The capability model (F3) already treats every source as probe-and-degrade, so an ARM machine with no RAPL is an *already-handled* case, not a new one. | `armv8_pmuv3` counters, ARM thermal-zone sources, SoC-specific power rails |
-| **Atomics width / alignment** | No assumptions about lock-free-ness beyond what `std::atomic::is_lock_free` reports at runtime. | — |
-| **Unaligned access** | No deliberate unaligned loads outside x86-specific kernels. | — |
+| Area | x86-64 | ARM64 | Shared |
+|---|---|---|---|
+| SIMD | SSE2 / AVX2 / AVX-512 | NEON (SVE deferred — runtime-variable vector length is a separate problem) | Dispatch interface; **scalar reference path always present** |
+| Timing | `rdtsc` (platform layer only) | `cntvct_el0` (platform layer only) | `std::chrono::steady_clock` everywhere else |
+| Cache line | 64 B | 64 or 128 B | Read from topology at runtime; never assumed |
+| Memory model | TSO | Weakly ordered | Explicit memory order on every atomic |
+| Package power | RAPL / powercap (root-gated) | **No RAPL.** SoC-specific; many platforms expose nothing | Capability model (F3) — absence already first-class |
+| Thermal | `coretemp` / `k10temp` hwmon | Commonly `/sys/class/thermal/thermal_zone*` | Source abstraction + discovery |
+| PMU | `perf_event_open`, x86 event names | `perf_event_open`, `armv8_pmuv3` event names | Same paranoid gating, same degradation path |
+| Topology | SMT; P/E cores on recent parts | **Heterogeneous cores are the norm** (big.LITTLE / DynamIQ); SMT usually absent | One topology model that treats heterogeneity as ordinary |
 
-There is a pleasing synergy here: **the scalar reference path required for portability
-is the same code required as the independent oracle in F11.** Writing it once serves
-both purposes, so the portability seam costs close to nothing beyond what verification
-already demands.
+Two observations worth recording:
 
-#### A cheap CI gate that keeps the door genuinely open
+**The capability model was already the right design.** An ARM machine with no RAPL is
+not a new case — it is the `unsupported` branch F3 already required. ARM validates that
+architecture rather than complicating it.
 
-A `LOADFORGE_SIMD=scalar` build configuration compiled in CI on x86 proves that no x86
-intrinsic has leaked into portable code, and that the scalar path still builds and
-passes its tests. This is one extra CI job, costs minutes, and is the difference
-between a door that is actually open and one that is merely described as open. Without
-it, the seams rot within a few months and "adding ARM later" quietly becomes a rewrite.
+**ARM makes core heterogeneity the normal case, not an Intel-specific edge case.**
+big.LITTLE / DynamIQ means differing core types are the default, which is a healthier
+assumption for the topology layer to be built on. A design that treats heterogeneity as
+ordinary handles Intel P/E cores correctly for free; the reverse is not true.
+
+#### What is deliberately still deferred
+
+- **SVE / SVE2.** Runtime-variable vector length is a genuinely different programming
+  model from fixed-width NEON, and interacts awkwardly with the fixed-decomposition
+  determinism contract (F1). NEON first; SVE only if a measured need appears.
+- **ARM-specific power rails.** Highly SoC-specific and mostly absent on the cloud
+  instances available. Where a platform exposes power via hwmon it is picked up by the
+  generic hwmon source; nothing bespoke is written.
+- **32-bit ARM.** Out of scope entirely.
+
+#### What CI can and cannot prove on ARM
+
+GitHub's ARM runners are 4-vCPU virtual machines. They validate **correctness,
+determinism, memory ordering and the NEON paths**. They do **not** expose real thermal
+sensors, real power, or real EDAC — exactly as §7.4 already states for x86 runners. Real
+ARM telemetry validation stays in tier T11 and needs physical hardware; a Raspberry Pi 5
+or an Ampere developer board is sufficient and cheap, and the
+[GCC Compile Farm](https://portal.cfarm.net/) offers free ARM machines to free-software
+projects. This is a pre-release manual checklist item, not a CI gate.
+
+Cloud ARM VMs generally do not help here either — a virtualized instance exposes no more
+thermal or power detail than a virtualized x86 one.
 
 ---
 
@@ -656,8 +683,8 @@ generation — the project uses classic headers.
 | Language | C++20 | Draft §44. GCC 13.3 / Clang 18.1 per the reference platform. |
 | Build | **CMake ≥ 3.28** + Ninja, `CMakePresets.json` | Matches the 24.04 baseline; presets keep local and CI builds identical. |
 | **License** | **`GPL-3.0-or-later`** | Owner decision. See §5.1. |
-| **Target architecture** | **x86-64 only**; portability seams per §4.5 | Owner decision — ARM deferred, door held open. |
-| Test framework | GoogleTest + GMock, **pinned to an exact revision**, with a system-installed fallback and a `LOADFORGE_BUILD_TESTS=OFF` path | GMock matters for platform fakes (F3). Pinning and the fallback keep offline / live-media builds working. |
+| **Target architectures** | **x86-64 and ARM64**, both first-class | Free `ubuntu-24.04-arm` CI makes ARM validation cost nothing, and running on weakly-ordered hardware is a far stronger memory-ordering check than TSan alone. See §4.5. |
+| **Test framework** | **GoogleTest + GMock** (confirmed) — pinned to an exact revision, system-installed fallback, `LOADFORGE_BUILD_TESTS=OFF` path | GMock matters for the platform fakes (F3) and the supervision tier (T7). Pinning and the fallback keep offline / live-media builds working. BSD-3-Clause, GPL-compatible, test-only. |
 | TOML | **Vendored pinned header-only parser** (e.g. `toml++`) in `third_party/` | The review is right that hand-rolling a parser is needless risk. Vendoring keeps third-party *external* dependencies at zero. |
 | Coverage | `gcovr` (GCC), `llvm-cov` (Clang) | *Neither `gcovr` nor `lcov` is installed in this container — CI must install them.* |
 | Sanitizers | ASan+UBSan, **TSan**, separate CI jobs | TSan is essential; the codebase is threaded by construction. |
@@ -698,7 +725,56 @@ relicense afterwards.
 
 Because the repository has **no outside contributions yet**, the licence remains
 trivially changeable today. That stops being true the moment the first external patch
-is accepted.
+is accepted — and §5.2 opens the door to exactly that, so any licence change must happen
+first.
+
+### 5.2 Contribution model
+
+**Decision: contributions welcome — issues, forks and pull requests.** This makes
+several things load-bearing that would otherwise be optional.
+
+**DCO, not a CLA.** Contributors sign off commits with
+`Signed-off-by: Name <email>` (`git commit -s`), certifying they have the right to
+submit the work under the project's licence. This is the
+[Developer Certificate of Origin](https://developercertificate.org/), the same
+lightweight mechanism the Linux kernel uses. A CLA — which asks contributors to assign
+or license rights to the project owner — is heavier, deters casual contributors, and is
+only worth its friction if the project intends to relicense or dual-license later. If a
+proprietary-licensing option is ever wanted, that decision must be made **now**, because
+retrofitting a CLA means contacting every past contributor.
+
+*Recommendation: DCO. It matches GPL's spirit and keeps the barrier low.* A CI check
+enforces the sign-off.
+
+**A hardware-failure issue template is the highest-value piece here.** LoadForge's most
+important inbound report is "my machine failed your test", and such a report is useless
+without provenance. The template must require:
+
+- Did `loadforge selftest` pass? *(This is the first triage question — it separates a
+  broken build or unsupported machine from a genuine finding.)*
+- `run.json` (carries version, fingerprint, capability set — F12)
+- The error records with full provenance: core, NUMA node, offset, XOR delta (F2)
+- Fault-isolation output: did it reproduce on another core? single-threaded?
+- Corrected-ECC counts before and after (F13)
+
+That template turns vague reports into triageable ones, and it is worth writing before
+the first user arrives rather than after.
+
+**Contributor-facing documentation carries real weight**, because three project rules
+are non-obvious and a well-meaning contributor will violate them by default:
+
+1. **The determinism contract** (F1) — a PR may not silently weaken a workload's
+   declared class.
+2. **The oracle doctrine** (F11) — never verify an implementation by re-running it.
+   This is the mistake the original design draft itself made.
+3. **Explicit memory ordering** (§4.5) — now enforced by ARM CI as well as review.
+
+These live in `CONTRIBUTING.md` and in `docs/determinism.md` / `docs/verification.md`,
+and are linked from the PR template.
+
+**Review standards.** Every PR must state which test tier(s) it adds to; a change
+touching `verification/` without a corresponding fault-injection test is not merged
+regardless of coverage numbers (§7.2).
 
 ---
 
@@ -709,16 +785,26 @@ LoadForge/
 ├── README.md
 ├── LICENSE                         # GPL-3.0-or-later (verbatim FSF text)
 ├── NOTICE                          # vendored components + their licences (§5.1)
+├── CONTRIBUTING.md                 # DCO, the three non-obvious rules (§5.2)
+├── CODE_OF_CONDUCT.md              # Contributor Covenant
 ├── CMakeLists.txt
 ├── CMakePresets.json               # debug, release, asan, tsan, coverage, simd-scalar
 ├── .clang-format  .clang-tidy  .gitignore
 │
 ├── .github/workflows/
-│   ├── ci.yml                      # build + test, gcc 13 & clang 18
-│   ├── sanitizers.yml              # asan+ubsan, tsan (required — see §4.5)
-│   ├── portability.yml             # LOADFORGE_SIMD=scalar build (§4.5 door-open gate)
-│   ├── licensing.yml               # SPDX headers + dependency compatibility (§5.1)
+│   ├── ci.yml                      # matrix: {ubuntu-24.04, ubuntu-24.04-arm}
+│   │                               #       × {gcc-13, clang-18}
+│   ├── sanitizers.yml              # asan+ubsan, tsan — both arches (§4.5)
+│   ├── portability.yml             # LOADFORGE_SIMD=scalar on both arches
+│   ├── licensing.yml               # SPDX headers, dep compatibility, DCO (§5.1, §5.2)
 │   └── coverage.yml                # patch + module coverage gates
+│
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── hardware-failure.yml    # the high-value one — see §5.2
+│   │   ├── bug-report.yml          # a bug in LoadForge itself
+│   │   └── unsupported-platform.yml# telemetry missing/misidentified (F3)
+│   └── PULL_REQUEST_TEMPLATE.md    # links the three non-obvious rules (§5.2)
 │
 ├── cmake/
 │   ├── CompilerWarnings.cmake      # warnings-as-errors; bans -ffast-math (F1)
@@ -900,14 +986,21 @@ than any coverage number**, and a milestone may not exit on coverage alone.
 
 ### 7.4 What CI cannot test — stated plainly
 
-CI runners are virtual machines. Verified in this container: no `hwmon`, no `cpufreq`,
-no RAPL, `perf_event_paranoid=2`, no EDAC. CI can therefore **never** validate real
-sensor readings, actual thermal response, genuine throttling, real power measurement,
-real ECC events, or that a workload in fact heats a physical CPU.
+CI runners are virtual machines on **both** architectures. Verified in this container:
+no `hwmon`, no `cpufreq`, no RAPL, `perf_event_paranoid=2`, no EDAC. CI can therefore
+**never** validate real sensor readings, actual thermal response, genuine throttling,
+real power measurement, real ECC events, or that a workload in fact heats a physical CPU.
 
-Those belong to T11 and require a self-hosted runner with real hardware or a documented
-manual validation checklist run before each release. Recorded here so it is never
-mistaken for coverage.
+What ARM CI *does* add is significant but specific: **correctness, determinism, NEON
+paths and — most valuably — memory ordering on genuinely weakly-ordered hardware**. It
+adds nothing to the telemetry picture, because a virtualized ARM instance is exactly as
+sensor-less as a virtualized x86 one.
+
+Real-hardware validation on both architectures stays in T11: a self-hosted runner, a
+cheap physical ARM board (Raspberry Pi 5 or an Ampere developer kit), or the free
+[GCC Compile Farm](https://portal.cfarm.net/) for free-software projects, driven by a
+documented manual checklist before each release. Recorded here so it is never mistaken
+for coverage.
 
 ---
 
@@ -915,10 +1008,10 @@ mistaken for coverage.
 
 | # | Milestone | Contents | Exit criterion |
 |---|---|---|---|
-| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, **SPDX headers + licence CI check (§5.1)**, **scalar-SIMD portability job (§4.5)** | Green CI on **both** GCC 13 and Clang 18; patch-coverage gate active; scalar build passing |
+| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, **CONTRIBUTING + issue/PR templates (§5.2)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; patch-coverage gate active; scalar build passing on both arches |
 | **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
 | **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **minimal telemetry capability probe** | `loadforge stress --test compression` runs end to end; oracle, fault-injection, determinism and supervision tiers pass; capability set reported at start |
-| **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1) | Both verification contracts demonstrated; determinism class enforced; first meaningful thermal result |
+| **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam** | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
 | **M3** | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; whole-project coverage gate activated |
 | **M4** | Workload breadth | Remaining workloads (3–11) + primitives layer | Each has an independent oracle, invariants, determinism and fault-injection tests |
 | **M5** | Dynamic mixed + cycling | Flagship mixed test (§17), thermal/power cycling (§35) | A five-hour schedule completes with continuous verification |
@@ -950,8 +1043,10 @@ research-flavoured one and is correctly last.
 | Silent regression via untested SIMD paths | Medium | Medium | Per-ISA runners; golden vectors per ISA |
 | Coverage gate gamed by assertion-free tests | Medium | Medium | Mutation testing; T3/T5/T6/T7 weighted above coverage |
 | Damage to poorly-cooled user hardware | Medium | Low | Conservative defaults, controller safety, clear warnings |
-| **Memory-ordering bug indistinguishable from the hardware fault it "found"** | **Fatal to credibility** | Medium | §4.5: explicit memory orders everywhere, mandatory TSan, reviewed ordering arguments |
-| Portability seams rot, making "add ARM later" a rewrite | Medium | **High if ungated** | §4.5: `LOADFORGE_SIMD=scalar` CI job proving no x86 intrinsics leaked into portable code |
+| Memory-ordering bug indistinguishable from the hardware fault it "found" | Fatal to credibility | **Low** *(was Medium)* | §4.5: explicit memory orders, mandatory TSan, **and the suite now runs on genuinely weakly-ordered ARM hardware every push** |
+| ~~Portability seams rot, making "add ARM later" a rewrite~~ | — | **Retired** | ARM is a first-class target with CI, so the seams cannot rot unnoticed |
+| ARM adds telemetry surface with no free hardware to validate it | Medium | Medium | ARM CI validates correctness; real ARM telemetry stays a T11 manual item on a cheap physical board |
+| Outside contribution weakens a determinism or verification contract | Medium | Medium | §5.2: PR template, CONTRIBUTING rules, and T3/T5/T6 tiers that fail loudly |
 | Vendored dependency turns out GPL-incompatible | Medium | Low | §5.1: licence compatibility checked in CI, not assumed |
 
 ---
@@ -965,7 +1060,9 @@ research-flavoured one and is correctly last.
 | 1 | Document placement | Draft moved to `docs/DESIGN-DRAFT.md` | 2 |
 | **2** | **License** | **`GPL-3.0-or-later`** — `LICENSE` added; obligations in §5.1 | **3** |
 | **3** | **Minimum toolchain** | **Ubuntu 24.04 LTS reference** — GCC 13.3, Clang 18.1, CMake 3.28; both compilers first-class in CI | **3** |
-| **4** | **Architectures** | **x86-64 only**; ARM deferred with enforced portability seams — §4.5 | **3** |
+| **4** | **Architectures** | **x86-64 and ARM64, both first-class.** Free `ubuntu-24.04-arm` CI for public repos removed the reason to defer — §4.5 | **4** *(reverses rev. 3)* |
+| **6** | **Test framework** | **GoogleTest + GMock**, pinned, with system fallback and tests-off build | **4** |
+| — | **Contribution model** | **Open** — issues, forks, PRs; **DCO** sign-off, not a CLA — §5.2 | **4** |
 | 7 | Cool-downs in the default schedule | Resolved by mode semantics — §4.4 | 2 |
 | 8 | Repository name casing | Keep `LoadForge`; binary and namespace `loadforge` | 2 |
 
@@ -976,10 +1073,6 @@ research-flavoured one and is correctly last.
    report clearly and document how to grant access.* Note this interacts with the
    licence: a `setcap` helper shipped by a distribution carries its own packaging
    obligations.
-6. **Test framework.** Confirm GoogleTest + GMock (pinned, with system fallback and
-   tests-off build), or prefer Catch2/doctest for a lighter footprint at the cost of
-   built-in mocking. *Recommendation: GoogleTest — the platform fakes (F3) and the
-   supervision tier (F7) both want real mocking.*
 9. **Milestone confirmation.** Is framework-first (F4) with the M2a/M2b split (F14)
    agreed?
 10. **Worker process granularity.** One worker process for all threads, or one per

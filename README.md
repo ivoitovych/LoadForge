@@ -166,20 +166,19 @@ The full strategy, including coverage targets and the test tier model, is in
 
 **Reference platform: Ubuntu 24.04 LTS.**
 
-- **Linux on x86-64.** Individual telemetry sources are probed at startup and degrade
-  gracefully when unavailable.
-- **GCC 13.3 or Clang 18.1** (C++20). Both are first-class — CI builds with each.
+- **Linux on x86-64 and ARM64** — both first-class. Individual telemetry sources are
+  probed at startup and degrade gracefully when unavailable.
+- **GCC 13.3 or Clang 18.1** (C++20). Both first-class — CI builds with each.
 - **CMake 3.28+**, Ninja.
 - **No third-party runtime dependencies.** The small amount of third-party code used is
   vendored and header-only; test-only dependencies are pinned and never linked into the
   shipped binary.
 
-**On ARM64:** not supported in v1 and not planned for it. The design deliberately keeps
-the door open — every vectorized kernel has a scalar path, cache-line geometry is read
-at runtime rather than assumed, and memory ordering is explicit throughout, because
-those three are the ones that cannot be retrofitted cheaply. A CI job builds the
-scalar-only configuration to prove the seams stay clean. See
-[`docs/PLAN.md` §4.5](docs/PLAN.md).
+CI runs the full matrix — **{x86-64, ARM64} × {GCC, Clang}** — plus sanitizer jobs.
+Running on ARM matters for more than portability: ARM64 is weakly ordered where x86-64
+is total-store-ordered, so a memory-ordering bug that x86 would hide shows up there. In
+a tool like this that is worth a great deal, because such a bug is indistinguishable
+from the hardware fault the tool claims to have found.
 
 ---
 
@@ -206,5 +205,20 @@ vendored component is checked for GPL compatibility in CI.
 
 ## Contributing
 
-The project is at the planning stage; the most useful contribution right now is
+**Contributions are welcome — issues, forks and pull requests.** See
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+The project is at the planning stage, so the most useful contribution right now is
 review of [`docs/PLAN.md`](docs/PLAN.md) — particularly the open questions at the end.
+
+Two things worth knowing before you write code, because they are not obvious and are
+strictly enforced: **an implementation is never verified by re-running itself** (every
+workload has an independently derived reference oracle), and **every atomic operation
+states its memory order explicitly**. Both rules exist because a bug in LoadForge would
+be indistinguishable from the hardware fault it claims to have found.
+
+Sign off your commits with `git commit -s` — the project uses the
+[DCO](https://developercertificate.org/), not a CLA.
+
+If LoadForge tells you your machine computed something wrong, please file it using the
+**hardware failure** issue template. That is the report this project exists to receive.
