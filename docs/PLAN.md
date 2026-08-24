@@ -1,6 +1,7 @@
 # LoadForge — Development Plan
 
-**Status:** revision 4 — ARM64 promoted to a first-class target; contribution model settled
+**Status:** revision 5 — full review pass; determinism scoping corrected, orphaned-worker
+safety gap closed
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -50,6 +51,17 @@ new evidence:
 | **ARM64 promoted to a first-class target** | Revision 3 deferred ARM on the assumption that validating it required hardware the project lacks. **GitHub provides `ubuntu-24.04-arm` runners free for public repositories** (GA since August 2025), so ARM CI costs nothing. This does more than add a target: it retires the highest-severity risk in §9, because weak-memory-ordering bugs become detectable by running on weakly-ordered hardware instead of only approximated by TSan. See §4.5. |
 | **Test framework: GoogleTest + GMock** | Confirmed. Pinned revision, system-installed fallback, `LOADFORGE_BUILD_TESTS=OFF` path for offline/live-media builds. Closes Q6. |
 | **Contributions welcome — issues, forks, PRs** | `CONTRIBUTING.md`, issue and PR templates, a code of conduct, and **DCO sign-off** rather than a CLA. See §5.2. |
+| **Commercial / dual licensing declined outright** | GPL-3.0-or-later permanently; no CLA, ever. The only deadline-bearing question, closed deliberately. See §5.2. |
+
+**Revision 5** is a full review pass over every document rather than a response to new
+information. It corrected two substantive errors of my own and closed one gap:
+
+| Change | Severity |
+|---|---|
+| **Cross-architecture bit-exactness was claimed for all non-`BoundedResidual` workloads. That is false for floating-point.** SIMD width is part of the decomposition — 4 AVX2 lanes, 2 NEON lanes and 8 AVX-512 lanes build different accumulation trees and therefore different bits, on flawless hardware. Determinism is now scoped per ISA path, and the class taxonomy is sharper for it. | **Would have caused false verification failures in CI** |
+| **Orphaned workers.** F9 protected the supervisor from dying workers but never addressed the controller dying — leaving workers at full thermal load with no ceiling enforced. Closed with `PR_SET_PDEATHSIG`, IPC-EOF detection, a controller heartbeat, and a T7 test that `SIGKILL`s the controller. | **Safety — the one new risk the process split created** |
+| Graph workloads were listed wholesale as `BitExact`. Split: integer results (BFS distances, component labels) are; PageRank is floating-point, and BFS *trees* depend on frontier order. | Correctness of the contract |
+| Stale cross-references: F1 cited tier T5 for determinism (T6 since rev. 2); §11 still listed closed questions as open. | Housekeeping |
 
 ---
 
@@ -117,14 +129,23 @@ So determinism becomes a **declared per-workload property**, not a universal rul
 
 | Class | Meaning | Workloads |
 |---|---|---|
-| `BitExact` | Identical bits across thread counts and repeat runs | Integer, sort, compression, hashing, graph structure |
-| `BitExactFixedDecomposition` | Identical bits for a given tile/block configuration, across thread counts and runs | Dense linear, stencil, FFT, Monte-Carlo |
+| `BitExact` | Identical bits across thread counts, repeat runs, **ISA paths and architectures** | Integer, sort, compression, hashing; integer graph results (BFS distances, component labels) |
+| `BitExactFixedDecomposition` | Identical bits within one ISA path for a given tile/block configuration | Dense linear, stencil, FFT, Monte-Carlo, PageRank |
 | `BoundedResidual` | Reproducible within a derived tolerance only | Adaptive mesh, dynamically load-balanced workloads |
 
-Every workload declares its class; the determinism test tier (T5) enforces exactly what
+Every workload declares its class; the determinism test tier (T6) enforces exactly what
 was declared, and a workload may not silently weaken its class. `BoundedResidual` is a
 legitimate choice — it just costs the workload its single-thread reproduction path, and
 that trade is made explicitly rather than by accident.
+
+**Determinism is scoped to an ISA path**, because SIMD width is part of the
+decomposition: a lane-parallel FP reduction over 4 AVX2 lanes, 2 NEON lanes or 8
+AVX-512 lanes builds a different accumulation tree and therefore different bits, from
+identical inputs on flawless hardware. Integer workloads are unaffected — integer
+addition *is* associative — which is why `BitExact` can promise cross-architecture
+identity and `BitExactFixedDecomposition` cannot. The ISA path is recorded in the run
+fingerprint (F12) so a result stays interpretable, and golden vectors are per ISA path.
+The full guarantee matrix is in [`determinism.md`](determinism.md).
 
 **Tolerances for bounded checks** are derived from problem conditioning and operation
 count, never hand-picked epsilons.
@@ -320,6 +341,28 @@ Additional requirements this creates, beyond the review's proposal:
   and continue the schedule, which is often what a multi-hour run wants.
 - Workers still observe a cooperative stop flag at bounded intervals; the process
   boundary is the backstop, not the primary path.
+
+**The inverse failure — the controller dying — is the dangerous one, and it must not be
+overlooked.** Splitting the process protects the supervisor from the workers, but it
+also creates a state that a single-process design could never reach: **orphaned workers
+holding the machine at full thermal and power load with nothing left enforcing the
+temperature ceiling, the duration limit or the emergency stop.** That is strictly worse
+than the problem the split was introduced to solve, and it is the one new risk the
+architecture creates.
+
+Workers therefore carry a dead-man's switch, belt and braces:
+
+- `prctl(PR_SET_PDEATHSIG, SIGKILL)` at worker startup, so the kernel terminates the
+  worker the moment its parent dies — no cooperation required, and it survives the
+  controller being `SIGKILL`ed.
+- Independently, the worker treats **EOF on the controller IPC channel** as an
+  immediate, unconditional stop. This covers the case where the controller is alive but
+  wedged, and the case where `PR_SET_PDEATHSIG` is lost across an unexpected re-parent.
+- The worker's own bounded-interval check includes "has the controller issued a
+  heartbeat within N intervals"; if not, it exits rather than waiting to be told.
+
+None of these are optional. A test in tier T7 kills the controller with `SIGKILL` and
+asserts that every worker is gone within a bounded time.
 
 Documentation must state plainly that software thermal protection is a backstop
 *behind* the CPU's own throttling and thermal shutdown, never a substitute.
@@ -933,6 +976,13 @@ program can be wrong.
 | **T10** Soak | multi-hour, memory growth, counter overflow/wrap | nightly | hours |
 | **T11** Hardware | real telemetry, real thermal response, real EDAC | manual / self-hosted | manual |
 
+Budgets are **per configuration**, and the every-push tiers run across the full
+{x86-64, ARM64} × {GCC 13, Clang 18} matrix — four builds — plus the separate sanitizer
+and portability jobs. They run concurrently, so wall-clock is roughly the slowest
+configuration rather than the sum, but the figures are targets to design toward rather
+than measurements. If the every-push set stops fitting in a coffee break, the answer is
+to move work to the nightly tier, never to weaken T3/T5/T6/T7.
+
 ### 7.2 The categories that matter most
 
 **Oracle tests (T3) — new in rev. 2.** Each workload's optimized implementation is
@@ -957,6 +1007,11 @@ declared class without an explicit, reviewed change.
 that exceeds a memory limit; assert the controller detects each, classifies OOM-kill
 distinctly from a fault, preserves the telemetry timeline across the death, and reports
 the last heartbeat and last verified block.
+
+**And the inverse, added in rev. 5:** `SIGKILL` the *controller* and assert every worker
+is gone within a bounded time. An orphaned worker holding the CPU at full load with no
+thermal ceiling enforced is the one genuinely dangerous state the process split can
+create, so it gets an explicit test rather than a hopeful comment.
 
 **Fixture-driven platform tests (T2).** Captured `/sys` trees including deliberately
 hostile cases: AMD, ARM64, no `hwmon`, `EACCES` on `energy_uj`, a counter that wraps
@@ -1101,9 +1156,19 @@ research-flavoured one and is correctly last.
 
 ## 11. Next step
 
-Still nothing implemented, by design. With revision 2 the design questions the
-maintainer review raised are settled in the document rather than in code.
+Still nothing implemented, by design.
 
-Once Q2 (license) and Q3–Q6 are answered, work begins at **M0**: repository
-scaffolding, build system, CI, and the patch-coverage gate — so every subsequent line
-of code lands into a harness already enforcing the standards above.
+**Every question that gates M0 is now answered.** Licence, toolchain, architectures,
+test framework and contribution model are settled (§10); the four remaining questions —
+privilege policy, milestone confirmation, worker granularity, minimum kernel — all bite
+at M1 or later and each has a stated default.
+
+**M0 begins on the owner's word:** repository scaffolding, `CMakeLists.txt` and presets,
+the CI matrix across {x86-64, ARM64} × {GCC 13, Clang 18}, the patch-coverage gate,
+clang-tidy and clang-format, the SPDX / licence / DCO checks, the scalar-SIMD
+portability-and-cross-arch-determinism job, and the ADR seed.
+
+The point of doing it in that order is that M0 is the milestone where the doctrine in
+[`determinism.md`](determinism.md) and [`verification.md`](verification.md) stops being
+prose and starts being a CI job that fails a pull request. Every subsequent line of code
+lands into a harness already enforcing it.

@@ -46,9 +46,15 @@ public description, is recorded in `run.json`, and is enforced by the T6 test ti
 Identical bits across thread counts, across repeat runs, and across tile or block
 configuration.
 
-Achievable whenever the computation is integer, or floating-point but
-order-independent. Required for: integer arithmetic, sorting, compression, hashing,
-checksums, graph structure.
+Achievable whenever the computation is integer or otherwise exact — integer arithmetic
+is associative, so accumulation order does not matter. Required for: integer arithmetic,
+sorting, compression, hashing, checksums, and the **integer** graph results (BFS
+distances, connected-component labels).
+
+For graph workloads, note the qualifier: only *order-independent* outputs qualify. A BFS
+distance array is a property of the graph and is `BitExact`; a BFS *tree* (which parent
+each vertex was reached from) depends on frontier ordering and is not. Checksum the
+former, never the latter.
 
 ### `BitExactFixedDecomposition`
 
@@ -57,7 +63,10 @@ Identical bits across thread counts and repeat runs **for a given decomposition*
 
 This is the interesting case and the default target for numerical workloads. It is
 achievable far more often than people assume — see §3. Expected for: dense linear
-algebra, stencil, FFT, Monte-Carlo.
+algebra, stencil, FFT, Monte-Carlo, and the **floating-point** graph algorithms
+(PageRank and other iterative FP methods).
+
+"Decomposition" includes **SIMD width**, not just tile geometry — see §3.
 
 ### `BoundedResidual`
 
@@ -128,13 +137,66 @@ across machines with different core counts. Counter-based generation also lets f
 isolation regenerate a single failing block in isolation, which is why it is mandatory
 rather than advisory.
 
-### Cross-architecture bit-exactness
+### SIMD width is part of the decomposition
 
-Results must match between x86-64 and ARM64 for `BitExact` and
-`BitExactFixedDecomposition` workloads. In practice this follows from IEEE 754 plus the
-flag policy in §4, provided no kernel relies on an x86-specific rounding or
-denormal-handling quirk. CI runs both architectures on every push, so a violation shows
-up immediately rather than a year later.
+**A vectorized floating-point reduction is not bit-identical to a scalar one, and AVX2
+is not bit-identical to NEON.** This is the same associativity problem as §1, one level
+down, and it is easy to miss.
+
+A lane-parallel reduction accumulates into per-lane accumulators and then combines them
+horizontally:
+
+```text
+AVX2      4 doubles/vector  →  4 partial sums  →  horizontal combine
+NEON      2 doubles/vector  →  2 partial sums  →  horizontal combine
+AVX-512   8 doubles/vector  →  8 partial sums  →  horizontal combine
+scalar    1 accumulator     →  no combine
+```
+
+Four different accumulation trees, therefore four different bit patterns — from the same
+input, on flawless hardware, with identical IEEE 754 semantics and identical FMA
+behaviour. Explicit FMA does not rescue this; it is orthogonal to it.
+
+So **bit-exactness is scoped to an ISA path**, and the ISA path is recorded in the run
+fingerprint (see `PLAN.md` F12) precisely so a result is interpretable.
+
+### What is actually guaranteed
+
+| Comparison | `BitExact` | `BitExactFixedDecomposition` | `BoundedResidual` |
+|---|---|---|---|
+| Across thread counts, same machine | **identical** | **identical** | within tolerance |
+| Repeat runs, same machine | **identical** | **identical** | within tolerance |
+| Across ISA paths (scalar vs AVX2 vs NEON) | **identical** | within tolerance | within tolerance |
+| Across architectures (x86-64 vs ARM64) | **identical** | identical *only* on the same ISA path class | within tolerance |
+
+The taxonomy is cleaner than it first looks, because the distinction falls out of the
+arithmetic rather than being imposed:
+
+- **`BitExact` workloads are integer or discrete.** Integer arithmetic is exact and
+  associative, so a vectorized radix sort, a scalar radix sort, and an ARM one all
+  produce the same sorted array; a compression round-trip is exact everywhere; a hash is
+  a hash. These *are* identical across ISA paths and architectures, and CI asserts it.
+- **`BitExactFixedDecomposition` workloads are floating-point.** They are identical
+  within an ISA path and only bounded across paths.
+
+**The scalar path is bit-identical across x86-64 and ARM64 for every class except
+`BoundedResidual`** — it is pure IEEE 754 with no lane structure to differ. This is a
+real, valuable and cheap guarantee: the `LOADFORGE_SIMD=scalar` CI job builds on both
+architectures, so comparing its outputs turns the portability job into a
+**cross-architecture determinism check** at no extra cost.
+
+### Consequences to keep in mind
+
+- **Golden vectors are per ISA path.** One recorded set of bits cannot serve scalar,
+  AVX2, AVX-512 and NEON for a floating-point workload.
+- **Comparing the scalar oracle against a vectorized implementation is a *bounded*
+  check for FP workloads**, never a bit comparison. This is already how the pairings in
+  [`verification.md`](verification.md) are written — residual norms, not equality — but
+  the reason is this section.
+- **If cross-width bit-exactness were ever genuinely needed**, it can be bought:
+  normalize lane accumulators into a single accumulator at fixed block boundaries,
+  independent of vector width. It costs performance in the inner loop. It is not done by
+  default, and no current requirement justifies it.
 
 ---
 

@@ -109,6 +109,11 @@ Beneath these sits a layer of small primitive kernels (integer, FP, SIMD, cache,
 memory, branch, atomic) used for calibration, diagnosis, and automatic workload
 construction — not as the user-facing reliability tests.
 
+That table is the target suite, not the build order. **Compression is built first**,
+because its exact byte-for-byte round-trip (`decompress(compress(x)) == x`) proves the
+verification machinery against the simplest possible contract before any floating-point
+subtlety enters. Dense linear algebra follows, and proves the bounded-tolerance contract.
+
 ---
 
 ## Planned operating modes

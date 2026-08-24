@@ -1,3 +1,19 @@
+> **Editorial note — read this first.**
+>
+> This is the original project description, preserved **verbatim and unedited** as the
+> historical working draft. It is not a specification, and several parts of it have been
+> deliberately superseded after review. Known examples: §45's source structure (no place
+> for the platform abstraction, supervision or testing), §6's suggestion to verify matrix
+> multiplication by recomputing blocks with the same implementation (this is the trap
+> `docs/verification.md` exists to prevent), §39's back-to-back schedule, §10 and §15's
+> assumption that parallel floating-point checksums are deterministic by default, and
+> §50's repository naming.
+>
+> **[`PLAN.md`](PLAN.md) is the current design of record.** Where the two disagree, the
+> plan wins — §2 of the plan explains each divergence and why.
+
+---
+
 # LoadForge
 
 **A lightweight, composable, self-verifying hardware reliability and load-testing framework for Linux**
