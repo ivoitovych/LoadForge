@@ -164,15 +164,22 @@ The full strategy, including coverage targets and the test tier model, is in
 
 ## Requirements
 
-Not yet fixed — proposed in the plan and open for review:
+**Reference platform: Ubuntu 24.04 LTS.**
 
-- Linux (kernel with `sysfs`/`procfs`; individual telemetry sources are probed at
-  startup and degrade gracefully when unavailable)
-- A C++20 compiler (GCC 13+ / Clang 18+ proposed)
-- CMake 3.24+
+- **Linux on x86-64.** Individual telemetry sources are probed at startup and degrade
+  gracefully when unavailable.
+- **GCC 13.3 or Clang 18.1** (C++20). Both are first-class — CI builds with each.
+- **CMake 3.28+**, Ninja.
 - **No third-party runtime dependencies.** The small amount of third-party code used is
   vendored and header-only; test-only dependencies are pinned and never linked into the
   shipped binary.
+
+**On ARM64:** not supported in v1 and not planned for it. The design deliberately keeps
+the door open — every vectorized kernel has a scalar path, cache-line geometry is read
+at runtime rather than assumed, and memory ordering is explicit throughout, because
+those three are the ones that cannot be retrofitted cheaply. A CI job builds the
+scalar-only configuration to prove the seams stay clean. See
+[`docs/PLAN.md` §4.5](docs/PLAN.md).
 
 ---
 
@@ -190,10 +197,10 @@ Use it deliberately.
 
 ## License
 
-**Not yet chosen — this repository is currently public with no license**, which means
-default copyright applies: the code and documents here may not be legally used, forked
-or contributed to. Settling this is the most pressing open item; see question 2 in
-[`docs/PLAN.md`](docs/PLAN.md#10-open-questions--owner-decision-needed).
+**GPL-3.0-or-later.** See [`LICENSE`](LICENSE) for the full text.
+
+Every source file carries `SPDX-License-Identifier: GPL-3.0-or-later`, and every
+vendored component is checked for GPL compatibility in CI.
 
 ---
 

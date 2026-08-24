@@ -1,6 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 2 — incorporates maintainer review
+**Status:** revision 3 — owner decisions on license, toolchain and architecture scope
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -30,8 +30,17 @@ recommendation of mine that was actively harmful:
 | **F1 corrected — banning FP contraction project-wide would suppress the FMA units the suite exists to stress.** | Maintainer review — **rev. 1 was wrong** |
 | Benchmark / stress / explore have different experimental discipline (§4.4); milestone ordering fixed; platform boundary narrowed; coverage policy made workable; result schema versioned from day one. | Maintainer review |
 
-Two points where this revision **does not** fully adopt the review are argued in
+Two points where revision 2 does **not** fully adopt the review are argued in
 F1 and F11; both are noted inline rather than silently resolved.
+
+**Revision 3** records the owner's decisions on three of the open questions, which
+close them and add concrete engineering requirements:
+
+| Decision | Consequence |
+|---|---|
+| **License: GPL** → `GPL-3.0-or-later` | `LICENSE` added (verbatim FSF text). SPDX headers on every source file; a CI check that every vendored dependency is GPL-compatible. See §5.1. |
+| **Toolchain: Ubuntu 24.04 LTS as the reference platform** | GCC 13.3 / Clang 18.1 / CMake 3.28 / libstdc++ 13 — all verified present in the development container. Fixes which C++20 library features are actually usable. See §5. |
+| **ARM: not implemented now, but the door stays open** | No ARM code, no ARM CI, no ARM telemetry sources. But portability seams are designed in from M0, because two of them — memory-ordering discipline and cache-line assumptions — cannot be retrofitted cheaply. See §4.5. |
 
 ---
 
@@ -557,14 +566,97 @@ This closes open question 7 from revision 1: comparable rise rates belong to ben
 and explore; the five-hour stress schedule should *not* squander time cooling between
 phases, and its recorded slopes are labelled contextual.
 
+### 4.5 Portability seams — ARM deferred, door held open
+
+**Decision: v1 targets x86-64 only.** No ARM implementation, no ARM CI, no ARM
+telemetry sources, no ARM SIMD kernels. ARM64 is a plausible later target and the
+design must not foreclose it.
+
+"Door open" is worth almost nothing as an intention and quite a lot as a small number
+of concrete constraints. Most portability work is genuinely cheap to defer. **Two items
+are not**, and both must be honoured from the first commit, because retrofitting them
+across a mature multithreaded codebase is brutal:
+
+#### Must be done now
+
+**1. Memory-ordering discipline.** x86-64 is total-store-ordered; ARM64 is weakly
+ordered. Code that is *accidentally* correct on x86 — relying on TSO rather than on
+explicit ordering — compiles fine and fails on ARM, often rarely and
+non-deterministically. This is the single most expensive thing to fix later, and for a
+tool whose purpose is diagnosing rare non-deterministic faults it would be
+catastrophic: a memory-ordering bug in LoadForge is indistinguishable from the
+hardware fault it claims to have found.
+
+Rules from M0:
+- Every atomic operation states its memory order explicitly. No bare `std::atomic`
+  operations relying on the `seq_cst` default by omission — the order is a documented
+  design decision each time.
+- No hand-rolled lock-free structures without an explicit ordering argument recorded in
+  a comment and reviewed.
+- ThreadSanitizer is a required CI job, not optional. TSan models a weak memory model
+  and catches a useful subset of these on x86 hardware.
+
+**2. No hardcoded cache-line size.** x86-64 is 64 bytes; ARM64 is 64 *or* 128
+(Apple silicon is 128). False sharing, padding and alignment are load-bearing concerns
+in this project — `coherence.pingpong` and the false-sharing primitives exist precisely
+to exercise them. A hardcoded `64` would silently produce a *wrong test* on ARM rather
+than a build failure. Cache-line and cache-level geometry are read from topology at
+runtime (already required by §4.1), never assumed.
+
+#### Cheap to defer, but seams kept clean
+
+| Seam | Requirement now | Deferred |
+|---|---|---|
+| **SIMD kernels** | Every vectorized kernel has a **scalar reference path** that always compiles and runs. x86 intrinsics live only under `primitives/simd/x86/`; `__m256d` and friends never appear in portable code. | NEON/SVE implementations |
+| **Timing** | Portable code uses `std::chrono::steady_clock`. `rdtsc` is confined to the platform layer and is never the portable time source. | `cntvct_el0` |
+| **Telemetry sources** | The capability model (F3) already treats every source as probe-and-degrade, so an ARM machine with no RAPL is an *already-handled* case, not a new one. | `armv8_pmuv3` counters, ARM thermal-zone sources, SoC-specific power rails |
+| **Atomics width / alignment** | No assumptions about lock-free-ness beyond what `std::atomic::is_lock_free` reports at runtime. | — |
+| **Unaligned access** | No deliberate unaligned loads outside x86-specific kernels. | — |
+
+There is a pleasing synergy here: **the scalar reference path required for portability
+is the same code required as the independent oracle in F11.** Writing it once serves
+both purposes, so the portability seam costs close to nothing beyond what verification
+already demands.
+
+#### A cheap CI gate that keeps the door genuinely open
+
+A `LOADFORGE_SIMD=scalar` build configuration compiled in CI on x86 proves that no x86
+intrinsic has leaked into portable code, and that the scalar path still builds and
+passes its tests. This is one extra CI job, costs minutes, and is the difference
+between a door that is actually open and one that is merely described as open. Without
+it, the seams rot within a few months and "adding ARM later" quietly becomes a rewrite.
+
 ---
 
 ## 5. Technology choices (proposed)
 
+**Reference platform: Ubuntu 24.04 LTS** (owner decision). Everything below is pinned to
+what 24.04 actually ships, all of it verified present in the development container:
+
+| Component | Version on 24.04 | Verified here |
+|---|---|---|
+| GCC | 13.3.0 | ✅ |
+| Clang / LLVM | 18.1.3 | ✅ |
+| CMake | 3.28.3 | ✅ |
+| Ninja | 1.11.1 | ✅ |
+| libstdc++ | 13 | ✅ |
+| `clang-tidy`, `clang-format` | 18.1.3 | ✅ |
+| `gcovr` / `lcov` | packaged | ❌ **not installed — CI must add** |
+
+Both compilers are first-class: every CI build runs GCC **and** Clang, since each finds
+diagnostics the other misses, and Clang is needed for `llvm-cov` and the sanitizer jobs.
+
+C++20 on GCC 13 / libstdc++ 13 is close to complete, with two practical caveats worth
+recording before code is written: `std::format` is available in GCC 13 but was
+incomplete in earlier releases, and C++20 modules are not usable in this toolchain
+generation — the project uses classic headers.
+
 | Decision | Proposal | Why |
 |---|---|---|
-| Language | C++20 | Draft §44. GCC 13 / Clang 18 both verified present. |
-| Build | CMake ≥ 3.24 + Ninja, `CMakePresets.json` | Presets keep local and CI builds identical. |
+| Language | C++20 | Draft §44. GCC 13.3 / Clang 18.1 per the reference platform. |
+| Build | **CMake ≥ 3.28** + Ninja, `CMakePresets.json` | Matches the 24.04 baseline; presets keep local and CI builds identical. |
+| **License** | **`GPL-3.0-or-later`** | Owner decision. See §5.1. |
+| **Target architecture** | **x86-64 only**; portability seams per §4.5 | Owner decision — ARM deferred, door held open. |
 | Test framework | GoogleTest + GMock, **pinned to an exact revision**, with a system-installed fallback and a `LOADFORGE_BUILD_TESTS=OFF` path | GMock matters for platform fakes (F3). Pinning and the fallback keep offline / live-media builds working. |
 | TOML | **Vendored pinned header-only parser** (e.g. `toml++`) in `third_party/` | The review is right that hand-rolling a parser is needless risk. Vendoring keeps third-party *external* dependencies at zero. |
 | Coverage | `gcovr` (GCC), `llvm-cov` (Clang) | *Neither `gcovr` nor `lcov` is installed in this container — CI must install them.* |
@@ -573,6 +665,41 @@ phases, and its recorded slopes are labelled contextual.
 | FP flags | `-ffp-contract=off`; **explicit FMA intrinsics** in FMA-stressing kernels; `-ffast-math`/`-Ofast` banned | F1. |
 | Runtime dependencies | **No third-party runtime dependencies** | Draft §44, with the wording the review recommends — the promise that can actually be kept. Enforced by a CI check on the linked binary. |
 
+### 5.1 Licensing — `GPL-3.0-or-later`
+
+`LICENSE` contains the verbatim FSF GPL-3.0 text (installed from the distribution's
+canonical copy, SHA-256 `3972dc97…36986`). `-or-later` is chosen so the project can
+move to a future GPL version without tracking down every contributor.
+
+**What this obliges the project to do:**
+
+- **SPDX headers on every source file** from the first commit:
+  `// SPDX-License-Identifier: GPL-3.0-or-later`. Cheap now, tedious to backfill.
+  Enforced by a CI check.
+- **Every vendored dependency must be GPL-compatible**, verified in CI rather than
+  assumed. Current plan is clean: `toml++` is MIT (compatible, and MIT code may be
+  combined into a GPL work), GoogleTest is BSD-3-Clause (compatible, and test-only —
+  never linked into the shipped binary anyway).
+- **A `NOTICE`/`third_party/README` recording each vendored component**, its version,
+  its upstream and its license.
+- **Distributing binaries obliges offering source.** Relevant if LoadForge is ever
+  shipped on live/rescue media, which the draft (§4) explicitly contemplates — the
+  media must carry the source or a written offer.
+
+**One consequence worth stating plainly rather than discovering later.** GPL is a good
+fit for a standalone diagnostic tool and is the natural licence for something this close
+to the Linux ecosystem. It does, however, prevent LoadForge from being embedded as a
+library inside proprietary QA or manufacturing test tooling — and hardware vendors and
+board manufacturers are a plausible audience for exactly this kind of suite. That may be
+precisely the intent; it is worth being a deliberate choice rather than a surprise. If a
+reusable engine is ever split out, LGPL for that component while the CLI stays GPL is
+the conventional resolution, and it is far easier to do that at the split than to
+relicense afterwards.
+
+Because the repository has **no outside contributions yet**, the licence remains
+trivially changeable today. That stops being true the moment the first external patch
+is accepted.
+
 ---
 
 ## 6. Directory structure (proposed)
@@ -580,14 +707,17 @@ phases, and its recorded slopes are labelled contextual.
 ```text
 LoadForge/
 ├── README.md
-├── LICENSE                         # ►► STILL MISSING — see Q2, now urgent
+├── LICENSE                         # GPL-3.0-or-later (verbatim FSF text)
+├── NOTICE                          # vendored components + their licences (§5.1)
 ├── CMakeLists.txt
-├── CMakePresets.json               # debug, release, asan, tsan, coverage
+├── CMakePresets.json               # debug, release, asan, tsan, coverage, simd-scalar
 ├── .clang-format  .clang-tidy  .gitignore
 │
 ├── .github/workflows/
-│   ├── ci.yml                      # build + test, gcc & clang
-│   ├── sanitizers.yml              # asan+ubsan, tsan
+│   ├── ci.yml                      # build + test, gcc 13 & clang 18
+│   ├── sanitizers.yml              # asan+ubsan, tsan (required — see §4.5)
+│   ├── portability.yml             # LOADFORGE_SIMD=scalar build (§4.5 door-open gate)
+│   ├── licensing.yml               # SPDX headers + dependency compatibility (§5.1)
 │   └── coverage.yml                # patch + module coverage gates
 │
 ├── cmake/
@@ -785,7 +915,7 @@ mistaken for coverage.
 
 | # | Milestone | Contents | Exit criterion |
 |---|---|---|---|
-| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, LICENSE | Green CI on GCC and Clang; patch-coverage gate active |
+| **M0** | Foundation | Scaffolding, CMake + presets, CI, patch-coverage gate, clang-tidy/format, ADR process, **SPDX headers + licence CI check (§5.1)**, **scalar-SIMD portability job (§4.5)** | Green CI on **both** GCC 13 and Clang 18; patch-coverage gate active; scalar build passing |
 | **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
 | **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **minimal telemetry capability probe** | `loadforge stress --test compression` runs end to end; oracle, fault-injection, determinism and supervision tiers pass; capability set reported at start |
 | **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1) | Both verification contracts demonstrated; determinism class enforced; first meaningful thermal result |
@@ -820,41 +950,48 @@ research-flavoured one and is correctly last.
 | Silent regression via untested SIMD paths | Medium | Medium | Per-ISA runners; golden vectors per ISA |
 | Coverage gate gamed by assertion-free tests | Medium | Medium | Mutation testing; T3/T5/T6/T7 weighted above coverage |
 | Damage to poorly-cooled user hardware | Medium | Low | Conservative defaults, controller safety, clear warnings |
+| **Memory-ordering bug indistinguishable from the hardware fault it "found"** | **Fatal to credibility** | Medium | §4.5: explicit memory orders everywhere, mandatory TSan, reviewed ordering arguments |
+| Portability seams rot, making "add ARM later" a rewrite | Medium | **High if ungated** | §4.5: `LOADFORGE_SIMD=scalar` CI job proving no x86 intrinsics leaked into portable code |
+| Vendored dependency turns out GPL-incompatible | Medium | Low | §5.1: licence compatibility checked in CI, not assumed |
 
 ---
 
 ## 10. Open questions — owner decision needed
 
-**Closed in revision 2:** Q7 (cool-downs → resolved by §4.4 mode semantics) and Q8
-(repository naming → `LoadForge` repo, `loadforge` binary and namespace, no rename).
+### Closed
 
-1. **Document placement.** *Done in rev. 2* — the draft now lives at
-   `docs/DESIGN-DRAFT.md`; the root holds README and, shortly, build files.
-2. **LICENSE — now urgent.** The repository is **public with no license**, which means
-   default copyright: no one may legally use, fork or contribute to it, and any
-   contribution received arrives with unclear terms. Both reviewers flag this as the
-   most pressing housekeeping item. *Recommendation: **Apache-2.0** if the explicit
-   patent grant matters, **MIT** if simplicity and adoption matter most.* **This is your
-   decision and needs making before M0 completes.**
-3. **Minimum toolchain.** GCC 13 / Clang 18 as verified here, or support older
-   distribution compilers (GCC 11 on Ubuntu 22.04)? Constrains available C++20 features.
-4. **Architectures.** x86-64 only for v1, or ARM64 from the start? Roughly doubles
-   telemetry work — different sensor and counter interfaces entirely.
+| # | Question | Resolution | Rev. |
+|---|---|---|---|
+| 1 | Document placement | Draft moved to `docs/DESIGN-DRAFT.md` | 2 |
+| **2** | **License** | **`GPL-3.0-or-later`** — `LICENSE` added; obligations in §5.1 | **3** |
+| **3** | **Minimum toolchain** | **Ubuntu 24.04 LTS reference** — GCC 13.3, Clang 18.1, CMake 3.28; both compilers first-class in CI | **3** |
+| **4** | **Architectures** | **x86-64 only**; ARM deferred with enforced portability seams — §4.5 | **3** |
+| 7 | Cool-downs in the default schedule | Resolved by mode semantics — §4.4 | 2 |
+| 8 | Repository name casing | Keep `LoadForge`; binary and namespace `loadforge` | 2 |
+
+### Still open
+
 5. **Privilege policy.** Never escalate and report reduced capability, ship a `setcap`
    helper, or support an opt-in privileged mode? *Recommendation: never escalate;
-   report clearly and document how to grant access.*
+   report clearly and document how to grant access.* Note this interacts with the
+   licence: a `setcap` helper shipped by a distribution carries its own packaging
+   obligations.
 6. **Test framework.** Confirm GoogleTest + GMock (pinned, with system fallback and
    tests-off build), or prefer Catch2/doctest for a lighter footprint at the cost of
-   built-in mocking.
-7. ~~Cool-downs in the default schedule~~ — **closed**, see §4.4.
-8. ~~Repository name casing~~ — **closed**, keep `LoadForge`.
+   built-in mocking. *Recommendation: GoogleTest — the platform fakes (F3) and the
+   supervision tier (F7) both want real mocking.*
 9. **Milestone confirmation.** Is framework-first (F4) with the M2a/M2b split (F14)
    agreed?
-10. **Worker process granularity** *(new)*. One worker process for all threads, or one
-    per workload group in the mixed test? Per-group isolation gives better fault
-    containment and attribution; one process is simpler and cheaper to synchronize.
-    *Recommendation: single worker process at M1, revisit at M5 when the mixed test
-    makes per-group attribution valuable.*
+10. **Worker process granularity.** One worker process for all threads, or one per
+    workload group in the mixed test? Per-group isolation gives better fault containment
+    and attribution; one process is simpler and cheaper to synchronize.
+    *Recommendation: single worker process at M1, revisit at M5.*
+11. **Minimum supported kernel** *(new)*. The reference platform is 24.04, but LoadForge
+    is explicitly intended to run from live/rescue media (draft §4), which may carry
+    older or newer kernels than the build host. Telemetry interfaces differ across
+    kernel generations. *Recommendation: build on 24.04, but declare a minimum runtime
+    kernel — 5.15 (22.04 LTS) is a reasonable floor — and let the capability model (F3)
+    absorb the rest.*
 
 ---
 
