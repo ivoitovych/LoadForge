@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <variant>
 
 #include "core/parse_error.hpp"
 #include "core/result.hpp"
@@ -19,33 +20,58 @@ namespace loadforge::core {
 /// MemAvailable and the cgroup limit, whichever is lower (PLAN.md F7), which is
 /// platform knowledge and belongs behind the platform boundary. Core parses;
 /// something that can see the machine resolves.
+///
+/// Invalid states are unrepresentable rather than merely undocumented: a
+/// percentage outside 1..100 cannot be constructed at all, and asking an
+/// absolute size for its percentage throws rather than silently returning the
+/// byte count. Both follow the rule Result already establishes -- defined
+/// failure, never a plausible wrong answer.
 class ByteSize {
  public:
-  enum class Kind { Absolute, Fraction };
+  enum class Kind : std::uint8_t { Absolute, Fraction };
 
-  static constexpr ByteSize bytes(std::uint64_t count) noexcept {
-    return ByteSize{Kind::Absolute, count};
+  static constexpr ByteSize bytes(std::uint64_t count) noexcept { return ByteSize{Bytes{count}}; }
+
+  /// A share of available memory, in whole percent. Rejects 0 and anything
+  /// above 100: neither is a meaningful footprint, and both were constructible
+  /// before even though the parser refused them.
+  [[nodiscard]] static Result<ByteSize, ParseError> percent(std::uint64_t whole) {
+    if (whole == 0 || whole > kMaxPercent) {
+      return ParseError::OutOfRange;
+    }
+    return ByteSize{Fraction{whole}};
   }
-  static constexpr ByteSize percent(std::uint64_t whole) noexcept {
-    return ByteSize{Kind::Fraction, whole};
+
+  [[nodiscard]] constexpr Kind kind() const noexcept {
+    return std::holds_alternative<Bytes>(store_) ? Kind::Absolute : Kind::Fraction;
   }
+  [[nodiscard]] constexpr bool is_absolute() const noexcept { return kind() == Kind::Absolute; }
 
-  [[nodiscard]] constexpr Kind kind() const noexcept { return kind_; }
-  [[nodiscard]] constexpr bool is_absolute() const noexcept { return kind_ == Kind::Absolute; }
+  /// Throws std::bad_variant_access if this is a percentage.
+  [[nodiscard]] constexpr std::uint64_t byte_count() const { return std::get<Bytes>(store_).count; }
 
-  /// Precondition: is_absolute().
-  [[nodiscard]] constexpr std::uint64_t byte_count() const noexcept { return value_; }
-
-  /// Precondition: !is_absolute(). In whole percent, 1..100.
-  [[nodiscard]] constexpr std::uint64_t percent_of_available() const noexcept { return value_; }
+  /// In whole percent, 1..100. Throws std::bad_variant_access if this is absolute.
+  [[nodiscard]] constexpr std::uint64_t percent_of_available() const {
+    return std::get<Fraction>(store_).whole;
+  }
 
   friend constexpr bool operator==(const ByteSize&, const ByteSize&) noexcept = default;
 
- private:
-  constexpr ByteSize(Kind kind, std::uint64_t value) noexcept : kind_(kind), value_(value) {}
+  static constexpr std::uint64_t kMaxPercent = 100;
 
-  Kind kind_;
-  std::uint64_t value_;
+ private:
+  struct Bytes {
+    std::uint64_t count;
+    friend constexpr bool operator==(const Bytes&, const Bytes&) noexcept = default;
+  };
+  struct Fraction {
+    std::uint64_t whole;
+    friend constexpr bool operator==(const Fraction&, const Fraction&) noexcept = default;
+  };
+
+  constexpr explicit ByteSize(std::variant<Bytes, Fraction> store) noexcept : store_(store) {}
+
+  std::variant<Bytes, Fraction> store_;
 };
 
 /// Parse a memory footprint: "1024", "512MiB", "8GiB", or "70%".

@@ -7,6 +7,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <variant>
 
 namespace loadforge::core {
 namespace {
@@ -49,6 +50,36 @@ TEST(ParseByteSize, AcceptsPercentage) {
   EXPECT_EQ(seventy.percent_of_available(), 70U);
   EXPECT_EQ(parsed("1%").percent_of_available(), 1U);
   EXPECT_EQ(parsed("100%").percent_of_available(), 100U);
+}
+
+ByteSize pct(std::uint64_t whole) {
+  const auto r = ByteSize::percent(whole);
+  EXPECT_TRUE(r.has_value()) << "percent(" << whole << ") unexpectedly rejected";
+  return r.value_or(ByteSize::bytes(0));
+}
+
+TEST(ByteSize, InvalidPercentagesAreUnrepresentable) {
+  // Previously these were constructible even though the parser refused them,
+  // so to_string(percent(0)) produced "0%" -- text parse_byte_size rejects.
+  EXPECT_FALSE(ByteSize::percent(0).has_value());
+  EXPECT_FALSE(ByteSize::percent(101).has_value());
+  EXPECT_FALSE(ByteSize::percent(1000).has_value());
+  EXPECT_EQ(ByteSize::percent(0).error(), ParseError::OutOfRange);
+  EXPECT_TRUE(ByteSize::percent(1).has_value());
+  EXPECT_TRUE(ByteSize::percent(100).has_value());
+}
+
+TEST(ByteSize, KindReportsBothAlternatives) {
+  EXPECT_EQ(ByteSize::bytes(1).kind(), ByteSize::Kind::Absolute);
+  EXPECT_TRUE(ByteSize::bytes(1).is_absolute());
+  EXPECT_EQ(pct(50).kind(), ByteSize::Kind::Fraction);
+  EXPECT_FALSE(pct(50).is_absolute());
+}
+
+TEST(ByteSize, AccessorsThrowRatherThanReturnAPlausibleWrongAnswer) {
+  // percent(70).byte_count() used to return 70 -- "70 bytes" -- silently.
+  EXPECT_THROW((void)pct(70).byte_count(), std::bad_variant_access);
+  EXPECT_THROW((void)ByteSize::bytes(70).percent_of_available(), std::bad_variant_access);
 }
 
 TEST(ParseByteSize, RejectsPercentageOutsideOneToHundred) {
@@ -115,20 +146,22 @@ TEST(ByteSizeToString, HandlesZeroAndIndivisible) {
   EXPECT_EQ(to_string(ByteSize::bytes(1536)), "1536B");  // 1.5KiB is not exact
 }
 
-TEST(ByteSizeToString, RendersPercentage) { EXPECT_EQ(to_string(ByteSize::percent(70)), "70%"); }
+TEST(ByteSizeToString, RendersPercentage) { EXPECT_EQ(to_string(pct(70)), "70%"); }
 
 TEST(ByteSize, ComparesByKindAndValue) {
   EXPECT_EQ(ByteSize::bytes(100), ByteSize::bytes(100));
   EXPECT_NE(ByteSize::bytes(100), ByteSize::bytes(101));
+  // Two percentages compare by value, not merely by kind.
+  EXPECT_EQ(pct(70), pct(70));
+  EXPECT_NE(pct(70), pct(50));
   // 100 bytes and 100 percent must never compare equal.
-  EXPECT_NE(ByteSize::bytes(100), ByteSize::percent(100));
+  EXPECT_NE(ByteSize::bytes(100), pct(100));
 }
 
 TEST(ByteSizeRoundTrip, ToStringOutputParsesBackIdentically) {
   for (const ByteSize original :
        {ByteSize::bytes(0), ByteSize::bytes(1), ByteSize::bytes(1536), ByteSize::bytes(4 * kKiB),
-        ByteSize::bytes(8 * kGiB), ByteSize::percent(1), ByteSize::percent(70),
-        ByteSize::percent(100)}) {
+        ByteSize::bytes(8 * kGiB), pct(1), pct(70), pct(100)}) {
     const std::string text = to_string(original);
     const auto reparsed = parse_byte_size(text);
     ASSERT_TRUE(reparsed.has_value()) << "round trip failed for '" << text << "'";

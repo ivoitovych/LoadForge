@@ -60,12 +60,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: NOTICE lists every vendored component
-        run: |
-          test -f NOTICE || { echo "NOTICE missing"; exit 1; }
-          if [ -d third_party ]; then
-            for d in third_party/*/; do
-              name=$(basename "$d")
-              grep -q "$name" NOTICE || { echo "third_party/$name not recorded in NOTICE"; exit 1; }
-            done
-          fi
+      - name: Manifest is complete and every licence is on the allowlist
+        # Validates declared licences against an allowlist. The previous version
+        # only checked that a directory name appeared in NOTICE, which proved
+        # nothing about the licence itself.
+        run: python3 tools/check-dependencies.py

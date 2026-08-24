@@ -2,6 +2,7 @@
 #ifndef LOADFORGE_CORE_PARSE_ERROR_HPP
 #define LOADFORGE_CORE_PARSE_ERROR_HPP
 
+#include <cstdint>
 #include <string_view>
 
 namespace loadforge::core {
@@ -10,7 +11,7 @@ namespace loadforge::core {
 ///
 /// Kept deliberately specific: a configuration error is reported to a user who
 /// must fix a file, so "invalid value" is not good enough.
-enum class ParseError {
+enum class ParseError : std::uint8_t {
   Empty,          ///< The value was empty or entirely whitespace.
   InvalidNumber,  ///< The numeric part was missing or malformed.
   MissingUnit,    ///< A bare number was given where a unit is required.

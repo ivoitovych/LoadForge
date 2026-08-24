@@ -31,11 +31,15 @@ TEST(ParseError, DescriptionsAreDistinct) {
 }
 
 TEST(ParseError, IsTotalForValuesOutsideTheEnumerators) {
-  // ParseError's underlying type is int, so this cast is well defined even
-  // though 999 names no enumerator. describe() must stay total: if someone adds
-  // an enumerator and forgets this function, the result should be a usable
-  // string, not a fall off the end of a non-void function.
-  EXPECT_EQ(describe(static_cast<ParseError>(999)), "unrecognised parse error");
+  // The underlying type is uint8_t, so 200 is representable and this cast is
+  // well defined even though it names no enumerator. (999 would NOT be
+  // representable and the cast itself would be undefined -- the kind of detail
+  // that turns a defensive test into the bug it was guarding against.)
+  //
+  // describe() must stay total: if someone adds an enumerator and forgets this
+  // function, the result should be a usable string, not a fall off the end of a
+  // non-void function.
+  EXPECT_EQ(describe(static_cast<ParseError>(200)), "unrecognised parse error");
 }
 
 }  // namespace

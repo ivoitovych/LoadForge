@@ -1,0 +1,8 @@
+# Reviewed-equivalent mutants: survivors that cannot be killed by any test
+# because the mutation does not change observable behaviour.
+#
+# Format: one "path:line:column" per line, with the justification directly above
+# it as a comment. Entries are reviewed like code. The count is reported by CI
+# and, per docs/PLAN.md §7.3, may only decrease without explicit review.
+#
+# Empty. Any surviving mutant currently fails the build.

@@ -28,8 +28,6 @@ constexpr std::array<Unit, 5> kUnits{{
     {"TiB", kTiB},
 }};
 
-constexpr std::uint64_t kMaxPercent = 100;
-
 }  // namespace
 
 Result<ByteSize, ParseError> parse_byte_size(std::string_view text) {
@@ -44,10 +42,7 @@ Result<ByteSize, ParseError> parse_byte_size(std::string_view text) {
     return ByteSize::bytes(count);  // a bare number is a byte count
   }
   if (suffix == "%") {
-    if (count == 0 || count > kMaxPercent) {
-      return ParseError::OutOfRange;
-    }
-    return ByteSize::percent(count);
+    return ByteSize::percent(count);  // the factory owns the 1..100 rule
   }
 
   for (const Unit& unit : kUnits) {

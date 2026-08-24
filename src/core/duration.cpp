@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <ranges>
+#include <stdexcept>
 
 #include "core/parse_number.hpp"
 
@@ -56,6 +57,9 @@ Result<Duration, ParseError> parse_duration(std::string_view text) {
 }
 
 std::string to_string(Duration duration) {
+  if (duration.count() < 0) {
+    throw std::invalid_argument("loadforge: configured durations are non-negative");
+  }
   const auto millis = static_cast<std::uint64_t>(duration.count());
   // Largest exact unit first, so the output round-trips through parse_duration.
   for (const Unit& unit : std::views::reverse(kUnits)) {

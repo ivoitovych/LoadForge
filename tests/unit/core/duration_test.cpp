@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -110,6 +111,17 @@ TEST(DurationToString, ChoosesLargestExactUnit) {
 TEST(DurationToString, FallsBackToMillisForZeroAndIndivisible) {
   EXPECT_EQ(to_string(Duration{0}), "0ms");
   EXPECT_EQ(to_string(Duration{1500}), "1500ms");  // 1.5s is not exact in any larger unit
+}
+
+TEST(DurationToString, RejectsNegativeRatherThanEmittingAHugePositive) {
+  // Duration is an alias for chrono::milliseconds so it interoperates with
+  // chrono, which makes Duration{-1} constructible. Casting that to an unsigned
+  // type would render something like "18446744073709551615ms" -- text the
+  // parser then rejects. A silent wrong answer is the one output this project
+  // must never produce.
+  EXPECT_THROW((void)to_string(Duration{-1}), std::invalid_argument);
+  EXPECT_THROW((void)to_string(Duration{-60000}), std::invalid_argument);
+  EXPECT_NO_THROW((void)to_string(Duration{0}));
 }
 
 TEST(DurationRoundTrip, ToStringOutputParsesBackIdentically) {

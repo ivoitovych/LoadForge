@@ -19,5 +19,5 @@ Checks: >
 # shape for a testable CLI entry point. Contorting that API to satisfy the check
 # would make the code worse, not safer.
 WarningsAsErrors: '*'
-HeaderFilterRegex: '^src/.*'
+HeaderFilterRegex: '.*/src/.*'
 FormatStyle: file

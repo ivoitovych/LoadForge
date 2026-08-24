@@ -7,9 +7,13 @@
 #include <string_view>
 #include <vector>
 
+#include "core/version.hpp"
+
 namespace loadforge::cli {
 
-inline constexpr std::string_view kVersion = "0.0.0-m0";
+/// Re-exported from the generated header so there is exactly one place a
+/// version can be wrong.
+inline constexpr std::string_view kVersion = core::kVersion;
 
 /// Convert a raw argv span into arguments, dropping argv[0].
 ///

@@ -1,27 +1,48 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 name: mutation
 on:
-  schedule: [{ cron: '0 3 * * *' }]
+  # NOT scheduled yet -- deliberately. See "Status" below.
   workflow_dispatch:
+    inputs:
+      mull_deb_url:
+        description: 'URL of the Mull .deb to install'
+        required: true
+      mull_deb_sha256:
+        description: 'SHA-256 of that .deb (required; the job refuses to run without it)'
+        required: true
 
 jobs:
   mull:
     # At 100% coverage the coverage number stops carrying information: it can no
     # longer tell a thorough test from one that executes a line and asserts
-    # nothing. Mutation testing is what answers the remaining question -- do the
-    # tests detect breakage? Gate: zero UNEXPLAINED surviving mutants
-    # (docs/PLAN.md §7.3).
-    name: mutation score
+    # nothing. Mutation testing answers the remaining question -- do the tests
+    # detect breakage?
+    #
+    # GATE: zero unexplained surviving mutants (docs/PLAN.md §7.3). Enforced by
+    # tools/mutation-gate.sh, which also fails if Mull cannot run: a gate that
+    # degrades to a no-op when its tool is missing is a green tick with nothing
+    # behind it.
+    #
+    # STATUS: armed but not yet on a schedule. Enabling it nightly requires a
+    # Mull release pinned by verified SHA-256, which has not been established
+    # yet. Rather than ship an unverified pin -- or the '|| true' this replaced,
+    # which let any number of survivors pass -- the job runs on demand with the
+    # URL and checksum supplied explicitly, and refuses to run without them.
+    name: zero unexplained surviving mutants
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: |
+      - name: Install Mull (checksum required)
+        run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build clang-18 llvm-18
-          curl -sSL https://github.com/mull-project/mull/releases/latest/download/mull-18-ubuntu-24.04.deb -o /tmp/mull.deb || true
-          sudo dpkg -i /tmp/mull.deb || echo "mull package unavailable; job is advisory until pinned"
+          curl -fsSL --retry 3 "${{ inputs.mull_deb_url }}" -o /tmp/mull.deb
+          echo "${{ inputs.mull_deb_sha256 }}  /tmp/mull.deb" | sha256sum --check --strict
+          sudo dpkg -i /tmp/mull.deb
+          mull-runner-18 --version
       - env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug -DCMAKE_CXX_FLAGS="-fpass-plugin=/usr/lib/mull-ir-frontend-18 -g -grecord-command-line"
       - run: cmake --build --preset debug
-      - name: Run mutants
-        run: mull-runner-18 ./build/debug/tests/loadforge_unit_tests --report-name mutation || true
+      - name: Run mutants and enforce the gate
+        run: ./tools/mutation-gate.sh ./build/debug/tests/loadforge_unit_tests

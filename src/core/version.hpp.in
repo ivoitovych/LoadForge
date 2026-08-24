@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Generated from src/core/version.hpp.in by CMake. Do not edit.
+#ifndef LOADFORGE_CORE_VERSION_HPP
+#define LOADFORGE_CORE_VERSION_HPP
+
+#include <string_view>
+
+namespace loadforge::core {
+
+/// The single authoritative version string, generated from the CMake project
+/// version plus the milestone tag. Duplicating it in a header is how a release
+/// eventually reports a version the build does not have.
+inline constexpr std::string_view kVersion = "@LOADFORGE_VERSION_STRING@";
+
+}  // namespace loadforge::core
+
+#endif

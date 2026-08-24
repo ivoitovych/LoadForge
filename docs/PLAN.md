@@ -1696,21 +1696,32 @@ research-flavoured one and is correctly last.
 
 ---
 
-## 11. Next step
+## 11. Status and next step
 
-Still nothing implemented, by design.
+**M0 (foundation) has landed.** The build system, seven presets, eight CI
+workflows, the 100% line-and-branch coverage gate, the cross-architecture
+determinism gate and the first core module are in the tree. What does *not*
+exist yet is any workload: those begin at M2a.
 
-**Every question that gates M0 is now answered.** Licence, toolchain, architectures,
-test framework and contribution model are settled (§10); the four remaining questions —
-privilege policy, milestone confirmation, worker granularity, minimum runtime platform — all bite
-at M1 or later and each has a stated default.
+Two M0 items need action outside the repository and are tracked here rather than
+quietly assumed done:
 
-**M0 begins on the owner's word:** repository scaffolding, `CMakeLists.txt` and presets,
-the CI matrix across {x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate,
-clang-tidy and clang-format, the SPDX / licence / DCO checks, the scalar-SIMD
-portability-and-cross-arch-determinism job, and the ADR seed.
+- **`main` is unprotected.** GitHub reports no required status checks, so a
+  direct push can put red code on `main` — which has already happened once. The
+  project cannot honestly claim "nothing untested reaches `main`" until a ruleset
+  requires the CI checks and, preferably, a pull request. The DCO check only runs
+  on pull requests, so direct pushes bypass that policy too.
+- **The mutation gate is armed but not scheduled.** `tools/mutation-gate.sh`
+  enforces zero unexplained surviving mutants and fails if Mull cannot run, but
+  enabling it nightly needs a Mull release pinned by verified SHA-256. Shipping
+  an unverified pin would be no better than the `|| true` it replaced.
 
-The point of doing it in that order is that M0 is the milestone where the doctrine in
-[`determinism.md`](determinism.md) and [`verification.md`](verification.md) stops being
-prose and starts being a CI job that fails a pull request. Every subsequent line of code
-lands into a harness already enforcing it.
+**Next is M1:** `core`, `platform`, `topology`, `config`, the controller/worker
+process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9), and the console
+reporter. Its exit criterion is that the controller runs a null workload for a
+configured duration, honours limits, and survives a deliberately crashed worker
+while reporting it correctly.
+
+M1 is the first milestone that needs an answer to Q10 (worker process
+granularity); the recommendation stands at a single worker process, revisited at
+M5.
