@@ -1,0 +1,99 @@
+name: Unsupported platform / missing or wrong telemetry
+description: LoadForge cannot read a sensor, misidentifies one, or reports a metric as unavailable on your machine
+title: "[platform] "
+labels: ["telemetry", "platform-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These reports are expected, not a nuisance. Sensor naming is not standardized
+        across boards and drivers — `temp1_input` may be package temperature, a VRM or
+        the chipset depending on the machine — so discovering what a given platform
+        exposes is an ongoing part of the project.
+
+        **A capture of your `/sys` tree can become a permanent test fixture**, which is
+        one of the most useful contributions available. See `tools/capture-sysfs.sh`.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is wrong?
+      options:
+        - "A metric is reported unavailable but the hardware supports it"
+        - "A sensor is misidentified (wrong label, wrong component)"
+        - "A reading is implausible (wrong scale, wrong units, nonsense value)"
+        - "LoadForge refuses to start on this platform"
+        - "A counter wraps, resets, or jumps during a run"
+    validations:
+      required: true
+
+  - type: input
+    id: metric
+    attributes:
+      label: Which metric or sensor?
+      placeholder: "e.g. package power, core temperature, memory bandwidth, fan RPM, EDAC counts"
+    validations:
+      required: true
+
+  - type: textarea
+    id: capability
+    attributes:
+      label: Capability report
+      description: >
+        LoadForge prints the telemetry capability set at startup — which sources are
+        available, permission-denied, or unsupported. Paste it whole.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: privilege
+    attributes:
+      label: Were you running as root, with CAP_PERFMON, or unprivileged?
+      description: >
+        Several sources are access-controlled — RAPL energy is root-only on current
+        kernels, and PMU access depends on perf_event_paranoid. This is the most common
+        cause of "unavailable".
+    validations:
+      required: true
+
+  - type: textarea
+    id: platform
+    attributes:
+      label: Platform
+      description: "CPU model, architecture (x86-64 / ARM64), motherboard or machine model, distribution, `uname -a`."
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: sysfs
+    attributes:
+      label: Relevant `/sys` contents
+      description: >
+        Whatever is relevant to the metric — e.g. `ls /sys/class/hwmon/*/` plus the
+        `name` and `*_label` files, `/sys/class/thermal/thermal_zone*/type`,
+        `/sys/class/powercap/*/name`, `cat /proc/sys/kernel/perf_event_paranoid`.
+        Or attach a `tools/capture-sysfs.sh` archive.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: reference
+    attributes:
+      label: What does a reference tool report?
+      description: >
+        Output from `sensors`, `turbostat`, or `perf stat` for the same metric, if you
+        have them. This tells us whether the kernel exposes it at all, or whether
+        LoadForge is failing to find it.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: fixture
+    attributes:
+      label: Test fixture
+      options:
+        - label: I am willing to have my (anonymised) `/sys` capture committed as a test fixture so this platform stays supported
+          required: false
