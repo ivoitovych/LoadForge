@@ -143,6 +143,11 @@ Non-negotiable review standards:
   that deliberately corrupts data and asserts the corruption is caught and classified
   correctly. This is required regardless of what coverage numbers say. A verification
   path without a negative test counts as untested.
+- A change touching `verification/` also needs an **unrun-check test** (tier T5b): make
+  the check *impossible* — the oracle cannot allocate, the block loop runs zero times —
+  and assert the run reports `VerificationNotPerformed` rather than success. Fault
+  injection proves the verifier notices corruption; this proves it notices itself not
+  running, which is the failure mode that reads to a user as "your hardware is fine".
 - A new workload needs an independent oracle, invariant tests, a declared determinism
   class, and fault-injection coverage.
 - Anything touching the platform layer needs fixture tests, including the hostile

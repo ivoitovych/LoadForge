@@ -186,6 +186,29 @@ you cannot derive the bound, that is a signal the check is not yet well understo
 See [`determinism.md`](determinism.md) for how the determinism class interacts with
 which contract a workload can offer.
 
+### A third outcome: the check could not be made
+
+Both contracts above answer *did the result match?*. There is a third answer, and
+collapsing it into "matched" is how a verifier lies without ever comparing anything
+wrongly:
+
+> **A verifier that cannot obtain its reference result reports a verification failure,
+> never a pass.** The oracle failed to allocate, the sampled block was never populated,
+> the tolerance could not be derived, zero blocks were checked because a loop bound came
+> out at zero — every one of these means the machine was never actually checked, and a
+> tool that reports "no errors" for an unrun check has told the user something false
+> about their hardware.
+
+Concretely: a verification pass records **how many blocks it compared**, and comparing
+zero is an error, not a clean sweep. §8 gives this its own error record type,
+`VerificationNotPerformed`, so the outcome is representable rather than collapsing into
+the pass path.
+
+This is the same rule the project's CI gates hold to — `docs/PLAN.md` F20 — and it was
+violated there first, by a mutation gate that certified a report it could not parse. The
+failure mode is identical: *silence is not evidence of absence*. "I found no errors" and
+"I ran no checks" must never reach the user as the same statement.
+
 ---
 
 ## 6. Fault injection is mandatory
@@ -278,10 +301,11 @@ isolation result           confidence                 telemetry at time of error
 input-integrity status     verification duty cycle
 ```
 
-### Two failure types, and only one of them has bits to compare
+### Three failure types, and only one of them has bits to compare
 
 A single record shape cannot serve both verification contracts (§5), and pretending
-otherwise produces meaningless fields:
+otherwise produces meaningless fields. A third type exists because "the check did not
+happen" is a distinct outcome from "the check failed" (§5):
 
 **`ExactBitCorruption`** — an exact comparison failed, so the expected bits are genuinely
 known. Adds:
@@ -308,6 +332,20 @@ For this type the XOR, popcount and bit-classification fields are **null and rep
 not-applicable** — never zero, never fabricated. A tool that prints a bit classification
 derived from a floating-point tolerance breach is inventing evidence, and the whole
 credibility argument of §1 depends on not doing that.
+
+**`VerificationNotPerformed`** — the check could not be made at all: the oracle could not
+be allocated, the reference input was unavailable, a tolerance could not be derived, or
+the pass compared zero blocks. Adds:
+
+```text
+what was to be checked    why it could not be    blocks compared (may be 0)
+```
+
+This is a **failure of the run**, reported as such, not a silent pass and not a warning
+buried in a log. Every verification pass therefore records the number of blocks it
+compared, so that "zero compared" is representable and can be rejected rather than
+rendering as a clean sweep. Without this type the tool's most dangerous output is
+reachable: a confident "no errors found" from a run that checked nothing.
 
 Corrected-ECC counts before and after the run are recorded alongside (F13) — a
 verification failure accompanied by rising corrected-ECC is a very different finding
@@ -336,6 +374,8 @@ Adding or changing a workload:
 - [ ] Declares `exact` or `bounded`; bounded tolerances are derived, not chosen
 - [ ] Has invariant / metamorphic tests (T4) beyond the oracle
 - [ ] Has fault-injection tests (T5) proving corruption is caught *and classified*
+- [ ] **Reports `VerificationNotPerformed` when the check cannot be made** (§5, §8), with
+      a test forcing that path — an unrun check must never report as a pass
 - [ ] Error records carry full provenance
 - [ ] Golden vectors, if regenerated, are justified in the PR description
 

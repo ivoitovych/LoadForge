@@ -133,6 +133,7 @@ own evidence. Two were live, and both failed open:
 | Change | Origin |
 |---|---|
 | **F20 — a gate that cannot read its evidence must fail, not pass.** `mutation-gate.sh` certified a report reading `this is not a mull report at all`, and the test suite asserted that it should. `check-dependencies.py` parsed TOML by regular expression, so an empty manifest meant zero components, zero checks, and `0 declared, ok` while the build fetched an undeclared dependency. Neither had a broken rule; each never reached its rules. Now principle 14, enforced by a completion marker, a total parse, and reconciliation against the evidence's own totals. | Review — **new finding, two live fail-open defects** |
+| **F20 carried into the workloads, not left in the tooling.** The same collapse is available to a verifier whose oracle failed to allocate or whose block loop ran zero times. `verification.md` gains a third error type, `VerificationNotPerformed`, and the rule that a pass records how many blocks it compared; §7.2 gains tier **T5b**, which forces each verification path to be *impossible* and asserts it reports failure. Fault injection proves a verifier notices corruption; T5b proves it notices itself not running. | Extended beyond the review — the tooling was where the class showed up first, not where it ends |
 | **The manifest/CMake cross-check generalized.** It was hardcoded to GoogleTest by name — one dependency validated, every future one silently ignored. Now derived from the manifest in both directions, so an undeclared pin in the build fails as loudly as a mismatched one. `kind`, `linked` and duplicate names are validated, and unknown fields are rejected because a misspelt field silently disables the check that reads it. | Review |
 | **The coverage-exclusion ratchet made real.** It was documented as ratcheted and implemented as an `echo` of the count into a step summary, which asks a reviewer to remember last week's number. `tools/check-exclusions.sh` now requires a written reason, an entry in a reviewed file, balanced regions, and no stale entries. | Review — **documented but ungated** |
 | **ShellCheck and Ruff over the trust-chain scripts.** The C++ compiles under `-Werror` and a long warning list; the shell and Python that decide whether the C++ may ship were unchecked. | Review |
@@ -1467,6 +1468,7 @@ program can be wrong.
 | **T3** Oracle | stress implementation vs independent reference (F11) | every push | < 3 min |
 | **T4** Property | metamorphic and invariant relations | every push | < 2 min |
 | **T5** Fault injection | corruption detected **and correctly classified** | every push | < 1 min |
+| **T5b** Unrun check | a check that *cannot be made* reports failure, never a pass (F20) | every push | < 1 min |
 | **T6** Determinism | declared class enforced per workload (F1) | every push | < 2 min |
 | **T7** Supervision | child crash / hang / OOM handled and reported correctly (F9) | every push | < 2 min |
 | **T8** Integration | real CLI, real files, tiny durations | every push | < 3 min |
@@ -1494,6 +1496,15 @@ atomic increment and assert the graph invariant notices. Rev. 2 adds asserting t
 **classification** is right — a single-bit flip must be reported as a single-bit flip.
 **A verification path without a negative test counts as untested regardless of line
 coverage.**
+
+**Unrun-check tests (T5b) — new in rev. 11.** For every verification path, a test that
+makes the check *impossible* rather than wrong — the oracle cannot allocate, the sampled
+block is empty, the tolerance cannot be derived, the block loop runs zero times — and
+asserts the run reports `VerificationNotPerformed` rather than success. This is the
+workload-side half of F20: "I found no errors" and "I ran no checks" must not reach the
+user as the same statement, and a verification pass therefore records how many blocks it
+compared so that zero is representable and rejectable. Fault injection proves the
+verifier notices corruption; this proves it notices *itself* not running.
 
 **Determinism (T6).** Each workload is tested against the class it declares (F1) —
 `BitExact` workloads at 1/2/3/4/7 threads must produce identical bits;
@@ -1628,10 +1639,12 @@ because a disagreement means one of the two readings is wrong and the gate canno
 which. All three are now enforced, and `tests/tools/test_tooling.sh` feeds each gate
 evidence it must refuse to interpret and asserts refusal.
 
-This doctrine applies beyond tooling. It is the same rule §7.2 applies to verification
-kernels: a verifier that cannot obtain its reference result reports a verification
-failure, never a pass. The trust chain is simply the part of the system where it was
-violated first.
+This doctrine applies beyond tooling, and §7.2's **T5b** tier is where it lands on the
+workloads: a verifier that cannot obtain its reference result reports
+`VerificationNotPerformed`, never a pass, and every verification pass records how many
+blocks it compared so that zero is representable rather than indistinguishable from a
+clean sweep ([`verification.md`](verification.md) §5 and §8). The trust chain is simply
+the part of the system where the rule was violated first.
 
 #### Architectural consequences — these are features, not costs
 
