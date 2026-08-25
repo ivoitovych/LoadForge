@@ -12,6 +12,13 @@
 # Coverage is a MINIMUM COMPLETENESS CONDITION, not evidence the tests are good.
 # That evidence comes from the oracle, fault-injection, determinism and
 # supervision tiers, plus mutation testing.
+#
+# There is deliberately no --gcov-ignore-parse-errors here. It was present, set
+# to negative_hits.warn, and it is exactly the fail-open shape F20 is about: a
+# gate told to shrug at data it could not parse and report a number anyway.
+# Nothing needs it -- GCC 13.3 and gcovr 8.6, the pinned combination CI uses,
+# produce a clean parse. If gcov output ever stops parsing, this must fail and
+# be looked at, not average over the parts it understood.
 set -euo pipefail
 
 BUILD_DIR="${1:-build/coverage}"
@@ -24,7 +31,6 @@ gcovr \
   --exclude-throw-branches \
   --exclude-unreachable-branches \
   --exclude-noncode-lines \
-  --gcov-ignore-parse-errors=negative_hits.warn \
   --print-summary \
   --html-details "$BUILD_DIR/coverage.html" \
   --xml "$BUILD_DIR/coverage.xml" \

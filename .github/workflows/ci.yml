@@ -46,10 +46,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: ./tests/tools/test_tooling.sh
       - name: Install linters
+        # Ruff is pinned for the same reason gcovr is: its formatter's output
+        # changes between releases, so an unpinned version would make
+        # 'ruff format --diff' fail on a tree nobody touched.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          pip install --break-system-packages 'ruff==0.14.0'
+          pip install --break-system-packages 'ruff==0.15.8'
       - name: ShellCheck
         # The C++ is compiled with -Werror and a long warning list; the shell
         # that decides whether the C++ may ship was, until now, unchecked. An
@@ -57,8 +60,10 @@ jobs:
         # verification failure, not a style complaint.
         run: shellcheck --severity=warning tools/*.sh tests/tools/*.sh
       - name: Ruff
+        # Rule selection and line length live in ruff.toml, so a local run and
+        # CI cannot drift apart.
         run: |
-          ruff check --select E,F,W,B,SIM,UP tools/
+          ruff check tools/
           ruff format --diff tools/
 
   format-and-tidy:
