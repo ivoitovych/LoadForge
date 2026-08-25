@@ -1,6 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 10 — fifth maintainer review; TSan/ARM evidence claim corrected
+**Status:** revision 11 — eighth maintainer review; the gates themselves made to fail closed (F20)
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -123,6 +123,21 @@ reviewing and start M0. One correction is technical:
 | **"Every syscall through an injectable surface" narrowed** to platform-facing syscalls and platform-owned error paths — taken literally it reinstated the whole-OS abstraction §4.2 explicitly rejects. Writing `run.json` does not become fake-syscall architecture for coverage's sake. | Review — wording conflict |
 | F18's input bracket noted as itself an observer: in benchmark mode the opening and closing checks sit outside the timed window while the input stays immutable across it. | Review |
 | Duplicate corrected-ECC sentence removed; §11's leftover "minimum kernel" renamed to match Q11. | Review — housekeeping |
+
+**Revision 11** incorporates the eighth maintainer review, which found no defect in the
+implemented behaviour and instead attacked the *gates* — on the observation that once the
+ordinary rules are in place, the remaining interesting failures are meta-verification
+failures: ways a tool that says "the verification passed" might have misunderstood its
+own evidence. Two were live, and both failed open:
+
+| Change | Origin |
+|---|---|
+| **F20 — a gate that cannot read its evidence must fail, not pass.** `mutation-gate.sh` certified a report reading `this is not a mull report at all`, and the test suite asserted that it should. `check-dependencies.py` parsed TOML by regular expression, so an empty manifest meant zero components, zero checks, and `0 declared, ok` while the build fetched an undeclared dependency. Neither had a broken rule; each never reached its rules. Now principle 14, enforced by a completion marker, a total parse, and reconciliation against the evidence's own totals. | Review — **new finding, two live fail-open defects** |
+| **The manifest/CMake cross-check generalized.** It was hardcoded to GoogleTest by name — one dependency validated, every future one silently ignored. Now derived from the manifest in both directions, so an undeclared pin in the build fails as loudly as a mismatched one. `kind`, `linked` and duplicate names are validated, and unknown fields are rejected because a misspelt field silently disables the check that reads it. | Review |
+| **The coverage-exclusion ratchet made real.** It was documented as ratcheted and implemented as an `echo` of the count into a step summary, which asks a reviewer to remember last week's number. `tools/check-exclusions.sh` now requires a written reason, an entry in a reviewed file, balanced regions, and no stale entries. | Review — **documented but ungated** |
+| **ShellCheck and Ruff over the trust-chain scripts.** The C++ compiles under `-Werror` and a long warning list; the shell and Python that decide whether the C++ may ship were unchecked. | Review |
+| **The SPDX gate's scope widened to match its name** — it checked `.cpp/.hpp/.cmake` while calling itself "every source file", leaving the tooling, templates and workflows outside a rule they were named by. | Review — claim exceeded scope |
+| **GitHub Actions pinned to commit SHAs.** Same argument as the GoogleTest pin: a tag is movable, so "pinned to v4" means CI's code can change with no change here — and actions run with the workflow token. | Review |
 
 ---
 
@@ -916,6 +931,52 @@ which is why this is a finding rather than a deferred question.
 
 ---
 
+#### F20 — A gate that cannot read its evidence must fail, not pass *(high — new in rev. 11)*
+
+*Raised by the maintainer review, from two live defects in the M0 tooling.*
+
+Everything this project claims about its own quality is downstream of a script reading a
+report. The coverage gate reads gcovr, the mutation gate reads Mull, the supply-chain
+gate reads `MANIFEST.toml`. Each was written to look for problems and complain about the
+ones it found — which quietly collapses three outcomes into two:
+
+| The evidence says | What the gate should do | What "look for problems" does |
+|---|---|---|
+| pass | pass | pass |
+| fail | fail | fail |
+| **nothing the gate understood** | **fail** | **pass** |
+
+The third row is the bug, and it is invisible in exactly the way that matters: a gate in
+that state emits the same cheerful output as a genuine clean run. Two shipped instances:
+
+- **`tools/mutation-gate.sh` certified a report reading `this is not a mull report at
+  all`** — the test suite even asserted that it should. Any crashed runner, truncated
+  file, empty file, or Mull release with a changed output format would have read as a
+  clean sweep, and §7.3's *primary quality metric* would have been reporting a
+  measurement that never happened.
+- **`tools/check-dependencies.py` parsed TOML with a regular expression.** An empty or
+  syntactically drifted manifest produced zero components, hence zero checks, hence
+  `dependency check: 0 declared, ok` — while `cmake/Dependencies.cmake` fetched a
+  dependency nothing had declared. Its cross-check was also hardcoded to GoogleTest by
+  name, so it validated exactly one dependency and would have ignored every future one.
+
+Neither had a broken rule. Each simply never reached its rules, and defaulted to success
+on the way past. The remedy is three requirements on every gate — a positive completion
+marker, a total parse, and reconciliation against the evidence's own arithmetic — set out
+with the enforcement in §7.3. The generalization is worth stating plainly because it
+governs the workloads too, not just the tooling:
+
+> **Silence is not evidence of absence.** "I found no problems" and "I found nothing I
+> understood" must never produce the same exit code — in a CI gate, and equally in a
+> verifier that could not obtain its reference result.
+
+The reviewer's framing of why this class now dominates is exact: with the ordinary rules
+in place, *the interesting remaining failures are meta-verification failures — ways in
+which a tool that says "the verification passed" might have misunderstood its own
+evidence.*
+
+---
+
 ## 3. Principles adopted
 
 1. **Framework first, breadth second.** One workload end to end beats twelve stubs.
@@ -937,6 +998,8 @@ which is why this is a finding rather than a deferred question.
 12. **Conclusions are reported as evidence with confidence, never as verdicts**
     ([`verification.md`](verification.md)).
 13. **Test code is product code.**
+14. **A check that cannot read its evidence fails** — a gate, an oracle or a parser that
+    does not understand its input reports failure, never success by default (F20).
 
 ---
 
@@ -1374,8 +1437,10 @@ LoadForge/
 │
 ├── benchmarks/
 ├── third_party/                    # vendored, pinned, header-only
-├── tools/
-│   ├── coverage.sh  capture-sysfs.sh  gen-golden/
+├── tools/                          # the trust chain: gates, and the files they review against
+│   ├── coverage.sh  check-exclusions.sh  coverage-exclusions.txt
+│   ├── mutation-gate.sh  mutation-allowlist.txt
+│   ├── check-dependencies.py  capture-sysfs.sh  gen-golden/
 └── config/
     ├── quick.toml  stress-5h.toml  explore-temperature.toml
 ```
@@ -1483,11 +1548,26 @@ gate therefore runs `gcovr --exclude-throw-branches --exclude-unreachable-branch
 With those excluded, 100% branch coverage is both achievable and a genuine statement
 about the code's own decisions.
 
-**2. Exclusions are individually justified, counted, and ratcheted.** Anything genuinely
+**2. Exclusions are individually justified, reviewed, and ratcheted.** Anything genuinely
 unreachable — a defensive `default:` on an exhaustive enum, an `abort()` path — carries
-an inline exclusion marker *with a written reason*. The **total exclusion count is
-reported in CI and may only decrease** without explicit review. A rising exclusion count
-is exactly how a 100% gate rots into decoration, so it is measured directly.
+an inline exclusion marker *with a written reason*, **and an entry in
+`tools/coverage-exclusions.txt` recording that reason**. A rising exclusion count is
+exactly how a 100% gate rots into decoration, so it is gated directly:
+`tools/check-exclusions.sh` fails the build on an exclusion with no written reason, on
+one absent from the reviewed file, on a `START` region left unclosed, and on a reviewed
+entry that outlived the code it excused.
+
+The reviewed file is the mechanism, not the count. Counting was the first attempt and it
+was not a ratchet: CI printed a number into the step summary and asked a reviewer to
+remember last week's. Requiring the justification to land in the same diff as the
+exclusion puts it in front of the one person positioned to reject it. The key is
+`path:marker:reason` rather than `path:line`, so line churn does not invalidate it and
+*rewording a justification does* — which is the moment re-review is worth having.
+
+The current count is zero, and every exclusion the project has so far been tempted by
+turned out to be a real defect wearing a disguise — `tools/coverage-exclusions.txt`
+records three. That is the argument for the gate: each would have been accepted by a
+reasonable reviewer looking at a count.
 
 **3. Mutation testing becomes the primary quality metric.** This matters more than it
 first appears: **at 100% coverage, coverage stops carrying information.** It can no
@@ -1509,9 +1589,49 @@ Every survivor is resolved one of two ways — **killed** by an improved test, o
 **explicitly classified** as equivalent or non-actionable with a reviewed written
 justification. Nothing is left in an unexamined third state.
 
-As with coverage exclusions, **the count of classified-equivalent mutants is reported in
-CI and may only decrease** without review. A surviving mutant is a test-suite defect and
-is triaged like a bug.
+As with coverage exclusions, the classified-equivalent mutants live in a reviewed file —
+`tools/mutation-allowlist.txt` — keyed `path:line:col:mutator` so that two operators
+firing at one site stay distinct and one reviewed entry cannot silently excuse an
+unrelated second mutant. Entries that outlive their mutant are rejected as stale. A
+surviving mutant is a test-suite defect and is triaged like a bug.
+
+**4. The gates themselves fail closed.** This is finding **F20**, and it is the one that
+is easiest to get wrong because a broken gate looks exactly like a clean run.
+
+Every mechanism above rests on a script reading a report and pronouncing on it. Such a
+script has three possible states, not two: *the evidence says pass*, *the evidence says
+fail*, and **it did not understand the evidence**. The third state is the dangerous one,
+because the natural implementation — parse for problems, complain about what you found —
+maps it onto *pass*. The project has shipped that bug twice:
+
+- `tools/mutation-gate.sh` certified a report whose entire content was
+  `this is not a mull report at all`. A crashed runner, a truncated file, an empty file,
+  or a future Mull with a different output format would all have read as a clean sweep,
+  and the project's *primary quality metric* would have been reporting on a measurement
+  it never took.
+- `tools/check-dependencies.py` parsed the manifest with a regular expression, so an
+  empty or syntactically drifted `MANIFEST.toml` yielded zero components, therefore zero
+  checks, therefore `0 declared, ok` — while `cmake/Dependencies.cmake` went on fetching
+  an undeclared dependency.
+
+Neither had a broken rule. Each simply never reached its rules. The rule that follows:
+
+> **A verification tool that cannot interpret its evidence must fail.** Silence is not
+> evidence of absence, and "I found no problems" and "I found nothing I understood" must
+> never produce the same exit code.
+
+Concretely, this means a gate must (a) require a **positive completion marker** proving
+the run it is judging actually finished, (b) insist its parse is **total** — an
+unparsed record is an unexamined record, not an absent one — and (c) **reconcile against
+the evidence's own totals** where the evidence states any, and fail on disagreement,
+because a disagreement means one of the two readings is wrong and the gate cannot tell
+which. All three are now enforced, and `tests/tools/test_tooling.sh` feeds each gate
+evidence it must refuse to interpret and asserts refusal.
+
+This doctrine applies beyond tooling. It is the same rule §7.2 applies to verification
+kernels: a verifier that cannot obtain its reference result reports a verification
+failure, never a pass. The trust chain is simply the part of the system where it was
+violated first.
 
 #### Architectural consequences — these are features, not costs
 
@@ -1699,9 +1819,15 @@ research-flavoured one and is correctly last.
 ## 11. Status and next step
 
 **M0 (foundation) has landed.** The build system, seven presets, eight CI
-workflows, the 100% line-and-branch coverage gate, the cross-architecture
-determinism gate and the first core module are in the tree. What does *not*
-exist yet is any workload: those begin at M2a.
+workflows, the 100% line-and-branch coverage gate, the coverage-exclusion gate,
+the cross-architecture determinism gate and the first core module are in the
+tree. What does *not* exist yet is any workload: those begin at M2a.
+
+The gates now hold to F20: each requires a positive completion marker, a total
+parse of its evidence, and agreement with that evidence's own totals, and
+`tests/tools/test_tooling.sh` feeds each of them reports and manifests they must
+refuse to interpret. The count of coverage exclusions is **zero**, gated rather
+than reported.
 
 Two M0 items need action outside the repository and are tracked here rather than
 quietly assumed done:

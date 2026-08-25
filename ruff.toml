@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Ruff configuration for the Python in tools/.
+#
+# There is not much Python here, but what there is decides whether the build's
+# supply chain is acceptable. It gets the same treatment as the C++: a linter in
+# CI, failing the build, not a convention someone remembers.
+#
+# 100 columns, to match ColumnLimit in .clang-format. One project, one width.
+line-length = 100
+target-version = "py311"   # tomllib; Ubuntu 24.04 ships 3.12
+
+[lint]
+select = ["E", "F", "W", "B", "SIM", "UP"]

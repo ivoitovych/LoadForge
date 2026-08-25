@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Reviewed coverage exclusions. Enforced by tools/check-exclusions.sh.
+#
+# One key per line:   <path>:<marker>:<reason as written in the source>
+#
+# The reason here must match the text after the marker in the source, character
+# for character. That is deliberate: rewording a justification means the claim
+# changed, and a changed claim should come back through review.
+#
+# Before adding an entry, try harder to delete it. Every exclusion this project
+# has been tempted by so far turned out to be a real defect wearing a disguise:
+#
+#   * an assert() that vanished under NDEBUG, leaving undefined behaviour on a
+#     path the test suite could not reach because the code made it unreachable;
+#   * an argc == 0 branch that was untestable only because the logic sat inside
+#     main() -- moving it into a free function made it an ordinary unit test;
+#   * a pair of ternaries whose false arms were never entered, which if/else
+#     turned into two branches a test could actually take.
+#
+# In each case the exclusion would have been accepted by any reasonable reviewer
+# and would have hidden the problem permanently. Genuinely unreachable code does
+# exist -- platform paths for hardware the CI runner does not have, and defensive
+# branches against a kernel that violates its own documented contract -- but it
+# is rarer than it feels at the moment you want the build to go green.
+#
+# THE COUNT MAY ONLY GO DOWN. It is zero. Keeping it there is the whole point.

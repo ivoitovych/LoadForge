@@ -21,7 +21,7 @@ jobs:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
         compiler: [gcc, clang]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install toolchain
         run: |
           sudo apt-get update -qq
@@ -43,13 +43,28 @@ jobs:
     name: trust-chain tooling
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: ./tests/tools/test_tooling.sh
+      - name: Install linters
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          pip install --break-system-packages 'ruff==0.14.0'
+      - name: ShellCheck
+        # The C++ is compiled with -Werror and a long warning list; the shell
+        # that decides whether the C++ may ship was, until now, unchecked. An
+        # unquoted expansion or a masked exit status in these scripts is a
+        # verification failure, not a style complaint.
+        run: shellcheck --severity=warning tools/*.sh tests/tools/*.sh
+      - name: Ruff
+        run: |
+          ruff check --select E,F,W,B,SIM,UP tools/
+          ruff format --diff tools/
 
   format-and-tidy:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build clang-format-18 clang-tidy-18
       - name: clang-format
         run: find src tests -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror

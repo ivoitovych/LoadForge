@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 name: Unsupported platform / missing or wrong telemetry
 description: LoadForge cannot read a sensor, misidentifies one, or reports a metric as unavailable on your machine
 title: "[platform] "

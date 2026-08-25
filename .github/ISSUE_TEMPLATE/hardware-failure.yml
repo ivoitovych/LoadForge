@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 name: Hardware failure report
 description: LoadForge reported a verification error, crash or hang on your machine
 title: "[hardware] "

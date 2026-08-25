@@ -9,7 +9,7 @@ jobs:
     name: 100% line and branch
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build g++-13
@@ -23,13 +23,20 @@ jobs:
       - run: ctest --preset coverage
       - name: Coverage gate
         run: ./tools/coverage.sh build/coverage
-      - name: Report coverage exclusions
-        # docs/PLAN.md §7.3: the exclusion count is reported and may only
-        # decrease. A rising count is how a 100% gate rots into decoration.
+      - name: Coverage-exclusion gate
+        # docs/PLAN.md §7.3: an exclusion removes a line from the numerator AND
+        # the denominator, so it keeps the number at 100% while shrinking what
+        # 100% covers. This step used to print the count and stop there, which
+        # asked a reviewer to remember last week's number -- not a ratchet.
+        # tools/check-exclusions.sh requires every exclusion to carry a written
+        # reason and to be listed in tools/coverage-exclusions.txt, and rejects
+        # entries that outlive the code they excused.
         run: |
-          n=$(grep -rc 'GCOVR_EXCL' src/ 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
-          echo "coverage exclusions in src/: $n"
-          echo "### Coverage exclusions: $n" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+          # pipefail, or 'tee' would swallow the gate's verdict and the step
+          # would pass on every failure -- the exact defect being fixed here.
+          set -o pipefail
+          ./tools/check-exclusions.sh | tee exclusions.txt
+          echo "### $(tail -n 1 exclusions.txt)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with: { name: coverage-html, path: build/coverage/coverage.html* }

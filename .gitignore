@@ -6,3 +6,6 @@ compile_commands.json
 coverage.html
 coverage.xml
 .cache/
+
+# Ruff
+.ruff_cache/

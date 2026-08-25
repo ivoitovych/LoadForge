@@ -9,22 +9,56 @@ jobs:
     name: SPDX headers
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Every source file carries an SPDX identifier
+        # The scope is every file the project authors, not only C++ and CMake.
+        # The gate used to check .cpp/.hpp/.cmake while calling itself "every
+        # source file" -- which left the shell and Python that enforce the whole
+        # trust chain, the CMake templates, and the workflows themselves outside
+        # a rule they were named by. A licence gate whose stated scope is wider
+        # than its real one is worse than a narrow gate honestly described.
         run: |
           missing=0
           while IFS= read -r f; do
             head -3 "$f" | grep -q 'SPDX-License-Identifier: GPL-3.0-or-later' || {
               echo "missing SPDX header: $f"; missing=1; }
-          done < <(find src tests cmake -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.cmake' \))
+          done < <(find src tests cmake tools .github -type f \
+                     \( -name '*.cpp' -o -name '*.hpp' -o -name '*.hpp.in' \
+                        -o -name '*.cmake' -o -name '*.sh' -o -name '*.py' \
+                        -o -name '*.yml' -o -name '*.yaml' -o -name 'CMakeLists.txt' \))
+          # CMakePresets.json is deliberately absent: JSON has no comment syntax.
+          head -3 CMakeLists.txt | grep -q 'SPDX-License-Identifier: GPL-3.0-or-later' || {
+            echo "missing SPDX header: CMakeLists.txt"; missing=1; }
           exit $missing
+
+  action-pins:
+    name: Actions are pinned to commit SHAs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: No workflow depends on a movable tag
+        # Same reasoning as the GoogleTest pin in cmake/Dependencies.cmake: a
+        # tag is a movable reference, so "pinned to v4" means the code that runs
+        # in CI can change with no change to this repository. Actions run with
+        # access to the workflow token, which makes them a more sensitive
+        # supply-chain input than a test-only library, not a less sensitive one.
+        run: |
+          bad=0
+          while IFS= read -r ref; do
+            grep -qE '^[0-9a-f]{40}$' <<< "${ref##*@}" || {
+              echo "unpinned action reference: $ref"
+              echo "  pin it to a full commit SHA, with the version in a trailing comment"
+              bad=1; }
+          done < <(grep -rhoE '^\s*-?\s*uses:\s*\S+' .github/workflows \
+                   | sed -E 's/^\s*-?\s*uses:\s*//')
+          exit $bad
 
   dco:
     name: DCO sign-off
     runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { fetch-depth: 0 }
       - name: Every commit is signed off
         run: |
@@ -41,7 +75,7 @@ jobs:
     name: No AI/vendor attribution
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { fetch-depth: 0 }
       - name: Commit metadata is free of vendor attribution
         run: |
@@ -59,7 +93,7 @@ jobs:
     name: Dependency licences are GPL-compatible
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Manifest is complete and every licence is on the allowlist
         # Validates declared licences against an allowlist. The previous version
         # only checked that a directory name appeared in NOTICE, which proved
