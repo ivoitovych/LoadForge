@@ -19,9 +19,17 @@ jobs:
     # detect breakage?
     #
     # GATE: zero unexplained surviving mutants (docs/PLAN.md §7.3). Enforced by
-    # tools/mutation-gate.sh, which also fails if Mull cannot run: a gate that
+    # tools/mutation-gate.py, which also fails if Mull cannot run: a gate that
     # degrades to a no-op when its tool is missing is a green tick with nothing
     # behind it.
+    #
+    # The integration step below runs BEFORE the gate is pointed at the project's
+    # own tests, and it is the more important of the two. The gate's fixture
+    # tests all passed while its parser was reading the mutator as the word
+    # "Replaced" -- because the fixtures were written from the same wrong idea of
+    # Mull's output as the parser was. Only the real binary can falsify that, so
+    # the real binary runs first, against a program with a known-surviving
+    # mutant, and the gate is not trusted on this repository until it has.
     #
     # STATUS: armed but not yet on a schedule. Enabling it nightly requires a
     # Mull release pinned by verified SHA-256, which has not been established
@@ -44,5 +52,10 @@ jobs:
       - env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug -DCMAKE_CXX_FLAGS="-fpass-plugin=/usr/lib/mull-ir-frontend-18 -g -grecord-command-line"
       - run: cmake --build --preset debug
+      - name: The gate agrees with the real Mull
+        # Compiles a known-surviving mutant, runs Mull, and checks that the gate
+        # parses the exact mutator identifier and that a reviewed key for one
+        # operator does not excuse a different operator at the same location.
+        run: ./tests/tools/mutation_integration.sh
       - name: Run mutants and enforce the gate
-        run: ./tools/mutation-gate.sh ./build/debug/tests/loadforge_unit_tests
+        run: ./tools/mutation-gate.py ./build/debug/tests/loadforge_unit_tests

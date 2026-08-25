@@ -1,0 +1,9 @@
+[info] Killed mutants (2/2):
+src/core/duration.cpp:42:12: warning: Killed: Replaced + with - [cxx_add_to_sub]
+  return a + b;
+           ^
+src/core/duration.cpp:51:9: warning: Killed: Replaced >= with > [cxx_ge_to_gt]
+  if (n >= limit) {
+        ^
+[info] Mutation score: 100%
+[info] All mutations have been killed

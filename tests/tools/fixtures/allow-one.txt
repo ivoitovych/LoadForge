@@ -1,2 +1,4 @@
-# reviewed: this operator cannot change observable behaviour here
-/src/core/duration.cpp:42:11:cxx_gt_to_ge
+# Reviewed: widening >= to > cannot change behaviour here, because the
+# caller already rejects the boundary value. The OTHER operator at this
+# same line and column, cxx_ge_to_lt, is deliberately NOT excused.
+src/core/duration.cpp:51:9:cxx_ge_to_gt

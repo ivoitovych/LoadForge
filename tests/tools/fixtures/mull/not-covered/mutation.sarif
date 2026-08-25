@@ -1,0 +1,1 @@
+{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "Mull", "version": "0.34.0"}}, "results": [{"level": "note", "ruleId": "cxx_mul_to_div", "message": {"text": "x"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/core/byte_size.cpp"}, "region": {"startLine": 70, "startColumn": 5}}}]}]}]}

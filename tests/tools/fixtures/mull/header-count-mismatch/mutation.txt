@@ -1,0 +1,3 @@
+[info] Survived mutants (2/3):
+src/core/duration.cpp:42:12: warning: Survived: Replaced + with - [cxx_add_to_sub]
+[info] Mutation score: 66%

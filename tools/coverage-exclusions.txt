@@ -2,11 +2,20 @@
 #
 # Reviewed coverage exclusions. Enforced by tools/check-exclusions.sh.
 #
-# One key per line:   <path>:<marker>:<reason as written in the source>
+# One record per line:
 #
-# The reason here must match the text after the marker in the source, character
-# for character. That is deliberate: rewording a justification means the claim
-# changed, and a changed claim should come back through review.
+#     LF-COV-NNN <path> <marker> -- <why this line cannot be reached>
+#
+# and the source carries the matching ID:
+#
+#     if (rc < 0) { abort(); }  // GCOVR_EXCL_LINE LF-COV-001 abort() cannot return
+#
+# IDs are allocated in order and never reused, so that a justification argued in
+# one review cannot later be inherited by a different exclusion. The first
+# version of this file keyed on the reason text instead, which meant two
+# exclusions in one file worded identically shared a single reviewed record --
+# so the rule "adding an exclusion requires editing this file" was almost true,
+# and almost true is what this project's gates keep getting caught by.
 #
 # Before adding an entry, try harder to delete it. Every exclusion this project
 # has been tempted by so far turned out to be a real defect wearing a disguise:

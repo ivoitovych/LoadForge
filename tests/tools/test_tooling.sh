@@ -24,7 +24,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FIX="$ROOT/tests/tools/fixtures"
-GATE="$ROOT/tools/mutation-gate.sh"
+GATE="$ROOT/tools/mutation-gate.py"
 DEPS="$ROOT/tools/check-dependencies.py"
 pass=0; fail=0
 
@@ -37,40 +37,65 @@ expect() { # description, expected-exit, actual-exit, [needle, output]
   fi
 }
 
-gate() { # report-fixture, allowlist-fixture
-  # The allowlist is passed as an argument rather than copied over the real one
-  # and copied back: a test run must not edit a tracked file, and the restore
-  # never happens if the run is interrupted.
-  local out; out="$("$GATE" dummy-binary "$FIX/$1" "$FIX/$2" 2>&1)"; local rc=$?
-  GATE_OUT="$out"; return $rc
+gate() { # report-fixture-dir, allowlist-fixture
+  local out; out="$(python3 "$GATE" --report-dir "$FIX/mull/$1" \
+                    --allowlist "$FIX/$2" --root "$ROOT" 2>&1)"; local rc=$?
+  GATE_OUT="$out"; GATE_RC=$rc; return $rc
 }
 
-echo "mutation-gate.sh"
-gate clean.txt allow-empty.txt;         expect "clean report passes"                    0 $? "0 unexplained" "$GATE_OUT"
-gate two-survivors.txt allow-empty.txt; expect "unexplained survivors fail"             1 $? "UNEXPLAINED SURVIVOR" "$GATE_OUT"
-gate two-survivors.txt allow-one.txt;   expect "allowed survivor excused, other fails"  1 $? "allowed (reviewed)" "$GATE_OUT"
-gate clean.txt allow-one.txt;           expect "stale allowlist entry fails"            1 $? "STALE ALLOWLIST ENTRY" "$GATE_OUT"
+echo "mutation-gate.py"
+gate clean allow-empty.txt
+expect "clean report passes"                                   0 $? "0 unexplained" "$GATE_OUT"
+gate two-survivors allow-empty.txt
+expect "unexplained survivors fail"                            1 $? "UNEXPLAINED SURVIVOR" "$GATE_OUT"
+# Two assertions about ONE run, so both read the saved GATE_RC rather than $?,
+# which the first expect would otherwise have overwritten.
+gate two-survivors allow-one.txt
+expect "the reviewed survivor is excused"                      1 "$GATE_RC" "allowed (reviewed)" "$GATE_OUT"
 
-# The fail-closed cases. Each of these previously produced "0 unexplained, ok".
-gate malformed.txt allow-empty.txt
+# THE regression test. Both survivors sit at src/core/duration.cpp:51:9; one
+# reviewed entry names cxx_ge_to_gt. The previous parser read every mutator on
+# such a line as the word "Replaced", so both collapsed to one key and this
+# single entry excused them both.
+expect "a second operator at the SAME location is not excused" 1 "$GATE_RC" \
+       "UNEXPLAINED SURVIVOR: src/core/duration.cpp:51:9:cxx_ge_to_lt" "$GATE_OUT"
+
+gate clean allow-one.txt
+expect "stale allowlist entry fails"                           1 $? "STALE ALLOWLIST ENTRY" "$GATE_OUT"
+
+# Evidence the gate must refuse to interpret.
+gate malformed allow-empty.txt
 expect "unrecognisable report FAILS (no completion marker)"    1 $? "no Mull summary line" "$GATE_OUT"
-gate empty.txt allow-empty.txt
+gate empty allow-empty.txt
 expect "empty report FAILS rather than reading as a clean run" 1 $? "no Mull summary line" "$GATE_OUT"
-gate unparsed-survivor.txt allow-empty.txt
-expect "survivor line the parser cannot read FAILS"            1 $? "could not parse 1 of 1" "$GATE_OUT"
-gate count-mismatch.txt allow-empty.txt
-expect "report that contradicts its own totals FAILS"          1 $? "disagrees with itself" "$GATE_OUT"
-gate score-without-survivors.txt allow-empty.txt
-expect "score below 100% with no survivors listed FAILS"       1 $? "lists no" "$GATE_OUT"
-gate score-perfect-with-survivors.txt allow-empty.txt
-expect "score of 100% alongside a survivor FAILS"              1 $? "incoherent report" "$GATE_OUT"
+gate unparsed-record allow-empty.txt
+expect "mutant line the parser cannot read FAILS"              1 $? "did not parse" "$GATE_OUT"
+gate header-count-mismatch allow-empty.txt
+expect "header count that disagrees with the list FAILS"       1 $? "but lists" "$GATE_OUT"
+gate totals-disagree allow-empty.txt
+expect "headers disagreeing on the total FAILS"                1 $? "disagree about how many" "$GATE_OUT"
+gate score-mismatch allow-empty.txt
+expect "score that does not follow from the counts FAILS"      1 $? "describe different runs" "$GATE_OUT"
+gate all-killed-with-survivor allow-empty.txt
+expect "'all killed' alongside a survivor FAILS"               1 $? "all mutations were killed while listing" "$GATE_OUT"
+gate zero-mutants allow-empty.txt
+expect "a run that generated no mutants FAILS"                 1 $? "mutated nothing measures nothing" "$GATE_OUT"
 
-out="$("$GATE" dummy-binary "$FIX/no-such-report.txt" 2>&1)"
-expect "missing report file FAILS" 1 $? "does not exist" "$out"
+# The two renderings must agree, which is the point of reading both.
+gate sarif-disagrees allow-empty.txt
+expect "IDE and SARIF naming different operators FAILS"        1 $? "disagree about 'Survived'" "$GATE_OUT"
+gate sarif-malformed allow-empty.txt
+expect "unparseable SARIF FAILS"                               1 $? "does not parse as JSON" "$GATE_OUT"
+gate missing-sarif allow-empty.txt
+expect "a missing SARIF rendering FAILS"                       1 $? "does not exist" "$GATE_OUT"
 
-# The key must include the mutator: two operators at one site are distinct.
-gate two-survivors.txt allow-one.txt
-expect "location-only allowlisting cannot excuse a second mutator" 1 $? "cxx_remove_void_call" "$GATE_OUT"
+# A mutant on an unexecuted line contradicts the 100% coverage gate, measured by
+# a different mechanism. Never allowlistable.
+gate not-covered allow-empty.txt
+expect "a not-covered mutant FAILS and is not allowlistable"   1 $? "NOT-COVERED MUTANT" "$GATE_OUT"
+
+out="$(python3 "$GATE" --report-dir "$FIX/mull/no-such-run" --allowlist "$FIX/allow-empty.txt" 2>&1)"
+expect "missing report directory FAILS" 1 $? "does not exist" "$out"
 
 echo "check-dependencies.py"
 out="$(python3 "$DEPS" 2>&1)"; expect "real manifest validates" 0 $? "googletest" "$out"
@@ -189,55 +214,101 @@ expect "the real tree has zero exclusions" 0 $? "0 marker(s)" "$out"
 
 # A synthetic root, because the point of these cases is source that the real
 # tree must never contain.
-ex="$(mktemp -d)"; mkdir -p "$ex/src" "$ex/tools"
-excl() { # source-body-on-stdin, then reviewed-file contents as $1
-  printf '%s' "${1-}" > "$ex/tools/coverage-exclusions.txt"
-  out="$("$ROOT/tools/check-exclusions.sh" "$ex" src 2>&1)"; return $?
+ex="$(mktemp -d)"; mkdir -p "$ex/src"
+excl() { # reviewed-file contents
+  printf '%s' "${1-}" > "$ex/reviewed.txt"
+  out="$("$ROOT/tools/check-exclusions.sh" "$ex" src "$ex/reviewed.txt" 2>&1)"; return $?
 }
 
-cat > "$ex/src/a.cpp" <<'EOF'
-int f(int x) { return x; }
-EOF
+printf 'int f(int x) { return x; }\n' > "$ex/src/a.cpp"
 excl ""; expect "empty tree passes"                          0 $? "0 marker(s)" "$out"
 
-cat > "$ex/src/a.cpp" <<'EOF'
-void f() { abort(); }  // GCOVR_EXCL_LINE  abort() does not return
-EOF
+printf 'void f() { abort(); }  // GCOVR_EXCL_LINE LF-COV-001 abort() does not return\n' \
+  > "$ex/src/a.cpp"
 excl ""
 expect "unreviewed exclusion FAILS"                          1 $? "UNREVIEWED EXCLUSION" "$out"
 
-excl 'src/a.cpp:GCOVR_EXCL_LINE:abort() does not return'
-expect "reviewed exclusion passes"                           0 $? "reviewed: src/a.cpp" "$out"
+excl 'LF-COV-001 src/a.cpp GCOVR_EXCL_LINE -- abort() does not return'
+expect "reviewed exclusion passes"                           0 $? "reviewed: LF-COV-001" "$out"
 
-excl 'src/a.cpp:GCOVR_EXCL_LINE:some entirely different reason'
-expect "reworded justification needs re-review"              1 $? "UNREVIEWED EXCLUSION" "$out"
+excl 'LF-COV-002 src/a.cpp GCOVR_EXCL_LINE -- abort() does not return'
+expect "an ID the source does not carry is stale"            1 $? "STALE EXCLUSION ENTRY" "$out"
 
-cat > "$ex/src/a.cpp" <<'EOF'
-void f() { abort(); }  // GCOVR_EXCL_LINE
-EOF
-excl 'src/a.cpp:GCOVR_EXCL_LINE:abort() does not return'
+excl 'LF-COV-001 src/other.cpp GCOVR_EXCL_LINE -- abort() does not return'
+expect "an exclusion that moved needs re-review"             1 $? "EXCLUSION MOVED" "$out"
+
+excl 'src/a.cpp GCOVR_EXCL_LINE -- no identifier at all'
+expect "a reviewed record with no ID is rejected"            1 $? "MALFORMED REVIEWED ENTRY" "$out"
+
+printf 'void f() { abort(); }  // GCOVR_EXCL_LINE LF-COV-001\n' > "$ex/src/a.cpp"
+excl 'LF-COV-001 src/a.cpp GCOVR_EXCL_LINE -- abort() does not return'
 expect "exclusion with no written reason FAILS"              1 $? "NO WRITTEN REASON" "$out"
 
-cat > "$ex/src/a.cpp" <<'EOF'
-int f(int x) { return x; }
-EOF
-excl 'src/a.cpp:GCOVR_EXCL_LINE:abort() does not return'
-expect "stale reviewed entry FAILS"                          1 $? "STALE EXCLUSION ENTRY" "$out"
+printf 'void f() { abort(); }  // GCOVR_EXCL_LINE it just cannot happen\n' > "$ex/src/a.cpp"
+excl ""
+expect "exclusion with no ID FAILS"                          1 $? "NO EXCLUSION ID" "$out"
 
-cat > "$ex/src/a.cpp" <<'EOF'
-// GCOVR_EXCL_START  the whole block needs hardware CI does not have
-void f() { }
-EOF
-excl 'src/a.cpp:GCOVR_EXCL_START:the whole block needs hardware CI does not have'
-expect "region left open to end of file FAILS"               1 $? "UNBALANCED EXCLUSION REGION" "$out"
+# The hole the ID scheme closes: two exclusions, one file, same marker, same
+# wording. Under the previous reason-keyed scheme they generated one key and a
+# single reviewed record satisfied both.
+{ printf 'void f() { abort(); }  // GCOVR_EXCL_LINE LF-COV-001 abort() does not return\n'
+  printf 'void g() { abort(); }  // GCOVR_EXCL_LINE LF-COV-001 abort() does not return\n'
+} > "$ex/src/a.cpp"
+excl 'LF-COV-001 src/a.cpp GCOVR_EXCL_LINE -- abort() does not return'
+expect "one ID cannot cover two exclusions"                  1 $? "DUPLICATE EXCLUSION ID" "$out"
 
-cat >> "$ex/src/a.cpp" <<'EOF'
-// GCOVR_EXCL_STOP
-EOF
-excl 'src/a.cpp:GCOVR_EXCL_START:the whole block needs hardware CI does not have'
-expect "balanced region with a reviewed reason passes"       0 $? "reviewed: src/a.cpp" "$out"
+# --- region sequencing, not just counting ------------------------------------
+printf '// GCOVR_EXCL_START LF-COV-001 needs hardware CI does not have\nvoid f() { }\n' \
+  > "$ex/src/a.cpp"
+excl 'LF-COV-001 src/a.cpp GCOVR_EXCL_START -- needs hardware CI does not have'
+expect "region left open to end of file FAILS"               1 $? "UNCLOSED EXCLUSION REGION" "$out"
+
+printf '// GCOVR_EXCL_STOP\nvoid f() { }\n// GCOVR_EXCL_START LF-COV-001 needs absent hardware\n' \
+  > "$ex/src/a.cpp"
+excl 'LF-COV-001 src/a.cpp GCOVR_EXCL_START -- needs absent hardware'
+expect "STOP before START FAILS despite balanced counts"     1 $? "EXCLUSION STOP WITH NO START" "$out"
+
+{ printf '// GCOVR_EXCL_START LF-COV-001 needs absent hardware\n'
+  printf '// GCOVR_EXCL_START LF-COV-002 also needs absent hardware\n'
+  printf '// GCOVR_EXCL_STOP\n// GCOVR_EXCL_STOP\n'
+} > "$ex/src/a.cpp"
+excl 'LF-COV-001 src/a.cpp GCOVR_EXCL_START -- needs absent hardware
+LF-COV-002 src/a.cpp GCOVR_EXCL_START -- also needs absent hardware'
+expect "nested regions FAIL"                                 1 $? "NESTED EXCLUSION REGION" "$out"
+
+{ printf '// GCOVR_EXCL_START LF-COV-001 needs hardware CI does not have\n'
+  printf 'void f() { }\n// GCOVR_EXCL_STOP\n'
+} > "$ex/src/a.cpp"
+excl 'LF-COV-001 src/a.cpp GCOVR_EXCL_START -- needs hardware CI does not have'
+expect "balanced region with a reviewed reason passes"       0 $? "reviewed: LF-COV-001" "$out"
 
 rm -rf "$ex"
+
+echo "check-fetch-centralization.sh"
+out="$("$ROOT/tools/check-fetch-centralization.sh" 2>&1)"
+expect "the real tree centralises every fetch" 0 $? "0 violation(s)" "$out"
+
+fz="$(mktemp -d)"; mkdir -p "$fz/cmake" "$fz/src"
+printf 'project(x)\n' > "$fz/CMakeLists.txt"
+out="$("$ROOT/tools/check-fetch-centralization.sh" "$fz" 2>&1)"
+expect "a tree with no fetches passes" 0 $? "0 violation(s)" "$out"
+
+printf 'FetchContent_Declare(sneaky GIT_REPOSITORY https://example.invalid/x.git)\n' \
+  >> "$fz/CMakeLists.txt"
+out="$("$ROOT/tools/check-fetch-centralization.sh" "$fz" 2>&1)"
+expect "a fetch in CMakeLists.txt FAILS" 1 $? "EXTERNAL FETCH OUTSIDE" "$out"
+
+printf 'project(x)\n' > "$fz/CMakeLists.txt"
+printf 'ExternalProject_Add(sneaky URL https://example.invalid/x.tar.gz)\n' > "$fz/cmake/Other.cmake"
+out="$("$ROOT/tools/check-fetch-centralization.sh" "$fz" 2>&1)"
+expect "a fetch in an undeclared module FAILS" 1 $? "EXTERNAL FETCH OUTSIDE" "$out"
+
+rm -f "$fz/cmake/Other.cmake"
+printf 'FetchContent_Declare(gtest GIT_REPOSITORY https://example.invalid/x.git)\n' \
+  > "$fz/cmake/Dependencies.cmake"
+out="$("$ROOT/tools/check-fetch-centralization.sh" "$fz" 2>&1)"
+expect "the same fetch in the reviewed module passes" 0 $? "0 violation(s)" "$out"
+rm -rf "$fz"
 
 echo; echo "  tooling tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

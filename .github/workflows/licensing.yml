@@ -99,3 +99,8 @@ jobs:
         # only checked that a directory name appeared in NOTICE, which proved
         # nothing about the licence itself.
         run: python3 tools/check-dependencies.py
+      - name: Every external fetch lives in the reviewed dependency module
+        # The manifest reconciliation is only as complete as its list of places
+        # to look. A FetchContent_Declare added anywhere else would be fetched by
+        # the build and seen by nothing.
+        run: ./tools/check-fetch-centralization.sh

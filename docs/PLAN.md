@@ -1,6 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 11 — eighth maintainer review; the gates themselves made to fail closed (F20)
+**Status:** revision 12 — ninth maintainer review; the gates' model of external tools falsified against the tools (F21)
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -139,6 +139,21 @@ own evidence. Two were live, and both failed open:
 | **ShellCheck and Ruff over the trust-chain scripts.** The C++ compiles under `-Werror` and a long warning list; the shell and Python that decide whether the C++ may ship were unchecked. | Review |
 | **The SPDX gate's scope widened to match its name** — it checked `.cpp/.hpp/.cmake` while calling itself "every source file", leaving the tooling, templates and workflows outside a rule they were named by. | Review — claim exceeded scope |
 | **GitHub Actions pinned to commit SHAs.** Same argument as the GoogleTest pin: a tag is movable, so "pinned to v4" means CI's code can change with no change here — and actions run with the workflow token. | Review |
+
+**Revision 12** incorporates the ninth maintainer review, which found one live defect and
+it was in the gate this project had just finished hardening:
+
+| Change | Origin |
+|---|---|
+| **F21 — a model of an external tool cannot falsify itself.** The mutation gate read the mutator identifier as the first token after `Survived:`. On real Mull output that token is the word `Replaced` — the identifier is the *bracketed* one at the end of the line. So every mutant at one source location collapsed to one key, and a single reviewed allowlist entry would have excused all of them: exactly the protection the key had been widened to provide, absent precisely where it mattered. Every fixture test passed throughout, because the fixtures encoded the same wrong idea of Mull's output as the parser did. | Review — **new finding, live defect** |
+| **The gate now reads two independent renderings and requires them to agree** — Mull's IDE text (which carries the totals) and its SARIF JSON (which carries a machine-readable `ruleId`). Neither suffices alone: SARIF omits killed mutants, so an empty SARIF cannot be told from a crashed run. This is the project's own oracle rule applied to its own tooling. | Extended beyond the review |
+| **Every stated total is now reconciled**, not just the killed count: each header's count against the records listed under it, all headers against one another, the derived killed count against the stated score, and "all mutations have been killed" against the survivor list. | Review |
+| **Not-covered mutants are a hard failure and are not allowlistable.** A mutant on a line the tests never executed contradicts the 100% line-coverage gate, measured by an entirely different mechanism. That disagreement is the finding. | Extended beyond the review |
+| **Coverage exclusions get stable `LF-COV-NNN` IDs.** Keying the reviewed file on `path:marker:reason` had a hole: two exclusions in one file, same marker, same wording, share one record — so "adding an exclusion requires editing the reviewed file" was almost true. | Review — **almost-true rule** |
+| **Exclusion regions are validated as a sequence, not a count.** `STOP` before `START` balances arithmetically while leaving a region open to end of file; nested regions were unconstrained. A per-file state machine replaces the count comparison. | Review |
+| **External fetches are confined to `cmake/Dependencies.cmake`,** gated. The manifest cross-check is only as complete as its list of places to look, and M1 is about to grow the CMake tree. | Review — pre-emptive |
+| **`VerificationNotPerformed` integrated rather than merely defined**: excluded from hardware fault isolation (§7 of `verification.md`), provenance fields explicitly nullable, and added to the error-record checklist and the PR template alongside tier T5b. | Review — internal inconsistency |
+| Selftest's conclusion narrowed: a failure means *the environment is not trustworthy for a hardware verdict* — faulty machine, broken build, or unsupported platform — not "faulty or unsupported", which omits the possibility the user can least rule out: that LoadForge is wrong. | Review |
 
 ---
 
@@ -976,6 +991,59 @@ in place, *the interesting remaining failures are meta-verification failures —
 which a tool that says "the verification passed" might have misunderstood its own
 evidence.*
 
+#### F21 — A model of an external tool cannot falsify itself *(high — new in rev. 12)*
+
+*Raised by the maintainer review. A live defect in the gate hardened by F20.*
+
+F20 made the gates fail closed on evidence they could not interpret. It did not ask
+whether they were interpreting correctly the evidence they *could* read. They were not.
+
+Mull's IDEReporter emits, from `rust/mull-reporters/src/ide_reporter.rs`:
+
+```text
+{path}:{line}:{col}: warning: {label}: {message} [{mutator}]
+```
+
+with `message` shaped `Replaced X with Y`. The gate captured the first token after
+`Survived:` as the mutator. On every real Mull line that token is the word **`Replaced`**.
+Consequences, in order of severity:
+
+- Two operators firing at one source location — `cxx_ge_to_gt` and `cxx_ge_to_lt` both
+  rewrite the same `>=` — produced the **same key**, were deduplicated, and one reviewed
+  allowlist entry excused both. The mutator was added to the key specifically to stop
+  that, and it stopped it only for fixtures.
+- The whole survivor-key mechanism was therefore weaker on real input than the
+  `path:line:col` scheme it replaced was believed to be.
+
+**Every one of the gate's tests passed the entire time.** They were written from the same
+mental model of Mull's output as the parser, so they could only confirm it. The rule:
+
+> **Where a gate parses an external tool, its fixtures must come from that tool** — the
+> tool's own test suite, or a captured run — and something must exercise the real binary.
+> A test written from your reading of the documentation tests your reading.
+
+Three things follow, and all three are now in place:
+
+1. The fixtures under `tests/tools/fixtures/mull/` are derived from Mull's own integration
+   tests and its reporter source, including details a hand-written fixture would not have
+   had — mutant lines carry no `[info]` prefix because they go through `diag_raw!`, while
+   headers do because they go through `diag_info!`.
+2. `tests/tools/mutation_integration.sh` compiles a program with a known-surviving mutant,
+   runs the real Mull, and asserts the gate parses the exact operator and that a reviewed
+   key for one operator does not excuse a different operator at the same location. It runs
+   in the mutation workflow *before* the gate is pointed at this project's own tests.
+3. The gate reads **two** renderings — IDE text and SARIF — and fails if they disagree, so
+   a future format change surfaces as a contradiction rather than a wrong verdict.
+
+The honest limitation, recorded because it is the whole point of the finding: **the
+integration test has not been run.** Mull is not pinned, and this environment cannot reach
+the package host. Everything above was derived from Mull 0.34.0's source, which is far
+better than a guess and still not the same as having run it. Until that test runs green,
+the mutation gate is *specified* correctly, not *demonstrated* correct — and F21 says
+exactly what that distinction is worth.
+
+---
+
 ---
 
 ## 3. Principles adopted
@@ -1001,6 +1069,8 @@ evidence.*
 13. **Test code is product code.**
 14. **A check that cannot read its evidence fails** — a gate, an oracle or a parser that
     does not understand its input reports failure, never success by default (F20).
+15. **A model of an external tool is tested against the tool**, never against itself
+    (F21). Fixtures come from the tool; something exercises the real binary.
 
 ---
 
@@ -1440,8 +1510,9 @@ LoadForge/
 ├── third_party/                    # vendored, pinned, header-only
 ├── tools/                          # the trust chain: gates, and the files they review against
 │   ├── coverage.sh  check-exclusions.sh  coverage-exclusions.txt
-│   ├── mutation-gate.sh  mutation-allowlist.txt
-│   ├── check-dependencies.py  capture-sysfs.sh  gen-golden/
+│   ├── mutation-gate.py  mutation-allowlist.txt
+│   ├── check-dependencies.py  check-fetch-centralization.sh
+│   ├── capture-sysfs.sh  gen-golden/
 └── config/
     ├── quick.toml  stress-5h.toml  explore-temperature.toml
 ```
@@ -1561,19 +1632,25 @@ about the code's own decisions.
 
 **2. Exclusions are individually justified, reviewed, and ratcheted.** Anything genuinely
 unreachable — a defensive `default:` on an exhaustive enum, an `abort()` path — carries
-an inline exclusion marker *with a written reason*, **and an entry in
-`tools/coverage-exclusions.txt` recording that reason**. A rising exclusion count is
-exactly how a 100% gate rots into decoration, so it is gated directly:
-`tools/check-exclusions.sh` fails the build on an exclusion with no written reason, on
-one absent from the reviewed file, on a `START` region left unclosed, and on a reviewed
-entry that outlived the code it excused.
+an inline exclusion marker carrying **an `LF-COV-NNN` ID and a written reason**, and a
+matching record in `tools/coverage-exclusions.txt`. A rising exclusion count is exactly
+how a 100% gate rots into decoration, so it is gated directly:
+`tools/check-exclusions.sh` fails the build on a marker with no ID, an ID with no written
+reason, an ID absent from the reviewed file, an ID reused for a second exclusion, an
+exclusion that has moved since it was reviewed, a `STOP` that precedes its `START`, a
+nested or unclosed region, and a reviewed record that outlived the code it excused.
 
 The reviewed file is the mechanism, not the count. Counting was the first attempt and it
 was not a ratchet: CI printed a number into the step summary and asked a reviewer to
 remember last week's. Requiring the justification to land in the same diff as the
-exclusion puts it in front of the one person positioned to reject it. The key is
-`path:marker:reason` rather than `path:line`, so line churn does not invalidate it and
-*rewording a justification does* — which is the moment re-review is worth having.
+exclusion puts it in front of the one person positioned to reject it.
+
+The key is an explicit ID rather than anything derived from the source. Deriving it was
+the second attempt — `path:marker:reason` — and it had a hole worth recording, because it
+is the same shape as the others: two exclusions in one file, same marker, same wording,
+generate one key, so a single reviewed record satisfies both. The rule "adding an
+exclusion requires editing the reviewed file" was *almost* true. An ID is unique by
+construction, survives line churn, and cannot be collided with by accident.
 
 The current count is zero, and every exclusion the project has so far been tempted by
 turned out to be a real defect wearing a disguise — `tools/coverage-exclusions.txt`
@@ -1850,10 +1927,17 @@ quietly assumed done:
   project cannot honestly claim "nothing untested reaches `main`" until a ruleset
   requires the CI checks and, preferably, a pull request. The DCO check only runs
   on pull requests, so direct pushes bypass that policy too.
-- **The mutation gate is armed but not scheduled.** `tools/mutation-gate.sh`
-  enforces zero unexplained surviving mutants and fails if Mull cannot run, but
-  enabling it nightly needs a Mull release pinned by verified SHA-256. Shipping
-  an unverified pin would be no better than the `|| true` it replaced.
+- **The mutation gate is specified, not demonstrated.** `tools/mutation-gate.py`
+  enforces zero unexplained surviving mutants, reconciles two independent
+  renderings of the run against each other, and fails if Mull cannot run. Its
+  parser and fixtures are derived from Mull 0.34.0's own source and integration
+  tests rather than from a reading of its docs — which is what F21 demands — but
+  **`tests/tools/mutation_integration.sh` has never been executed**, because Mull
+  is not pinned and this environment cannot reach the package host. Pinning a
+  Mull release by verified SHA-256 and running that test green is what turns the
+  gate from specified into demonstrated, and F21 is precisely the finding that
+  says the difference matters. Until then the gate is not trusted on this
+  repository's own tests.
 
 **Next is M1:** `core`, `platform`, `topology`, `config`, the controller/worker
 process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9), and the console

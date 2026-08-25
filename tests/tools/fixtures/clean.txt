@@ -1,3 +1,0 @@
-[info] Survived mutants (0/12):
-[info] Killed mutants: 12/12
-[info] Mutation score: 100%

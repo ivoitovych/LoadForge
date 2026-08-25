@@ -1,0 +1,12 @@
+[info] Killed mutants (1/3):
+src/core/duration.cpp:42:12: warning: Killed: Replaced + with - [cxx_add_to_sub]
+  return a + b;
+           ^
+[info] Survived mutants (2/3):
+src/core/duration.cpp:51:9: warning: Survived: Replaced >= with > [cxx_ge_to_gt]
+  if (n >= limit) {
+        ^
+src/core/duration.cpp:51:9: warning: Survived: Replaced >= with < [cxx_ge_to_lt]
+  if (n >= limit) {
+        ^
+[info] Mutation score: 33%

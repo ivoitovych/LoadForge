@@ -1,3 +1,0 @@
-[info] warning: Survived: mutant at an unrecognised location
-[info] Killed mutants: 11/12
-[info] Mutation score: 91%

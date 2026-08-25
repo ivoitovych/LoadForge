@@ -239,14 +239,31 @@ And, since revision 2, the classification must also be right: a single-bit flip 
 ## 7. Fault isolation — what happens on a real failure
 
 Detecting a wrong result is half the job. The other half is telling the user what it
-means. On any verification failure, LoadForge automatically re-runs the failing unit of
-work:
+means. On a verification failure that produced a **wrong result** —
+`ExactBitCorruption` or `NumericalVerificationFailure` — LoadForge automatically re-runs
+the failing unit of work:
 
 | Re-run | If it fails | If it passes |
 |---|---|---|
 | Same core, same thread count | Reproducible — proceed to the next re-run | **Non-reproducible transient** — see below |
 | **Different core** | Not core-local; *consistent with* memory, uncore, or power-delivery involvement | *Consistent with* a core-local fault — name the core, but see the caveats |
 | **Single-threaded** | Deterministic and reproducible — the strongest evidence available | Concurrency-dependent; could be hardware, could be a LoadForge bug — escalate accordingly |
+
+### `VerificationNotPerformed` is not routed here
+
+Fault isolation asks *where did the wrong answer come from?*. That question presupposes a
+wrong answer. `VerificationNotPerformed` (§5, §8) means no answer was ever compared: the
+oracle would not allocate, the reference was unavailable, zero blocks were checked. There
+is nothing to re-run on another core and nothing about the hardware to conclude, so the
+re-run ladder is skipped entirely and the finding is reported as what it is — a failure
+of the tool or the run, not of the machine.
+
+Routing it here would be worse than useless. Every re-run would "pass", because a check
+that cannot be made does not fail on the second core either, and the ladder would land on
+**non-reproducible transient** — the one classification reserved for the most alarming
+thing this tool can see. A tool that reports a suspected transient hardware fault because
+its own allocator failed has told the user something false in the most expensive
+direction available to it.
 
 ### These are diagnostic signals, not proof
 
@@ -300,6 +317,15 @@ workload + version         RNG seed                   ISA dispatch path
 isolation result           confidence                 telemetry at time of error
 input-integrity status     verification duty cycle
 ```
+
+**Every one of these fields is nullable, and absence is reported as absence.** That is
+the same rule §3 of [`PLAN.md`](PLAN.md) applies to telemetry, and it matters most for
+`VerificationNotPerformed`: a check that failed before a buffer was allocated has no
+buffer address, no offset, and possibly no iteration index. Filling those with zeros
+would manufacture provenance for an event that has none — and a triager reading
+`buffer address 0x0, offset 0` has been handed a fact, not a gap. The record states which
+fields do not apply and why, exactly as the bounded-failure type does for the bit fields
+below.
 
 ### Three failure types, and only one of them has bits to compare
 
@@ -357,10 +383,18 @@ from one without.
 
 Runs the golden vectors and a fast oracle comparison before any long run begins.
 
-Its purpose is triage: a machine that fails selftest is either faulty or unsupported,
-and the user should learn that in seconds rather than five hours in. It is also the
-first question the hardware-failure issue template asks, because the answer separates a
-broken build from a genuine finding.
+Its purpose is triage, and the conclusion it supports is narrower than it first looks:
+
+> **A selftest failure means the environment is not trustworthy for a hardware verdict.**
+> The machine may be faulty, the build or the tool may be broken, or the platform may be
+> unsupported. Selftest does not distinguish between those — it only establishes that the
+> question "is this hardware sound?" cannot yet be answered here.
+
+Saying instead that a failing machine "is either faulty or unsupported" would omit the
+third possibility, and it is the one a user is least able to rule out on their own: that
+LoadForge itself is wrong. The user should learn this in seconds rather than five hours
+in. It is also the first question the hardware-failure issue template asks, because the
+answer separates a broken build from a genuine finding.
 
 ---
 
@@ -382,6 +416,9 @@ Adding or changing a workload:
 Touching `src/verification/`:
 
 - [ ] A fault-injection test accompanies the change. Required regardless of coverage.
-- [ ] If it touches error records, the correct type is emitted —
-      `ExactBitCorruption` **or** `NumericalVerificationFailure` (§8), never bit fields
-      fabricated for a bounded breach.
+- [ ] An unrun-check test accompanies it too (tier T5b): make the check impossible and
+      assert `VerificationNotPerformed`, never a pass.
+- [ ] If it touches error records, the correct type is emitted — `ExactBitCorruption`,
+      `NumericalVerificationFailure`, **or** `VerificationNotPerformed` (§8) — never bit
+      fields fabricated for a bounded breach, and never provenance fabricated for a check
+      that never ran.

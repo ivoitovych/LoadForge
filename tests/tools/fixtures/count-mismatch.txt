@@ -1,4 +1,0 @@
-[info] Survived mutants (2/12):
-/src/core/duration.cpp:42:11: warning: Survived: cxx_gt_to_ge: replaced > with >=
-/src/core/duration.cpp:42:11: warning: Survived: cxx_remove_void_call: removed call
-[info] Killed mutants: 11/12

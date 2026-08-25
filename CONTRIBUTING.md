@@ -155,20 +155,36 @@ Non-negotiable review standards:
 - **Coverage is 100%, gated.** Code and its tests land together in the same pull
   request. There is no "tests to follow" — that campaign never comes, and tests written
   later encode what the code *does* (bugs included) rather than what it should do.
-- Anything genuinely unreachable needs an inline exclusion marker **with a written
-  reason**, and a matching entry in `tools/coverage-exclusions.txt` — in the same pull
-  request, so the justification lands in the diff a reviewer is already reading.
-  `tools/check-exclusions.sh` gates this: a reason-less marker, an unreviewed exclusion,
-  an unclosed `GCOVR_EXCL_START` region, or an entry that outlived its code all fail the
-  build. The count is currently zero. Try hard to keep it there — read the header of that
-  file first; every exclusion this project has been tempted by so far turned out to be a
-  real defect wearing a disguise.
+- Anything genuinely unreachable needs an inline exclusion marker carrying an
+  **`LF-COV-NNN` ID and a written reason**, plus a matching record in
+  `tools/coverage-exclusions.txt` — in the same pull request, so the justification lands
+  in the diff a reviewer is already reading:
+
+  ```cpp
+  if (rc < 0) { abort(); }  // GCOVR_EXCL_LINE LF-COV-001 abort() cannot return
+  ```
+
+  `tools/check-exclusions.sh` gates this: a missing ID, a reason-less marker, an
+  unreviewed or relocated exclusion, a reused ID, a `STOP` before its `START`, a nested or
+  unclosed region, or a record that outlived its code all fail the build. The count is
+  currently zero. Try hard to keep it there — read the header of that file first; every
+  exclusion this project has been tempted by so far turned out to be a real defect wearing
+  a disguise.
 - A change to `tools/` that adds or alters a gate needs a case in
   `tests/tools/test_tooling.sh` that feeds the gate evidence it should **refuse to
   interpret** — a truncated report, an empty manifest — and asserts it fails. The gates
   have twice reported success on input they did not understand (`docs/PLAN.md` F20), and
   a gate in that state produces the same output as a clean run. Testing that it says
   "pass" when it should is only half the test.
+- If the gate parses the output of an **external tool**, the fixtures must be derived from
+  that tool — its own test suite, or a captured run — never from your reading of its
+  documentation, and there must be a test that runs the real binary. F21: the mutation
+  gate's entire fixture suite passed while the parser misread every mutator identifier,
+  because the fixtures encoded the same wrong assumption. A model of an external tool
+  cannot falsify itself.
+- External dependencies are fetched **only** from `cmake/Dependencies.cmake`. Adding a
+  `FetchContent_Declare` elsewhere fails `tools/check-fetch-centralization.sh`, because
+  the manifest cross-check cannot reconcile a pin it does not know to look for.
 - For a new workload, **write the reference oracle and its tests first**. F11 requires
   the oracle to be derived independently from the specification; writing it before the
   optimized kernel exists is the cleanest guarantee of that.

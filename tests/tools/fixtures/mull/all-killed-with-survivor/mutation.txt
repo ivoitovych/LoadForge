@@ -1,0 +1,4 @@
+[info] Survived mutants (1/2):
+src/core/duration.cpp:42:12: warning: Survived: Replaced + with - [cxx_add_to_sub]
+[info] Mutation score: 50%
+[info] All mutations have been killed

@@ -1,0 +1,5 @@
+[info] Killed mutants (1/2):
+src/core/duration.cpp:51:9: warning: Killed: Replaced >= with > [cxx_ge_to_gt]
+[info] Not Covered mutants (1/2):
+src/core/byte_size.cpp:70:5: warning: Not Covered: Replaced * with / [cxx_mul_to_div]
+[info] Mutation score: 50%

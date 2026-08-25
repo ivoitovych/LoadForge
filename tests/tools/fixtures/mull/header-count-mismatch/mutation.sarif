@@ -1,0 +1,1 @@
+{"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "Mull", "version": "0.34.0"}}, "results": [{"level": "warning", "ruleId": "cxx_add_to_sub", "message": {"text": "x"}, "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/core/duration.cpp"}, "region": {"startLine": 42, "startColumn": 12}}}]}]}]}

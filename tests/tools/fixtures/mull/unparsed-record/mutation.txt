@@ -1,0 +1,3 @@
+[info] Survived mutants (1/2):
+src/core/duration.cpp: warning: Survived: mutant at an unknown position
+[info] Mutation score: 50%
