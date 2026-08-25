@@ -34,10 +34,13 @@
 #      treated as a failure of the gate, not as a pass.
 set -euo pipefail
 
-TEST_BINARY="${1:?usage: mutation-gate.sh <test-binary> [report-file]}"
+TEST_BINARY="${1:?usage: mutation-gate.sh <test-binary> [report-file] [allowlist-file]}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ALLOWLIST="$ROOT/tools/mutation-allowlist.txt"
 REPORT="${2:-}"
+# Third argument so the tests can point at a fixture allowlist. They used to
+# overwrite the real one and copy it back afterwards, which edits a tracked file
+# during a test run and leaves a fixture in the tree if the run is interrupted.
+ALLOWLIST="${3:-$ROOT/tools/mutation-allowlist.txt}"
 
 if [ -z "$REPORT" ]; then
   command -v mull-runner-18 >/dev/null || {
@@ -124,6 +127,21 @@ if [ -n "$killed_summary" ]; then
     echo "  $expected survivor(s) ($killed killed of $total), but $survivor_lines survivor" >&2
     echo "  line(s) are present. Either the report is truncated or this script is reading" >&2
     echo "  it wrongly. Both are failures." >&2
+    exit 1
+  fi
+fi
+
+score="$(grep -oE 'Mutation score: *[0-9]+' "$REPORT" | grep -oE '[0-9]+$' | tail -n 1 || true)"
+if [ -n "$score" ]; then
+  if [ "$score" -eq 100 ] && [ "$survivor_lines" -ne 0 ]; then
+    echo "mutation gate: the report claims a 100% mutation score while listing" >&2
+    echo "  $survivor_lines survivor(s). Refusing to certify an incoherent report." >&2
+    exit 1
+  fi
+  if [ "$score" -ne 100 ] && [ "$survivor_lines" -eq 0 ]; then
+    echo "mutation gate: the report claims a mutation score of ${score}% but lists no" >&2
+    echo "  survivors. Mutants survived that this script did not see, so its verdict" >&2
+    echo "  would be based on a report it has only partly read." >&2
     exit 1
   fi
 fi

@@ -26,7 +26,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FIX="$ROOT/tests/tools/fixtures"
 GATE="$ROOT/tools/mutation-gate.sh"
 DEPS="$ROOT/tools/check-dependencies.py"
-ALLOWLIST="$ROOT/tools/mutation-allowlist.txt"
 pass=0; fail=0
 
 expect() { # description, expected-exit, actual-exit, [needle, output]
@@ -39,10 +38,10 @@ expect() { # description, expected-exit, actual-exit, [needle, output]
 }
 
 gate() { # report-fixture, allowlist-fixture
-  local saved; saved="$(cat "$ALLOWLIST")"
-  cp "$FIX/$2" "$ALLOWLIST"
-  local out; out="$("$GATE" dummy-binary "$FIX/$1" 2>&1)"; local rc=$?
-  printf '%s' "$saved" > "$ALLOWLIST"
+  # The allowlist is passed as an argument rather than copied over the real one
+  # and copied back: a test run must not edit a tracked file, and the restore
+  # never happens if the run is interrupted.
+  local out; out="$("$GATE" dummy-binary "$FIX/$1" "$FIX/$2" 2>&1)"; local rc=$?
   GATE_OUT="$out"; return $rc
 }
 
@@ -61,6 +60,10 @@ gate unparsed-survivor.txt allow-empty.txt
 expect "survivor line the parser cannot read FAILS"            1 $? "could not parse 1 of 1" "$GATE_OUT"
 gate count-mismatch.txt allow-empty.txt
 expect "report that contradicts its own totals FAILS"          1 $? "disagrees with itself" "$GATE_OUT"
+gate score-without-survivors.txt allow-empty.txt
+expect "score below 100% with no survivors listed FAILS"       1 $? "lists no" "$GATE_OUT"
+gate score-perfect-with-survivors.txt allow-empty.txt
+expect "score of 100% alongside a survivor FAILS"              1 $? "incoherent report" "$GATE_OUT"
 
 out="$("$GATE" dummy-binary "$FIX/no-such-report.txt" 2>&1)"
 expect "missing report file FAILS" 1 $? "does not exist" "$out"
@@ -147,6 +150,10 @@ deps; expect "missing required field rejected"                    1 $? "missing 
 good_manifest
 sed -i 's/^linked    = false/linked    = "false"/' "$tmp/third_party/MANIFEST.toml"
 deps; expect "quoted boolean rejected (a string is always truthy)" 1 $? "must be a TOML boolean" "$out"
+
+good_manifest
+sed -i "s|^sha       = \"$GTEST_SHA\"|sha       = 12345|" "$tmp/third_party/MANIFEST.toml"
+deps; expect "non-string sha rejected"                            1 $? "must be a non-empty string" "$out"
 
 good_manifest
 sed -i 's/^kind      = "fetched"/kind      = "borrowed"/' "$tmp/third_party/MANIFEST.toml"

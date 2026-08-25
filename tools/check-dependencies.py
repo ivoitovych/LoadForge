@@ -118,7 +118,7 @@ for index, fields in enumerate(components):
             "silently disables the check that reads it"
         )
 
-    for text_field in ("version", "source", "licence"):
+    for text_field in ("version", "source", "licence", "sha"):
         value = fields.get(text_field)
         if text_field in fields and (not isinstance(value, str) or not value):
             fail(f"{name}: '{text_field}' must be a non-empty string")
@@ -186,7 +186,8 @@ for name, fields in declared.items():
     if not failed:
         print(
             f"  ok    {name} {fields.get('version')} [{fields.get('licence')}] "
-            f"{fields.get('kind')}, linked={fields.get('linked')}"
+            # str(False) is "False"; echo back the TOML spelling the file uses.
+            f"{fields.get('kind')}, linked={str(fields.get('linked')).lower()}"
         )
 
 third_party = root / "third_party"
