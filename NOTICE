@@ -43,3 +43,22 @@ allowlist, requires a full 40-character SHA for fetched components, rejects
 anything vendored but undeclared, and checks that the SHA in the manifest is the
 SHA the build actually pins. This file is prose for humans; the manifest is what
 CI enforces.
+
+--------------------------------------------------------------------------------
+toml++ (tomlplusplus) v3.4.0
+--------------------------------------------------------------------------------
+Vendored at third_party/tomlplusplus/ (toml.hpp and LICENSE only).
+Upstream:  https://github.com/marzer/tomlplusplus
+Commit:    30172438cee64926dc41fdd9c11fb3ba5b2ba9de
+Licence:   MIT — see third_party/tomlplusplus/LICENSE for the full text.
+
+Copyright (c) Mark Gillard <mark.gillard@outlook.com.au>
+
+MIT is GPL-compatible: MIT-licensed code may be combined into a GPL-3.0-or-later
+work, and this combination is distributed under GPL-3.0-or-later. The MIT notice
+above and the LICENSE file are retained as that licence requires.
+
+This is a header-only library compiled into the LoadForge binary. It is not a
+third-party RUNTIME dependency: nothing is dynamically linked and nothing needs
+to be installed on the user's machine, which is what the project's
+"no third-party runtime dependencies" promise means.

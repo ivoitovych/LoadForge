@@ -193,6 +193,60 @@ good_manifest
   >> "$tmp/third_party/MANIFEST.toml"
 deps; expect "duplicate component name rejected"                  1 $? "declared twice" "$out"
 
+# --- the vendored path, which had never been exercised -----------------------
+# Every component so far has been kind = "fetched" and test-only. The first
+# vendored, linked component arrives with config/ at M1, and per F20 a gate
+# untested on a path is a gate that will fail open on it -- so the path is
+# tested here before anything travels down it.
+# Both components, because a manifest declaring only the vendored one leaves
+# GoogleTest undeclared while Dependencies.cmake still fetches it -- which the
+# reverse cross-check correctly rejects, for reasons unrelated to vendoring.
+vendored_manifest() {
+  manifest <<EOF
+[[component]]
+name      = "googletest"
+version   = "v1.15.2"
+sha       = "$GTEST_SHA"
+source    = "https://github.com/google/googletest.git"
+licence   = "BSD-3-Clause"
+kind      = "fetched"
+linked    = false
+pinned_by = "cmake/Dependencies.cmake"
+
+[[component]]
+name        = "examplelib"
+version     = "v1.0.0"
+sha         = "$GTEST_SHA"
+source      = "https://example.invalid/examplelib.git"
+licence     = "MIT"
+kind        = "vendored"
+linked      = true
+files_sha256 = "$1"
+EOF
+}
+
+mkdir -p "$tmp/third_party/examplelib"
+printf '#pragma once\n' > "$tmp/third_party/examplelib/examplelib.hpp"
+vendored_manifest "0000000000000000000000000000000000000000000000000000000000000000"
+deps; expect "vendored tree that does not match its digest FAILS" 1 $? "has changed since it was reviewed" "$out"
+
+# The failure message carries the digest, so recording it needs no second tool.
+digest="$(grep -oE 'tree now hashes to [0-9a-f]{64}' <<< "$out" | grep -oE '[0-9a-f]{64}')"
+vendored_manifest "$digest"
+deps; expect "vendored tree matching its reviewed digest passes"  0 $? "matches its reviewed digest" "$out"
+
+printf '#pragma once\nint sneaky();\n' > "$tmp/third_party/examplelib/examplelib.hpp"
+deps; expect "an edit to vendored code FAILS afterwards"          1 $? "has changed since it was reviewed" "$out"
+
+printf '#pragma once\n' > "$tmp/third_party/examplelib/examplelib.hpp"
+vendored_manifest "$digest"
+sed -i '/^files_sha256/d' "$tmp/third_party/MANIFEST.toml"
+deps; expect "vendored component with no digest FAILS"            1 $? "must record 'files_sha256'" "$out"
+
+vendored_manifest "$digest"
+rm -rf "$tmp/third_party/examplelib"
+deps; expect "vendored component whose directory is gone FAILS"   1 $? "ships no code" "$out"
+
 good_manifest
 mkdir -p "$tmp/third_party/undeclared-library"
 deps; expect "vendored directory nobody declared FAILS"           1 $? "present but not declared" "$out"
@@ -283,6 +337,115 @@ excl 'LF-COV-001 src/a.cpp GCOVR_EXCL_START -- needs hardware CI does not have'
 expect "balanced region with a reviewed reason passes"       0 $? "reviewed: LF-COV-001" "$out"
 
 rm -rf "$ex"
+
+echo "check-test-obligations.py"
+out="$("$ROOT/tools/check-test-obligations.py" 2>&1)"
+expect "the real ledger matches the real tree" 0 $? "module(s), ok" "$out"
+
+ob="$(mktemp -d)"; mkdir -p "$ob/src/core" "$ob/tests/unit" "$ob/tests/fixtures"
+printf 'int f();\n' > "$ob/src/core/core.hpp"
+printf 'int main(){}\n' > "$ob/tests/unit/core_test.cpp"
+led() { printf '%s\n' "${1-}" > "$ob/tests/obligations.toml"
+        out="$("$ROOT/tools/check-test-obligations.py" "$ob" 2>&1)"; return $?; }
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P3"]
+tiers   = ["T1"]'
+expect "a ledger matching the tree passes"                   0 $? "ok    src/core" "$out"
+
+led '# nothing declared'
+expect "an empty ledger beside real source FAILS"            1 $? "not a clean sheet" "$out"
+
+led '[[module]
+path = broken'
+expect "an unparseable ledger FAILS"                         1 $? "does not parse as TOML" "$out"
+
+mkdir -p "$ob/src/other"; printf 'int g();\n' > "$ob/src/other/other.hpp"
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]'
+expect "a module absent from the ledger FAILS"               1 $? "absent from obligations.toml" "$out"
+rm -rf "$ob/src/other"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]
+
+[[module]]
+path    = "src/deleted"
+classes = ["P1"]
+tiers   = ["T1"]'
+expect "a ledger entry outliving its module FAILS"           1 $? "holds no source" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P9"]
+tiers   = ["T1"]'
+expect "an invented path class FAILS"                        1 $? "is not a path class" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P3"]
+tiers   = ["T1"]'
+expect "an entry without P1 FAILS as unclassified"           1 $? "has not been classified" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T9"]'
+expect "declaring a universal tier FAILS"                    1 $? "not a declarable tier" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T7"]'
+expect "a promised tier with no tests FAILS"                 1 $? "a promise, not a test" "$out"
+
+# P2 and P7 are the classes that cannot be tested without something to force the
+# state, so the ledger insists the fixtures are named when they are declared.
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P2"]
+tiers   = ["T1"]'
+expect "error paths declared with no fixtures FAILS"         1 $? "needs something to force" "$out"
+
+led '[[module]]
+path     = "src/core"
+classes  = ["P1", "P7"]
+tiers    = ["T1"]
+fixtures = ["sysfs/no-such-tree"]'
+expect "a fixture that does not exist FAILS"                 1 $? "does not exist" "$out"
+
+mkdir -p "$ob/tests/fixtures/sysfs/intel"
+led '[[module]]
+path     = "src/core"
+classes  = ["P1", "P7"]
+tiers    = ["T1"]
+fixtures = ["sysfs/intel"]'
+expect "declared classes with real fixtures passes"          0 $? "ok    src/core" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]
+tears   = ["typo"]'
+expect "a misspelt field FAILS rather than being ignored"    1 $? "unknown field" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]
+
+[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]'
+expect "a module declared twice FAILS"                       1 $? "declared twice" "$out"
+
+rm -rf "$ob"
 
 echo "check-fetch-centralization.sh"
 out="$("$ROOT/tools/check-fetch-centralization.sh" 2>&1)"

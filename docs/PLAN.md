@@ -1524,18 +1524,21 @@ LoadForge/
 │   ├── tools/                      # tests OF the gates — trust-chain tooling (T0b)
 │   │   ├── test_tooling.sh  mutation_integration.sh
 │   │   └── fixtures/mull/          # taken from Mull's own integration tests (F21)
-│   ├── ○ obligations.toml          # M1 — the per-module path/tier ledger
+│   ├── obligations.toml            # the per-module path-class and tier ledger
 │   └── fixtures/
 │       ├── sysfs/                  # intel, amd, arm64, no-hwmon, eacces, edac, wrapping
 │       ├── procfs/
 │       └── golden/
 │
 ├── benchmarks/
-├── third_party/                    # vendored, pinned, header-only
+├── third_party/                    # vendored, pinned, digest-checked
+│   ├── MANIFEST.toml               # every component + files_sha256 over its tree
+│   └── tomlplusplus/               # toml++ v3.4.0, MIT, header-only (config/, M1)
 ├── tools/                          # the trust chain: gates, and the files they review against
 │   ├── coverage.sh  check-exclusions.sh  coverage-exclusions.txt
 │   ├── mutation-gate.py  mutation-allowlist.txt
 │   ├── check-dependencies.py  check-fetch-centralization.sh
+│   ├── check-test-obligations.py   # the per-module path/tier ledger gate
 │   ├── capture-sysfs.sh  gen-golden/
 └── config/
     ├── quick.toml  stress-5h.toml  explore-temperature.toml

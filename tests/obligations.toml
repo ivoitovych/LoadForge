@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The per-module test-obligation ledger. Enforced by
+# tools/check-test-obligations.py; the doctrine is docs/IMPLEMENTATION.md §2.
+#
+# WHY THIS FILE EXISTS
+#
+# The project gates 100% line and branch coverage, and that gate cannot see most
+# of what needs testing. An EACCES from open(), a short read, an EINTR, a
+# counter that wraps mid-sample: none of these is a branch gcov reports as
+# uncovered, because the success case covers the branch and the failure arm
+# simply never runs. Coverage says 100% and means it.
+#
+# So IMPLEMENTATION.md §2.2 classifies execution paths into seven kinds, and only
+# the first is enumerated by a tool:
+#
+#   P1  decision      each branch outcome, each switch arm, loops at 0/1/many
+#   P2  error         each documented failure of each fallible call
+#   P3  boundary      empty, one, max, overflow, negative, subnormal, NaN, wrap
+#   P4  verification  pass, each corruption classification, and not-performed
+#   P5  concurrency   the orderings the design depends on
+#   P6  lifecycle     startup, each abnormal termination, restart, teardown
+#   P7  capability    per source: present, absent, EACCES, malformed, vanishes, wraps
+#
+# Enumerating P2 through P7 is human judgement, so it must leave a trace or it
+# will be skipped under deadline. Declaring a module's classes here does not
+# prove the enumeration is complete -- nothing can. It proves the enumeration was
+# MADE, is CURRENT, and that the tests it promises exist. That is the difference
+# between a convention and a gate, and this project has learned which one
+# survives contact with a deadline.
+#
+# T0 (static), T0b (gate tests) and T9 (sanitizers) are never listed: they are
+# universal. A blank 'tiers' is therefore a real exemption, never an oversight.
+
+[[module]]
+path    = "src/core"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = "Pure value logic: Result, ParseError, duration and byte-size parsing. No syscalls, so no P2."
+
+[[module]]
+path    = "src/main"
+classes = ["P1", "P3"]
+tiers   = ["T1", "T8"]
+note    = "CLI dispatch and the selftest digest. T8 runs the real binary, so main() is covered rather than excluded."

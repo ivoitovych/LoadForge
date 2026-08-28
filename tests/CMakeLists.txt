@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 loadforge_provide_gtest()
+loadforge_provide_tomlplusplus()
 include(GoogleTest)
 
 add_executable(loadforge_unit_tests
@@ -9,8 +10,10 @@ add_executable(loadforge_unit_tests
   unit/core/byte_size_test.cpp
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
+  unit/third_party/tomlplusplus_smoke_test.cpp
 )
-target_link_libraries(loadforge_unit_tests PRIVATE loadforge_cli GTest::gtest_main GTest::gmock)
+target_link_libraries(loadforge_unit_tests PRIVATE
+  loadforge_cli GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
 loadforge_set_fp_contract(loadforge_unit_tests)
 loadforge_enable_sanitizers(loadforge_unit_tests)
 loadforge_enable_coverage(loadforge_unit_tests)

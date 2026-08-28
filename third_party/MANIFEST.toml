@@ -18,3 +18,14 @@ licence   = "BSD-3-Clause"
 kind      = "fetched"
 linked    = false
 pinned_by = "cmake/Dependencies.cmake"
+
+[[component]]
+name         = "tomlplusplus"
+version      = "v3.4.0"
+sha          = "30172438cee64926dc41fdd9c11fb3ba5b2ba9de"
+source       = "https://github.com/marzer/tomlplusplus.git"
+licence      = "MIT"
+kind         = "vendored"
+linked       = true
+files_sha256 = "28c93d98b75fd422a9f3654301aa245aa2c746b3021f188a528a25bcf83a5f70"
+comment      = "Single-header TOML parser for config/ (M1). Vendored rather than fetched so an offline or live-media build needs no network. MIT is GPL-compatible; MIT code may be combined into a GPL-3.0-or-later work. Only toml.hpp and LICENSE are vendored -- not the upstream tests, docs or build files."

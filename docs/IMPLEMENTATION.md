@@ -127,7 +127,7 @@ coverage.
 ### 2.5 The path inventory, and the gate that enforces it
 
 Enumeration for P2–P7 is human work, so it must leave a reviewable trace or it will be
-skipped under deadline. The mechanism, landing at M1:
+skipped under deadline. The mechanism, **in place since this plan was written**:
 
 **`tests/obligations.toml`** declares, per module, which path classes it contains and
 therefore which tiers it owes:
@@ -141,10 +141,15 @@ fixtures = ["sysfs/intel", "sysfs/amd", "sysfs/arm64", "sysfs/no-hwmon", "sysfs/
 ```
 
 **`tools/check-test-obligations.py`** fails the build when a module in `src/` is absent
-from the ledger, when a declared tier has no corresponding test target, when a declared
-fixture does not exist, or when a ledger entry names a module that no longer exists. It is
-built to the F20 standard: it fails closed on a ledger it cannot parse, and an empty
-ledger with a populated `src/` is a failure, not a pass.
+from the ledger, when a ledger entry names a module that no longer exists, when a declared
+class is not one of the seven, when an entry omits P1 (every module has decision paths, so
+an entry without it was filled in rather than classified), when a declared tier has no
+tests under it, when a module declaring P2 or P7 names no fixtures — those classes are
+reachable only by forcing them, and forcing them needs something to force — or when a
+named fixture does not exist. It is built to the F20 standard: it fails closed on a ledger
+it cannot parse, and an empty ledger with a populated `src/` is a failure, not a pass. It
+runs in the coverage workflow, next to the gate whose blind spots it covers, and has 15
+tests of its own.
 
 This does not prove the enumeration is *complete* — nothing can, since P2–P7 are
 judgement. It proves the enumeration was *made*, is *current*, and that the tests it
@@ -186,7 +191,7 @@ those, so a blank there means a real exemption and never an oversight.
 |---|---|---|---|---|
 | `core/` | M0 ✅ | P1, P3 | T1 | Result, units, duration, byte size — done, 100% |
 | `main/` | M0 ✅ | P1, P3 | T1, T8 | CLI dispatch, selftest digest |
-| `config/` | M1 | P1, P2, P3 | T1, T8 | TOML parse, schema validation, resolution. **Needs the vendored parser — see §7 finding X1** |
+| `config/` | M1 | P1, P2, P3 | T1, T8 | TOML parse, schema validation, resolution. Parser vendored and smoke-tested (X1 closed) |
 | `platform/fs` | M1 | P1, P2, P7 | T1, T2 | The fixture-swappable reader every other platform module goes through |
 | `platform/clock` | M1 | P1, P3 | T1 | Monotonic time; fake clock for the rest of the suite |
 | `platform/process` | M1 | P1, P2, P6 | T1, T7 | fork/exec, signals, reaping, `PR_SET_PDEATHSIG` (F9) |
@@ -315,7 +320,9 @@ The last transition matters more than it looks: an orphaned worker holding every
 full load with no thermal ceiling enforced is the one genuinely dangerous state the
 process split can create. It gets an explicit test, not a hopeful comment.
 
-**New gates:** `tools/check-test-obligations.py` and `tests/obligations.toml` (§2.5).
+**New gates:** none — `tools/check-test-obligations.py` and `tests/obligations.toml`
+landed early, so M1's modules are added to a ledger that already exists rather than
+retrofitted into one.
 
 **Exit criteria** — all measurable, all in CI:
 
@@ -495,9 +502,10 @@ What CI enforces at each milestone. A gate, once added, is never removed.
 | 100% line and branch | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Coverage exclusions reviewed (`LF-COV-NNN`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Supply chain: manifest ↔ build reconciliation | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Vendored-tree digest (silent edits fail) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | External fetches centralized | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cross-architecture determinism digest | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Test-obligation ledger** | | ✅ | ✅ | ✅ | ✅ |
+| **Test-obligation ledger** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Mutation gate, demonstrated against real Mull** | | | ✅ | ✅ | ✅ |
 | Fault-injection required on `verification/` | | | ✅ | ✅ | ✅ |
 | Unrun-check (T5b) required on `verification/` | | | ✅ | ✅ | ✅ |
@@ -519,8 +527,8 @@ done about each:
 
 | # | Finding | Resolution |
 |---|---|---|
-| **X1** | **`config/` at M1 needs a TOML parser, and none is vendored.** `PLAN.md` §5 chose a vendored header-only parser (`toml++`), but `third_party/` contains only `MANIFEST.toml` and nothing is declared. M1 therefore begins with a supply-chain decision, not with code. | Recorded as an M1 prerequisite here; §7.1 below states what landing it requires. |
-| **X2** | **The vendored-and-linked path through `check-dependencies.py` has never been exercised.** Every current component is `kind = "fetched"`, test-only. `toml++` will be the first `vendored`, `linked = true` component, and the checker requires `pinned_by` only for fetched. | Flagged; the checker needs a vendored-path test before X1 lands, per the F20 rule that a gate untested on a path is a gate that will fail open on it. |
+| **X1** | **`config/` at M1 needs a TOML parser, and none is vendored.** `PLAN.md` §5 chose a vendored header-only parser (`toml++`), but `third_party/` contained only `MANIFEST.toml` and nothing was declared. M1 would have begun with a supply-chain decision rather than with code. | **Closed.** toml++ v3.4.0 vendored at commit `30172438`, declared, recorded in `NOTICE`, exposed as a SYSTEM include so third-party code is not held to `-Werror` rules it never agreed to, and exercised by a smoke test on the surface `config/` will use. The static artifact still links and runs. |
+| **X2** | **The vendored-and-linked path through `check-dependencies.py` had never been exercised.** Every component was `kind = "fetched"`, test-only, and the checker required `pinned_by` only for fetched — so a vendored component could be declared with no directory at all and pass. | **Closed, before X1 landed**, per the F20 rule that a gate untested on a path will fail open on it. A vendored component must now ship a directory and record `files_sha256`, a digest over its tree: a fetched dependency is pinned by the download it verifies, and a vendored one has no such moment, so the digest is its equivalent. Six tests cover the path, including an edit to vendored code after the fact. |
 | **X3** | `PLAN.md` §6's directory tree lists `docs/architecture.md`, `telemetry-sources.md`, `result-schema.md`, `testing.md`, `safety.md` and `ISSUE_TEMPLATE/bug-report.yml`, none of which exist, without distinguishing planned from present. | `PLAN.md` §6 annotated: present entries versus planned, with the milestone that creates each. |
 | **X4** | `PLAN.md` §6's workflow list is mis-nested and stale — `mutation.yml` is described as "nightly mull run, tracked mutation score", but it is `workflow_dispatch`-only and gates on *zero unexplained survivors*, not a score. | Corrected in `PLAN.md` §6. |
 | **X5** | The tree omits `tests/tools/`, which exists and holds the trust-chain tests. | Added in `PLAN.md` §6. |
@@ -535,16 +543,26 @@ Nothing in the cross-review contradicted a normative contract in `determinism.md
 repository** — which is the failure mode to expect from here on, and the reason §6's gate
 table and §3's ledger are written to be mechanically checkable rather than prose.
 
-### 7.1 What X1 requires before M1 code starts
+### 7.1 How X1 and X2 were closed
 
-1. Choose the parser and pin it by commit SHA, not tag.
-2. Declare it in `third_party/MANIFEST.toml` as `kind = "vendored"`, `linked = true`, with
-   its licence checked against the GPL-compatible allowlist.
-3. Add the vendored-path test to `tests/tools/test_tooling.sh` (X2) — a vendored component
-   with a missing directory, a wrong licence, and an undeclared directory present.
-4. Record it in `NOTICE`.
-5. Confirm the static release artifact still links and runs, since this is the first
-   component actually linked into the shipped binary.
+In this order, because the order was the point — the gate was extended and tested on the
+vendored path *before* anything travelled down it:
+
+1. `check-dependencies.py` gained vendored-component validation: the directory must exist,
+   and `files_sha256` must match a recomputed digest over its tree. Six tooling tests,
+   including one that edits the vendored file afterwards and asserts the gate notices.
+2. toml++ v3.4.0 vendored — `toml.hpp` and `LICENSE` only, not upstream's tests, docs or
+   build files — pinned to commit `30172438cee64926dc41fdd9c11fb3ba5b2ba9de`.
+3. Declared in `third_party/MANIFEST.toml` as `vendored`, `linked = true`, MIT, with the
+   digest; recorded in `NOTICE` with the GPL-compatibility reasoning.
+4. Exposed through `cmake/Dependencies.cmake` as a **SYSTEM** include. The project compiles
+   under `-Werror` with `-Wconversion`, `-Wold-style-cast` and more; third-party code has
+   no obligation to satisfy a bar it never agreed to, and our own code stays held to it.
+5. A smoke test compiles and exercises it on the surface `config/` will use — including
+   that a malformed document *throws* rather than yielding an empty table, which is the F20
+   property every parser here owes. A digest over a file that does not compile is a
+   checksum of a brick.
+6. The static artifact rebuilt, verified `statically linked`, and run.
 
 ---
 
@@ -578,14 +596,23 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 
 ## 10. Status
 
-**M0 complete. M1 blocked on Q10 and, before code, on the X1 parser decision.**
+**M0 complete. Every cross-review finding that could be closed without an owner decision
+is closed. M1 is blocked only on Q10.**
+
+Done since this plan was written: X1 and X2 (§7.1), and the obligation ledger and its gate
+(§2.5), which landed early so M1's modules join a ledger that already exists rather than
+being retrofitted into one.
 
 The next concrete actions, in order:
 
-1. Decide Q10 (one line from the owner).
-2. Land the TOML parser as a vendored, linked, declared component — with the
-   vendored-path test in the dependency checker first (X1, X2).
-3. Build `platform/fs` and `platform/process` with injection from the first commit, since
-   every downstream P2 path depends on that seam.
-4. Land `tests/obligations.toml` and its gate alongside the first M1 module, so the ledger
-   is never retrofitted.
+1. **Decide Q10** (one line from the owner) — worker process granularity. It determines the
+   IPC shape, so M1 cannot start without it.
+2. Build `platform/fs` and `platform/process` with injection from the first commit, since
+   every downstream P2 path depends on that seam, and add both to the ledger in the same
+   change.
+3. `topology` next, since it is the immutable snapshot both processes need before fork.
+4. Then the controller/worker split and the state machine in §4, with a T7 test per
+   transition.
+
+Outside the repository, and still owner-only: **branch protection on `main`**, and a
+**Mull release pinned by verified SHA-256** — the latter now a hard prerequisite for M2a.

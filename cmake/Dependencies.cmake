@@ -34,3 +34,24 @@ function(loadforge_provide_gtest)
   set(BUILD_GMOCK   ON  CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(googletest)
 endfunction()
+
+# Vendored, not fetched: config/ needs a TOML parser at M1, and an offline or
+# live-media build must not need the network to get one. third_party/MANIFEST.toml
+# records the upstream commit and a sha256 over the vendored tree, so an edit to
+# the vendored code -- by a rebase, a well-meant fix, or a bad merge -- fails
+# tools/check-dependencies.py. A fetched dependency is pinned by the download it
+# verifies; a vendored one has no such moment, and the digest is its equivalent.
+#
+# SYSTEM include, deliberately. The project compiles under -Werror with an
+# aggressive warning set (-Wconversion, -Wold-style-cast, -Wdouble-promotion and
+# more), which third-party code has no obligation to satisfy. Marking it SYSTEM
+# keeps our own code held to the full standard without demanding that a vendored
+# header meet a bar it never agreed to.
+function(loadforge_provide_tomlplusplus)
+  add_library(loadforge_tomlplusplus INTERFACE)
+  add_library(loadforge::tomlplusplus ALIAS loadforge_tomlplusplus)
+  target_include_directories(loadforge_tomlplusplus SYSTEM INTERFACE
+    "${CMAKE_SOURCE_DIR}/third_party/tomlplusplus")
+  # Header-only: no compiled TU, no runtime dependency, nothing to link.
+  target_compile_definitions(loadforge_tomlplusplus INTERFACE TOML_EXCEPTIONS=1)
+endfunction()

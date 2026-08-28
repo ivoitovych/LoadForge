@@ -28,6 +28,7 @@ The theme: a checker that cannot understand its own evidence must say so, not
 report success by default.
 """
 
+import hashlib
 import pathlib
 import re
 import sys
@@ -44,13 +45,36 @@ ALLOWED_LICENCES = {
     "ISC",
     "Zlib",
 }
-# Every field is required of every component; 'pinned_by' additionally so for
-# 'fetched'. Unknown fields are rejected: a typo ('license' for 'licence') would
-# otherwise disable a check while looking like extra documentation.
+# Every field is required of every component. 'pinned_by' is additionally
+# required of 'fetched' components and 'files_sha256' of 'vendored' ones.
+# Unknown fields are rejected: a typo ('license' for 'licence') would otherwise
+# disable a check while looking like extra documentation.
 REQUIRED_FIELDS = {"name", "version", "sha", "source", "licence", "kind", "linked"}
-OPTIONAL_FIELDS = {"pinned_by", "comment"}
+OPTIONAL_FIELDS = {"pinned_by", "files_sha256", "comment"}
 KINDS = {"fetched", "vendored"}
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def tree_digest(directory: pathlib.Path) -> str:
+    """A reproducible digest over a vendored directory's contents.
+
+    sha256 over a canonical listing of "<relative posix path> <file sha256>",
+    sorted, one per line. Sorting and the relative path make it independent of
+    filesystem order and of where the repository is checked out.
+
+    A fetched dependency is pinned by the commit the build downloads, and the
+    build fails loudly if the download does not match. A vendored one has no
+    such moment: the code sits in the tree and can be edited like any other
+    file, by a rebase, a well-meant fix, or a bad merge, and nothing would
+    notice. This digest is the vendored equivalent of the pin.
+    """
+    entries = []
+    for path in sorted(p for p in directory.rglob("*") if p.is_file()):
+        body = hashlib.sha256(path.read_bytes()).hexdigest()
+        entries.append(f"{path.relative_to(directory).as_posix()} {body}")
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+
 
 root = pathlib.Path.cwd()
 if not (root / "third_party").exists():
@@ -148,6 +172,37 @@ for index, fields in enumerate(components):
             )
         elif isinstance(sha, str):
             pins.append((name, sha, pathlib.Path(pinned_by)))
+
+    if kind == "vendored":
+        # The directory is the component. Declaring one and shipping no code is
+        # a fail-open the checker used to allow: every other check would pass
+        # while the build had nothing to compile.
+        directory = root / "third_party" / name
+        if not directory.is_dir():
+            fail(
+                f"{name}: declared as vendored, but third_party/{name} does not exist. "
+                "A vendored component that ships no code is a declaration about nothing."
+            )
+        else:
+            declared_digest = fields.get("files_sha256")
+            if not isinstance(declared_digest, str) or not DIGEST_RE.fullmatch(declared_digest):
+                fail(
+                    f"{name}: a vendored component must record 'files_sha256', a 64-character "
+                    f"sha256 over its tree. Computed now: {tree_digest(directory)}"
+                )
+            else:
+                actual = tree_digest(directory)
+                if actual != declared_digest:
+                    fail(
+                        f"{name}: third_party/{name} has changed since it was reviewed.\n"
+                        f"        MANIFEST.toml records {declared_digest}\n"
+                        f"        the tree now hashes to {actual}\n"
+                        "        Vendored code is not ours to edit. Re-vendor from upstream at a "
+                        "new pinned commit, or, if the change is deliberate, update the digest in "
+                        "the same reviewed change that makes it."
+                    )
+                else:
+                    print(f"  ok    {name} vendored tree matches its reviewed digest")
 
 # ---------------------------------------------------------------------------
 # The manifest is only authoritative if the build actually uses what it declares.
