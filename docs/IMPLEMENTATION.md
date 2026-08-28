@@ -50,10 +50,17 @@ for "forgotten".
 
 ## 2. The coverage doctrine — what "every execution path" means operationally
 
-The owner's requirement is that every execution path carries comprehensive test coverage,
-so that production holds no surprises. That requirement is only useful if it is
-**decidable**: someone must be able to look at a module and say whether the obligation is
-discharged. This section makes it decidable.
+The requirement is stated in the foundation documents — [`PLAN.md`](PLAN.md) §7.3 and
+[`CONTRIBUTING.md`](../CONTRIBUTING.md):
+
+> **Every line of working code is covered comprehensively.** Executing a line is the
+> floor, not the goal. For each line the tests must exercise the distinct *meanings* its
+> inputs can take — every boundary of every value domain it touches, every way each call
+> it makes can fail, every corner case where its behaviour changes — and they must
+> **fail** if that behaviour changes.
+
+That is only useful if it is **decidable**: someone must be able to look at a module and
+say whether the obligation is discharged. This section makes it decidable.
 
 ### 2.1 Line and branch coverage is the floor, not the definition
 
@@ -183,6 +190,14 @@ Every module that will exist, the milestone that introduces it, the path classes
 contains, and the tiers it therefore owes. This is the master list §2.5's gate is built
 from; adding a module without adding a row here is itself a gate failure.
 
+**Ledger granularity follows the directory layout**, because that is what
+`tools/check-test-obligations.py` can check: one entry per directory under `src/` that
+holds source files. A row below may therefore merge with its neighbours or split as the
+tree grows — `platform` is one module today and becomes several once `sysfs`, `procfs`
+and the rest arrive. A planned row that does not match a shipped directory is a plan, not
+a discrepancy; a *shipped* directory that does not match its row is a defect, and the gate
+catches it.
+
 **T0 (static), T0b (gate tests) and T9 (sanitizers) are omitted from every row because
 they are universal** — T0 and T9 run over the whole tree on every push, and T0b covers
 `tools/` rather than `src/`. The "tiers owed" column lists only what a module owes *beyond*
@@ -193,7 +208,7 @@ those, so a blank there means a real exemption and never an oversight.
 | `core/` | M0 ✅ | P1, P3 | T1 | Result, units, duration, byte size — done, 100% |
 | `main/` | M0 ✅ | P1, P3 | T1, T8 | CLI dispatch, selftest digest |
 | `config/` | M1 | P1, P2, P3 | T1, T8 | TOML parse, schema validation, resolution. Parser vendored and smoke-tested (X1 closed) |
-| `platform/fs` | M1 | P1, P2, P7 | T1, T2 | The fixture-swappable reader every other platform module goes through |
+| `platform` (seam, `fs`) | M1 ✅ | P1, P2, P3 | T1, T2, T8 | **Shipped.** The substitutable `Syscalls` and the reader above it. Corrected against what was built: the row previously claimed P7 and omitted P3 and T8. `fs` itself has no capability states — a source being present, absent or forbidden is a property of the *telemetry sources* that use it, and those arrive at M3 |
 | `platform/clock` | M1 | P1, P3 | T1 | Monotonic time; fake clock for the rest of the suite |
 | `platform/process` | M1 | P1, P2, P6 | T1, T7 | fork/exec, signals, reaping, `PR_SET_PDEATHSIG` (F9) |
 | `platform/affinity` | M1 | P1, P2, P7 | T1, T2 | |

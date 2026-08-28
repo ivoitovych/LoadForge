@@ -148,6 +148,63 @@ INSTANTIATE_TEST_SUITE_P(
                       std::pair{EINVAL, "the driver rejects the read size"},
                       std::pair{ENXIO, "no such device or address"}));
 
+TEST_F(FileSystemTest, AbandonsAReadThatIsInterruptedWithoutEnd) {
+  // A driver or signal storm that interrupts every read would spin an unbounded
+  // retry forever. A hung sampler is worse than a failed one: the watchdog sees
+  // a stalled worker and no reason for it. This is the only test that can reach
+  // the bound, because a finite script cannot express "forever".
+  syscalls.always_fail_read(EINTR);
+
+  const auto result = fs.read_file("/sys/interrupt-storm");
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().number, EINTR);
+  EXPECT_EQ(syscalls.read_count(), FileSystem::kMaxConsecutiveInterrupts);
+  // The message says it gave up, and how often, or the operator learns nothing.
+  EXPECT_NE(describe(result.error()).find("abandoned after"), std::string::npos)
+      << describe(result.error());
+  EXPECT_TRUE(syscalls.all_descriptors_closed());
+}
+
+TEST_F(FileSystemTest, TheInterruptBoundCountsConsecutiveRunsNotTheWholeRead) {
+  // A long file read under a busy signal load is legitimate: what is pathological
+  // is an unbroken run of interruptions. Progress must reset the count, or a big
+  // read on a busy machine fails for no good reason.
+  std::vector<FakeSyscalls::ReadStep> steps;
+  for (int block = 0; block < 4; ++block) {
+    for (int i = 0; i < FileSystem::kMaxConsecutiveInterrupts - 1; ++i) {
+      steps.push_back({"", EINTR});
+    }
+    steps.push_back({"x", 0});
+  }
+  steps.push_back({"", 0});
+  syscalls.script_reads(steps);
+
+  const auto result = fs.read_file("/sys/busy-but-progressing");
+
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value(), "xxxx");
+}
+
+TEST_F(FileSystemTest, TheSizeLimitIsReportedAsOursNotTheKernels) {
+  // No system call failed here; the limit is LoadForge's judgement. Naming
+  // read(2) would put words in the kernel's mouth, and a project whose doctrine
+  // is never to fabricate evidence does not get to fabricate provenance either.
+  const std::string chunk(FileSystem::kChunkSize, 'x');
+  std::vector<FakeSyscalls::ReadStep> steps;
+  for (std::size_t written = 0; written <= FileSystem::kMaxFileSize;
+       written += FileSystem::kChunkSize) {
+    steps.push_back({chunk, 0});
+  }
+  syscalls.script_reads(steps);
+
+  const auto result = fs.read_file("/proc/runaway");
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().call, "read_file");
+  EXPECT_NE(result.error().call, "read");
+}
+
 TEST_F(FileSystemTest, PartialContentIsDiscardedWhenTheReadFails) {
   // Returning what was read so far would hand the caller a truncated value that
   // parses fine and is wrong. There is no partial success here.
@@ -172,6 +229,22 @@ TEST_F(FileSystemTest, ACloseFailureAfterAGoodReadIsReported) {
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().number, EIO);
   EXPECT_EQ(result.error().call, "close");
+  EXPECT_TRUE(syscalls.all_descriptors_closed());
+}
+
+TEST_F(FileSystemTest, CloseIsNotRetriedWhenItIsInterrupted) {
+  // Linux releases the descriptor even when close reports EINTR, so retrying
+  // could close a descriptor that has since been reused by another thread --
+  // a bug that shows up as one part of the program reading another's file.
+  // Exactly one close, whatever it returns.
+  syscalls.set_content("95000\n");
+  syscalls.fail_close(EINTR);
+
+  const auto result = fs.read_file("/sys/interrupted-close");
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().number, EINTR);
+  EXPECT_EQ(syscalls.close_count(), 1);
 }
 
 TEST_F(FileSystemTest, AReadFailureOutranksACloseFailure) {

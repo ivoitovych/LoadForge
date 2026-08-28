@@ -41,6 +41,21 @@ class FileSystem {
   /// in one call while the short-read loop still exists and is still tested.
   static constexpr std::size_t kChunkSize = 4096;
 
+  /// Consecutive EINTRs tolerated before a read is abandoned.
+  ///
+  /// Retrying EINTR forever is the textbook answer and it is wrong here. A
+  /// driver or a signal storm that interrupts every read would spin this loop
+  /// with no bound, and a telemetry sampler that never returns is a HUNG tool,
+  /// which is the one outcome worse than a reported failure: the watchdog sees
+  /// a stalled worker and no reason for it. The bound is far above any
+  /// plausible legitimate run of signals, so reaching it is itself evidence.
+  static constexpr int kMaxConsecutiveInterrupts = 128;
+
+  /// Thread-safety: this class holds no mutable state, so it is as thread-safe
+  /// as the Syscalls it is given. RealSyscalls is stateless and therefore safe
+  /// to share; the test fakes are not, and are per-test objects. Worth stating
+  /// because the controller is multithreaded by construction and a shared
+  /// reader is the obvious thing for someone to reach for.
   explicit FileSystem(Syscalls& syscalls) : syscalls_(&syscalls) {}
 
   /// The whole file as text.

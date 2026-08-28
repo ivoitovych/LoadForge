@@ -404,6 +404,25 @@ classes = ["P1"]
 tiers   = ["T7"]'
 expect "a promised tier with no tests FAILS"                 1 $? "a promise, not a test" "$out"
 
+# T8 is not a directory of test files -- its cases are add_test() calls. Listing
+# tests/CMakeLists.txt as a location made the check vacuous, because the file
+# always exists, so declaring T8 could never fail. A gate condition that cannot
+# fail is not a gate. The marker must be INSIDE the file.
+mkdir -p "$ob/tests"
+printf 'project(x)\n' > "$ob/tests/CMakeLists.txt"
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T8"]'
+expect "T8 with a CMakeLists carrying no add_test FAILS"     1 $? "a promise, not a test" "$out"
+
+printf 'add_test(NAME smoke COMMAND thing)\n' >> "$ob/tests/CMakeLists.txt"
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T8"]'
+expect "T8 with a real add_test passes"                      0 $? "ok    src/core" "$out"
+
 # P2 and P7 are the classes that cannot be tested without something to force the
 # state, so the ledger insists the fixtures are named when they are declared.
 # P2 and P7 need different things, and conflating them was this gate's first
