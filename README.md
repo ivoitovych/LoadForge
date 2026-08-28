@@ -29,6 +29,7 @@ milestone sequence.
 | Document | What it is |
 |---|---|
 | [`docs/PLAN.md`](docs/PLAN.md) | The development plan and design of record: a critical review of the draft, the architecture, the directory layout, the testing strategy, milestones and risks |
+| [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) | The build order to 1.0: what each milestone delivers, the module ledger, and the doctrine that makes "every execution path is tested" decidable rather than aspirational |
 | [`docs/DESIGN-DRAFT.md`](docs/DESIGN-DRAFT.md) | The original project description — a **working draft**, preserved verbatim; parts are superseded by the plan |
 | [`docs/determinism.md`](docs/determinism.md) | The determinism contract — normative, required reading before touching numerical code |
 | [`docs/verification.md`](docs/verification.md) | The verification doctrine — oracles vs golden vectors, fault injection, fault isolation |
@@ -36,7 +37,8 @@ milestone sequence.
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute, and the three rules that are not obvious |
 | [`LICENSE`](LICENSE) | GPL-3.0-or-later |
 
-Start with `docs/PLAN.md` if you want to know where the project is going and why.
+Start with `docs/PLAN.md` for where the project is going and why, and
+`docs/IMPLEMENTATION.md` for what gets built next and what tests it owes.
 
 ---
 

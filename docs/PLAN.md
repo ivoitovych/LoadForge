@@ -1,6 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 12 — ninth maintainer review; the gates' model of external tools falsified against the tools (F21)
+**Status:** revision 13 — implementation plan split out to `IMPLEMENTATION.md`; cross-review applied
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -154,6 +154,24 @@ it was in the gate this project had just finished hardening:
 | **External fetches are confined to `cmake/Dependencies.cmake`,** gated. The manifest cross-check is only as complete as its list of places to look, and M1 is about to grow the CMake tree. | Review — pre-emptive |
 | **`VerificationNotPerformed` integrated rather than merely defined**: excluded from hardware fault isolation (§7 of `verification.md`), provenance fields explicitly nullable, and added to the error-record checklist and the PR template alongside tier T5b. | Review — internal inconsistency |
 | Selftest's conclusion narrowed: a failure means *the environment is not trustworthy for a hardware verdict* — faulty machine, broken build, or unsupported platform — not "faulty or unsupported", which omits the possibility the user can least rule out: that LoadForge is wrong. | Review |
+
+**Revision 13** splits the *implementation* plan out into
+[`IMPLEMENTATION.md`](IMPLEMENTATION.md) — the build order to 1.0, the module ledger, and
+the doctrine that makes "every execution path is covered" decidable rather than
+aspirational. This document keeps the design of record. The cross-review between the two
+found ten discrepancies, all of one kind — **this document falling behind the
+repository** — and all now fixed here:
+
+| Change | Origin |
+|---|---|
+| **New tier T0b: the gates themselves.** 56 tests run against `tools/` on every push, and the tier table that defines what this project tests did not mention the machinery enforcing it. | Cross-review — **the testing model omitted its own enforcement** |
+| **M0's row rewritten to what actually shipped**, and its two carried items named: the mutation gate is specified but undemonstrated (F21), and `main` is unprotected. | Cross-review — the exit criterion predated the trust-chain work |
+| **The Mull pin becomes a hard prerequisite for M2a.** It was an open item in §11 with no deadline, while mutation testing is the declared primary metric from M2a onward — a gate that has never run cannot hold that role. | Cross-review — **an undated dependency on the critical path** |
+| **The standing coverage obligation stated explicitly** at §8 rather than left implicit in §7.3. Implicit is not measurable. | Cross-review |
+| **§6's tree marks planned entries with ○ and the milestone that creates each.** It listed five documents and an issue template that do not exist, indistinguishably from the ones that do. | Cross-review — planned and present were conflated |
+| **§6's workflow list corrected**: it was mis-nested, and described `mutation.yml` as a nightly run tracking a mutation score. It is `workflow_dispatch`-only and gates on zero *unexplained survivors* — a score threshold is precisely what §7.3 rejects. | Cross-review — **stale in a way that contradicted §7.3** |
+| **`tests/tools/` added to the tree**, along with the planned obligation ledger. | Cross-review — omitted though present |
+| Two findings that belong to `IMPLEMENTATION.md` rather than here, recorded so they are not lost: `config/` at M1 needs the vendored TOML parser that §5 chose but nothing has declared; and it will be the first `vendored`, `linked = true` component, a path `check-dependencies.py` has never been exercised on. | Cross-review — **a gate untested on a path is a gate that will fail open on it** |
 
 ---
 
@@ -1405,22 +1423,23 @@ LoadForge/
 ├── CMakePresets.json               # debug, release, asan, tsan, coverage, simd-scalar
 ├── .clang-format  .clang-tidy  .gitignore
 │
-├── .github/workflows/
-│   ├── ci.yml                      # matrix: {ubuntu-24.04, ubuntu-24.04-arm}
-│   │                               #       × {gcc-13, clang-18}
+├── .github/workflows/           # all eight present
+│   ├── ci.yml                      # matrix {ubuntu-24.04, ubuntu-24.04-arm}
+│   │                               #   × {gcc-13, clang-18}; + trust-chain tooling
 │   ├── sanitizers.yml              # asan+ubsan, tsan — both arches (§4.5)
-│   ├── portability.yml             # LOADFORGE_SIMD=scalar on both arches
-│   ├── release-static.yml         # fully static artifact, built + smoke-tested (F19)
-│   ├── canary-2604.yml            # Ubuntu 26.04 forward-compat, NON-blocking
-│   └── mutation.yml               # nightly mull run, tracked mutation score
-│   ├── licensing.yml               # SPDX headers, dep compatibility, DCO (§5.1, §5.2)
-│   └── coverage.yml                # patch + module coverage gates
+│   ├── portability.yml             # scalar SIMD both arches + cross-arch digest
+│   ├── release-static.yml          # fully static artifact, built + smoke-tested (F19)
+│   ├── canary-2604.yml             # Ubuntu 26.04 forward-compat, NON-blocking
+│   ├── licensing.yml               # SPDX, dep manifest, fetch centralization, DCO
+│   ├── coverage.yml                # 100% line/branch + reviewed-exclusion gate
+│   └── mutation.yml                # zero UNEXPLAINED SURVIVORS (§7.3) — not a score,
+│                                   #   and workflow_dispatch until Mull is pinned
 │
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
 │   │   ├── hardware-failure.yml    # the high-value one — see §5.2
-│   │   ├── bug-report.yml          # a bug in LoadForge itself
-│   │   └── unsupported-platform.yml# telemetry missing/misidentified (F3)
+│   │   ├── unsupported-platform.yml# telemetry missing/misidentified (F3)
+│   │   └── ○ bug-report.yml        # M1 — a bug in LoadForge itself
 │   └── PULL_REQUEST_TEMPLATE.md    # links the three non-obvious rules (§5.2)
 │
 ├── cmake/
@@ -1428,16 +1447,17 @@ LoadForge/
 │   ├── FloatingPoint.cmake         # -ffp-contract=off, ISA dispatch flags (F1)
 │   ├── Sanitizers.cmake  Coverage.cmake  Dependencies.cmake
 │
-├── docs/
-│   ├── PLAN.md                     # this document
+├── docs/                            # ○ = planned, with the milestone that creates it
+│   ├── PLAN.md                     # this document — the design of record
+│   ├── IMPLEMENTATION.md           # build order, per-path coverage doctrine, ledger
 │   ├── DESIGN-DRAFT.md             # the original 51-section working draft
-│   ├── architecture.md
 │   ├── determinism.md              # the F1 contract — required contributor reading
 │   ├── verification.md             # oracle vs golden vector doctrine (F11)
 │   ├── platforms.md                # supported components, adaptation policy
-│   ├── telemetry-sources.md        # every source, its privilege, its fallback
-│   ├── result-schema.md            # versioned schema + run fingerprint (F12)
-│   ├── testing.md  safety.md
+│   ├── ○ architecture.md           # M1 — once the process split exists to describe
+│   ├── ○ telemetry-sources.md      # M3 — every source, its privilege, its fallback
+│   ├── ○ result-schema.md          # M3 — versioned schema + run fingerprint (F12)
+│   ├── ○ safety.md                 # M1 — limits, watchdog, e-stop
 │   └── adr/0001-record-architecture-decisions.md
 │
 ├── src/
@@ -1501,6 +1521,10 @@ LoadForge/
 │   ├── soak/                       # hours-long, opt-in, nightly
 │   ├── hardware/                   # needs real sensors; skipped in CI
 │   ├── support/                    # fakes, matchers, fixture loaders
+│   ├── tools/                      # tests OF the gates — trust-chain tooling (T0b)
+│   │   ├── test_tooling.sh  mutation_integration.sh
+│   │   └── fixtures/mull/          # taken from Mull's own integration tests (F21)
+│   ├── ○ obligations.toml          # M1 — the per-module path/tier ledger
 │   └── fixtures/
 │       ├── sysfs/                  # intel, amd, arm64, no-hwmon, eacces, edac, wrapping
 │       ├── procfs/
@@ -1534,6 +1558,7 @@ program can be wrong.
 | Tier | Scope | Runs | Budget |
 |---|---|---|---|
 | **T0** Static | format, clang-tidy, warnings-as-errors, no-third-party-runtime-deps check | every push | < 1 min |
+| **T0b** Gate | the trust-chain tooling itself — each gate fed evidence it must refuse to interpret (F20), and, for a gate parsing an external tool, the real binary (F21) | every push | < 1 min |
 | **T1** Unit | pure logic, parsers, math at tiny sizes | every push | < 60 s |
 | **T2** Fixture | platform + telemetry + EDAC against synthetic `/sys`, `/proc` | every push | < 30 s |
 | **T3** Oracle | stress implementation vs independent reference (F11) | every push | < 3 min |
@@ -1812,15 +1837,23 @@ for coverage.
 
 | # | Milestone | Contents | Exit criterion |
 |---|---|---|---|
-| **M0** | Foundation | Scaffolding, CMake + presets, CI, **100% line/branch coverage gate**, clang-tidy/format, ADR process, SPDX + licence + DCO checks (§5.1, §5.2), scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)** | Green CI across the full matrix — **{x86-64, ARM64} × {GCC 13, Clang 18}**; **100% line and branch coverage gate active and passing**; scalar build passing on both arches; static artifact built |
+| **M0** ✅ | Foundation | Scaffolding, CMake + seven presets, eight CI workflows, **100% line/branch coverage gate**, **reviewed-exclusion gate**, **supply-chain manifest reconciliation**, **fetch centralization**, **cross-architecture determinism digest**, clang-tidy/format, ShellCheck/Ruff, SHA-pinned actions, ADR process, SPDX + licence + DCO checks, scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)**, `core` and `main` | **Met.** Green CI on **{x86-64, ARM64} × {GCC 13, Clang 18}**; 100% line and branch with zero exclusions; scalar build passing on both arches; static artifact built and verified. **Two items carried:** the mutation gate is specified but undemonstrated (F21) — now a prerequisite for M2a — and `main` is unprotected |
 | **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
-| **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **input-integrity re-verification (F18)** + minimal telemetry capability probe | `loadforge stress --test compression` runs end to end; oracle, fault-injection, determinism and supervision tiers pass; capability set reported at start |
+| **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **input-integrity re-verification (F18)** + minimal telemetry capability probe | `loadforge stress --test compression` runs end to end; each `ExactBitCorruption` classification asserted by fault injection; a corrupted **input** caught as such; `VerificationNotPerformed` produced and kept out of fault isolation; capability set reported at start; **the mutation gate demonstrated against real Mull** (carried from M0 — M2a cannot close without it, since from here it is the primary quality signal) |
 | **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **`FpEnvironment` contract (F15)**; first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
 | **M3** | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)**, **per-provider remediation (F3)**, **verification duty cycle (F17)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; 100% gate still passing; **mutation gating extended** beyond the M0 set |
 | **M4** | Workload breadth | Remaining workloads (3–11) + primitives layer | Each has an independent oracle, invariants, determinism and fault-injection tests |
 | **M5** | Dynamic mixed + cycling | Flagship mixed test (§17), thermal/power cycling (§35), **crash journal (F16)** — required before serious multi-hour runs | A five-hour schedule completes with continuous verification |
 | **M6** | Explore | Search strategy, objectives, drift correction, confidence reporting (F5) | Repeatable worst-case discovery with reported variance on real hardware |
 | **M7** | Hardening / 1.0 | Docs, packaging, manual hardware validation | Multi-machine validation; no known correctness defects |
+
+**Every milestone carries the same standing coverage obligation**, stated once rather
+than repeated per row: it exits at 100% line and branch coverage with zero unexplained
+exclusions, with the per-module obligation ledger current, and with the mutation gate
+reporting zero unexplained survivors over the modules in its scope.
+[`IMPLEMENTATION.md`](IMPLEMENTATION.md) holds the module-by-module build order, the
+execution-path taxonomy that defines what "covered" means for paths a coverage tool cannot
+see, and the per-milestone exit criteria in full.
 
 Rev. 2 changes: telemetry capability probing moved **into** the vertical slice at M2a,
 so M2 genuinely delivers what F4 promises; M2 split into M2a/M2b per F14; the
@@ -1939,9 +1972,9 @@ quietly assumed done:
   says the difference matters. Until then the gate is not trusted on this
   repository's own tests.
 
-**Next is M1:** `core`, `platform`, `topology`, `config`, the controller/worker
-process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9), and the console
-reporter. Its exit criterion is that the controller runs a null workload for a
+**Next is M1**, and [`IMPLEMENTATION.md`](IMPLEMENTATION.md) §4 has it in full:
+`platform`, `topology`, `config`, the controller/worker process split with the
+`PR_SET_PDEATHSIG` lifecycle settled (F9), and the console reporter. Its exit criterion is that the controller runs a null workload for a
 configured duration, honours limits, and survives a deliberately crashed worker
 while reporting it correctly.
 

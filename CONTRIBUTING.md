@@ -135,7 +135,16 @@ adds one, discuss it in an issue first.
 ## Pull requests
 
 Say in the description **which test tier(s) your change adds to**. The tiers are in
-[`docs/PLAN.md` §7.1](docs/PLAN.md).
+[`docs/PLAN.md` §7.1](docs/PLAN.md), and
+[`docs/IMPLEMENTATION.md` §2](docs/IMPLEMENTATION.md) explains what each execution path in
+your change owes — including the classes a coverage tool cannot see, such as syscall error
+paths and capability states. The short version of that rule:
+
+> A path is covered when it is **executed** by a test, **asserted** on its observable
+> result, and **demonstrated to fail** when the behaviour it guards is broken.
+
+The third part is the one usually skipped, and it is what separates a test suite from a
+decorative one.
 
 Non-negotiable review standards:
 
