@@ -193,11 +193,18 @@ def main() -> int:
                         "promise, not a test."
                     )
 
-        # A module carrying error or capability paths cannot be tested without
-        # something to force those states. Saying so here is the whole point of
-        # the ledger: it makes the fixture requirement visible before the code
-        # is written, rather than discovered when coverage refuses to reach it.
-        needs_fixtures = {"P2", "P7"} & set(classes if isinstance(classes, list) else [])
+        # P2 and P7 are both unreachable without something to force the state,
+        # but they are forced by different means, and the first version of this
+        # gate conflated them. P7 -- a telemetry source present, absent or
+        # returning EACCES -- needs a hostile tree on disk. P2 -- an errno from a
+        # syscall -- is forced through the substitutable Syscalls seam, and has
+        # no on-disk fixture at all. Demanding one of a module like
+        # src/platform/fs was wrong, and demanding it of every future P2 module
+        # would have pushed people to invent fixtures that prove nothing.
+        #
+        # Found on this gate's first real use, which is the argument for landing
+        # gates early rather than at the milestone that needs them.
+        declared_classes = set(classes if isinstance(classes, list) else [])
         fixtures = entry.get("fixtures", [])
         if not isinstance(fixtures, list):
             fail(f"{path}: 'fixtures' must be a list")
@@ -205,11 +212,17 @@ def main() -> int:
         for fixture in fixtures:
             if not (root / "tests" / "fixtures" / str(fixture)).exists():
                 fail(f"{path}: fixture 'tests/fixtures/{fixture}' does not exist")
-        if needs_fixtures and not fixtures:
+        if "P7" in declared_classes and not fixtures:
             fail(
-                f"{path}: declares {sorted(needs_fixtures)} but names no fixtures. "
-                "Error and capability paths are reachable only by forcing them, and "
-                "forcing them needs something to force."
+                f"{path}: declares P7 but names no fixtures. A capability state -- a "
+                "source present, absent, or refusing permission -- is reachable only "
+                "from a tree on disk that is in that state."
+            )
+        if "P2" in declared_classes and not ({"T2", "T5"} & set(tiers or [])):
+            fail(
+                f"{path}: declares P2 but owes neither T2 nor T5. An errno is reachable "
+                "only by forcing it through the substitutable syscall seam, and those "
+                "are the tiers where the forcing happens."
             )
 
     for path in sorted(modules - declared.keys()):

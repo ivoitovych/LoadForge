@@ -406,11 +406,27 @@ expect "a promised tier with no tests FAILS"                 1 $? "a promise, no
 
 # P2 and P7 are the classes that cannot be tested without something to force the
 # state, so the ledger insists the fixtures are named when they are declared.
+# P2 and P7 need different things, and conflating them was this gate's first
+# real bug: an errno is forced through the substitutable syscall seam, not from
+# a tree on disk, so demanding a fixture of src/platform/fs was wrong.
 led '[[module]]
 path    = "src/core"
 classes = ["P1", "P2"]
 tiers   = ["T1"]'
-expect "error paths declared with no fixtures FAILS"         1 $? "needs something to force" "$out"
+expect "error paths with no injecting tier FAILS"            1 $? "neither T2 nor T5" "$out"
+
+mkdir -p "$ob/tests/unit"
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P2"]
+tiers   = ["T1", "T2"]'
+expect "error paths need no on-disk fixture, only a tier"    0 $? "ok    src/core" "$out"
+
+led '[[module]]
+path     = "src/core"
+classes  = ["P1", "P7"]
+tiers    = ["T1"]'
+expect "capability paths with no fixtures FAILS"             1 $? "reachable only" "$out"
 
 led '[[module]]
 path     = "src/core"

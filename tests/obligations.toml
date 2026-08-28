@@ -43,3 +43,18 @@ path    = "src/main"
 classes = ["P1", "P3"]
 tiers   = ["T1", "T8"]
 note    = "CLI dispatch and the selftest digest. T8 runs the real binary, so main() is covered rather than excluded."
+
+[[module]]
+path    = "src/platform"
+classes = ["P1", "P2", "P3"]
+tiers   = ["T1", "T2", "T8"]
+note    = """
+The seam. P2 is the reason this module exists: every errno of open(2), read(2) \
+and close(2) is forced through a substitutable Syscalls, because none of those \
+failure arms is a branch a coverage tool can see as uncovered. T2 is where the \
+forcing happens (tests/support/fake_syscalls.hpp); T8 drives the same code \
+against a real kernel in a temporary directory, because a fake agrees with \
+whatever the code believes (F21) -- that test is what established that \
+open(dir, O_RDONLY) succeeds and EISDIR comes from read(2) instead. \
+No P7 yet: capability states arrive with the telemetry sources at M3.\
+"""
