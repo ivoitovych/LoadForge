@@ -10,10 +10,17 @@ add_executable(loadforge_unit_tests
   unit/core/byte_size_test.cpp
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
+  unit/platform/syscall_error_test.cpp
+  unit/platform/fs_test.cpp
+  unit/platform/real_syscalls_test.cpp
+  unit/platform/result_instantiations_test.cpp
   unit/third_party/tomlplusplus_smoke_test.cpp
 )
 target_link_libraries(loadforge_unit_tests PRIVATE
-  loadforge_cli GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
+  loadforge_cli loadforge_platform GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
+# tests/ is on the include path so that support/ fakes resolve the same way
+# src/ headers do, rather than by relative path from wherever a test lives.
+target_include_directories(loadforge_unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 loadforge_set_fp_contract(loadforge_unit_tests)
 loadforge_enable_sanitizers(loadforge_unit_tests)
 loadforge_enable_coverage(loadforge_unit_tests)

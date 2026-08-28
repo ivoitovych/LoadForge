@@ -404,13 +404,48 @@ classes = ["P1"]
 tiers   = ["T7"]'
 expect "a promised tier with no tests FAILS"                 1 $? "a promise, not a test" "$out"
 
+# T8 is not a directory of test files -- its cases are add_test() calls. Listing
+# tests/CMakeLists.txt as a location made the check vacuous, because the file
+# always exists, so declaring T8 could never fail. A gate condition that cannot
+# fail is not a gate. The marker must be INSIDE the file.
+mkdir -p "$ob/tests"
+printf 'project(x)\n' > "$ob/tests/CMakeLists.txt"
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T8"]'
+expect "T8 with a CMakeLists carrying no add_test FAILS"     1 $? "a promise, not a test" "$out"
+
+printf 'add_test(NAME smoke COMMAND thing)\n' >> "$ob/tests/CMakeLists.txt"
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T8"]'
+expect "T8 with a real add_test passes"                      0 $? "ok    src/core" "$out"
+
 # P2 and P7 are the classes that cannot be tested without something to force the
 # state, so the ledger insists the fixtures are named when they are declared.
+# P2 and P7 need different things, and conflating them was this gate's first
+# real bug: an errno is forced through the substitutable syscall seam, not from
+# a tree on disk, so demanding a fixture of src/platform/fs was wrong.
 led '[[module]]
 path    = "src/core"
 classes = ["P1", "P2"]
 tiers   = ["T1"]'
-expect "error paths declared with no fixtures FAILS"         1 $? "needs something to force" "$out"
+expect "error paths with no injecting tier FAILS"            1 $? "neither T2 nor T5" "$out"
+
+mkdir -p "$ob/tests/unit"
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P2"]
+tiers   = ["T1", "T2"]'
+expect "error paths need no on-disk fixture, only a tier"    0 $? "ok    src/core" "$out"
+
+led '[[module]]
+path     = "src/core"
+classes  = ["P1", "P7"]
+tiers    = ["T1"]'
+expect "capability paths with no fixtures FAILS"             1 $? "reachable only" "$out"
 
 led '[[module]]
 path     = "src/core"
@@ -446,6 +481,84 @@ tiers   = ["T1"]'
 expect "a module declared twice FAILS"                       1 $? "declared twice" "$out"
 
 rm -rf "$ob"
+
+echo "check-dco.sh"
+# Real git repositories, because the bug this gate had was entirely about what
+# actions/checkout leaves in the working tree on a pull_request event -- which no
+# amount of reasoning about the YAML would have revealed.
+dco="$(mktemp -d)"
+git init -q "$dco"
+git -C "$dco" config user.name "Test Contributor"
+git -C "$dco" config user.email "contributor@example.invalid"
+git -C "$dco" config commit.gpgsign false
+dco_commit() { # message, [--no-signoff]
+  echo "$RANDOM" > "$dco/file.txt"
+  git -C "$dco" add -A
+  if [ "${2-}" = "--no-signoff" ]; then
+    git -C "$dco" commit -q -m "$1"
+  else
+    git -C "$dco" commit -q -s -m "$1"
+  fi
+}
+
+dco_commit "base commit"
+base="$(git -C "$dco" rev-parse HEAD)"
+git -C "$dco" checkout -q -b feature
+dco_commit "signed feature work"
+head="$(git -C "$dco" rev-parse HEAD)"
+
+out="$("$ROOT/tools/check-dco.sh" "$base" "$head" "$dco" 2>&1)"
+expect "a signed-off series passes"                          0 $? "1 commit(s) checked, 0 unsigned" "$out"
+
+dco_commit "unsigned feature work" --no-signoff
+head="$(git -C "$dco" rev-parse HEAD)"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$head" "$dco" 2>&1)"
+expect "an unsigned commit FAILS"                            1 $? "MISSING Signed-off-by" "$out"
+
+# THE regression test. On a pull_request event GitHub checks out refs/pull/N/merge
+# -- a synthetic merge of head into base, authored by GitHub, with no trailers.
+# Walking base..HEAD from there flagged GitHub's own commit, so the gate failed
+# every pull request no matter how carefully its commits were signed.
+git -C "$dco" checkout -q -b pr-merge "$base"
+git -C "$dco" merge -q --no-ff --no-verify -m "Merge feature into main" feature 2>/dev/null
+merge_head="$(git -C "$dco" rev-parse HEAD)"
+git -C "$dco" log -1 --format='%(trailers:key=Signed-off-by)' "$merge_head" | grep -q . \
+  && echo "  (fixture problem: the merge commit is signed, which defeats this test)"
+
+out="$("$ROOT/tools/check-dco.sh" "$base" "$merge_head" "$dco" 2>&1)"; dco_rc=$?
+# It fails, but for the right reason: the real unsigned commit, not the merge.
+expect "the unsigned commit behind a merge is flagged"       1 "$dco_rc" "MISSING Signed-off-by: .*unsigned feature work" "$out"
+if grep -q "MISSING Signed-off-by: .*Merge feature into main" <<< "$out"; then
+  echo "  FAIL  GitHub's synthetic merge commit must not be flagged"; fail=$((fail + 1))
+else
+  echo "  PASS  GitHub's synthetic merge commit is not flagged"; pass=$((pass + 1))
+fi
+
+# Same shape, with the unsigned commit removed: the merge must not fail it.
+git -C "$dco" checkout -q -B feature "$base"
+dco_commit "signed work only"
+git -C "$dco" checkout -q -B pr-merge "$base"
+git -C "$dco" merge -q --no-ff --no-verify -m "Merge feature into main" feature 2>/dev/null
+merge_head="$(git -C "$dco" rev-parse HEAD)"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$merge_head" "$dco" 2>&1)"
+expect "a signed series behind a merge commit passes"        0 $? "0 unsigned" "$out"
+
+out="$("$ROOT/tools/check-dco.sh" "$base" "$base" "$dco" 2>&1)"
+expect "an empty range FAILS rather than passing vacuously"  1 $? "no commits in" "$out"
+
+out="$("$ROOT/tools/check-dco.sh" "does-not-exist" "$head" "$dco" 2>&1)"
+expect "an unresolvable ref FAILS"                           1 $? "is not a commit" "$out"
+
+# A body that merely mentions the words is not a trailer.
+git -C "$dco" checkout -q -B feature "$base"
+echo change > "$dco/file.txt"; git -C "$dco" add -A
+git -C "$dco" commit -q -m "mentions Signed-off-by: Someone <a@b.c> in prose
+
+but has no trailer block because this line follows it."
+out="$("$ROOT/tools/check-dco.sh" "$base" "$(git -C "$dco" rev-parse HEAD)" "$dco" 2>&1)"
+expect "a sign-off mentioned in prose does not count"        1 $? "MISSING Signed-off-by" "$out"
+
+rm -rf "$dco"
 
 echo "check-fetch-centralization.sh"
 out="$("$ROOT/tools/check-fetch-centralization.sh" 2>&1)"
