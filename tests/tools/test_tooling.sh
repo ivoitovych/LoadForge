@@ -463,6 +463,84 @@ expect "a module declared twice FAILS"                       1 $? "declared twic
 
 rm -rf "$ob"
 
+echo "check-dco.sh"
+# Real git repositories, because the bug this gate had was entirely about what
+# actions/checkout leaves in the working tree on a pull_request event -- which no
+# amount of reasoning about the YAML would have revealed.
+dco="$(mktemp -d)"
+git init -q "$dco"
+git -C "$dco" config user.name "Test Contributor"
+git -C "$dco" config user.email "contributor@example.invalid"
+git -C "$dco" config commit.gpgsign false
+dco_commit() { # message, [--no-signoff]
+  echo "$RANDOM" > "$dco/file.txt"
+  git -C "$dco" add -A
+  if [ "${2-}" = "--no-signoff" ]; then
+    git -C "$dco" commit -q -m "$1"
+  else
+    git -C "$dco" commit -q -s -m "$1"
+  fi
+}
+
+dco_commit "base commit"
+base="$(git -C "$dco" rev-parse HEAD)"
+git -C "$dco" checkout -q -b feature
+dco_commit "signed feature work"
+head="$(git -C "$dco" rev-parse HEAD)"
+
+out="$("$ROOT/tools/check-dco.sh" "$base" "$head" "$dco" 2>&1)"
+expect "a signed-off series passes"                          0 $? "1 commit(s) checked, 0 unsigned" "$out"
+
+dco_commit "unsigned feature work" --no-signoff
+head="$(git -C "$dco" rev-parse HEAD)"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$head" "$dco" 2>&1)"
+expect "an unsigned commit FAILS"                            1 $? "MISSING Signed-off-by" "$out"
+
+# THE regression test. On a pull_request event GitHub checks out refs/pull/N/merge
+# -- a synthetic merge of head into base, authored by GitHub, with no trailers.
+# Walking base..HEAD from there flagged GitHub's own commit, so the gate failed
+# every pull request no matter how carefully its commits were signed.
+git -C "$dco" checkout -q -b pr-merge "$base"
+git -C "$dco" merge -q --no-ff --no-verify -m "Merge feature into main" feature 2>/dev/null
+merge_head="$(git -C "$dco" rev-parse HEAD)"
+git -C "$dco" log -1 --format='%(trailers:key=Signed-off-by)' "$merge_head" | grep -q . \
+  && echo "  (fixture problem: the merge commit is signed, which defeats this test)"
+
+out="$("$ROOT/tools/check-dco.sh" "$base" "$merge_head" "$dco" 2>&1)"; dco_rc=$?
+# It fails, but for the right reason: the real unsigned commit, not the merge.
+expect "the unsigned commit behind a merge is flagged"       1 "$dco_rc" "MISSING Signed-off-by: .*unsigned feature work" "$out"
+if grep -q "MISSING Signed-off-by: .*Merge feature into main" <<< "$out"; then
+  echo "  FAIL  GitHub's synthetic merge commit must not be flagged"; fail=$((fail + 1))
+else
+  echo "  PASS  GitHub's synthetic merge commit is not flagged"; pass=$((pass + 1))
+fi
+
+# Same shape, with the unsigned commit removed: the merge must not fail it.
+git -C "$dco" checkout -q -B feature "$base"
+dco_commit "signed work only"
+git -C "$dco" checkout -q -B pr-merge "$base"
+git -C "$dco" merge -q --no-ff --no-verify -m "Merge feature into main" feature 2>/dev/null
+merge_head="$(git -C "$dco" rev-parse HEAD)"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$merge_head" "$dco" 2>&1)"
+expect "a signed series behind a merge commit passes"        0 $? "0 unsigned" "$out"
+
+out="$("$ROOT/tools/check-dco.sh" "$base" "$base" "$dco" 2>&1)"
+expect "an empty range FAILS rather than passing vacuously"  1 $? "no commits in" "$out"
+
+out="$("$ROOT/tools/check-dco.sh" "does-not-exist" "$head" "$dco" 2>&1)"
+expect "an unresolvable ref FAILS"                           1 $? "is not a commit" "$out"
+
+# A body that merely mentions the words is not a trailer.
+git -C "$dco" checkout -q -B feature "$base"
+echo change > "$dco/file.txt"; git -C "$dco" add -A
+git -C "$dco" commit -q -m "mentions Signed-off-by: Someone <a@b.c> in prose
+
+but has no trailer block because this line follows it."
+out="$("$ROOT/tools/check-dco.sh" "$base" "$(git -C "$dco" rev-parse HEAD)" "$dco" 2>&1)"
+expect "a sign-off mentioned in prose does not count"        1 $? "MISSING Signed-off-by" "$out"
+
+rm -rf "$dco"
+
 echo "check-fetch-centralization.sh"
 out="$("$ROOT/tools/check-fetch-centralization.sh" 2>&1)"
 expect "the real tree centralises every fetch" 0 $? "0 violation(s)" "$out"

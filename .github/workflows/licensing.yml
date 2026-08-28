@@ -61,15 +61,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { fetch-depth: 0 }
       - name: Every commit is signed off
-        run: |
-          missing=0
-          for c in $(git rev-list ${{ github.event.pull_request.base.sha }}..HEAD); do
-            git log -1 --format='%(trailers:key=Signed-off-by)' "$c" | grep -q . || {
-              echo "missing Signed-off-by: $(git log -1 --oneline "$c")"
-              echo "  add it with: git commit -s --amend  (see CONTRIBUTING.md)"
-              missing=1; }
-          done
-          exit $missing
+        # Explicit SHAs, never HEAD. On a pull_request event actions/checkout
+        # checks out refs/pull/N/merge -- a synthetic merge of head into base
+        # that GitHub authors and does not sign -- so `base..HEAD` walked
+        # GitHub's own commit and failed every pull request regardless of
+        # sign-off. The logic lives in a script so it can be tested against real
+        # repositories, including that merge shape (tests/tools/test_tooling.sh).
+        run: >-
+          ./tools/check-dco.sh
+          "${{ github.event.pull_request.base.sha }}"
+          "${{ github.event.pull_request.head.sha }}"
 
   attribution:
     name: No AI/vendor attribution
