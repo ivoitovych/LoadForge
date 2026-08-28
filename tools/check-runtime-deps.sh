@@ -41,6 +41,26 @@ ALLOWED=(
   "libstdc++.so.6"
   "libgcc_s.so.1"
 )
+
+# The dynamic loader, matched by pattern because its soname is
+# architecture-specific: ld-linux-x86-64.so.2, ld-linux-aarch64.so.1,
+# ld-linux-armhf.so.3, ld64.so.2 on ppc64le.
+#
+# It is not a dependency in any meaningful sense -- it is the thing that loads
+# dependencies -- but whether it appears as DT_NEEDED at all varies by
+# architecture and by how the binary was linked. On x86-64 this project's binary
+# reaches it through PT_INTERP and it never shows up here; on AArch64 it is a
+# NEEDED entry, which is what the first ARM CI run of this gate reported.
+#
+# That difference is exactly why the check runs on every matrix entry rather
+# than once, and it showed up on the first run. The comment in ci.yml predicting
+# it was written before it happened; the allowlist was written from the x86-64
+# evidence in front of me, which is a smaller set of facts than the project
+# ships on.
+#
+# The pattern is deliberately narrow -- glibc's documented loader names -- so
+# that it cannot be satisfied by an arbitrary library that merely starts "ld".
+LOADER_PATTERNS=( "ld-linux-*.so.*" "ld64.so.*" )
 # A caller may allow more for a binary that is not the shipped one -- the test
 # binary links GoogleTest, for instance -- but never for `loadforge` itself.
 ALLOWED+=("$@")
@@ -92,6 +112,10 @@ for library in "${needed[@]}"; do
   permitted=0
   for candidate in "${ALLOWED[@]}"; do
     [ "$library" = "$candidate" ] && permitted=1
+  done
+  for pattern in "${LOADER_PATTERNS[@]}"; do
+    # shellcheck disable=SC2053  # the right-hand side is a glob, deliberately
+    [[ "$library" == $pattern ]] && permitted=1
   done
   if [ "$permitted" -eq 1 ]; then
     echo "  ok        $library"

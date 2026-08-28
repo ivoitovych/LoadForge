@@ -77,6 +77,29 @@ else
   fail=$((fail + 1))
 fi
 
+# --- the dynamic loader, which is not a dependency ---------------------------
+# Its soname is architecture-specific and whether it appears as DT_NEEDED at all
+# varies: on x86-64 this project's binary reaches it through PT_INTERP, on
+# AArch64 it is a NEEDED entry. That difference broke the gate's first ARM run.
+#
+# /usr/bin/gcc-13 is a REAL binary that lists the loader as NEEDED on x86-64, so
+# the case is tested here against an actual ELF object rather than against a
+# soname string this author typed -- which is the whole point, since typing the
+# string is exactly the mistake that caused the failure.
+loader_subject=""
+for candidate in /usr/bin/gcc-13 /usr/bin/gcc /usr/bin/cc; do
+  if [ -f "$candidate" ] && readelf -d "$candidate" 2>/dev/null | grep -q 'Shared library: \[ld-'; then
+    loader_subject="$candidate"; break
+  fi
+done
+if [ -n "$loader_subject" ]; then
+  run_gate "$loader_subject"
+  expect 0 "the dynamic loader is not a third-party dependency" "0 not permitted"
+else
+  echo "  SKIP  no local binary lists the loader as NEEDED; the ARM64 shape is"
+  echo "        untested here and is covered by the ARM matrix entry in CI"
+fi
+
 # --- a static binary satisfies the promise trivially, and says so -------------
 if "${CXX:-c++}" -static -o "$work/static" "$work/plain.cpp" 2>/dev/null; then
   run_gate "$work/static"
