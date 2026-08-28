@@ -30,6 +30,7 @@ milestone sequence.
 |---|---|
 | [`docs/PLAN.md`](docs/PLAN.md) | The development plan and design of record: a critical review of the draft, the architecture, the directory layout, the testing strategy, milestones and risks |
 | [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) | The build order to 1.0: what each milestone delivers, the module ledger, and the doctrine that makes "every execution path is tested" decidable rather than aspirational |
+| [`docs/JOURNAL.md`](docs/JOURNAL.md) | The engineering journal: facts established by experiment (several contradict the obvious reading of the manual pages), decisions and the alternatives rejected, and the mistakes that earned a structural fix |
 | [`docs/DESIGN-DRAFT.md`](docs/DESIGN-DRAFT.md) | The original project description — a **working draft**, preserved verbatim; parts are superseded by the plan |
 | [`docs/determinism.md`](docs/determinism.md) | The determinism contract — normative, required reading before touching numerical code |
 | [`docs/verification.md`](docs/verification.md) | The verification doctrine — oracles vs golden vectors, fault injection, fault isolation |
@@ -38,7 +39,10 @@ milestone sequence.
 | [`LICENSE`](LICENSE) | GPL-3.0-or-later |
 
 Start with `docs/PLAN.md` for where the project is going and why, and
-`docs/IMPLEMENTATION.md` for what gets built next and what tests it owes.
+`docs/IMPLEMENTATION.md` for what gets built next and what tests it owes. Read
+`docs/JOURNAL.md` before writing code that touches the kernel, the toolchain, or a CI
+gate — it is short, and it records the things that were wrong until an experiment
+corrected them.
 
 ---
 
