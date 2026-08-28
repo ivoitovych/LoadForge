@@ -1,6 +1,7 @@
 # LoadForge — Implementation Plan
 
-**Status:** revision 1 — written at M0 complete, `main` at the trust-chain hardening pass
+**Status:** revision 2 — Q10 closed (multiple worker processes); X1, X2 and the
+obligation ledger landed
 **Covers:** what "complete" means, how per-path test coverage is made enforceable rather
 than aspirational, the module ledger, and the milestone-by-milestone build order to 1.0.
 
@@ -204,7 +205,7 @@ those, so a blank there means a real exemption and never an oversight.
 | `platform/edac` | M3 | P1, P2, P7 | T1, T2 | F13 |
 | `topology/` | M1 | P1, P2, P3, P7 | T1, T2 | Shared immutable snapshot taken before fork |
 | `worker/scheduler` | M1 | P1, P5, P6 | T1, T7 | Pool, affinity, barriers, heartbeat emission |
-| `worker/ipc` | M1 | P1, P2, P5 | T1, T5b, T7 | Shared-memory status, record channel |
+| `worker/ipc` | M1 | P1, P2, P5 | T1, T5, T5b, T7 | Shared-memory status, record channel. T5 because the boundary is fuzzed: garbage from a worker must never become a hardware verdict |
 | `controller/orchestration` | M1 | P1, P3, P6 | T1, T8 | Phase schedule, run control |
 | `controller/safety` | M1 | P1, P3, P6 | T1, T7, T8 | Limits, watchdog, e-stop, child kill |
 | `controller/supervision` | M1 | P1, P2, P6 | T1, T7 | Heartbeats, crash classification, OOM versus fault |
@@ -320,9 +321,62 @@ The last transition matters more than it looks: an orphaned worker holding every
 full load with no thermal ceiling enforced is the one genuinely dangerous state the
 process split can create. It gets an explicit test, not a hopeful comment.
 
-**New gates:** none — `tools/check-test-obligations.py` and `tests/obligations.toml`
-landed early, so M1's modules are added to a ledger that already exists rather than
-retrofitted into one.
+#### Testing a multi-process supervisor
+
+Q10 is closed: **multiple worker processes, one executable, re-executed with an internal
+switch** (`PLAN.md` §4.6). That decision buys fault containment and a surviving telemetry
+timeline, and it pays for them in P5 and P6 paths that multiply by worker count. This is
+the test structure that makes the trade honest.
+
+**A separate `tests/support/fake_worker` executable, not a test switch on the real binary.**
+The controller must be driven against a worker that misbehaves on demand, and the obvious
+way to get one — a hidden `--misbehave` flag on `loadforge` — is the wrong way. A tool
+whose only product is trust must not ship a binary that can be told to corrupt its own
+results. The misbehaviour lives in a test-only executable that is never installed, and a
+release gate asserts the shipped artifact contains no test-hook symbols.
+
+The fake worker's **misbehaviour catalogue**, each entry a T7 test:
+
+| Misbehaviour | The controller must |
+|---|---|
+| Exit 0 | Record completion, reap without a zombie |
+| Exit non-zero | Classify as worker error, not hardware fault |
+| `SIGSEGV`, `SIGBUS`, `SIGABRT` | Classify as fault, name the signal, preserve the timeline up to it |
+| Silent hang — alive, no heartbeat | Detect by heartbeat staleness, not by EOF; a wedged process holds its descriptors open |
+| Spin without progress | Distinguish "working slowly" from "not progressing" |
+| Allocate until OOM-killed | Classify as OOM **distinctly** from a fault, by reading the kernel's own record |
+| Close the record pipe early | Report truncated evidence as truncated, never as clean |
+| Emit a truncated record | Reject it; a partial record is not a record |
+| Emit a record with a bad checksum | Reject and report — a corrupt worker is what this tool exists to detect |
+| Die holding a process-shared lock | Recover via `EOWNERDEAD`; survivors must not deadlock |
+| Ignore `SIGTERM` | Escalate to `SIGKILL` within the bounded time |
+| Fork a grandchild, then die | Leave no orphan holding a core at full load |
+
+D-state (uninterruptible sleep) is deliberately absent: it cannot be produced reliably from
+userspace, and a test that cannot be made to fail is not a test. It is named here so its
+absence is a recorded gap rather than an oversight.
+
+**The rule that keeps the multi-process paths honest:**
+
+> **No supervision test runs with a single worker.** Every T7 case runs with N ≥ 2, and the
+> cases about lock recovery and orphan reaping run with N ≥ 3.
+
+N=1 exercises none of the cross-process behaviour the design was chosen for, and a suite
+that only ever runs N=1 passes right up until production. The default N in tests is 2; the
+mixed workload at M5 raises it.
+
+**Two further obligations specific to the split:**
+
+- **The IPC boundary is fuzzed.** The controller must survive arbitrary bytes arriving on
+  the record pipe, because a worker producing garbage is precisely the failure this tool
+  exists to detect. Garbage in must never become a hardware verdict out.
+- **Every process-shared lock has a robustness test.** Kill the holder mid-critical-section
+  and assert a survivor recovers rather than blocking forever (`PLAN.md` §4.6).
+
+**New gates:** two. A release-artifact check that no test-hook symbol is present in the
+shipped binary, and the `EOWNERDEAD` obligation recorded per lock in the ledger.
+`tools/check-test-obligations.py` and `tests/obligations.toml` already exist, so M1's
+modules join a ledger rather than being retrofitted into one.
 
 **Exit criteria** — all measurable, all in CI:
 
@@ -335,9 +389,9 @@ retrofitted into one.
    tested for the message it produces.
 6. 100% line and branch, zero exclusions; obligation ledger current.
 
-**Blocked on:** open question 10 (worker process granularity). *Recommendation stands:
-single worker process at M1, revisit at M5.* This is the only decision M1 cannot start
-without, because it determines the IPC shape.
+**Blocked on:** nothing. Q10 is closed — multiple worker processes, one executable
+(`PLAN.md` §4.6) — which was the only decision M1 could not start without, because it
+determines the IPC shape.
 
 ### M2a — First vertical slice, exact verification
 

@@ -86,6 +86,13 @@ They are complementary evidence, **not proof**. So:
 > Any atomic weaker than `seq_cst` needs a **documented synchronization argument** and a
 > **dedicated test exercising the intended ordering protocol**.
 
+**Across processes, add one more:** every process-shared lock is `PTHREAD_MUTEX_ROBUST`,
+and every acquisition handles `EOWNERDEAD` by making the protected state consistent. A
+worker can die holding a lock — that is not an edge case here, it is the expected event the
+process split exists to survive. Without robustness one dead worker deadlocks every
+survivor, and multi-process becomes *worse* than threads at the one thing it was chosen
+for. Each such lock needs a test that kills the holder mid-critical-section.
+
 And the cheapest defence of all: **prefer not to write lock-free protocols.** Default to
 mutexes and `seq_cst`. Reach for `relaxed`/`acquire`/`release` only when measurement shows
 the simple version is a real bottleneck — then pay for the argument and the test. In this

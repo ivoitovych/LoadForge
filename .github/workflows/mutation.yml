@@ -4,14 +4,65 @@ on:
   # NOT scheduled yet -- deliberately. See "Status" below.
   workflow_dispatch:
     inputs:
+      discover_pin:
+        description: 'Bootstrap only: install from upstream and REPORT a candidate pin. Gates nothing.'
+        type: boolean
+        default: false
+      llvm_version:
+        description: 'LLVM version Mull is built against (must match the compiler used to build)'
+        default: '18'
       mull_deb_url:
         description: 'URL of the Mull .deb to install'
-        required: true
+        required: false
       mull_deb_sha256:
         description: 'SHA-256 of that .deb (required; the job refuses to run without it)'
-        required: true
+        required: false
 
 jobs:
+  discover:
+    # ONE-SHOT BOOTSTRAP, and the only way to establish the first pin.
+    #
+    # Mull is not in Ubuntu's repositories; it comes from a third-party package
+    # host that the development environment cannot reach (403 through its
+    # proxy). GitHub's runners can. So this job installs from that host, prints
+    # the version and the SHA-256 of what it got, and a human records both in
+    # the repository as the pin -- after which every later run verifies against
+    # it and any change fails loudly.
+    #
+    # This is trust-on-first-use, and saying so plainly matters more than the
+    # inconvenience of admitting it. Every first pin in this project was TOFU:
+    # the GoogleTest commit and the toml++ tree digest were each believed once
+    # and verified ever after. What TOFU buys is not proof of the first fetch;
+    # it is detection of every subsequent change. That is worth having, and it
+    # is strictly more than an unpinned install offers.
+    #
+    # It does not gate anything and installs nothing the gate then trusts.
+    name: bootstrap — report a candidate pin
+    if: inputs.discover_pin
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install from upstream and report what arrived
+        run: |
+          set -euo pipefail
+          curl -1sLf 'https://dl.cloudsmith.io/public/mull-project/mull-stable/setup.deb.sh' \
+            | sudo -E bash
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --download-only "mull-${{ inputs.llvm_version }}"
+          deb=$(find /var/cache/apt/archives -name "mull-${{ inputs.llvm_version }}_*.deb" | head -n 1)
+          [ -n "$deb" ] || { echo "no .deb was downloaded"; exit 1; }
+          echo "### Candidate Mull pin" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '```'
+            echo "file:    $(basename "$deb")"
+            echo "sha256:  $(sha256sum "$deb" | cut -d' ' -f1)"
+            echo "size:    $(stat -c%s "$deb") bytes"
+            echo '```'
+            echo "Record these in the repository, then run this workflow again with"
+            echo "\`discover_pin\` unset to use them."
+          } >> "$GITHUB_STEP_SUMMARY"
+          sha256sum "$deb"
+
   mull:
     # At 100% coverage the coverage number stops carrying information: it can no
     # longer tell a thorough test from one that executes a line and asserts
@@ -37,8 +88,16 @@ jobs:
     # which let any number of survivors pass -- the job runs on demand with the
     # URL and checksum supplied explicitly, and refuses to run without them.
     name: zero unexplained surviving mutants
+    if: '!inputs.discover_pin'
     runs-on: ubuntu-24.04
     steps:
+      - name: Refuse to run without a verified pin
+        run: |
+          [ -n "${{ inputs.mull_deb_url }}" ] && [ -n "${{ inputs.mull_deb_sha256 }}" ] && exit 0
+          echo "This job installs code that runs in CI with the workflow token, so it takes"
+          echo "the .deb URL and its SHA-256 and verifies the download against it."
+          echo "Run this workflow with discover_pin to obtain a candidate pair."
+          exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install Mull (checksum required)
         run: |

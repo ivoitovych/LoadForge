@@ -1,6 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 13 — implementation plan split out to `IMPLEMENTATION.md`; cross-review applied
+**Status:** revision 14 — Q10 closed: multiple worker processes, one executable (§4.6)
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -1276,6 +1276,70 @@ thermal or power detail than a virtualized x86 one.
 
 ---
 
+### 4.6 The worker process model — multiple processes, one executable
+
+**Decision (revision 14, owner):** LoadForge runs **multiple worker processes**, not one.
+Revision 10 recommended a single process at M1 and a revisit at M5; the owner reversed it,
+and the reasoning is better than the recommendation was.
+
+The point is not only that the controller *notices* a dead worker. It is that **the
+controller's telemetry timeline survives the death**. The most valuable output this tool
+can produce is the seconds leading up to a fault, and an in-process crash destroys exactly
+that evidence. Separate address spaces also give per-worker fault attribution, let an
+OOM-kill land on one worker and be classified distinctly, and — for a tool that verifies
+memory — give N independent mappings rather than one.
+
+#### One executable, re-executed
+
+Workers are the same binary, started with an internal switch, not a second artifact. That
+keeps one thing to ship (which matters for the static live-media build), makes it
+impossible for controller and worker to be different versions, and means a user installs
+one file.
+
+**`fork()` then `exec()` of `/proc/self/exe` — not `fork()` alone.** Three reasons, and
+the first two are correctness rather than taste:
+
+1. `fork()` in a multithreaded process may only call async-signal-safe functions until
+   `exec`, and the controller *is* multithreaded (F9's lifecycle rule already forces the
+   fork to happen from a long-lived thread before the controller's threads start).
+2. A forked child inherits a copy of the parent's heap. For a tool whose job is to verify
+   memory, beginning from pages the controller has already dirtied is backwards.
+3. `exec` re-randomizes ASLR, so N workers occupy N independent mappings.
+
+The path comes from `/proc/self/exe`, never `argv[0]`: `argv[0]` can be relative, can be
+changed by the caller, and the working directory may move. It is resolved and cached at
+startup, before any `chdir`, with a fallback for a live medium where `/proc` is not
+mounted.
+
+#### The rule that makes multi-process safer rather than more dangerous
+
+A worker can die **holding a process-shared lock**. Unless every such mutex is
+`PTHREAD_MUTEX_ROBUST` and every acquirer handles `EOWNERDEAD` by making the protected
+state consistent, one dead worker deadlocks every survivor — and the process split becomes
+*worse* than threads at the one thing it was chosen for.
+
+> **Every process-shared lock is robust, and every acquisition handles `EOWNERDEAD`.**
+> This is a hard rule with a dedicated test per lock, in the same category as §4.5's rule
+> about memory orders.
+
+The preference behind §4.5 applies with more force here: prefer designs with no shared
+lock at all. Single-writer shared-memory slots with a sequence counter, and pipes for
+records, need no cross-process mutex.
+
+#### What this costs, recorded honestly
+
+- IPC becomes a real, versioned interface — shared memory for status and heartbeats, pipes
+  for verification and error records — and F18 applies to it: control state crossing the
+  boundary is protected and re-validated, never trusted.
+- Cross-process barriers are materially harder than in-process ones.
+- Every lifecycle (P6) and concurrency (P5) path multiplies by the worker count.
+- Debugging is harder, which raises the value of the crash journal (F16).
+
+The complexity is real. It is accepted because the alternative trades away the evidence
+this tool exists to produce.
+
+---
+
 ## 5. Technology choices (proposed)
 
 **Reference platform: Ubuntu 24.04 LTS** (owner decision). Everything below is pinned to
@@ -1916,6 +1980,7 @@ research-flavoured one and is correctly last.
 | — | **Commercial / dual licensing** | **Declined outright.** GPL-3.0-or-later only, permanently; no CLA, ever. The one deadline-bearing question, closed deliberately — §5.2 | **4** |
 | 7 | Cool-downs in the default schedule | Resolved by mode semantics — §4.4 | 2 |
 | 8 | Repository name casing | Keep `LoadForge`; binary and namespace `loadforge` | 2 |
+| **10** | **Worker process granularity** | **Multiple worker processes, from M1** — one executable, re-executed with an internal worker switch. Owner decision, reversing the rev. 10 recommendation of a single process. See §4.6 | **14** |
 
 ### Still open
 
@@ -1926,10 +1991,6 @@ research-flavoured one and is correctly last.
    obligations.
 9. **Milestone confirmation.** Is framework-first (F4) with the M2a/M2b split (F14)
    agreed?
-10. **Worker process granularity.** One worker process for all threads, or one per
-    workload group in the mixed test? Per-group isolation gives better fault containment
-    and attribution; one process is simpler and cheaper to synchronize.
-    *Recommendation: single worker process at M1, revisit at M5.*
 11. **Minimum runtime platform** *(reframed in rev. 7 — was "minimum supported kernel")*.
     The review is right that the binding constraint is **userspace ABI, not kernel
     version**: a 24.04-linked binary needs `GLIBC_2.39` and `GLIBCXX_3.4.33` symbols that
