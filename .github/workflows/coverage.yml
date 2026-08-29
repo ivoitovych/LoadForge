@@ -21,8 +21,22 @@ jobs:
       - run: cmake --build --preset coverage
       - run: find build/coverage -name '*.gcda' -delete
       - run: ctest --preset coverage
+      - name: Coverage-gate tooling tests
+        # The completeness check decides whether the coverage number describes
+        # the whole source tree, so a bug in it silently weakens the gate it
+        # guards. Its own failing case is exercised here, before it is trusted
+        # below.
+        run: |
+          sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning tools/check-coverage-complete.sh tools/coverage.sh \
+                     tests/tools/test_coverage_completeness.sh
       - name: Coverage gate
         run: ./tools/coverage.sh build/coverage
+      - name: Coverage-completeness tests
+        # Runs after the gate, because the real-report case needs the report the
+        # gate just produced -- testing the check against gcovr's actual output
+        # rather than against an imitation of it (F21).
+        run: ./tests/tools/test_coverage_completeness.sh
       - name: Coverage-exclusion gate
         # docs/PLAN.md §7.3: an exclusion removes a line from the numerator AND
         # the denominator, so it keeps the number at 100% while shrinking what
