@@ -98,6 +98,45 @@ ASan and TSan builds configure fine and fail at link without it. It is easy to c
 "sanitizers only work in CI" and defer; installing the runtime package takes a minute and
 keeps the local loop honest.
 
+### 1.7 Under ASan and TSan, a child that raises `SIGSEGV` does not die by signal.
+
+The sanitizer installs its own handler, prints its report, and calls `_exit`. So the child
+**exits with a code** instead of being terminated by a signal, and any test asserting
+"terminated by SIGSEGV" fails on exactly the two presets most likely to be run before a
+release.
+
+*Evidence:* a real-kernel test forking a child that raised `SIGSEGV` passed on the debug
+preset and failed under both sanitizers, with the code under test behaving correctly the
+whole time. The failure output was ASan's own SEGV report, followed by the assertion
+failing because `termination()` said `kExited`.
+
+*Rule:* a test that needs a genuinely fatal signal must use one the sanitizers do not
+intercept — `SIGTERM` and `SIGUSR1` are safe, `SIGSEGV`, `SIGBUS`, `SIGFPE` and `SIGILL`
+are not. Decoding of the intercepted signals is still testable; just not by raising them.
+
+### 1.8 The `W*` wait-status macros do not partition the integers.
+
+`WIFEXITED`, `WIFSIGNALED`, `WIFSTOPPED` and `WIFCONTINUED` between them leave
+**16,777,215 of the 2³² possible status words** matching none of the four. The smallest
+positive one is `0xff`.
+
+*Evidence:* enumerated all 2³² values in a C loop, which takes about four seconds. This
+started as an attempt to prove the opposite — that an "unrecognised" arm was dead code
+that the exclusion ladder said to delete.
+
+Two neighbours found the same way:
+
+- `0x7f` — the stopped marker carrying signal 0, which is not a signal — classifies as
+  **stopped**, because `WIFSTOPPED` tests only the low byte.
+- `exit(256)` produces a status word of `0`, **indistinguishable from `exit(0)`**. Only
+  the low 8 bits survive. Consequence for this project: no exit code above 255 may ever
+  carry meaning, or a distinguished failure code would report itself as success.
+
+*Why it matters beyond trivia:* `waitpid` never produces an unmatched word, so it is
+tempting to treat the fall-through as unreachable. But the same decoder reads status words
+back from a crash journal written by an earlier run, and a truncated record must classify
+as "unknown" rather than as a clean exit.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -269,6 +308,31 @@ whether the absent-capability path was taken.
 That is why the per-module obligation ledger exists as a *separate, checked* artifact:
 what a tool cannot enumerate, a human declares and a gate holds them to.
 
+### 3.7 A coverage gate can report 100% over code it has never seen
+
+The most instructive F20 case so far, because the gate was not wrong about anything it
+measured — it simply did not measure everything, and said nothing about the gap.
+
+`gcovr` reports on the `.gcda` files it finds. A source file that was never compiled into
+the measured build produces none, so it is **not reported as uncovered — it is not
+reported at all**, and 100% of what remains is still 100%. The percentage is true and
+worthless.
+
+*Evidence:* the gate printed `lines: 100.0% (301 out of 301)` over a build directory that
+predated a newly added file. Once the file was genuinely compiled in, the real figure was
+99.7%, with an uncovered branch that then needed real work.
+
+The part worth generalising is **why it survived so long**: CI configures and builds from
+a fresh checkout on every run, so CI can never hit it. *The one place the hazard does not
+exist is the one place the gate runs automatically.* Locally — where a contributor forms
+their confidence before pushing — a stale build directory is the normal state.
+
+So: when a gate is safe in CI by accident of environment rather than by construction, it
+is not safe. Ask what the gate reads, and what a *missing* input makes it say.
+
+The fix compares the report against the **source tree**, not against a checked-in list. A
+list would need updating by the same person who forgot to rebuild.
+
 ---
 
 ## 4. Recurring mistakes, and the structural fixes
@@ -332,6 +396,25 @@ their *output format* changes between releases. Unpinned, `format --diff` fails 
 nobody touched, and a coverage report parses differently than the gate expects. A pin here
 is not conservatism; it is the difference between a gate that measures the code and a gate
 that measures the runner's package index.
+
+### 4.6 A test that asserts a failure can pass for the wrong reason
+
+The subtlest of these, because the test is green and the assertion looks specific.
+
+A test fed a coverage gate a real report with **one** file's entry removed, and asserted
+that the gate failed and that its message named that file. Both were satisfied — while the
+gate was broken and reporting *every* file as missing. The test passed, and would have gone
+on passing for a gate that could only ever say "everything is missing".
+
+**A test that asserts a failure must also assert that the failure is the right one.** The
+fix was one more assertion, that the count was exactly one. Concretely, prefer:
+
+- the exact count, not "at least one";
+- the specific message, not merely non-empty output;
+- the specific exit status, not merely non-zero.
+
+This is the negative-path twin of §3.3. A gate that has never failed has not been tested —
+and a gate whose failure was checked only loosely has been tested for the wrong thing.
 
 ---
 
