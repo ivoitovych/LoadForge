@@ -374,6 +374,30 @@ what a distribution actually packages.
 When a document claims something is enforced, the first question is *by what*, and the
 answer must be a file path.
 
+### 5.5 A fix to a shared gate protects nothing until it reaches `main`
+
+CI runs the *merge* of the pull request onto its base, so the version of a gate that judges
+a branch is the base branch's version plus whatever that branch changes. A fix living only
+in an unmerged branch therefore protects only that branch.
+
+This was not a hypothesis. The sign-off gate's fix (§1.5) sat on two unmerged branches, and
+the next pull request opened from `main` failed on the identical bug — the same synthetic
+merge commit, the same misleading message — while a correctly signed-off commit sat
+underneath it.
+
+**Two practical consequences:**
+
+- Fixes to shared infrastructure are worth merging ahead of the feature work that
+  motivated them. Every parallel branch pays the tax again until they land.
+- Until then, port the fix into each affected branch rather than waiting. A cherry-pick of
+  the same patch no-ops once the base carries it, and waiting for one's own pull request to
+  merge is still waiting.
+
+The corollary is worth stating separately, because it is easy to get backwards: a red check
+on a branch is not automatically that branch's defect. Before changing anything, establish
+whether the same failure reproduces on the base — if it does, the branch is a bystander, and
+"fixing" it locally would mean changing code that was never wrong.
+
 ---
 
 ## 6. Open threads
