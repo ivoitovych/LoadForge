@@ -1376,7 +1376,7 @@ generation — the project uses classic headers.
 | Sanitizers | ASan+UBSan, **TSan**, separate CI jobs | TSan is essential; the codebase is threaded by construction. |
 | Static analysis | `clang-tidy`, warnings-as-errors, `clang-format` | All present. |
 | FP flags | `-ffp-contract=off`; **explicit FMA intrinsics** in FMA-stressing kernels; `-ffast-math`/`-Ofast` banned | F1. |
-| Runtime dependencies | **No third-party runtime dependencies** | Draft §44, with the wording the review recommends — the promise that can actually be kept. To be enforced by a CI check on the linked binary (lands at M0). |
+| Runtime dependencies | **No third-party runtime dependencies** | Draft §44, with the wording the review recommends — the promise that can actually be kept. Enforced by `tools/check-runtime-deps.sh` on every matrix entry: the shipped binary may link only libc, libm, libstdc++ and libgcc_s. Rev. 12 said this check landed at M0; it had not, and the gap was found by reading the documents against the repository rather than by anything failing. |
 
 ### 5.1 Licensing — `GPL-3.0-or-later`
 
