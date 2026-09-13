@@ -434,6 +434,22 @@ classes = ["P1", "P2"]
 tiers   = ["T1"]'
 expect "error paths with no injecting tier FAILS"            1 $? "neither T2 nor T5" "$out"
 
+# P6 had no rule at all until a module first declared it, so the declaration was
+# an unenforced promise -- which is the shape this gate exists to catch. Found
+# while adding the worker launcher: the ledger accepted P6 and asked for nothing.
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P6"]
+tiers   = ["T1"]'
+expect "lifecycle paths with no way to force them FAILS"     1 $? "none of T2, T7 or T8" "$out"
+
+mkdir -p "$ob/tests/unit"
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P6"]
+tiers   = ["T1", "T2"]'
+expect "lifecycle paths forced through the seam pass"        0 $? "ok    src/core" "$out"
+
 mkdir -p "$ob/tests/unit"
 led '[[module]]
 path    = "src/core"
