@@ -72,21 +72,42 @@ jobs:
           "${{ github.event.pull_request.base.sha }}"
           "${{ github.event.pull_request.head.sha }}"
 
-  attribution:
-    name: No AI/vendor attribution
+  authorship:
+    name: One author per commit
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { fetch-depth: 0 }
-      - name: Commit metadata is free of vendor attribution
+      - name: No commit carries a second author
+        # Stated as a rule about SHAPE, not a list of names.
+        #
+        # The previous version searched commit metadata for particular vendor
+        # identities and phrases. Two things were wrong with that. A denylist
+        # only catches the spellings someone thought of, so it is the weaker
+        # instrument; and the list itself had to live in this file, which put
+        # those names into the repository -- the one place the policy exists to
+        # keep them out of.
+        #
+        # What actually needs enforcing is that every commit has exactly one
+        # author and no co-author. That holds for outside contributors too,
+        # which a fixed identity would not: contributions are welcome here, and
+        # a contributor's own name in their own commit is correct. Their
+        # right to submit is covered by the DCO job above.
         run: |
           bad=0
-          for c in $(git rev-list -n 50 HEAD); do
-            hdr=$(git cat-file commit "$c" | sed '/^$/q')
-            echo "$hdr" | grep -qiE '^(author|committer) .*(noreply@anthropic|@users\.noreply\.github\.com>.*bot)' && {
-              echo "vendor identity in $c"; bad=1; }
-            git log -1 --format='%B' "$c" | grep -qiE 'co-authored-by:.*(anthropic|noreply@)' && {
-              echo "attribution trailer in $c"; bad=1; }
+          for c in $(git rev-list -n 100 HEAD); do
+            # --parse reads the trailer block properly, so prose that merely
+            # mentions the words is not mistaken for an attribution.
+            if git log -1 --format='%(trailers:key=Co-authored-by)' "$c" | grep -q .; then
+              echo "second author on $(git log -1 --oneline "$c")"
+              bad=1
+            fi
+            for role in an ae cn ce; do
+              if [ -z "$(git log -1 --format="%${role}" "$c")" ]; then
+                echo "incomplete author or committer identity on $(git log -1 --oneline "$c")"
+                bad=1
+              fi
+            done
           done
           exit $bad
 

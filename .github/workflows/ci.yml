@@ -35,6 +35,13 @@ jobs:
         run: cmake --build --preset debug
       - name: Test
         run: ctest --preset debug
+      - name: The shipped binary links nothing but the C and C++ runtime
+        # docs/PLAN.md §5 promised this check "lands at M0" and it did not. It
+        # runs on every matrix entry rather than once, because linkage is a
+        # property of the toolchain and architecture, not of the source: a
+        # dependency that GCC on x86-64 resolves statically may arrive as a
+        # NEEDED entry under Clang on ARM64.
+        run: ./tools/check-runtime-deps.sh build/debug/loadforge
 
   tooling:
     # The trust chain tests itself: mutation-gate.py decides whether the test
@@ -48,6 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: ./tests/tools/test_tooling.sh
+      - run: ./tests/tools/test_runtime_deps.sh
       - name: Install linters
         # Ruff is pinned for the same reason gcovr is: its formatter's output
         # changes between releases, so an unpinned version would make
