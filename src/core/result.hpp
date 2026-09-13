@@ -7,6 +7,16 @@
 
 namespace loadforge::core {
 
+/// Success carrying no information, for Result<Ok, E>: "it worked", with
+/// nothing to hand back. std::monostate would serve, but a named type says why
+/// it is there, and Result requires its two alternatives to be distinct types.
+///
+/// Not called Unit: duration.cpp and byte_size.cpp already use that name for a
+/// unit suffix, and the older, more specific meaning keeps it.
+struct Ok {
+  [[nodiscard]] friend constexpr bool operator==(Ok /*lhs*/, Ok /*rhs*/) noexcept { return true; }
+};
+
 /// A value or the reason one could not be produced.
 ///
 /// std::expected is C++23; the reference toolchain is GCC 13 / C++20

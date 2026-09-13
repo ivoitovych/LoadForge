@@ -1699,6 +1699,27 @@ the standard is simply *all of it*.
 Alongside it, the **same-change rule**: code and its tests land together, in the same
 pull request, or neither lands. There is no "tests to follow."
 
+And, above both, the standard the gate exists to serve — the owner's requirement, stated
+here because it governs everything in this section:
+
+> **Every line of working code is covered comprehensively.** Executing a line is the
+> floor, not the goal. For each line the tests must exercise the distinct *meanings* its
+> inputs can take — every boundary of every value domain it touches, every way each call
+> it makes can fail, every corner case where its behaviour changes — and they must
+> **fail** if that behaviour changes.
+
+The operational form, for a reviewer with a diff in front of them:
+
+> If you can change what a line does and no test notices, that line is not covered —
+> whatever the percentage says.
+
+The three mechanisms in this section exist to serve that one sentence, and none of them
+substitutes for another. **Coverage** proves a line was executed. The **path taxonomy**
+([`IMPLEMENTATION.md`](IMPLEMENTATION.md) §2.2) enumerates the meanings a line can carry,
+including the six classes a coverage tool cannot see. **Mutation testing** proves the
+tests would notice if the line changed. A project with all three still has to think; a
+project with fewer is guessing.
+
 #### Why this is the right call for this project specifically
 
 Retrofitting tests onto existing code is not merely slower — it produces *worse* tests.

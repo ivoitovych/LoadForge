@@ -56,6 +56,21 @@ if(LOADFORGE_SIMD STREQUAL "scalar")
   target_compile_definitions(loadforge_core PUBLIC LOADFORGE_SIMD_SCALAR=1)
 endif()
 
+# ---- platform ---------------------------------------------------------------
+# The seam every later module's error paths depend on. Kept a separate library
+# so that a link error is the immediate answer if anything above the platform
+# boundary reaches for a syscall directly (docs/PLAN.md §4.2).
+add_library(loadforge_platform STATIC
+  src/platform/syscall_error.cpp
+  src/platform/syscalls.cpp
+  src/platform/fs.cpp
+)
+target_link_libraries(loadforge_platform PUBLIC loadforge_core)
+loadforge_set_warnings(loadforge_platform)
+loadforge_set_fp_contract(loadforge_platform)
+loadforge_enable_sanitizers(loadforge_platform)
+loadforge_enable_coverage(loadforge_platform)
+
 # ---- cli --------------------------------------------------------------------
 add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp)
 target_link_libraries(loadforge_cli PUBLIC loadforge_core)

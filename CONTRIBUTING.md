@@ -168,9 +168,18 @@ Non-negotiable review standards:
   class, and fault-injection coverage.
 - Anything touching the platform layer needs fixture tests, including the hostile
   fixtures (missing sensors, `EACCES`, wrapping counters).
-- **Coverage is 100%, gated.** Code and its tests land together in the same pull
-  request. There is no "tests to follow" — that campaign never comes, and tests written
-  later encode what the code *does* (bugs included) rather than what it should do.
+- **Coverage is 100%, gated — and 100% is the floor, not the goal.** Every line of
+  working code is covered *comprehensively*: the tests exercise the distinct meanings its
+  inputs can take — every boundary of every value domain it touches, every way each call
+  it makes can fail, every corner case where its behaviour changes — and they fail if that
+  behaviour changes. The reviewer's form of the question:
+
+  > If you can change what a line does and no test notices, that line is not covered,
+  > whatever the percentage says.
+
+  Code and its tests land together in the same pull request. There is no "tests to
+  follow" — that campaign never comes, and tests written later encode what the code
+  *does* (bugs included) rather than what it should do.
 - Anything genuinely unreachable needs an inline exclusion marker carrying an
   **`LF-COV-NNN` ID and a written reason**, plus a matching record in
   `tools/coverage-exclusions.txt` — in the same pull request, so the justification lands
