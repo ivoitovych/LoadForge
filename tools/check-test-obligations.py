@@ -242,6 +242,20 @@ def main() -> int:
                 "only by forcing it through the substitutable syscall seam, and those "
                 "are the tiers where the forcing happens."
             )
+        # P6 had no rule at all until a module first declared it, which meant the
+        # declaration was an unenforced promise -- the shape this whole gate
+        # exists to prevent. A lifecycle path is a process starting, dying
+        # abnormally, being restarted or torn down, and none of those is reachable
+        # by calling a function and looking at what it returned: it needs the
+        # state forced through the seam (T2), a supervision harness (T7), or a
+        # real process to actually create and reap (T8).
+        if "P6" in declared_classes and not ({"T2", "T7", "T8"} & set(tiers or [])):
+            fail(
+                f"{path}: declares P6 but owes none of T2, T7 or T8. A lifecycle path -- "
+                "a process starting, dying abnormally, restarting, being torn down -- "
+                "is reachable only by forcing the state through the seam, by a "
+                "supervision harness, or against a real process."
+            )
 
     for path in sorted(modules - declared.keys()):
         fail(

@@ -104,12 +104,21 @@ if [ -f "$ROOT/build/coverage/coverage.xml" ]; then
   run_gate "$ROOT/build/coverage/coverage.xml" "$ROOT/src"
   expect 0 "this repository's own coverage report is complete" "covers all"
 
-  # And the same real report with a real entry removed must fail. A substring of
-  # a genuine filename is used so the deletion cannot silently match nothing.
+  # And the same real report with one real entry removed must fail.
+  #
+  # The entry is RENAMED rather than deleted, because gcovr writes the whole
+  # report on a single line: an earlier version of this used `grep -v` to drop
+  # the line containing the victim and thereby dropped the entire document, so
+  # every file read as absent. The gate failed, and the assertion "it failed and
+  # named the victim" was satisfied by that -- which is exactly the
+  # passing-for-the-wrong-reason trap the count assertion below was added to
+  # catch. It caught it. Substituting the name touches one attribute and cannot
+  # depend on how the XML happens to be wrapped.
   victim="$(grep -oE 'filename="src/[^"]*\.cpp"' "$ROOT/build/coverage/coverage.xml" |
     head -n 1 | sed 's/filename="//; s/"//')"
   if [ -n "$victim" ]; then
-    grep -vF "filename=\"$victim\"" "$ROOT/build/coverage/coverage.xml" >"$work/real-stale.xml"
+    sed "s|filename=\"$victim\"|filename=\"src/absent/removed-by-test.cpp\"|g" \
+      "$ROOT/build/coverage/coverage.xml" >"$work/real-stale.xml"
     run_gate "$work/real-stale.xml" "$ROOT/src"
     expect 1 "a REAL report with one file removed FAILS" "$victim"
     # EXACTLY one, asserted separately. An earlier version of this test passed

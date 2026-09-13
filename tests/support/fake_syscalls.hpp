@@ -139,6 +139,84 @@ class FakeSyscalls final : public platform::Syscalls {
     return core::Ok{};
   }
 
+  // --- process control -------------------------------------------------------
+  //
+  // The same strictness rule as above applies, and one case needs stating: a
+  // successful exec DOES NOT RETURN. This fake cannot replace the test process,
+  // so `exec` here always returns an error -- which matches the real interface,
+  // where the return type is SyscallError precisely because success has no
+  // return path. A test for the success case would be testing something that
+  // cannot happen.
+
+  /// fork returns 0 next time, i.e. this process becomes the child.
+  void fork_yields_child() { fork_result_ = 0; }
+  /// fork returns this pid next time, i.e. this process stays the parent.
+  void fork_yields_parent(pid_t pid) { fork_result_ = pid; }
+  void fail_fork(int error) { fork_error_ = error; }
+
+  void fail_exec(int error) { exec_error_ = error; }
+  void fail_set_parent_death_signal(int error) { pdeathsig_error_ = error; }
+
+  /// getppid's answer. Set it to something other than the pid the launcher
+  /// captured before forking to simulate the supervisor dying in the race
+  /// window -- the reparenting an orphan sees.
+  void set_parent_pid(pid_t pid) { parent_pid_ = pid; }
+
+  [[nodiscard]] int fork_count() const { return fork_count_; }
+  [[nodiscard]] int exec_count() const { return exec_count_; }
+  [[nodiscard]] int pdeathsig_count() const { return pdeathsig_count_; }
+  [[nodiscard]] int last_death_signal() const { return last_death_signal_; }
+  [[nodiscard]] const std::string& last_exec_path() const { return last_exec_path_; }
+  [[nodiscard]] const std::vector<std::string>& last_exec_argv() const { return last_exec_argv_; }
+
+  core::Result<std::size_t, platform::SyscallError> read_link(const std::string& path, char* buffer,
+                                                              std::size_t size) override {
+    ++read_link_count_;
+    last_path_ = path;
+    if (read_link_error_ != 0) {
+      return platform::SyscallError{read_link_error_, "readlink", path};
+    }
+    // Truncates to the caller's buffer and reports the truncated length, with
+    // no terminator and no error -- exactly what readlink(2) does, and the
+    // whole reason the caller has to detect a full buffer itself.
+    const std::size_t count = link_target_.size() < size ? link_target_.size() : size;
+    for (std::size_t i = 0; i < count; ++i) {
+      buffer[i] = link_target_[i];
+    }
+    return count;
+  }
+
+  void set_link_target(std::string target) { link_target_ = std::move(target); }
+  void fail_read_link(int error) { read_link_error_ = error; }
+  [[nodiscard]] int read_link_count() const { return read_link_count_; }
+
+  core::Result<pid_t, platform::SyscallError> fork_process() override {
+    ++fork_count_;
+    if (fork_error_ != 0) {
+      return platform::SyscallError{fork_error_, "fork", "worker process"};
+    }
+    return fork_result_;
+  }
+
+  platform::SyscallError exec(const std::string& path,
+                              const std::vector<std::string>& argv) override {
+    ++exec_count_;
+    last_exec_path_ = path;
+    last_exec_argv_ = argv;
+    return platform::SyscallError{exec_error_, "execv", path};
+  }
+
+  core::Result<core::Ok, platform::SyscallError> set_parent_death_signal(int signal) override {
+    ++pdeathsig_count_;
+    last_death_signal_ = signal;
+    if (pdeathsig_error_ != 0) {
+      return platform::SyscallError{pdeathsig_error_, "prctl", "PR_SET_PDEATHSIG"};
+    }
+    return core::Ok{};
+  }
+
+  pid_t parent_pid() override { return parent_pid_; }
+
  private:
   static constexpr int kFakeDescriptor = 42;
 
@@ -161,6 +239,34 @@ class FakeSyscalls final : public platform::Syscalls {
   int read_count_ = 0;
   bool descriptor_open_ = false;
   std::string last_path_;
+
+  std::string link_target_ = "/proc/self/exe-target";
+  int read_link_error_ = 0;
+  int read_link_count_ = 0;
+
+  pid_t fork_result_ = 0;
+  int fork_error_ = 0;
+  int fork_count_ = 0;
+
+  // Defaults to ENOEXEC rather than 0: a SyscallError with number 0 would
+  // render as "Success", and "execv failed: Success" is the kind of message
+  // that costs an hour. An unscripted exec in a test is a bug in the test.
+  int exec_error_ = ENOEXEC;
+  int exec_count_ = 0;
+  std::string last_exec_path_;
+  std::vector<std::string> last_exec_argv_;
+
+  int pdeathsig_error_ = 0;
+  int pdeathsig_count_ = 0;
+  int last_death_signal_ = 0;
+
+  pid_t parent_pid_ = kFakeSupervisorPid;
+
+ public:
+  /// The pid the fake reports as the parent unless a test says otherwise.
+  /// Tests pass this to become_worker as the captured supervisor pid, so the
+  /// race check passes by default and a test states only the case it is about.
+  static constexpr pid_t kFakeSupervisorPid = 1000;
 };
 
 }  // namespace loadforge::testing

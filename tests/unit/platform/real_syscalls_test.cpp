@@ -14,9 +14,11 @@
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -188,6 +190,138 @@ TEST_F(RealSyscallsTest, FileSystemReadsAFileLargerThanOneChunk) {
   const auto result = fs.read_file(path);
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(result.value(), body);
+}
+
+// --- the process-control half of the seam ------------------------------------
+//
+// EVERY ONE OF THESE RUNS IN THE TEST PROCESS ITSELF, never in a forked child,
+// and that is not a stylistic choice. A child ends with _exit(2), which skips
+// the atexit handlers -- including the one gcov installs to write its counters.
+// Anything executed only in a child is therefore absent from the coverage
+// report, and reads as untested code rather than as lost data. Measured: the
+// first version of these tests exercised exec, prctl and getppid exclusively in
+// forked children, and the gate reported all three as never executed.
+//
+// So the calls that CAN be made in the parent are made there. exec is the
+// interesting one: a failing exec does not replace the image, so calling it with
+// a path that cannot be executed exercises the whole body -- argument marshalling
+// included -- and returns normally.
+
+TEST_F(RealSyscallsTest, ReadLinkResolvesARealSymlink) {
+  const std::string target = write("target", "contents");
+  const std::filesystem::path link = directory / "link";
+  std::filesystem::create_symlink(target, link);
+
+  std::string buffer(4096, '\0');
+  const auto count = syscalls.read_link(link.string(), buffer.data(), buffer.size());
+  ASSERT_TRUE(count.has_value()) << describe(count.error());
+  EXPECT_EQ(buffer.substr(0, count.value()), target);
+}
+
+TEST_F(RealSyscallsTest, ReadLinkReportsARealMissingPath) {
+  std::string buffer(4096, '\0');
+  const auto count =
+      syscalls.read_link((directory / "not-here").string(), buffer.data(), buffer.size());
+  ASSERT_FALSE(count.has_value());
+  EXPECT_EQ(count.error().number, ENOENT);
+  EXPECT_EQ(count.error().call, "readlink");
+}
+
+TEST_F(RealSyscallsTest, ReadLinkOnSomethingThatIsNotASymlinkIsEINVAL) {
+  // The kernel's own answer, which a fake could only have asserted by agreeing
+  // with whatever this author assumed.
+  const std::string regular = write("regular", "not a link");
+  std::string buffer(4096, '\0');
+
+  const auto count = syscalls.read_link(regular, buffer.data(), buffer.size());
+  ASSERT_FALSE(count.has_value());
+  EXPECT_EQ(count.error().number, EINVAL);
+}
+
+TEST_F(RealSyscallsTest, ExecReturnsTheKernelsErrnoWhenItCannotReplaceTheImage) {
+  // Safe to call here precisely because it fails: a successful exec would end
+  // the test process. This covers the argument marshalling too, which no other
+  // test can reach without actually exec'ing.
+  const SyscallError error =
+      syscalls.exec((directory / "not-here").string(), {"loadforge", "--worker", "--slot=0"});
+  EXPECT_EQ(error.number, ENOENT);
+  EXPECT_EQ(error.call, "execv");
+}
+
+TEST_F(RealSyscallsTest, ExecOnADirectoryIsEACCES) {
+  // Another real failure, and one worth pinning: a directory is not ENOEXEC or
+  // EISDIR here, which is the sort of thing a hand-written expectation gets
+  // wrong.
+  const SyscallError error = syscalls.exec(directory.string(), {"loadforge"});
+  EXPECT_EQ(error.number, EACCES) << "got " << describe(error);
+}
+
+TEST_F(RealSyscallsTest, ExecOnAFileWithoutTheExecuteBitIsEACCES) {
+  const std::string plain = write("plain", "#!/bin/sh\necho hi\n");
+  const SyscallError error = syscalls.exec(plain, {"plain"});
+  EXPECT_EQ(error.number, EACCES) << "got " << describe(error);
+}
+
+TEST_F(RealSyscallsTest, TheParentDeathSignalCanBeArmedAndCleared) {
+  auto armed = syscalls.set_parent_death_signal(SIGKILL);
+  EXPECT_TRUE(armed.has_value()) << (armed.has_value() ? "" : describe(armed.error()));
+
+  // Cleared immediately: leaving it set would arm a death signal on the test
+  // process for the remainder of the suite.
+  auto cleared = syscalls.set_parent_death_signal(0);
+  EXPECT_TRUE(cleared.has_value());
+}
+
+TEST_F(RealSyscallsTest, AnInvalidDeathSignalIsRejectedByTheKernel) {
+  auto armed = syscalls.set_parent_death_signal(-1);
+  ASSERT_FALSE(armed.has_value());
+  EXPECT_EQ(armed.error().number, EINVAL);
+  EXPECT_EQ(armed.error().call, "prctl");
+}
+
+TEST_F(RealSyscallsTest, ParentPidMatchesGetppid) {
+  EXPECT_EQ(syscalls.parent_pid(), ::getppid());
+  EXPECT_GT(syscalls.parent_pid(), 0);
+}
+
+TEST_F(RealSyscallsTest, ForkProducesARealChildThatTheParentReaps) {
+  const auto forked = syscalls.fork_process();
+  ASSERT_TRUE(forked.has_value()) << describe(forked.error());
+
+  if (forked.value() == 0) {
+    ::_exit(0);  // The child's own coverage is lost here; see the note above.
+  }
+
+  int raw = 0;
+  ASSERT_EQ(::waitpid(forked.value(), &raw, 0), forked.value());
+  EXPECT_TRUE(WIFEXITED(raw));
+  EXPECT_EQ(WEXITSTATUS(raw), 0);
+}
+
+// --- the translation helper, whose failing arm no kernel will give us --------
+
+TEST(SyscallResultTest, ASuccessfulCallYieldsItsValue) {
+  const auto result = result_or_error<int>(7, false, ENOENT, "fork", "worker process");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), 7);
+}
+
+TEST(SyscallResultTest, AFailedCallYieldsTheErrnoAndSubject) {
+  // This is the arm fork(2) cannot be made to take in a test: its failures come
+  // from RLIMIT_NPROC, which is not even enforced for the privileged process CI
+  // runs as. Moving the decision here is what makes it reachable at all.
+  const auto result = result_or_error<pid_t>(-1, true, EAGAIN, "fork", "worker process");
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().number, EAGAIN);
+  EXPECT_EQ(result.error().call, "fork");
+  EXPECT_EQ(result.error().subject, "worker process");
+}
+
+TEST(SyscallResultTest, TheValueIsIgnoredWhenTheCallFailed) {
+  // A failed syscall's return value is meaningless, and the helper must not
+  // smuggle it through: -1 is not a pid.
+  const auto result = result_or_error<pid_t>(-1, true, ENOMEM, "fork", "worker process");
+  ASSERT_FALSE(result.has_value());
 }
 
 }  // namespace

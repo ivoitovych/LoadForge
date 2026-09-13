@@ -2,10 +2,12 @@
 #include "platform/syscalls.hpp"
 
 #include <fcntl.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <string>
+#include <vector>
 
 namespace loadforge::platform {
 namespace {
@@ -56,5 +58,51 @@ core::Result<core::Ok, SyscallError> RealSyscalls::close(int fd) {
   }
   return core::Ok{};
 }
+
+core::Result<std::size_t, SyscallError> RealSyscalls::read_link(const std::string& path,
+                                                                char* buffer, std::size_t size) {
+  const ssize_t count = ::readlink(path.c_str(), buffer, size);
+  if (count < 0) {
+    return SyscallError{errno, "readlink", path};
+  }
+  return static_cast<std::size_t>(count);
+}
+
+core::Result<pid_t, SyscallError> RealSyscalls::fork_process() {
+  // Branch-free on purpose: fork's failures cannot be induced in a test process,
+  // so the decision lives in result_or_error, above the seam, where both arms
+  // are reachable. See the note there.
+  const pid_t pid = ::fork();
+  return result_or_error<pid_t>(pid, pid < 0, errno, "fork", "worker process");
+}
+
+SyscallError RealSyscalls::exec(const std::string& path, const std::vector<std::string>& argv) {
+  // execv takes char* const[], not const char* const[], for historical reasons;
+  // it does not modify the strings. const_cast is the documented way to call it
+  // and is why this lives below the seam rather than in code under test.
+  std::vector<char*> raw;
+  raw.reserve(argv.size() + 1);
+  for (const std::string& argument : argv) {
+    raw.push_back(
+        const_cast<char*>(argument.c_str()));  // NOLINT(cppcoreguidelines-pro-type-const-cast)
+  }
+  raw.push_back(nullptr);
+
+  ::execv(path.c_str(), raw.data());
+  // Only reachable because execv failed: on success this image is gone.
+  return SyscallError{errno, "execv", path};
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::set_parent_death_signal(int signal) {
+  // prctl(2) is variadic, like open(2), and POSIX offers no non-variadic
+  // spelling. See the note in open_read.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  if (::prctl(PR_SET_PDEATHSIG, signal) != 0) {
+    return SyscallError{errno, "prctl", "PR_SET_PDEATHSIG"};
+  }
+  return core::Ok{};
+}
+
+pid_t RealSyscalls::parent_pid() { return ::getppid(); }
 
 }  // namespace loadforge::platform

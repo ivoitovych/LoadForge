@@ -46,7 +46,7 @@ note    = "CLI dispatch and the selftest digest. T8 runs the real binary, so mai
 
 [[module]]
 path    = "src/platform"
-classes = ["P1", "P2", "P3"]
+classes = ["P1", "P2", "P3", "P6"]
 tiers   = ["T1", "T2", "T8"]
 note    = """
 The seam. P2 is the reason this module exists: every errno of open(2), read(2) \
@@ -63,7 +63,18 @@ CONSTANTS: the encodings its unit tests use were read off real children forked \
 and killed by the RealWaitStatus tests, not recalled, and it was those that \
 established the W* macros do not partition the integers. \
 \
-No P7 yet: capability states arrive with the telemetry sources at M3. No P6 \
-yet either: ExitStatus describes a lifecycle transition without performing one, \
-and the lifecycle paths arrive with the launcher that creates the processes.\
+WorkerLauncher is where P6 arrives, because it is the first code that PERFORMS \
+a lifecycle transition rather than describing one: fork, arm the death signal, \
+exec, and the three ways a worker can fail before it does any work. Two of \
+those are unreachable against a real kernel and exist only because the seam \
+does -- a fork that fails needs RLIMIT_NPROC, which is not enforced for the \
+privileged process CI runs as, and the PR_SET_PDEATHSIG race needs the \
+supervisor to die inside a window of a few instructions. \
+\
+One decision moved ABOVE the seam for the same reason: fork's errno \
+translation lives in result_or_error, because leaving it in RealSyscalls would \
+have made its failing arm permanently unreachable and demanded the project's \
+first coverage exclusion. \
+\
+No P7 yet: capability states arrive with the telemetry sources at M3.\
 """
