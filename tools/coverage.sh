@@ -37,3 +37,28 @@ gcovr \
   --fail-under-line 100 \
   --fail-under-branch 100 \
   "$BUILD_DIR"
+
+# EVERY SOURCE FILE MUST APPEAR IN THE REPORT
+# -------------------------------------------
+# gcovr reports on the .gcda files it finds. A source file that was never
+# compiled into the measured build produces none, so it is not reported as
+# uncovered -- it is not reported at all, and 100% of what remains is still
+# 100%. The percentage is then true and worthless.
+#
+# This is not hypothetical. It happened while adding exit_status.cpp: the gate
+# printed "lines: 100.0% (301 out of 301)" over a build directory that predated
+# the file, and the real figure once the file was actually compiled in was 99.7%
+# with an uncovered branch. The gate said the new code was perfectly covered
+# without ever having seen it.
+#
+# CI never hits this, because it configures and builds from a fresh checkout
+# every time -- which is exactly why it survived: the one place the hazard does
+# not exist is the one place the gate runs automatically. Locally, where a
+# contributor forms their confidence before pushing, a stale build directory is
+# the normal state.
+#
+# So this is the F20 rule applied to the gate's own inputs: evidence that is
+# missing must fail, not pass quietly. The check lives in its own script so that
+# it can be tested against a report with a file removed -- a gate whose failing
+# case is never exercised is decoration.
+"$ROOT/tools/check-coverage-complete.sh" "$BUILD_DIR/coverage.xml"

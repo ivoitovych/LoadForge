@@ -56,5 +56,14 @@ forcing happens (tests/support/fake_syscalls.hpp); T8 drives the same code \
 against a real kernel in a temporary directory, because a fake agrees with \
 whatever the code believes (F21) -- that test is what established that \
 open(dir, O_RDONLY) succeeds and EISDIR comes from read(2) instead. \
-No P7 yet: capability states arrive with the telemetry sources at M3.\
+\
+ExitStatus classifies waitpid(2) status words and is pure decision and boundary \
+logic (P1, P3), so it needs no seam -- but the same F21 rule applies to its \
+CONSTANTS: the encodings its unit tests use were read off real children forked \
+and killed by the RealWaitStatus tests, not recalled, and it was those that \
+established the W* macros do not partition the integers. \
+\
+No P7 yet: capability states arrive with the telemetry sources at M3. No P6 \
+yet either: ExitStatus describes a lifecycle transition without performing one, \
+and the lifecycle paths arrive with the launcher that creates the processes.\
 """

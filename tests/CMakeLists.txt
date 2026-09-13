@@ -12,6 +12,7 @@ add_executable(loadforge_unit_tests
   unit/main/selftest_test.cpp
   unit/platform/syscall_error_test.cpp
   unit/platform/fs_test.cpp
+  unit/platform/exit_status_test.cpp
   unit/platform/real_syscalls_test.cpp
   unit/platform/result_instantiations_test.cpp
   unit/third_party/tomlplusplus_smoke_test.cpp
