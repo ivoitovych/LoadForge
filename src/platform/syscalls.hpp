@@ -2,8 +2,11 @@
 #ifndef LOADFORGE_PLATFORM_SYSCALLS_HPP
 #define LOADFORGE_PLATFORM_SYSCALLS_HPP
 
+#include <sys/types.h>
+
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include "core/result.hpp"
 #include "platform/syscall_error.hpp"
@@ -61,6 +64,46 @@ class Syscalls {
   /// can mean data was lost, and the platform layer does not decide for its
   /// caller whether that matters.
   [[nodiscard]] virtual core::Result<core::Ok, SyscallError> close(int fd) = 0;
+
+  /// readlink(2) into `buffer`, returning the byte count written.
+  ///
+  /// readlink does NOT null-terminate, and it does not report truncation: when
+  /// the target is longer than the buffer it fills the buffer completely and
+  /// returns the buffer size, indistinguishable from an exact fit. Detecting
+  /// that is the caller's job and is why this returns the raw count rather than
+  /// a string -- a wrapper that hid the count would hide the only evidence of
+  /// truncation there is.
+  [[nodiscard]] virtual core::Result<std::size_t, SyscallError> read_link(const std::string& path,
+                                                                          char* buffer,
+                                                                          std::size_t size) = 0;
+
+  /// fork(2). Returns 0 in the child and the child's pid in the parent.
+  ///
+  /// Callers above the seam must not test this against 0 themselves --
+  /// WorkerLauncher::fork_worker wraps it in a type that makes the two cases
+  /// impossible to confuse (process.hpp).
+  [[nodiscard]] virtual core::Result<pid_t, SyscallError> fork_process() = 0;
+
+  /// execv(2), replacing the current image.
+  ///
+  /// Returns ONLY a failure, because a successful exec does not return: there is
+  /// no success value this could carry. Modelling it as Result<Ok, E> would
+  /// invent a success branch that cannot occur and that no test could ever take.
+  [[nodiscard]] virtual SyscallError exec(const std::string& path,
+                                          const std::vector<std::string>& argv) = 0;
+
+  /// prctl(PR_SET_PDEATHSIG, signal) -- ask the kernel to deliver `signal` to
+  /// this process when its parent dies. Set in the child, after fork.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> set_parent_death_signal(
+      int signal) = 0;
+
+  /// getppid(2). Cannot fail.
+  ///
+  /// Needed because PR_SET_PDEATHSIG has a race: the parent can die between the
+  /// fork and the prctl, and the signal then never arrives because there is no
+  /// longer a parent to die. Re-reading the parent pid afterwards is the only
+  /// way to see that it already happened.
+  [[nodiscard]] virtual pid_t parent_pid() = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -72,6 +115,14 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] core::Result<std::size_t, SyscallError> read(int fd, char* buffer,
                                                              std::size_t size) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> close(int fd) override;
+  [[nodiscard]] core::Result<std::size_t, SyscallError> read_link(const std::string& path,
+                                                                  char* buffer,
+                                                                  std::size_t size) override;
+  [[nodiscard]] core::Result<pid_t, SyscallError> fork_process() override;
+  [[nodiscard]] SyscallError exec(const std::string& path,
+                                  const std::vector<std::string>& argv) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> set_parent_death_signal(int signal) override;
+  [[nodiscard]] pid_t parent_pid() override;
 };
 
 }  // namespace loadforge::platform
