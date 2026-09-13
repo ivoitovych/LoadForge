@@ -11,20 +11,22 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 
 ## Project status
 
-> **Pre-alpha — M0 (foundation) complete. No workloads yet.**
+> **Pre-alpha — M0 complete, M1 in progress. No workloads yet.**
 
 | | |
 |---|---|
-| **Phase** | M0 done; M1 (core framework + multi-process supervision) next |
-| **Code** | Build system, CI, config primitives, CLI skeleton |
-| **Tests** | 100% line and branch coverage, gated in CI |
+| **Phase** | M0 done; M1 under way — syscall seam, exit-status classification and the worker launcher have landed |
+| **Code** | Build system, CI, config primitives, CLI skeleton, platform seam and worker launcher |
+| **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI |
 | **Public API** | Not defined |
 | **Usable** | Not yet — no workloads until M2a |
 
 What exists is the foundation: CMake with seven presets, eight CI workflows across
-{x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate, and the first core module.
-The workloads themselves begin at M2a. See [`docs/PLAN.md`](docs/PLAN.md) for the
-milestone sequence.
+{x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate, and the platform layer M1
+is built on — a substitutable syscall seam that makes every `errno` path testable, a
+classifier for how a worker died rather than merely whether it returned zero, and the
+launcher that creates workers by `fork` and `exec`. The workloads themselves begin at M2a.
+See [`docs/PLAN.md`](docs/PLAN.md) for the milestone sequence.
 
 | Document | What it is |
 |---|---|

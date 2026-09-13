@@ -137,6 +137,35 @@ tempting to treat the fall-through as unreachable. But the same decoder reads st
 back from a crash journal written by an earlier run, and a truncated record must classify
 as "unknown" rather than as a clean exit.
 
+### 1.9 Coverage counters from a forked child are discarded.
+
+A child that ends with `_exit(2)` skips the atexit handlers — including the one gcov
+installs to write its counters. **Anything executed only inside a forked child is absent
+from the coverage report**, and absent reads as "never executed", not as "lost data".
+
+*Evidence:* the first version of the worker-launcher tests exercised `execv`, `prctl` and
+`getppid` exclusively in forked children. The gate reported all three as never executed,
+with the code demonstrably working and its assertions passing.
+
+*Rule:* call anything you need measured **in the parent process**. That is usually
+possible even for process-control calls, and often more direct:
+
+- A **failing `exec`** does not replace the image, so it returns normally and exercises
+  the whole function — argument marshalling included.
+- `prctl`, `getppid` and `fork` itself can all be called by the test process, which then
+  reaps the child it made.
+
+A child is still the right place to test what *only* a child can show — that an exit code
+survives a real process boundary, say — just don't expect its coverage to count.
+
+### 1.10 `ERESTARTNOINTR` is kernel-internal and never reaches userspace.
+
+`fork(2)` lists it among its errors. The kernel restarts the call rather than returning
+it, and glibc does not define the constant at all.
+
+*Evidence:* the compiler refused to name it, in a loop enumerating fork's documented
+errnos. A manual page listing an error is not proof that userspace can observe it.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -176,6 +205,26 @@ supervisor and worker.
 - Every supervision test runs with **N ≥ 2** workers. With one worker, "the supervisor
   noticed a death" and "the supervisor noticed the only child exited" are the same
   observation, and the test proves nothing about supervision.
+
+**Implemented, and two details the design did not anticipate.**
+
+*The orphan check must not compare against pid 1.* An orphan is reparented to the nearest
+**subreaper**, not to init, whenever anything in the process tree has called
+`PR_SET_CHILD_SUBREAPER` — which is the normal case inside a container and under
+`systemd --user`. The comparison is against the supervisor's pid captured *before* the
+fork, whatever the new parent turns out to be.
+
+*Splitting the fork from what the child does is a testability requirement, not a style
+choice.* A single `spawn()` has to call `_exit()` in the child, and `_exit` cannot be
+driven from a test — it takes the test process with it. Two functions (`fork_worker`
+returning which side you are on, `become_worker` returning the exit code the child must
+use) put every decision above the seam and shrink the untestable remainder to two lines of
+glue. The same split is what makes the death-signal failure and the race both reachable
+from a fake.
+
+A related small thing worth keeping: the fork result is returned as a **type that has to be
+asked** which side it is on, not as a raw pid. `if (pid == 0)` written backwards in a
+supervisor means the supervisor execs itself away and the run ends with no diagnosis.
 
 ### 2.2 A substitutable syscall seam, rather than mocking at a higher level
 
@@ -416,6 +465,34 @@ fix was one more assertion, that the count was exactly one. Concretely, prefer:
 This is the negative-path twin of §3.3. A gate that has never failed has not been tested —
 and a gate whose failure was checked only loosely has been tested for the wrong thing.
 
+**It happened again, and the extra assertion earned its place immediately.** A later run of
+that same test reported all twelve files missing instead of one. The cause: gcovr writes
+its report on a *single line*, and the fixture removed the victim with `grep -v` on the
+line containing it — deleting the entire document. The original two assertions were still
+satisfied. The count assertion is what failed.
+
+Two lessons, and the second is the general one:
+
+- **Do not line-edit structured data.** The fixture now *renames* the entry rather than
+  deleting a line, which touches one attribute and cannot depend on how the XML is wrapped.
+- **A test fixture is code, and it fails the same ways code does.** This one had a bug
+  that made the test vacuous while green. Fixtures deserve the same "what would make this
+  fail?" question as the thing under test.
+
+### 4.7 Declaring something a gate does not check
+
+The obligation ledger has per-class rules — P7 must name its fixtures, P2 must owe an
+injecting tier — each added when a module first declared that class. **P6 had no rule at
+all.** Declaring it asked for nothing and the gate printed `ok`.
+
+Found by declaring P6 for the first time, for the worker launcher, and noticing the gate
+had no opinion about it. That is §5.4 wearing different clothes: a promise in a document
+with nothing behind it, except here the document was the gate's own input.
+
+**When you are the first to use a category a checker knows about, check whether the checker
+actually checks it.** A vocabulary a tool accepts is not the same as a vocabulary it
+enforces, and the gap is invisible precisely because the tool says nothing.
+
 ---
 
 ## 5. Process knowledge
@@ -487,12 +564,19 @@ whether the same failure reproduces on the base — if it does, the branch is a 
 
 Kept short and current; move an item to the relevant document once it is settled.
 
-- **Awaiting the owner:** review/merge of the platform-seam pull request; branch protection
-  on `main` (required status checks, no required approvals — a solo maintainer would
-  otherwise block themselves); one manual workflow run to establish the mutation-tool pin,
-  which is a hard prerequisite for the first workload milestone.
+- **Awaiting the owner:** one manual workflow run to establish the mutation-tool pin, which
+  is a hard prerequisite for the first workload milestone; branch protection on `main`
+  (required status checks, no required approvals — a solo maintainer would otherwise block
+  themselves); deletion of the merged branches. The credential this work runs under gets
+  **403 on workflow dispatch and on deleting a ref**, so all three are genuinely the
+  owner's rather than something to try harder at.
 - **Unanswered question:** whether CI should hard-require a specific committer identity.
   Doing so would close the repository to outside contributors, so the current check
   verifies *shape* — one author, complete identity — and not a particular person.
-- **Next in sequence:** worker process management (§2.1), then the clock abstraction, then
-  topology discovery.
+- **Landed since this file was written:** the syscall seam, the runtime-dependency gate,
+  `ExitStatus`, the coverage-completeness gate, and the worker launcher (§2.1). Review was
+  waived by the owner rather than performed, which is worth remembering when reading that
+  history: the gates are the only thing that has inspected it.
+- **Next in sequence:** the supervisor that owns a set of workers — spawning N, reaping
+  them, and classifying each death — which is where the N ≥ 2 rule in §2.1 first has
+  something to bite on. Then the clock abstraction, then topology discovery.
