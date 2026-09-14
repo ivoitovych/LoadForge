@@ -88,3 +88,30 @@ each instantiation carries its own coverage and each is exercised. \
 \
 No P7 yet: capability states arrive with the telemetry sources at M3.\
 """
+
+[[module]]
+path    = "src/topology"
+classes = ["P1", "P3"]
+tiers   = ["T1", "T8"]
+note    = """
+The sysfs CPU-list parser. Pure text logic, so no seam and no P2 of its own -- \
+the errno paths belong to the FileSystem that hands it a line. \
+\
+P3 is where the weight is, because every boundary here is a place a wrong \
+answer would look right: an empty value is a LEGITIMATE reading (offline is \
+empty on a healthy machine) rather than an error; a descending range, a \
+duplicate id and overlapping elements are all refused because \
+cpumask_print_to_pagebuf cannot emit them, so a file containing one is not the \
+file we think; and the id bound is checked inside the digit loop, because a \
+long enough run of digits wraps a 64-bit accumulator and lands back on a small, \
+entirely plausible CPU id. \
+\
+T8 parses the real files this kernel writes -- online, offline, both sibling \
+lists for every online CPU, and every cache level's sharing list -- and checks \
+the count against sysconf(_SC_NPROCESSORS_ONLN), an independent source, so the \
+agreement is evidence rather than a tautology (F21). \
+\
+No P7 yet: the capability states (a source absent, EACCES, vanishing mid-run) \
+arrive with the code that decides what to do when a topology file is missing, \
+which is the next piece rather than this one.\
+"""
