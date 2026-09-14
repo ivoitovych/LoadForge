@@ -71,10 +71,20 @@ does -- a fork that fails needs RLIMIT_NPROC, which is not enforced for the \
 privileged process CI runs as, and the PR_SET_PDEATHSIG race needs the \
 supervisor to die inside a window of a few instructions. \
 \
-One decision moved ABOVE the seam for the same reason: fork's errno \
-translation lives in result_or_error, because leaving it in RealSyscalls would \
-have made its failing arm permanently unreachable and demanded the project's \
-first coverage exclusion. \
+WorkerPool adds the supervisor's half: spawning N, reaping them, telling one \
+worker's death from another's. Every test there runs N >= 2, because with one \
+worker "noticed a death" and "noticed the only child exited" are the same \
+observation and a pool that ignored pids entirely would pass. Its hardest paths \
+are the unwind of a partial spawn -- forks 1 and 2 succeeded, fork 3 failed, and \
+the survivors must be signalled and reaped before the error is reported -- and \
+a reaped child that is NOT ours, which must be skipped rather than attributed to \
+a worker. \
+\
+Two decisions moved ABOVE the seam for the same reason: fork's and waitpid's \
+errno translation live in result_or_error, because leaving them in RealSyscalls \
+would have made their failing arms permanently unreachable and demanded the \
+project's first coverage exclusion. That template is instantiated per type, so \
+each instantiation carries its own coverage and each is exercised. \
 \
 No P7 yet: capability states arrive with the telemetry sources at M3.\
 """

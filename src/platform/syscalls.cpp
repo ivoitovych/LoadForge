@@ -3,9 +3,11 @@
 
 #include <fcntl.h>
 #include <sys/prctl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <csignal>
 #include <string>
 #include <vector>
 
@@ -104,5 +106,34 @@ core::Result<core::Ok, SyscallError> RealSyscalls::set_parent_death_signal(int s
 }
 
 pid_t RealSyscalls::parent_pid() { return ::getppid(); }
+
+core::Result<Reaped, SyscallError> RealSyscalls::wait_any() {
+  int status = 0;
+  const pid_t pid = ::waitpid(-1, &status, 0);
+  // Branch-free for the same reason fork_process is: waitpid's failures are
+  // ECHILD (no children at all) and EINTR, and neither can be produced on
+  // demand in a test process without racing the test itself. The decision lives
+  // above the seam in result_or_error, where both arms are reachable.
+  return result_or_error<Reaped>(Reaped{pid, status}, pid < 0, errno, "waitpid", "any child");
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::send_signal(pid_t pid, int signal) {
+  // The call and the errno read are SEPARATE STATEMENTS, deliberately.
+  //
+  // Written as `result_or_error(core::Ok{}, ::kill(...) != 0, errno, ...)` this
+  // compiled, looked tidier, and was wrong: the order in which a function's
+  // arguments are evaluated is unsequenced, so `errno` could be read before
+  // ::kill ran and the reported error was whatever the last unrelated syscall
+  // had left behind. It reported ENOENT for a kill that failed with ESRCH,
+  // because the test fixture had touched the filesystem first.
+  //
+  // The real-kernel test is what caught it; against the fake this code is not
+  // even reached. fork_process and wait_any escape the same trap only because
+  // their syscall already sits on its own line.
+  const bool failed = ::kill(pid, signal) != 0;
+  const int number = errno;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "kill",
+                                   "pid " + std::to_string(pid));
+}
 
 }  // namespace loadforge::platform

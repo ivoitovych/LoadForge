@@ -66,6 +66,7 @@ add_library(loadforge_platform STATIC
   src/platform/fs.cpp
   src/platform/exit_status.cpp
   src/platform/process.cpp
+  src/platform/worker_pool.cpp
 )
 target_link_libraries(loadforge_platform PUBLIC loadforge_core)
 loadforge_set_warnings(loadforge_platform)
