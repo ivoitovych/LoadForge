@@ -166,6 +166,54 @@ it, and glibc does not define the constant at all.
 *Evidence:* the compiler refused to name it, in a loop enumerating fork's documented
 errnos. A manual page listing an error is not proof that userspace can observe it.
 
+### 1.11 The three monotonic clocks disagree, and each disagreement means something.
+
+Measured on the development machine after 140 seconds of uptime:
+
+```
+CLOCK_MONOTONIC      139.916862507
+CLOCK_MONOTONIC_RAW  139.490723645     426 ms behind
+CLOCK_BOOTTIME       139.916895306     33 us ahead of MONOTONIC
+```
+
+- **`MONOTONIC_RAW` vs `MONOTONIC` is NTP slew** — here about **0.3%**. Over a five-hour
+  run that is nearly a minute. RAW is the honest ruler for *how long did this take*,
+  because nothing adjusts it underneath a measurement already in progress.
+- **`BOOTTIME` vs `MONOTONIC` is suspend, and nothing else** — they share the same NTP
+  discipline, so their difference isolates the time the machine spent asleep. The 33 µs
+  here is just the gap between the two syscalls.
+
+*The trap:* computing suspend as `BOOTTIME − MONOTONIC_RAW` looks equivalent and is not.
+It would have reported a **426 ms "suspend" on a machine that never slept**, because that
+pair does not share the discipline.
+
+*Why it earns its place:* silicon cools while a machine sleeps, so a temperature curve
+spanning a suspend describes two experiments glued together. A tool that reported it as
+one would be publishing a fabricated result.
+
+### 1.12 An invariant true of two clocks is not true of two readings
+
+`CLOCK_BOOTTIME` is `CLOCK_MONOTONIC` plus suspend, so it can never advance less. That is
+true **of the clocks, at one instant**, and false of two readings taken at different
+instants — which is all any interval calculation actually has.
+
+The two are separate syscalls, so every reading carries a gap between them, and the gap
+*differs* between readings. When it shrinks, the BOOTTIME delta comes out microseconds
+smaller and the difference goes negative.
+
+*Evidence:* a strict check refusing any negative value passed the debug build and failed
+under **both** sanitizer presets — slower, so more variance in the gap — reporting the
+clocks as contradictory by 2989 ns.
+
+*The general rule, which is the part worth carrying:* before enforcing a relationship
+between two measured quantities, ask whether it holds of the *quantities* or of the
+*measurements*. Non-atomic reads turn every exact inequality into an approximate one, and
+the tolerance has to be argued from how the measurement is taken.
+
+The local lesson is smaller and more embarrassing: the same reasoning had already been
+applied to the suspend threshold a few lines earlier and simply was not carried to the
+contradiction check. **When you write one tolerance, look for its mirror.**
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -574,9 +622,12 @@ Kept short and current; move an item to the relevant document once it is settled
   Doing so would close the repository to outside contributors, so the current check
   verifies *shape* — one author, complete identity — and not a particular person.
 - **Landed since this file was written:** the syscall seam, the runtime-dependency gate,
-  `ExitStatus`, the coverage-completeness gate, and the worker launcher (§2.1). Review was
-  waived by the owner rather than performed, which is worth remembering when reading that
-  history: the gates are the only thing that has inspected it.
-- **Next in sequence:** the supervisor that owns a set of workers — spawning N, reaping
-  them, and classifying each death — which is where the N ≥ 2 rule in §2.1 first has
-  something to bite on. Then the clock abstraction, then topology discovery.
+  `ExitStatus`, the coverage-completeness gate, the worker launcher and the pool that
+  supervises a set of them (§2.1), and the clock (§1.11, §1.12). Review was waived by the
+  owner rather than performed, which is worth remembering when reading that history: the
+  gates are the only thing that has inspected it.
+- **Next in sequence:** topology discovery — cores, threads, cache hierarchy and NUMA
+  layout out of `/sys`. It is the first module with real **P7** capability paths (a source
+  present, absent, `EACCES`, malformed, or vanishing mid-run) and the first to drive the
+  `FileSystem` reader against deliberately hostile trees, so it is where the obligation
+  ledger's fixture rule finally has something to enforce.
