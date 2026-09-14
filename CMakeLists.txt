@@ -75,6 +75,18 @@ loadforge_set_fp_contract(loadforge_platform)
 loadforge_enable_sanitizers(loadforge_platform)
 loadforge_enable_coverage(loadforge_platform)
 
+# ---- topology ---------------------------------------------------------------
+# What the machine is: cores, threads, caches, NUMA. Reads /sys through the
+# platform layer, so it depends on platform and platform never depends on it.
+add_library(loadforge_topology STATIC
+  src/topology/cpu_list.cpp
+)
+target_link_libraries(loadforge_topology PUBLIC loadforge_platform)
+loadforge_set_warnings(loadforge_topology)
+loadforge_set_fp_contract(loadforge_topology)
+loadforge_enable_sanitizers(loadforge_topology)
+loadforge_enable_coverage(loadforge_topology)
+
 # ---- cli --------------------------------------------------------------------
 add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp)
 target_link_libraries(loadforge_cli PUBLIC loadforge_core)
