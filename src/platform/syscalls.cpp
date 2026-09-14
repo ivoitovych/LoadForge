@@ -8,6 +8,8 @@
 
 #include <cerrno>
 #include <csignal>
+#include <cstdint>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -134,6 +136,18 @@ core::Result<core::Ok, SyscallError> RealSyscalls::send_signal(pid_t pid, int si
   const int number = errno;
   return result_or_error<core::Ok>(core::Ok{}, failed, number, "kill",
                                    "pid " + std::to_string(pid));
+}
+
+core::Result<TimeSpec, SyscallError> RealSyscalls::read_clock(int clock_id) {
+  timespec value{};
+  const bool failed = ::clock_gettime(clock_id, &value) != 0;
+  const int number = errno;
+  // The fields are carried across as they are. Combining them into nanoseconds
+  // here would put an overflow check below the seam, where no test could reach
+  // its failing arm -- see result_or_error's note, and Clock::to_nanoseconds.
+  return result_or_error<TimeSpec>(
+      TimeSpec{static_cast<std::int64_t>(value.tv_sec), static_cast<std::int64_t>(value.tv_nsec)},
+      failed, number, "clock_gettime", "clock " + std::to_string(clock_id));
 }
 
 }  // namespace loadforge::platform

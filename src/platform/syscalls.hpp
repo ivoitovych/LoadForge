@@ -5,6 +5,7 @@
 #include <sys/types.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,19 @@ struct Reaped {
   int status = 0;  ///< Raw; decode with ExitStatus, which keeps the raw value.
 
   [[nodiscard]] friend bool operator==(const Reaped&, const Reaped&) = default;
+};
+
+/// One clock reading, exactly as clock_gettime(2) reports it.
+///
+/// The seconds and nanoseconds stay separate here rather than being combined
+/// below the seam: the combination can overflow and the nanoseconds field can
+/// be out of range on a broken clock, and both of those are decisions that
+/// belong where a test can force them.
+struct TimeSpec {
+  std::int64_t seconds = 0;
+  std::int64_t nanoseconds = 0;
+
+  [[nodiscard]] friend bool operator==(const TimeSpec&, const TimeSpec&) = default;
 };
 
 /// The seam. Every system call the platform layer issues goes through here.
@@ -127,6 +141,13 @@ class Syscalls {
 
   /// kill(2).
   [[nodiscard]] virtual core::Result<core::Ok, SyscallError> send_signal(pid_t pid, int signal) = 0;
+
+  /// clock_gettime(2) for the given clock id.
+  ///
+  /// Takes the raw clock id rather than an enum so the seam stays a translation
+  /// and nothing else; naming the clocks, and arguing which one answers which
+  /// question, is Clock's job above the seam where it can be tested.
+  [[nodiscard]] virtual core::Result<TimeSpec, SyscallError> read_clock(int clock_id) = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -148,6 +169,7 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] pid_t parent_pid() override;
   [[nodiscard]] core::Result<Reaped, SyscallError> wait_any() override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> send_signal(pid_t pid, int signal) override;
+  [[nodiscard]] core::Result<TimeSpec, SyscallError> read_clock(int clock_id) override;
 };
 
 }  // namespace loadforge::platform
