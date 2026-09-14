@@ -152,12 +152,30 @@ fixtures = ["sysfs/intel", "sysfs/amd", "sysfs/arm64", "sysfs/no-hwmon", "sysfs/
 from the ledger, when a ledger entry names a module that no longer exists, when a declared
 class is not one of the seven, when an entry omits P1 (every module has decision paths, so
 an entry without it was filled in rather than classified), when a declared tier has no
-tests under it, when a module declaring P2 or P7 names no fixtures — those classes are
-reachable only by forcing them, and forcing them needs something to force — or when a
-named fixture does not exist. It is built to the F20 standard: it fails closed on a ledger
-it cannot parse, and an empty ledger with a populated `src/` is a failure, not a pass. It
-runs in the coverage workflow, next to the gate whose blind spots it covers, and has 15
-tests of its own.
+tests under it, or when a named fixture does not exist. It is built to the F20 standard:
+it fails closed on a ledger it cannot parse, and an empty ledger with a populated `src/`
+is a failure, not a pass. It runs in the coverage workflow, next to the gate whose blind
+spots it covers, and has 25 tests of its own.
+
+The classes that cannot be tested without something to force the state carry their own
+rules, and the two are forced by **different** means — conflating them was this gate's
+first real bug. **P2** owes T2 or T5, because an errno is forced through the substitutable
+syscall seam and has no on-disk fixture at all; demanding one of `src/platform/fs` was
+wrong. **P6** owes T2, T7 or T8, because a lifecycle transition needs a process to
+actually start and die. **P7** owes `fixtures` *or* `fixture_builders`:
+
+```toml
+fixture_builders = ["tests/unit/topology/source_test.cpp"]
+```
+
+A committed tree holds the states a tree *can* hold — a malformed value, an unexpected
+layout, a dangling symlink. It cannot hold the other two. *Vanishes mid-run* is an event,
+not a state: only a test that reads a file and then removes it produces it. And a mode-000
+file arrives from a clone **readable**, because git records the execute bit and nothing
+else — so a committed `eacces` fixture would be read successfully and the test would pass
+having demonstrated the opposite of its claim. A named builder must exist and must carry
+the marker `LOADFORGE P7 FIXTURE BUILDER`, so the alternative is an escape hatch with a
+lock on it rather than "some file exists" wearing a new field name.
 
 This does not prove the enumeration is *complete* — nothing can, since P2–P7 are
 judgement. It proves the enumeration was *made*, is *current*, and that the tests it
