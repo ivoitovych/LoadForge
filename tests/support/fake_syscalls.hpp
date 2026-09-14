@@ -283,6 +283,25 @@ class FakeSyscalls final : public platform::Syscalls {
     return step.reaped;
   }
 
+  /// Set what a given clock id reports. Unset clocks return a fixed value, so a
+  /// test states only the clock it is about.
+  void set_clock(int clock_id, platform::TimeSpec value) { clocks_[clock_id] = value; }
+  void fail_clock(int clock_id, int error) { clock_errors_[clock_id] = error; }
+
+  [[nodiscard]] const std::vector<int>& clocks_read() const { return clocks_read_; }
+
+  core::Result<platform::TimeSpec, platform::SyscallError> read_clock(int clock_id) override {
+    clocks_read_.push_back(clock_id);
+    if (const auto failed = clock_errors_.find(clock_id); failed != clock_errors_.end()) {
+      return platform::SyscallError{failed->second, "clock_gettime",
+                                    "clock " + std::to_string(clock_id)};
+    }
+    if (const auto found = clocks_.find(clock_id); found != clocks_.end()) {
+      return found->second;
+    }
+    return platform::TimeSpec{0, 0};
+  }
+
   core::Result<core::Ok, platform::SyscallError> send_signal(pid_t pid, int signal) override {
     signals_sent_.emplace_back(pid, signal);
     if (const auto found = signal_errors_.find(pid); found != signal_errors_.end()) {
@@ -347,6 +366,10 @@ class FakeSyscalls final : public platform::Syscalls {
   int signal_error_ = 0;
   std::map<pid_t, int> signal_errors_;
   std::vector<std::pair<pid_t, int>> signals_sent_;
+
+  std::map<int, platform::TimeSpec> clocks_;
+  std::map<int, int> clock_errors_;
+  std::vector<int> clocks_read_;
 
  public:
   /// The pid the fake reports as the parent unless a test says otherwise.
