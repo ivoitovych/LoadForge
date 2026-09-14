@@ -5,7 +5,9 @@
 #include <cerrno>
 #include <cstddef>
 #include <deque>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "platform/syscalls.hpp"
@@ -190,8 +192,28 @@ class FakeSyscalls final : public platform::Syscalls {
   void fail_read_link(int error) { read_link_error_ = error; }
   [[nodiscard]] int read_link_count() const { return read_link_count_; }
 
+  /// One scripted fork: a pid returned (0 meaning "this process is the child"),
+  /// or an errno raised.
+  struct ForkStep {
+    pid_t pid = 0;
+    int error = 0;
+  };
+
+  /// Script a sequence of forks, for a caller that forks more than once. A pool
+  /// spawning N workers needs N different pids, and the interesting cases --
+  /// the fourth fork failing, the third returning 0 -- are positional.
+  void script_forks(std::vector<ForkStep> steps) { forks_.assign(steps.begin(), steps.end()); }
+
   core::Result<pid_t, platform::SyscallError> fork_process() override {
     ++fork_count_;
+    if (!forks_.empty()) {
+      const ForkStep step = forks_.front();
+      forks_.pop_front();
+      if (step.error != 0) {
+        return platform::SyscallError{step.error, "fork", "worker process"};
+      }
+      return step.pid;
+    }
     if (fork_error_ != 0) {
       return platform::SyscallError{fork_error_, "fork", "worker process"};
     }
@@ -216,6 +238,61 @@ class FakeSyscalls final : public platform::Syscalls {
   }
 
   pid_t parent_pid() override { return parent_pid_; }
+
+  /// One scripted reap: a child delivered, or an errno raised.
+  struct WaitStep {
+    platform::Reaped reaped;
+    int error = 0;
+  };
+
+  /// Script the reap sequence exactly: a foreign child, an EINTR, an ECHILD.
+  void script_waits(std::vector<WaitStep> steps) { waits_.assign(steps.begin(), steps.end()); }
+
+  /// Raise this errno from every reap, forever -- the only way to reach the
+  /// caller's interrupt bound, which a finite script cannot express.
+  void always_fail_wait(int error) { persistent_wait_error_ = error; }
+
+  void fail_signal(int error) { signal_error_ = error; }
+
+  /// Fail only for this pid, so a test can make ONE worker vanish (ESRCH) while
+  /// its neighbours are signalled normally. A blanket failure could not tell
+  /// "the loop kept going" from "the loop stopped at the first error".
+  void fail_signal_for(pid_t pid, int error) { signal_errors_[pid] = error; }
+
+  [[nodiscard]] int wait_count() const { return wait_count_; }
+  [[nodiscard]] const std::vector<std::pair<pid_t, int>>& signals_sent() const {
+    return signals_sent_;
+  }
+
+  core::Result<platform::Reaped, platform::SyscallError> wait_any() override {
+    ++wait_count_;
+    if (persistent_wait_error_ != 0) {
+      return platform::SyscallError{persistent_wait_error_, "waitpid", "any child"};
+    }
+    // Nothing left to reap is ECHILD, exactly as the kernel reports it, rather
+    // than a success carrying pid 0 -- which the caller would have to
+    // special-case and which no real waitpid ever returns for a blocking call.
+    if (waits_.empty()) {
+      return platform::SyscallError{ECHILD, "waitpid", "any child"};
+    }
+    const WaitStep step = waits_.front();
+    waits_.pop_front();
+    if (step.error != 0) {
+      return platform::SyscallError{step.error, "waitpid", "any child"};
+    }
+    return step.reaped;
+  }
+
+  core::Result<core::Ok, platform::SyscallError> send_signal(pid_t pid, int signal) override {
+    signals_sent_.emplace_back(pid, signal);
+    if (const auto found = signal_errors_.find(pid); found != signal_errors_.end()) {
+      return platform::SyscallError{found->second, "kill", "pid " + std::to_string(pid)};
+    }
+    if (signal_error_ != 0) {
+      return platform::SyscallError{signal_error_, "kill", "pid " + std::to_string(pid)};
+    }
+    return core::Ok{};
+  }
 
  private:
   static constexpr int kFakeDescriptor = 42;
@@ -244,6 +321,7 @@ class FakeSyscalls final : public platform::Syscalls {
   int read_link_error_ = 0;
   int read_link_count_ = 0;
 
+  std::deque<ForkStep> forks_;
   pid_t fork_result_ = 0;
   int fork_error_ = 0;
   int fork_count_ = 0;
@@ -261,6 +339,14 @@ class FakeSyscalls final : public platform::Syscalls {
   int last_death_signal_ = 0;
 
   pid_t parent_pid_ = kFakeSupervisorPid;
+
+  std::deque<WaitStep> waits_;
+  int persistent_wait_error_ = 0;
+  int wait_count_ = 0;
+
+  int signal_error_ = 0;
+  std::map<pid_t, int> signal_errors_;
+  std::vector<std::pair<pid_t, int>> signals_sent_;
 
  public:
   /// The pid the fake reports as the parent unless a test says otherwise.

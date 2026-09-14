@@ -13,6 +13,18 @@
 
 namespace loadforge::platform {
 
+/// A child that waitpid(2) reaped: which one, and the raw status word.
+///
+/// The two travel together because neither is usable alone. A status word with
+/// no pid cannot be attributed to a worker, and a pid with no status says only
+/// that something ended.
+struct Reaped {
+  pid_t pid = 0;
+  int status = 0;  ///< Raw; decode with ExitStatus, which keeps the raw value.
+
+  [[nodiscard]] friend bool operator==(const Reaped&, const Reaped&) = default;
+};
+
 /// The seam. Every system call the platform layer issues goes through here.
 ///
 /// WHY THIS INTERFACE EXISTS, AND WHY IT IS EXACTLY THIS NARROW
@@ -104,6 +116,17 @@ class Syscalls {
   /// longer a parent to die. Re-reading the parent pid afterwards is the only
   /// way to see that it already happened.
   [[nodiscard]] virtual pid_t parent_pid() = 0;
+
+  /// waitpid(-1, &status, 0) -- reap whichever child terminated first.
+  ///
+  /// Returns the pid AND the raw status word together, because they are only
+  /// meaningful as a pair: a status word with no pid attached cannot be
+  /// attributed to a worker, and a supervisor that reported "a worker died" for
+  /// a child some library forked would be inventing evidence.
+  [[nodiscard]] virtual core::Result<Reaped, SyscallError> wait_any() = 0;
+
+  /// kill(2).
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> send_signal(pid_t pid, int signal) = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -123,6 +146,8 @@ class RealSyscalls final : public Syscalls {
                                   const std::vector<std::string>& argv) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> set_parent_death_signal(int signal) override;
   [[nodiscard]] pid_t parent_pid() override;
+  [[nodiscard]] core::Result<Reaped, SyscallError> wait_any() override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> send_signal(pid_t pid, int signal) override;
 };
 
 }  // namespace loadforge::platform

@@ -23,6 +23,7 @@
 #include <fstream>
 #include <string>
 
+#include "platform/exit_status.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
 
@@ -315,6 +316,71 @@ TEST(SyscallResultTest, AFailedCallYieldsTheErrnoAndSubject) {
   EXPECT_EQ(result.error().number, EAGAIN);
   EXPECT_EQ(result.error().call, "fork");
   EXPECT_EQ(result.error().subject, "worker process");
+}
+
+TEST_F(RealSyscallsTest, SignallingAReapedPidIsESRCH) {
+  // A real ESRCH from a real kill, rather than a fake agreeing that kill
+  // returns ESRCH. This is the race WorkerPool::signal_all tolerates: a worker
+  // that died between the last reap and the signal. Reaping first makes it
+  // deterministic -- the pid is gone, not merely likely to be.
+  const auto forked = syscalls.fork_process();
+  ASSERT_TRUE(forked.has_value()) << describe(forked.error());
+  if (forked.value() == 0) {
+    ::_exit(0);
+  }
+  int raw = 0;
+  ASSERT_EQ(::waitpid(forked.value(), &raw, 0), forked.value());
+
+  const auto sent = syscalls.send_signal(forked.value(), SIGTERM);
+  ASSERT_FALSE(sent.has_value());
+  EXPECT_EQ(sent.error().number, ESRCH);
+  EXPECT_EQ(sent.error().call, "kill");
+  EXPECT_NE(sent.error().subject.find("pid "), std::string::npos);
+}
+
+TEST_F(RealSyscallsTest, SignalZeroProbesALiveProcessWithoutDisturbingIt) {
+  // Signal 0 is the documented existence check. Asserted against this very
+  // process, which is definitely alive, so the success arm of send_signal is
+  // exercised against the kernel rather than only against the fake.
+  const auto sent = syscalls.send_signal(::getpid(), 0);
+  EXPECT_TRUE(sent.has_value()) << (sent.has_value() ? "" : describe(sent.error()));
+}
+
+TEST_F(RealSyscallsTest, WaitingWithNoChildrenIsECHILD) {
+  // The ordinary end of a run, from the real kernel. This test process has no
+  // children at this point -- every earlier test reaped its own.
+  const auto reaped = syscalls.wait_any();
+  ASSERT_FALSE(reaped.has_value());
+  EXPECT_EQ(reaped.error().number, ECHILD);
+  EXPECT_EQ(reaped.error().call, "waitpid");
+}
+
+TEST_F(RealSyscallsTest, WaitAnyReapsARealChildAndReportsItsStatusWord) {
+  const auto forked = syscalls.fork_process();
+  ASSERT_TRUE(forked.has_value()) << describe(forked.error());
+  if (forked.value() == 0) {
+    ::_exit(9);
+  }
+
+  const auto reaped = syscalls.wait_any();
+  ASSERT_TRUE(reaped.has_value()) << describe(reaped.error());
+  EXPECT_EQ(reaped.value().pid, forked.value());
+  EXPECT_EQ(ExitStatus{reaped.value().status}.code(), 9);
+}
+
+TEST(SyscallResultTest, TheFailingArmWorksForEveryTypeTheSeamInstantiates) {
+  // A template is compiled once per type, so each instantiation carries its own
+  // coverage. The fork instantiation is exercised above; these are the other
+  // two the seam uses, and without them their failing arms would be reported as
+  // never executed even though the code is identical.
+  const auto reaped = result_or_error<Reaped>(Reaped{}, true, ECHILD, "waitpid", "any child");
+  ASSERT_FALSE(reaped.has_value());
+  EXPECT_EQ(reaped.error().number, ECHILD);
+
+  const auto signalled = result_or_error<core::Ok>(core::Ok{}, true, ESRCH, "kill", "pid 1234");
+  ASSERT_FALSE(signalled.has_value());
+  EXPECT_EQ(signalled.error().number, ESRCH);
+  EXPECT_EQ(signalled.error().subject, "pid 1234");
 }
 
 TEST(SyscallResultTest, TheValueIsIgnoredWhenTheCallFailed) {
