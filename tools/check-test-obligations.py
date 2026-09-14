@@ -34,7 +34,14 @@ CLASSES = {"P1", "P2", "P3", "P4", "P5", "P6", "P7"}
 # universal and deliberately not declarable per module -- see the ledger header.
 TIERS = {"T1", "T2", "T3", "T4", "T5", "T5b", "T6", "T7", "T8", "T10", "T11"}
 REQUIRED_FIELDS = {"path", "classes", "tiers"}
-OPTIONAL_FIELDS = {"fixtures", "note"}
+OPTIONAL_FIELDS = {"fixtures", "fixture_builders", "note"}
+
+# A file named as a fixture_builder must SAY it is one. Without a marker the
+# check degenerates into "some file exists", which is the vacuous shape this
+# gate has already shipped three times (see TIER_FILE_MARKERS). The marker is
+# something an author writes deliberately and a reviewer can grep for; it cannot
+# appear by accident in a file that builds no hostile tree.
+FIXTURE_BUILDER_MARKER = "LOADFORGE P7 FIXTURE BUILDER"
 
 # Where a tier's tests live. A tier is satisfied when at least one non-empty
 # directory exists among its locations; the mapping is deliberately coarse,
@@ -230,11 +237,47 @@ def main() -> int:
         for fixture in fixtures:
             if not (root / "tests" / "fixtures" / str(fixture)).exists():
                 fail(f"{path}: fixture 'tests/fixtures/{fixture}' does not exist")
-        if "P7" in declared_classes and not fixtures:
+
+        # A CHECKED-IN TREE IS ONE WAY TO PUT A SOURCE IN A STATE, NOT THE ONLY ONE
+        # ------------------------------------------------------------------------
+        # The original rule demanded `fixtures`, i.e. a tree committed under
+        # tests/fixtures/. That is right for the states a tree can hold -- a
+        # malformed value, an unexpected layout, a dangling symlink -- and wrong
+        # for the rest, because some capability states CANNOT be committed:
+        #
+        #   * "vanishes mid-run" is an event, not a state. No static tree can
+        #     hold it; only a test that reads a file and then removes it.
+        #   * a mode-000 file does not survive a clone. git records the execute
+        #     bit and nothing else, so a committed EACCES fixture would arrive
+        #     readable and the test would pass by reading it.
+        #
+        # So the rule now accepts a named BUILDER: a test file that constructs
+        # the hostile state at runtime. That is not a loophole -- the builder
+        # must exist and must carry the marker, so naming an arbitrary file does
+        # not satisfy it -- and refusing it would have forced exactly the
+        # prove-nothing fixture this gate's P2 comment already warns about.
+        builders = entry.get("fixture_builders", [])
+        if not isinstance(builders, list):
+            fail(f"{path}: 'fixture_builders' must be a list")
+            builders = []
+        for builder in builders:
+            target = root / str(builder)
+            if not target.is_file():
+                fail(f"{path}: fixture builder '{builder}' does not exist")
+            elif FIXTURE_BUILDER_MARKER not in target.read_text(
+                encoding="utf-8", errors="replace"
+            ):
+                fail(
+                    f"{path}: fixture builder '{builder}' does not carry "
+                    f"'{FIXTURE_BUILDER_MARKER}'. A file that does not say it builds "
+                    "hostile trees is not evidence that anything builds one."
+                )
+        if "P7" in declared_classes and not fixtures and not builders:
             fail(
-                f"{path}: declares P7 but names no fixtures. A capability state -- a "
-                "source present, absent, or refusing permission -- is reachable only "
-                "from a tree on disk that is in that state."
+                f"{path}: declares P7 but names neither fixtures nor fixture_builders. "
+                "A capability state -- a source present, absent, refusing permission, "
+                "or vanishing mid-run -- is reachable only from a tree on disk that is "
+                "in that state, committed or constructed."
             )
         if "P2" in declared_classes and not ({"T2", "T5"} & set(tiers or [])):
             fail(

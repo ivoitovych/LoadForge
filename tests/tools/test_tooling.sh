@@ -478,6 +478,43 @@ tiers    = ["T1"]
 fixtures = ["sysfs/intel"]'
 expect "declared classes with real fixtures passes"          0 $? "ok    src/core" "$out"
 
+# Not every capability state can be committed to git. "Vanishes mid-run" is an
+# event rather than a state, and a mode-000 file arrives readable after a clone
+# because git records only the execute bit -- so a test that CONSTRUCTS the
+# hostile tree is the only way to reach either, and the ledger has to be able to
+# say so. The escape hatch is bounded: the named file must exist AND declare
+# itself, or this is just "some file exists" wearing a new field name.
+led '[[module]]
+path             = "src/core"
+classes          = ["P1", "P7"]
+tiers            = ["T1"]
+fixture_builders = ["tests/unit/no_such_test.cpp"]'
+expect "a fixture builder that does not exist FAILS"         1 $? "does not exist" "$out"
+
+printf 'int builder(){return 0;}\n' > "$ob/tests/unit/builder_test.cpp"
+led '[[module]]
+path             = "src/core"
+classes          = ["P1", "P7"]
+tiers            = ["T1"]
+fixture_builders = ["tests/unit/builder_test.cpp"]'
+expect "a builder that does not declare itself FAILS"        1 $? "does not carry" "$out"
+
+printf '// LOADFORGE P7 FIXTURE BUILDER\n' >> "$ob/tests/unit/builder_test.cpp"
+led '[[module]]
+path             = "src/core"
+classes          = ["P1", "P7"]
+tiers            = ["T1"]
+fixture_builders = ["tests/unit/builder_test.cpp"]'
+expect "a builder that declares itself passes"               0 $? "ok    src/core" "$out"
+
+led '[[module]]
+path             = "src/core"
+classes          = ["P1", "P7"]
+tiers            = ["T1"]
+fixture_builders = "tests/unit/builder_test.cpp"'
+expect "fixture_builders that is not a list FAILS"           1 $? "must be a list" "$out"
+rm -f "$ob/tests/unit/builder_test.cpp"
+
 led '[[module]]
 path    = "src/core"
 classes = ["P1"]

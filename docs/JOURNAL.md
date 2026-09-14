@@ -214,6 +214,56 @@ The local lesson is smaller and more embarrassing: the same reasoning had alread
 applied to the suspend threshold a few lines earlier and simply was not carried to the
 contradiction check. **When you write one tolerance, look for its mirror.**
 
+### 1.13 `--exclude-throw-branches` does not exclude the branches *inside* a landing pad
+
+gcovr's `--exclude-throw-branches` drops the edges gcov labels `(throw)`. It does **not**
+drop the ordinary branches sitting inside the cleanup block that a throw edge jumps to —
+those are unlabelled, and nothing else recognises them either.
+
+That block exists whenever a function builds something destructible and then calls
+anything the compiler must assume can throw. Destroying a `std::string` carries a branch
+(the small-string check), so the pattern
+
+```cpp
+return SomeError{kind, path_, describe(error)};   // two allocating members
+```
+
+emits a branch that **no test can ever take**: it runs only if `describe` throws after
+`path_` has been copied, or if the `Result` constructor throws after the temporary is
+built.
+
+*Evidence:* the topology `Source` module measured 99.4% branch coverage with every test
+passing, the four missing branches all on `return Unavailable{...}` lines. Raw
+`gcov -b -c` showed them as `branch N never executed` immediately after a
+`call N never executed`, with no `(throw)` label — which is why the exclusion flag left
+them.
+
+*Two fixes, and the second is the one that generalises.* Hoisting the second allocation
+into its own statement removes the half-built-object cleanup, because the only throwing
+construction then happens when nothing needs destroying. That handles the aggregate but
+not the `Result` constructor, which was still assumed-throwing for want of a specifier.
+Declaring the truth —
+
+```cpp
+constexpr Result(E error) noexcept(std::is_nothrow_move_constructible_v<E>)
+```
+
+— removed the rest. `std::variant`'s in-place constructor is itself `noexcept` exactly
+when the alternative's is, so the condition is precise rather than optimistic: a type
+whose move can throw still gets a throwing `Result` and the landing pad it genuinely
+needs.
+
+*The measurable result:* project-wide branch count fell from **650 to 565**. Those 85
+edges were never the code's own decisions; they were exception plumbing being counted as
+though they were, and the 646/650 they inflated was a less honest number than the 565/565
+that replaced it.
+
+*The rule worth carrying:* **a missing `noexcept` is not only a performance question — it
+manufactures unreachable branches.** When an uncoverable branch appears on a line that
+contains no `if`, look for the cleanup path before reaching for an exclusion. This is
+rung 2 of the exclusion ladder approached from the other side: rather than making the edge
+reachable, delete the edge.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -314,6 +364,65 @@ A trivial naming point recorded because it will otherwise be re-proposed: `Unit`
 already taken in this codebase, by the unit-suffix parsers in `duration.cpp` and
 `byte_size.cpp`. Two different `Unit` types in one project is a permanent source of
 misreading.
+
+### 2.6 "Absent" and "vanished" are different facts, and only a *stateful* reader can tell them apart
+
+The capability model (F3) said absent, empty and malformed are three different things. The
+topology `Source` module added a fourth that does not fit that list: a source that was
+here, was read, and is **gone now**.
+
+The errno is identical. `ENOENT` is `ENOENT`, whether the kernel never offered the
+attribute or a CPU was offlined between two samples. Nothing in the failure distinguishes
+them — only the history does, which is why `Source` carries state at all. It is one
+`bool`, and it is the entire reason the module is a class rather than a free function.
+
+*The rejected alternative* is the obvious one: `read_cpu_list(fs, path)`, stateless,
+simpler in every other respect, and structurally incapable of making the distinction.
+
+*Why the distinction is worth a class:* reporting a vanished source as absent says "this
+machine never had that" about a machine that did. Every number gathered before the change
+then silently belongs to a different machine than the summary claims — and nothing
+downstream would question it, because "absent" is a perfectly ordinary thing for a
+telemetry source to be.
+
+The symmetric decision matters as much: `EACCES` is **not** promoted to vanished once a
+source has been read. A device going away does not revoke a permission, and telling a user
+their hardware changed when what they need is a group membership sends them looking in the
+wrong place. `EISDIR` and `ENOTDIR` get the same treatment for the same reason — both mean
+*our path is wrong*, and folding them into "absent" would turn a bug in our own path
+construction into a confident permanent statement about the user's hardware.
+
+*Falsified, not asserted:* three mutations were applied and each was killed — setting
+`seen_` on entry rather than on success (6 tests), promoting `EACCES` to vanished
+(2 tests), folding unknown errnos into absent (4 tests).
+
+### 2.7 A P7 fixture can be *built* as well as committed — and some cannot be committed at all
+
+`tools/check-test-obligations.py` required a module declaring **P7** to name fixtures under
+`tests/fixtures/`. That is right for the states a committed tree can hold — a malformed
+value, an unexpected layout, a dangling symlink — and wrong for the two that matter most
+here:
+
+- **"Vanishes mid-run" is an event, not a state.** No static tree can hold it. Only a test
+  that reads a file and then removes it produces it.
+- **A mode-000 file arrives from a clone readable.** git records the execute bit and
+  nothing else, so a committed `eacces` fixture would be read successfully and the test
+  would pass *having demonstrated the opposite of its claim*.
+
+So the gate now accepts `fixture_builders` — a test file that constructs the hostile state
+at runtime — as an alternative to `fixtures`. This is deliberately **not** a loophole: the
+named file must exist *and* carry the marker `LOADFORGE P7 FIXTURE BUILDER`, because
+without a marker the check degenerates into "some file exists", which is the vacuous shape
+this project has now shipped four times (§4.7). Four new gate tests cover the escape hatch
+in both directions, including the one that matters: a builder that does not declare itself
+fails.
+
+*The general shape, which is the part worth carrying:* when a gate blocks correct work, the
+question is whether its **intent** or its **spelling** is wrong. Here the intent — a P7
+claim must be backed by something that really puts a source in that state — was right, and
+the spelling recognised only one implementation of it. Weakening the intent would have been
+the wrong fix; so would inventing a prove-nothing fixture to satisfy the spelling, which is
+exactly what the gate's own P2 comment already warns against.
 
 ---
 
@@ -623,11 +732,21 @@ Kept short and current; move an item to the relevant document once it is settled
   verifies *shape* — one author, complete identity — and not a particular person.
 - **Landed since this file was written:** the syscall seam, the runtime-dependency gate,
   `ExitStatus`, the coverage-completeness gate, the worker launcher and the pool that
-  supervises a set of them (§2.1), and the clock (§1.11, §1.12). Review was waived by the
-  owner rather than performed, which is worth remembering when reading that history: the
-  gates are the only thing that has inspected it.
-- **Next in sequence:** topology discovery — cores, threads, cache hierarchy and NUMA
-  layout out of `/sys`. It is the first module with real **P7** capability paths (a source
-  present, absent, `EACCES`, malformed, or vanishing mid-run) and the first to drive the
-  `FileSystem` reader against deliberately hostile trees, so it is where the obligation
-  ledger's fixture rule finally has something to enforce.
+  supervises a set of them (§2.1), the clock (§1.11, §1.12), the sysfs CPU-list parser, and
+  the capability-classifying `Source` that decides what a *failed* reading means (§2.6,
+  §2.7). Review was waived by the owner rather than performed, which is worth remembering
+  when reading that history: the gates are the only thing that has inspected it.
+- **Next in sequence:** the rest of topology discovery — cores, threads, cache hierarchy
+  and NUMA layout — now that there is a reader that can say *why* a source gave no answer.
+  The interesting work is no longer the reading but the **cross-checking**: sibling lists
+  must be mutually consistent, a core's siblings must include the core itself, and the
+  union of every package's CPUs must equal `online`. Each of those is an independent source
+  that can disagree, and F21 says a topology that only agrees with itself is not evidence.
+  The open design question is what to do when two sysfs files contradict each other —
+  almost certainly refuse rather than pick a winner, on the same reasoning as the CPU-list
+  parser's strictness, but it has not been decided.
+- **Deferred, and worth not forgetting:** `Source` has no "counter wraps" state, which the
+  P7 taxonomy lists. It is genuinely not needed yet — nothing here reads a monotonic
+  counter — but the telemetry sources at M3 will, and the decision about where wrap
+  detection lives (in `Source`, or in a counter type above it) should be made deliberately
+  rather than by whoever first hits it.
