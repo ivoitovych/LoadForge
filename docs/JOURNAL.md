@@ -214,6 +214,29 @@ The local lesson is smaller and more embarrassing: the same reasoning had alread
 applied to the suspend threshold a few lines earlier and simply was not carried to the
 contradiction check. **When you write one tolerance, look for its mirror.**
 
+### 1.13a `cpu0` has no `online` file, and that is normal
+
+Every CPU directory under `/sys/devices/system/cpu/` carries an `online` attribute **except
+`cpu0`**, because the boot CPU cannot be offlined on most configurations, so the kernel
+never creates the file.
+
+*Evidence:* probed directly — `cpu0/online` does not exist while `cpu1/online` reads `1`, on
+an ordinary healthy 4-CPU machine.
+
+This matters because it is a **P7 absence that is completely ordinary**. Code that read
+per-CPU `online` files and treated a missing one as an error would fail on every machine it
+ever ran on. It is also why discovery reads the top-level `online` list instead: one file,
+authoritative, and present everywhere.
+
+Two other shapes probed at the same time, recorded so nobody has to guess:
+
+- `smt/control` reads the **string** `"notsupported"`, not a boolean. `smt/active` is `0`
+  or `1`, and the whole `smt/` directory is absent on some architectures — which is why
+  `multithreaded()` is derived from the sibling sets instead.
+- `core_siblings_list` is **package**-scoped despite its name (it is the older alias for
+  `package_cpus_list`). `thread_siblings_list` is the one that means "shares a physical
+  core". Reaching for the obvious-sounding name gets the wrong answer.
+
 ### 1.13 `--exclude-throw-branches` does not exclude the branches *inside* a landing pad
 
 gcovr's `--exclude-throw-branches` drops the edges gcov labels `(throw)`. It does **not**
@@ -423,6 +446,56 @@ claim must be backed by something that really puts a source in that state — wa
 the spelling recognised only one implementation of it. Weakening the intent would have been
 the wrong fix; so would inventing a prove-nothing fixture to satisfy the spelling, which is
 exactly what the gate's own P2 comment already warns against.
+
+### 2.8 Discovery refuses when its sources contradict each other, rather than picking one
+
+The kernel publishes the CPU topology several times over, in files that must agree: a CPU's
+thread siblings must include the CPU itself, two CPUs that call each other siblings must
+publish the *same* sibling set and report the same core, and every sibling must be online.
+Nothing outside the kernel enforces any of it.
+
+*The decision:* when the checks fail, discovery **refuses**. It does not pick whichever file
+it read first, and it does not drop the CPU that does not fit.
+
+*The rejected alternative* is the accommodating one, and it is what most tools do — take
+`online`, take `core_id`, assume they line up. It is tempting because it always produces an
+answer. That is exactly the problem: a wrong core count is not a visible failure, it is a
+number every later report is silently attributed against, and nothing downstream would
+think to question it. A refusal is loud once; a plausible wrong topology is quietly wrong
+forever.
+
+*Why the agreement is evidence rather than a tautology (F21):* these files are written by
+different parts of the kernel from different internal structures — `online` from the
+hotplug machinery, `thread_siblings_list` from the scheduler's topology masks, `core_id`
+and `physical_package_id` from the architecture's CPU identification. A bug in LoadForge
+cannot make them agree.
+
+Two smaller decisions inside it:
+
+- **A core is a (package, core_id) pair**, never `core_id` alone. `core_id` is unique only
+  within a package, so counting by it merges every socket's core 0 and reports half the
+  machine.
+- **An empty `online` is a contradiction, not an empty reading.** `CpuList` is right to
+  accept an empty value — `offline` is empty on every healthy machine — but a discovery
+  layer knows something the parser does not: this code is executing, so at least one CPU is
+  online. That is the difference between a parser, which must accept whatever the format
+  allows, and a layer that knows something about the world.
+
+### 2.9 `core_id` of −1 means the kernel does not know, and that is not a malformed file
+
+Real kernels write **−1** into `core_id` and `physical_package_id` when they cannot
+determine them, which happens on some virtualised and arm64 machines.
+
+This forced the sysfs integer reader to be **signed**. An unsigned parser would refuse `-1`
+as "not a digit" and report a malformed file — which is a lie, because the file is exactly
+what the kernel meant to write. Reading it faithfully and then refusing to build a topology
+on it lets the message distinguish *"your kernel wrote something strange"* from *"your
+kernel does not expose this"*, and only the second has an answer the user can act on.
+
+The same reader also shows that **the right answer to one input can differ between two
+callers of the same class**: an empty value is a success for `cpu_list()` and malformed for
+`integer()`, because no kernel attribute holding a number is ever written blank. That is
+not an inconsistency to be tidied away; it is the two formats genuinely differing.
 
 ---
 
@@ -636,6 +709,37 @@ Two lessons, and the second is the general one:
   that made the test vacuous while green. Fixtures deserve the same "what would make this
   fail?" question as the thing under test.
 
+**A third instance, and the sharpest one, because the code under test contained the exact
+bug its own comment denied.** `Source::integer` guards against a run of digits long enough
+to overflow its accumulator. It was written as:
+
+```cpp
+magnitude = magnitude * 10 + (digit - '0');
+if (magnitude > kMaxMagnitude) { /* refuse */ }
+```
+
+under a comment stating — correctly — that *"overflowing a signed integer is undefined
+behaviour rather than a big number, so there would be nothing left to test for once the
+loop had finished."* That is precisely what the code then did: it multiplied first and
+inspected the result afterwards. By the time the comparison runs, the overflow has already
+happened.
+
+The test fed it twenty-six nines, asserted the refusal, and **passed** — because a wrapped
+value happens to exceed the bound on some later digit, so the expected error arrived
+without the guard ever having worked. Only the UBSan build reported it:
+`signed integer overflow: 999999999999999999 * 10 cannot be represented in type 'long int'`.
+
+Three things worth carrying:
+
+- **Check before the operation, not after it, whenever the operation is the thing that can
+  destroy the evidence.** The guard is now `magnitude > (kMaxMagnitude - digit) / 10`,
+  which keeps the value in range instead of detecting that it left.
+- **A comment stating the hazard is not a defence against it.** This one named the exact
+  failure and sat directly above it. Prose does not execute.
+- **Test the boundary, not a value far past it.** "Twenty-six nines is refused" can be
+  satisfied by an accident; "10^18 is accepted and 10^18 + 1 is refused" cannot, and
+  neither case can overflow anything, so neither can pass for the wrong reason.
+
 ### 4.7 Declaring something a gate does not check
 
 The obligation ledger has per-class rules — P7 must name its fixtures, P2 must owe an
@@ -762,15 +866,15 @@ Kept short and current; move an item to the relevant document once it is settled
   the capability-classifying `Source` that decides what a *failed* reading means (§2.6,
   §2.7). Review was waived by the owner rather than performed, which is worth remembering
   when reading that history: the gates are the only thing that has inspected it.
-- **Next in sequence:** the rest of topology discovery — cores, threads, cache hierarchy
-  and NUMA layout — now that there is a reader that can say *why* a source gave no answer.
-  The interesting work is no longer the reading but the **cross-checking**: sibling lists
-  must be mutually consistent, a core's siblings must include the core itself, and the
-  union of every package's CPUs must equal `online`. Each of those is an independent source
-  that can disagree, and F21 says a topology that only agrees with itself is not evidence.
-  The open design question is what to do when two sysfs files contradict each other —
-  almost certainly refuse rather than pick a winner, on the same reasoning as the CPU-list
-  parser's strictness, but it has not been decided.
+- **Next in sequence:** the cache hierarchy and NUMA layout, the two parts of topology
+  discovery still unbuilt. The CPU half — cores, threads, packages, with the cross-checks —
+  has landed (§2.8, §2.9), and the contradiction question it raised is settled: discovery
+  refuses rather than picking a winner. Caches bring a shape the CPU files do not: each
+  `cache/indexN` has a `shared_cpu_list` that must be consistent with the sibling sets (an
+  L1 shared beyond a physical core, or an L3 not shared across a package, is a
+  contradiction), plus `size` in a unit-suffixed format (`48K`, `266240K`) that
+  `core::byte_size` may or may not already parse correctly — worth checking rather than
+  assuming.
 - **Wanted: one local entry point that runs what CI runs.** There is currently none, so
   every contributor — and every session — assembles the list from memory and gets a
   different subset. That is how §4.8 happened: eleven checks run, the twelfth not recalled

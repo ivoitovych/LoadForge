@@ -93,7 +93,10 @@ No P7 yet: capability states arrive with the telemetry sources at M3.\
 path             = "src/topology"
 classes          = ["P1", "P2", "P3", "P7"]
 tiers            = ["T1", "T2", "T8"]
-fixture_builders = ["tests/unit/topology/source_test.cpp"]
+fixture_builders = [
+  "tests/unit/topology/source_test.cpp",
+  "tests/unit/topology/cpu_topology_test.cpp",
+]
 note             = """
 The sysfs CPU-list parser, and the Source that decides what a failed reading \
 MEANS. \
@@ -135,5 +138,21 @@ the count against sysconf(_SC_NPROCESSORS_ONLN), an independent source, so the \
 agreement is evidence rather than a tautology (F21). It now also reads a \
 sysfs path this kernel does not offer, unlinks a file between two readings, and \
 points a Source at a directory and at a path whose parent is a file -- real \
-ENOENT, real EISDIR, real ENOTDIR, none of them faked.\
+ENOENT, real EISDIR, real ENOTDIR, none of them faked. \
+\
+CpuTopology adds the reason this module has cross-checks at all. The kernel \
+publishes the same facts several times over -- online from the hotplug \
+machinery, thread_siblings_list from the scheduler's masks, core_id and \
+physical_package_id from the architecture's CPU identification -- and nothing \
+outside the kernel makes them agree. Discovery REFUSES when they do not, \
+because a wrong core count is not a visible failure: it is a number every \
+later report is attributed against, and nothing downstream would question it. \
+\
+Its tests BUILD a sysfs tree and drive RealSyscalls at it. A fake would agree \
+with whatever this code believes, which is worthless for testing disagreement \
+(F21); a committed tree would put each hostile arrangement in a directory of \
+near-identical trees instead of beside the assertion it exists for. The real \
+/sys is read as well, because a tree these tests wrote is still a tree these \
+tests believe in -- and if any cross-check were too strict for real hardware, \
+that is the test that says so.\
 """
