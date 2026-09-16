@@ -650,6 +650,32 @@ with nothing behind it, except here the document was the gate's own input.
 actually checks it.** A vocabulary a tool accepts is not the same as a vocabulary it
 enforces, and the gap is invisible precisely because the tool says nothing.
 
+### 4.8 Verifying "every gate" from memory, and missing the one for the other language
+
+A change to the topology module was checked before pushing against: the full test suite,
+both sanitizers, the coverage gate, the coverage-completeness gate, the exclusions gate,
+the obligations gate and its own tests, the runtime-dependency gate, the fetch and
+dependency gates, `clang-format`, `clang-tidy` and `shellcheck`. Eleven things. CI still
+came back red.
+
+It came back red on `ruff format --diff tools/`, because the change also touched a
+**Python** gate, and the recalled list was a list of the checks this project's *C++* work
+usually needs. The miss was not carelessness about any one gate; it was that the list
+lived in my head and was assembled by association with the last similar change, and this
+change was similar-but-one-language-wider.
+
+*The general rule:* **a checklist reconstructed from memory is biased toward the last
+thing it was used for.** When a change reaches into a part of the tree you do not normally
+touch, the question is not "did I run the checks?" but "what does CI run that I have not
+named?" — and the answer is in the workflow files, which are readable in seconds and do
+not rely on recall at all.
+
+*The structural fix* is not another rule. The repository has no single local entry point
+that runs what CI runs: a contributor forms their confidence from whichever subset they
+remember, which is the same failure waiting for the next person. That belongs in its own
+change rather than smuggled into this one, so it is recorded in §6 instead of fixed here —
+but it is the real answer, and "be more careful" is not.
+
 ---
 
 ## 5. Process knowledge
@@ -745,6 +771,13 @@ Kept short and current; move an item to the relevant document once it is settled
   The open design question is what to do when two sysfs files contradict each other —
   almost certainly refuse rather than pick a winner, on the same reasoning as the CPU-list
   parser's strictness, but it has not been decided.
+- **Wanted: one local entry point that runs what CI runs.** There is currently none, so
+  every contributor — and every session — assembles the list from memory and gets a
+  different subset. That is how §4.8 happened: eleven checks run, the twelfth not recalled
+  because it belonged to the other language in the tree. A `tools/verify.sh` that runs
+  exactly what the workflows run, and is itself checked against the workflow files so the
+  two cannot drift, would close it. Deliberately not bundled into the change that
+  motivated it.
 - **Deferred, and worth not forgetting:** `Source` has no "counter wraps" state, which the
   P7 taxonomy lists. It is genuinely not needed yet — nothing here reads a monotonic
   counter — but the telemetry sources at M3 will, and the decision about where wrap

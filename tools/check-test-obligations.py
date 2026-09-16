@@ -264,9 +264,7 @@ def main() -> int:
             target = root / str(builder)
             if not target.is_file():
                 fail(f"{path}: fixture builder '{builder}' does not exist")
-            elif FIXTURE_BUILDER_MARKER not in target.read_text(
-                encoding="utf-8", errors="replace"
-            ):
+            elif FIXTURE_BUILDER_MARKER not in target.read_text(encoding="utf-8", errors="replace"):
                 fail(
                     f"{path}: fixture builder '{builder}' does not carry "
                     f"'{FIXTURE_BUILDER_MARKER}'. A file that does not say it builds "
