@@ -287,6 +287,26 @@ contains no `if`, look for the cleanup path before reaching for an exclusion. Th
 rung 2 of the exclusion ladder approached from the other side: rather than making the edge
 reachable, delete the edge.
 
+### 1.14 What sysfs writes for caches, and why the config parser cannot read it
+
+Four facts, each probed from the running machine before the cache module was designed:
+
+- **`cache/indexN/size` is written as `48K`, `2048K`, `266240K`** — a bare `K` meaning
+  1024, staying in `K` even at 260 MiB. `core::parse_byte_size` **rejects** it: run against
+  `"48K"` it returns `"unit suffix is not recognised"`, because it accepts `KiB`/`MiB`/`GiB`
+  and, deliberately, a percentage. That parser reads what a *user* writes in a config file.
+  Pointing it at a cache size would fail on every real machine, and teaching it `K` would
+  make `70%` a parseable cache size. So topology has its own, and a test pins the boundary
+  in both directions.
+- **A shared cache is published once per CPU that can see it.** `index3/id` reads `0` from
+  all four CPUs — one L3, four directory entries. Deduplication is on `(level, type, id)`,
+  and reading all four *first* is what makes them checkable against each other.
+- **`id` is unique only within a level, and L1 Data and L1 Instruction share one.** cpu0's
+  L1d and L1i are both `id=0`. An identity of `(level, id)` would merge them.
+- **Some virtualised machines publish no `cache/` directory at all.** Zero caches is a fact
+  about the machine, not a failure to read it — the scan terminates on the first *absent*
+  index, and nothing else terminates it.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -496,6 +516,48 @@ The same reader also shows that **the right answer to one input can differ betwe
 callers of the same class**: an empty value is a success for `cpu_list()` and malformed for
 `integer()`, because no kernel attribute holding a number is ever written blank. That is
 not an inconsistency to be tidied away; it is the two formats genuinely differing.
+
+### 2.10 Cache cross-checks: which ones, and — more importantly — which ones not
+
+The cache hierarchy gets the same treatment as the CPU topology (§2.8): read everything,
+check the readings against each other, refuse on contradiction. Four checks, each certain
+of any machine:
+
+- a cache's shared set contains the CPU it was read through;
+- every CPU in that set is one the CPU topology found online;
+- every CPU sharing a cache publishes an **identical** record for it — sharing a cache is an
+  equivalence relation, exactly as sharing a core is;
+- **sharing only widens with level**: the CPUs sharing a CPU's L1 are a subset of those
+  sharing its L2. This is the defining structural property of a hierarchy.
+
+*What was deliberately left out, and why it matters more than what went in:* a check that
+refuses a real machine is worse than no check at all, because a refusal is loud and
+permanent. Two plausible checks fail that test:
+
+- "every CPU reports the same set of levels" — **false on big.LITTLE**, where big and
+  little cores can have different cache depths;
+- "sizes grow with level" — nearly always true and not guaranteed; L1i and L1d already
+  differ at the *same* level (32K and 48K here).
+
+The T8 test against the real `/sys` is what guards the checks that *were* kept: if any is
+too strict, that test is the one that says so.
+
+*Two smaller decisions:*
+
+- The scan's terminator is **absence and nothing else**. A denied or unreadable `indexN`
+  is a failure, not the end of the list — otherwise a machine whose L3 we could not read
+  would silently report as a machine with no L3, a plausible wrong answer.
+- `read_index` returns `Result<optional<Cache>, DiscoveryFailure>`. That is the
+  Result-of-optional shape §2.6 warned against, and it is right here because there are
+  genuinely three outcomes — end of list, a cache, a failure — and collapsing any two would
+  lose the distinction above.
+
+*On shape:* the first `discover()` did the reading, all four checks, deduplication and
+sorting in one body, and clang-tidy measured its cognitive complexity at **79** against a
+threshold of 25. Splitting it into `read_index`, `check_served_cpus_online`,
+`check_nesting`, `deduplicate` and `ordered_before` made each check a named claim rather
+than a paragraph in a loop — which is what the doctrine says a cross-check *is*. The
+finding was correct and the fix was better code, not appeasement.
 
 ---
 
@@ -780,6 +842,40 @@ remember, which is the same failure waiting for the next person. That belongs in
 change rather than smuggled into this one, so it is recorded in §6 instead of fixed here —
 but it is the real answer, and "be more careful" is not.
 
+### 4.9 Two parsers that look interchangeable and are not
+
+The first draft of the cache reader parsed `cache/indexN/level` with `parse_cache_size` —
+it was to hand, it reads digits, and `level` is digits. It also accepts a `K` suffix, so a
+file containing `1K` would have read as **level 1024**: a plausible wrong number in the one
+place this module exists to prevent them.
+
+Caught on re-reading the code before it was ever run, which is the cheapest place, and
+recorded because the mistake is *structural*: a parser for a superset format silently
+accepts things the narrower field never contains. The fix was the narrower reader
+(`Source::integer`) with an explicit bound. **When two parsers accept overlapping inputs,
+the one that accepts *less* is the one to reach for**, and the comment at the call site now
+says why.
+
+### 4.10 A mutant that does not compile has proved nothing
+
+Nine hand-applied mutations of the cache cross-checks, eight reporting "tests failed: 1"
+or more. The ninth reported `tests failed:` — **blank**. Read quickly, a blank sits in the
+column where a small number sits and looks like a small number.
+
+It was not a survivor and not a kill. Replacing `if (!online)` with `if (false)` left
+`online` unused, `-Werror` refused the build, and the `&&`-chained pipeline never reached
+the count. The probe harness had no arm for "the build failed", so it said nothing — which
+is the fail-open shape F20 is about, in a tool that only ever runs by hand.
+
+Re-probed with a mutant that compiles (`if (!online && cpus.cpus().empty())`) and killed
+by exactly the test written for it. Two things carried forward:
+
+- **A mutation is evidence only if the mutant ran.** Under `-Werror`, disabling a check can
+  strand a variable, and a mutant that will not build says nothing about the tests.
+- **An empty result is not a result** — the `$?` lesson of §4.1 in a different costume. The
+  harness now prints "MUTANT DID NOT COMPILE" as its own outcome, so the column can never
+  be blank.
+
 ---
 
 ## 5. Process knowledge
@@ -866,15 +962,13 @@ Kept short and current; move an item to the relevant document once it is settled
   the capability-classifying `Source` that decides what a *failed* reading means (§2.6,
   §2.7). Review was waived by the owner rather than performed, which is worth remembering
   when reading that history: the gates are the only thing that has inspected it.
-- **Next in sequence:** the cache hierarchy and NUMA layout, the two parts of topology
-  discovery still unbuilt. The CPU half — cores, threads, packages, with the cross-checks —
-  has landed (§2.8, §2.9), and the contradiction question it raised is settled: discovery
-  refuses rather than picking a winner. Caches bring a shape the CPU files do not: each
-  `cache/indexN` has a `shared_cpu_list` that must be consistent with the sibling sets (an
-  L1 shared beyond a physical core, or an L3 not shared across a package, is a
-  contradiction), plus `size` in a unit-suffixed format (`48K`, `266240K`) that
-  `core::byte_size` may or may not already parse correctly — worth checking rather than
-  assuming.
+- **Next in sequence:** the NUMA layout, the last part of topology discovery. CPUs (§2.8,
+  §2.9) and caches (§1.14, §2.10) have landed with their cross-checks. NUMA brings
+  `/sys/devices/system/node/nodeN/cpulist`, which must partition `online` — every online
+  CPU in exactly one node — and `meminfo`, a multi-line file where the single-line
+  `Source::text()` will not do. That is the first source needing a multi-line reader, and
+  the decision about where it lives (a `Source::lines()`, or a separate procfs-style
+  reader for M3's `/proc/meminfo`) should be made once for both.
 - **Wanted: one local entry point that runs what CI runs.** There is currently none, so
   every contributor — and every session — assembles the list from memory and gets a
   different subset. That is how §4.8 happened: eleven checks run, the twelfth not recalled
