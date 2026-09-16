@@ -80,6 +80,7 @@ loadforge_enable_coverage(loadforge_platform)
 # platform layer, so it depends on platform and platform never depends on it.
 add_library(loadforge_topology STATIC
   src/topology/cpu_list.cpp
+  src/topology/source.cpp
 )
 target_link_libraries(loadforge_topology PUBLIC loadforge_platform)
 loadforge_set_warnings(loadforge_topology)

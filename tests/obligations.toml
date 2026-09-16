@@ -90,12 +90,35 @@ No P7 yet: capability states arrive with the telemetry sources at M3.\
 """
 
 [[module]]
-path    = "src/topology"
-classes = ["P1", "P3"]
-tiers   = ["T1", "T8"]
-note    = """
-The sysfs CPU-list parser. Pure text logic, so no seam and no P2 of its own -- \
-the errno paths belong to the FileSystem that hands it a line. \
+path             = "src/topology"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2", "T8"]
+fixture_builders = ["tests/unit/topology/source_test.cpp"]
+note             = """
+The sysfs CPU-list parser, and the Source that decides what a failed reading \
+MEANS. \
+\
+P2 arrived with Source::classify. The parser had none -- pure text logic, with \
+the errno paths belonging to the FileSystem that handed it a line -- but \
+classify is this module's own per-errno decision, and getting it wrong is not a \
+crash, it is a confident wrong statement about the user's hardware. Those arms \
+are forced through the seam (T2), because the one that matters most cannot be \
+provoked otherwise: the tests run as root, and root bypasses the DAC check that \
+produces EACCES, so a chmod-000 file would be read successfully and the test \
+would pass having proved nothing. \
+\
+P7 is the class this module exists for: a source present, absent, denied, \
+malformed, unreadable, or VANISHED -- present once and gone now. The last is \
+the one no stateless classifier can produce, since ENOENT is ENOENT and only a \
+reader that remembers succeeding can tell "this kernel never offered it" from \
+"the machine changed under us". Reporting the second as the first would attach \
+every number gathered before the change to a machine that no longer exists. \
+\
+The fixtures are BUILT, not committed, and the ledger names the builder \
+instead. Neither state that matters can survive a checkout: vanishing mid-run \
+is an event rather than a tree, and a mode-000 file arrives readable because \
+git stores the execute bit and nothing else. A committed fixture for either \
+would pass while demonstrating the opposite of its claim. \
 \
 P3 is where the weight is, because every boundary here is a place a wrong \
 answer would look right: an empty value is a LEGITIMATE reading (offline is \
@@ -109,9 +132,8 @@ entirely plausible CPU id. \
 T8 parses the real files this kernel writes -- online, offline, both sibling \
 lists for every online CPU, and every cache level's sharing list -- and checks \
 the count against sysconf(_SC_NPROCESSORS_ONLN), an independent source, so the \
-agreement is evidence rather than a tautology (F21). \
-\
-No P7 yet: the capability states (a source absent, EACCES, vanishing mid-run) \
-arrive with the code that decides what to do when a topology file is missing, \
-which is the next piece rather than this one.\
+agreement is evidence rather than a tautology (F21). It now also reads a \
+sysfs path this kernel does not offer, unlinks a file between two readings, and \
+points a Source at a directory and at a path whose parent is a file -- real \
+ENOENT, real EISDIR, real ENOTDIR, none of them faked.\
 """
