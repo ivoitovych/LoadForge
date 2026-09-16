@@ -163,7 +163,12 @@ it checkable: every CPU sharing a cache must describe it identically, and \
 sharing must only widen with level. Two plausible checks are deliberately \
 absent because they are false of real machines (big.LITTLE gives cores \
 different cache depths; L1i and L1d differ in size at the same level), and a \
-check that refuses real hardware is worse than none. Its size parser is its \
+check that refuses real hardware is worse than none -- a rule the first \
+version broke by REQUIRING cache/indexN/id, which arm64 kernels do not \
+publish; CI's arm64 job refused it, so identity is now (level, type, \
+shared_cpu_list) and id, size and line are optional readings. Absent is the \
+only thing an optional attribute may be short of a value: a denied or \
+unreadable one still fails, and a test makes each a directory to prove it. Its size parser is its \
 own rather than core::parse_byte_size, which rejects the bare K sysfs writes \
 and accepts the percentages a cache size must never; a test pins that boundary \
 in both directions so nobody unifies them.\

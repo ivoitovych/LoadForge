@@ -59,12 +59,21 @@ core::Result<CacheType, std::string_view> parse_type(std::string_view text) {
   return std::string_view{"not one of Data, Instruction or Unified"};
 }
 
-/// Reads a small non-negative integer attribute, refusing a negative value.
-core::Result<std::uint32_t, DiscoveryFailure> read_count(platform::FileSystem& filesystem,
-                                                         const std::string& path) {
+/// Reads a small non-negative integer attribute the kernel may not publish.
+///
+/// Absent is a reading, not a failure: the kernel's cacheinfo hides `id`,
+/// `coherency_line_size` and the rest when it does not know them, rather than
+/// writing zero. Anything OTHER than absence -- denied, a directory, a value
+/// that is not a number -- is still a failure, because "we could not read it"
+/// and "the kernel does not know it" are different facts.
+core::Result<std::optional<std::uint32_t>, DiscoveryFailure> read_optional_count(
+    platform::FileSystem& filesystem, const std::string& path) {
   Source source(filesystem, path);
   auto value = source.integer();
   if (!value.has_value()) {
+    if (value.error().kind == Availability::kAbsent) {
+      return std::optional<std::uint32_t>{};
+    }
     return source_failure(value.error());
   }
   if (value.value() < 0) {
@@ -77,15 +86,39 @@ core::Result<std::uint32_t, DiscoveryFailure> read_count(platform::FileSystem& f
                          ", which is past anything a cache attribute holds";
     return disagreement(path, std::move(detail));
   }
-  return static_cast<std::uint32_t>(value.value());
+  return std::optional<std::uint32_t>{static_cast<std::uint32_t>(value.value())};
+}
+
+/// Reads `size`, which the kernel hides when it does not know it.
+core::Result<std::optional<std::uint64_t>, DiscoveryFailure> read_optional_size(
+    platform::FileSystem& filesystem, const std::string& path) {
+  Source source(filesystem, path);
+  auto text = source.text();
+  if (!text.has_value()) {
+    if (text.error().kind == Availability::kAbsent) {
+      return std::optional<std::uint64_t>{};
+    }
+    return source_failure(text.error());
+  }
+  auto size = parse_cache_size(text.value());
+  if (!size.has_value()) {
+    std::string detail = "\"" + text.value() + "\": " + std::string{size.error()};
+    return disagreement(path, std::move(detail));
+  }
+  // The kernel hides `size` rather than writing zero, so a zero that IS
+  // written is not "unknown" -- it is a file that is not what we think.
+  if (size.value() == 0) {
+    std::string detail = "a cache of zero bytes is not a cache";
+    return disagreement(path, std::move(detail));
+  }
+  return std::optional<std::uint64_t>{size.value()};
 }
 
 std::string name_of(std::uint32_t cpu) { return "cpu" + std::to_string(cpu); }
 
-/// Renders a cache the way a message should name it: "cpu0's L1 Data cache".
-std::string name_of(const CacheId& identity) {
-  return "the L" + std::to_string(identity.level) + " " + std::string{describe(identity.type)} +
-         " cache (id " + std::to_string(identity.id) + ")";
+/// Renders a kind the way a message should name it: "the L1 Data cache".
+std::string name_of(const CacheKind& kind) {
+  return "the L" + std::to_string(kind.level) + " " + std::string{describe(kind.type)} + " cache";
 }
 
 /// One cache as one CPU described it, kept with the CPU it came from.
@@ -139,31 +172,6 @@ core::Result<std::optional<Cache>, DiscoveryFailure> read_index(platform::FileSy
     return disagreement(directory + "/type", std::move(detail));
   }
 
-  auto id = read_count(filesystem, directory + "/id");
-  if (!id.has_value()) {
-    return id.error();
-  }
-
-  Source size_source(filesystem, directory + "/size");
-  auto size_text = size_source.text();
-  if (!size_text.has_value()) {
-    return source_failure(size_text.error());
-  }
-  auto size = parse_cache_size(size_text.value());
-  if (!size.has_value()) {
-    std::string detail = "\"" + size_text.value() + "\": " + std::string{size.error()};
-    return disagreement(directory + "/size", std::move(detail));
-  }
-  if (size.value() == 0) {
-    std::string detail = "a cache of zero bytes is not a cache";
-    return disagreement(directory + "/size", std::move(detail));
-  }
-
-  auto line = read_count(filesystem, directory + "/coherency_line_size");
-  if (!line.has_value()) {
-    return line.error();
-  }
-
   Source shared_source(filesystem, directory + "/shared_cpu_list");
   auto shared = shared_source.cpu_list();
   if (!shared.has_value()) {
@@ -171,14 +179,41 @@ core::Result<std::optional<Cache>, DiscoveryFailure> read_index(platform::FileSy
   }
 
   // A cache is shared with at least the CPU it was read through. The cheapest
-  // sign that this directory is not describing what we think.
+  // sign that this directory is not describing what we think -- and checked
+  // before anything optional is read, because every later check reasons FROM
+  // the shared set.
   if (!shared.value().contains(cpu)) {
     std::string detail = name_of(cpu) + " is not among the CPUs sharing its own cache";
     return disagreement(directory + "/shared_cpu_list", std::move(detail));
   }
 
-  const CacheId identity{level, type.value(), id.value()};
-  return std::optional<Cache>{Cache{identity, size.value(), line.value(), shared.value()}};
+  // Everything below here the kernel may legitimately not publish.
+  auto size = read_optional_size(filesystem, directory + "/size");
+  if (!size.has_value()) {
+    return size.error();
+  }
+  auto line = read_optional_count(filesystem, directory + "/coherency_line_size");
+  if (!line.has_value()) {
+    return line.error();
+  }
+  auto id = read_optional_count(filesystem, directory + "/id");
+  if (!id.has_value()) {
+    return id.error();
+  }
+
+  // The optionals are pulled out BEFORE the aggregate is built, and the order
+  // is load-bearing (journal §1.13). Aggregate members initialise in
+  // declaration order, and `shared_with` -- the one allocating member -- comes
+  // second. Written inline, every `.value()` after it is a std::get that the
+  // compiler must assume can throw, which forces a cleanup path destroying the
+  // half-built vector, and that path carries a branch no test can take. With
+  // the trivially-copyable values already in hand, the vector copy is the last
+  // thing that can throw and nothing is left half-built.
+  const std::optional<std::uint64_t> size_bytes = size.value();
+  const std::optional<std::uint32_t> line_bytes = line.value();
+  const std::optional<std::uint32_t> cache_id = id.value();
+  const CacheKind kind{level, type.value()};
+  return std::optional<Cache>{Cache{kind, shared.value(), size_bytes, line_bytes, cache_id}};
 }
 
 /// Every CPU a cache claims to serve must be one the CPU topology found. A
@@ -192,7 +227,7 @@ std::optional<DiscoveryFailure> check_served_cpus_online(const std::vector<Readi
       const bool online = std::any_of(cpus.cpus().begin(), cpus.cpus().end(),
                                       [served](const LogicalCpu& c) { return c.id == served; });
       if (!online) {
-        std::string detail = name_of(reading.cache.identity) + " on " + name_of(reading.cpu) +
+        std::string detail = name_of(reading.cache.kind) + " on " + name_of(reading.cpu) +
                              " claims to serve " + name_of(served) + ", which is not online";
         return disagreement(index_directory(sysfs_root, reading.cpu, 0) + "/../shared_cpu_list",
                             std::move(detail));
@@ -210,14 +245,14 @@ std::optional<DiscoveryFailure> check_nesting(const std::vector<Reading>& readin
                                               std::string_view sysfs_root) {
   for (const Reading& inner : readings) {
     for (const Reading& outer : readings) {
-      if (outer.cpu != inner.cpu || outer.cache.identity.level <= inner.cache.identity.level) {
+      if (outer.cpu != inner.cpu || outer.cache.kind.level <= inner.cache.kind.level) {
         continue;
       }
       for (const std::uint32_t served : inner.cache.shared_with.ids()) {
         if (!outer.cache.shared_with.contains(served)) {
-          std::string detail = name_of(inner.cpu) + " shares " + name_of(inner.cache.identity) +
+          std::string detail = name_of(inner.cpu) + " shares " + name_of(inner.cache.kind) +
                                " with " + name_of(served) + " but does not share " +
-                               name_of(outer.cache.identity) + " with it; caches nest";
+                               name_of(outer.cache.kind) + " with it; caches nest";
           return disagreement(index_directory(sysfs_root, inner.cpu, 0) + "/..", std::move(detail));
         }
       }
@@ -226,43 +261,56 @@ std::optional<DiscoveryFailure> check_nesting(const std::vector<Reading>& readin
   return std::nullopt;
 }
 
-/// Collapses readings to distinct caches, checking as it goes that every CPU
-/// describing a given cache describes the SAME one. Sharing a cache is an
-/// equivalence relation exactly as sharing a core is, so two readings of one
-/// identity must be identical -- not merely compatible.
-core::Result<std::vector<Cache>, DiscoveryFailure> deduplicate(const std::vector<Reading>& readings,
-                                                               std::string_view sysfs_root) {
+/// Every CPU a cache claims to serve must publish that same cache -- identical
+/// in every field, not merely compatible. Sharing a cache is an equivalence
+/// relation exactly as sharing a core is, and this is what makes the
+/// deduplication below sound: once every sharer agrees, keeping one reading per
+/// identity loses nothing.
+std::optional<DiscoveryFailure> check_sharers_agree(const std::vector<Reading>& readings,
+                                                    std::string_view sysfs_root) {
+  for (const Reading& reading : readings) {
+    for (const std::uint32_t sharer : reading.cache.shared_with.ids()) {
+      const bool agrees = std::any_of(readings.begin(), readings.end(), [&](const Reading& other) {
+        return other.cpu == sharer && other.cache == reading.cache;
+      });
+      if (!agrees) {
+        std::string detail = name_of(reading.cache.kind) + " is described differently by " +
+                             name_of(reading.cpu) + " and " + name_of(sharer) +
+                             ", which it claims to serve";
+        return disagreement(index_directory(sysfs_root, reading.cpu, 0) + "/..", std::move(detail));
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+/// Collapses readings to distinct caches. Sound only after check_sharers_agree:
+/// every reading of one identity is then known to be identical, so the first
+/// is as good as any.
+std::vector<Cache> deduplicate(const std::vector<Reading>& readings) {
   std::vector<Cache> distinct;
   for (const Reading& reading : readings) {
-    const auto existing =
-        std::find_if(distinct.begin(), distinct.end(),
-                     [&reading](const Cache& c) { return c.identity == reading.cache.identity; });
-    if (existing == distinct.end()) {
+    const bool seen = std::any_of(distinct.begin(), distinct.end(), [&](const Cache& c) {
+      return c.kind == reading.cache.kind && c.shared_with == reading.cache.shared_with;
+    });
+    if (!seen) {
       distinct.push_back(reading.cache);
-      continue;
-    }
-    if (*existing != reading.cache) {
-      std::string detail =
-          name_of(reading.cache.identity) +
-          " is described differently by two of the CPUs that share it, including " +
-          name_of(reading.cpu);
-      return disagreement(index_directory(sysfs_root, reading.cpu, 0) + "/..", std::move(detail));
     }
   }
   return distinct;
 }
 
-/// Level, then id, then type -- so L1 Data and L1 Instruction with the same id
-/// sit together and in a fixed order.
+/// Level, then the lowest CPU sharing the cache, then type -- so a CPU's L1
+/// Data and L1 Instruction sit together and in a fixed order. `shared_with` is
+/// never empty here: read_index refused any cache not containing its own CPU.
 bool ordered_before(const Cache& lhs, const Cache& rhs) {
-  if (lhs.identity.level != rhs.identity.level) {
-    return lhs.identity.level < rhs.identity.level;
+  if (lhs.kind.level != rhs.kind.level) {
+    return lhs.kind.level < rhs.kind.level;
   }
-  if (lhs.identity.id != rhs.identity.id) {
-    return lhs.identity.id < rhs.identity.id;
+  if (lhs.shared_with.ids().front() != rhs.shared_with.ids().front()) {
+    return lhs.shared_with.ids().front() < rhs.shared_with.ids().front();
   }
-  return static_cast<std::uint8_t>(lhs.identity.type) <
-         static_cast<std::uint8_t>(rhs.identity.type);
+  return static_cast<std::uint8_t>(lhs.kind.type) < static_cast<std::uint8_t>(rhs.kind.type);
 }
 
 }  // namespace
@@ -352,36 +400,39 @@ core::Result<CacheHierarchy, DiscoveryFailure> CacheHierarchy::discover(
   if (auto failure = check_nesting(readings, sysfs_root)) {
     return *failure;
   }
-
-  auto distinct = deduplicate(readings, sysfs_root);
-  if (!distinct.has_value()) {
-    return distinct.error();
+  if (auto failure = check_sharers_agree(readings, sysfs_root)) {
+    return *failure;
   }
-  std::vector<Cache> caches = distinct.value();
+
+  std::vector<Cache> caches = deduplicate(readings);
   std::sort(caches.begin(), caches.end(), ordered_before);
   return CacheHierarchy{std::move(caches)};
 }
 
 std::size_t CacheHierarchy::count_at_level(std::uint32_t level) const noexcept {
-  return static_cast<std::size_t>(
-      std::count_if(caches_.begin(), caches_.end(),
-                    [level](const Cache& cache) { return cache.identity.level == level; }));
+  return static_cast<std::size_t>(std::count_if(
+      caches_.begin(), caches_.end(), [level](const Cache& c) { return c.kind.level == level; }));
 }
 
 std::uint32_t CacheHierarchy::deepest_level() const noexcept {
   std::uint32_t deepest = 0;
   for (const Cache& cache : caches_) {
-    deepest = std::max(deepest, cache.identity.level);
+    deepest = std::max(deepest, cache.kind.level);
   }
   return deepest;
 }
 
-std::uint64_t CacheHierarchy::total_bytes_at_level(std::uint32_t level) const noexcept {
+std::optional<std::uint64_t> CacheHierarchy::total_bytes_at_level(
+    std::uint32_t level) const noexcept {
   std::uint64_t total = 0;
   for (const Cache& cache : caches_) {
-    if (cache.identity.level == level) {
-      total += cache.size_bytes;
+    if (cache.kind.level != level) {
+      continue;
     }
+    if (!cache.size_bytes.has_value()) {
+      return std::nullopt;  // One unknown makes the sum unknown, not smaller.
+    }
+    total += *cache.size_bytes;
   }
   return total;
 }

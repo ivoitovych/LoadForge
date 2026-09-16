@@ -90,16 +90,24 @@ TEST(ParseCacheSizeTest, ASizeLargerThanAnyCacheIsRefusedRatherThanWrapped) {
   EXPECT_FALSE(parse_cache_size("1099511627777").has_value());
 }
 
-TEST(CacheValueTest, EqualityComparesTheIdentityFirst) {
+TEST(CacheValueTest, EqualityComparesEveryField) {
   // Cache::operator== is defaulted and compares members in order, stopping at
-  // the first difference. discover() only ever compares two caches it has
-  // already matched BY identity, so the identity arm is unreachable through it
-  // -- and a public equality operator whose first comparison no test has taken
-  // is one a later change could break unnoticed.
-  const Cache l1{CacheId{1, CacheType::kData, 0}, 48U * 1024U, 64, CpuList{}};
-  const Cache l2{CacheId{2, CacheType::kData, 0}, 48U * 1024U, 64, CpuList{}};
-  EXPECT_NE(l1, l2) << "same size, line and sharing; different level";
-  EXPECT_EQ(l1, l1);
+  // the first difference -- so each member is a comparison arm, and each needs
+  // a pair that differs there and nowhere earlier. A public equality operator
+  // with an arm no test has taken is one a later change could break unnoticed.
+  const CpuList zero = CpuList::parse("0").value();
+  const CpuList one = CpuList::parse("1").value();
+  const Cache base{CacheKind{1, CacheType::kData}, zero, 48U * 1024U, 64, 0};
+  EXPECT_EQ(base, base);
+  EXPECT_NE(base, (Cache{CacheKind{2, CacheType::kData}, zero, 48U * 1024U, 64, 0})) << "level";
+  EXPECT_NE(base, (Cache{CacheKind{1, CacheType::kInstruction}, zero, 48U * 1024U, 64, 0}))
+      << "type";
+  EXPECT_NE(base, (Cache{CacheKind{1, CacheType::kData}, one, 48U * 1024U, 64, 0})) << "sharers";
+  EXPECT_NE(base, (Cache{CacheKind{1, CacheType::kData}, zero, 32U * 1024U, 64, 0})) << "size";
+  EXPECT_NE(base, (Cache{CacheKind{1, CacheType::kData}, zero, 48U * 1024U, 128, 0})) << "line";
+  EXPECT_NE(base, (Cache{CacheKind{1, CacheType::kData}, zero, 48U * 1024U, 64, 1})) << "id";
+  EXPECT_NE(base, (Cache{CacheKind{1, CacheType::kData}, zero, 48U * 1024U, 64, std::nullopt}))
+      << "an unknown id is not id 0";
 }
 
 TEST(CacheTypeTest, EveryTypeRendersAsTheTextSysfsWrites) {
@@ -147,16 +155,26 @@ class CacheTest : public ::testing::Test {
   }
 
   /// One cache/indexN directory, exactly as the kernel lays it out.
+  ///
+  /// `id`, `size` and `line` are written only when non-empty, because the
+  /// kernel itself omits each of them when it does not know the value -- and
+  /// arm64 kernels generally omit `id` altogether.
   void add_cache(std::uint32_t cpu, std::uint32_t index, const std::string& level,
                  const std::string& type, const std::string& id, const std::string& size,
                  const std::string& shared, const std::string& line = "64") {
     const std::filesystem::path d = cpu_dir(cpu) / "cache" / ("index" + std::to_string(index));
     write(d / "level", level);
     write(d / "type", type);
-    write(d / "id", id);
-    write(d / "size", size);
     write(d / "shared_cpu_list", shared);
-    write(d / "coherency_line_size", line);
+    if (!id.empty()) {
+      write(d / "id", id);
+    }
+    if (!size.empty()) {
+      write(d / "size", size);
+    }
+    if (!line.empty()) {
+      write(d / "coherency_line_size", line);
+    }
   }
 
   /// The arrangement probed from a real 4-CPU machine: private L1d, L1i and L2
@@ -196,12 +214,40 @@ TEST_F(CacheTest, OneSharedL3IsCountedOnceNotFourTimes) {
   EXPECT_EQ(caches.value().count_at_level(2), 4U);
   EXPECT_EQ(caches.value().count_at_level(3), 1U) << "one L3, not four";
   EXPECT_EQ(caches.value().deepest_level(), 3U);
-  EXPECT_EQ(caches.value().total_bytes_at_level(3), 266240ULL * 1024ULL);
-  EXPECT_EQ(caches.value().total_bytes_at_level(1), 4ULL * (48U + 32U) * 1024U);
+  EXPECT_EQ(caches.value().total_bytes_at_level(3),
+            std::optional<std::uint64_t>{266240ULL * 1024ULL});
+  EXPECT_EQ(caches.value().total_bytes_at_level(1),
+            std::optional<std::uint64_t>{4ULL * (48U + 32U) * 1024U});
+}
+
+TEST_F(CacheTest, AnAbsentIdIsAReadingNotAFailureBecauseArm64DoesNotPublishOne) {
+  // The arrangement CI's arm64 runner actually has: every cache present, no
+  // `id` file anywhere. The first version of this module required `id` and
+  // refused the whole machine -- caught by the arm64 job, which is the one
+  // place it could have been. Deduplication must not need `id` at all.
+  set_online("0-3");
+  for (std::uint32_t id = 0; id < 4; ++id) {
+    add_cpu(id, "0", std::to_string(id), std::to_string(id));
+    const std::string self = std::to_string(id);
+    add_cache(id, 0, "1", "Data", "", "48K", self);
+    add_cache(id, 1, "1", "Instruction", "", "32K", self);
+    add_cache(id, 2, "2", "Unified", "", "2048K", self);
+    add_cache(id, 3, "3", "Unified", "", "266240K", "0-3");
+  }
+
+  auto caches = discover();
+  ASSERT_TRUE(caches.has_value()) << describe(caches.error());
+  EXPECT_EQ(caches.value().count_at_level(3), 1U) << "the L3 is one cache without any id to say so";
+  EXPECT_EQ(caches.value().count(), 13U);
+  for (const Cache& cache : caches.value().caches()) {
+    EXPECT_FALSE(cache.id.has_value());
+    EXPECT_TRUE(cache.size_bytes.has_value());
+  }
 }
 
 TEST_F(CacheTest, DataAndInstructionCachesAtOneLevelShareAnIdAndAreStillTwoCaches) {
-  // The case CacheId's `type` member exists for. Both are L1 id=0 on cpu0.
+  // The case CacheKind's `type` member exists for. Both are L1 id=0 on cpu0,
+  // both shared by exactly {0}: only the type tells them apart.
   set_online("0");
   add_cpu(0, "0", "0", "0");
   add_cache(0, 0, "1", "Data", "0", "48K", "0");
@@ -210,7 +256,26 @@ TEST_F(CacheTest, DataAndInstructionCachesAtOneLevelShareAnIdAndAreStillTwoCache
   auto caches = discover();
   ASSERT_TRUE(caches.has_value()) << describe(caches.error());
   EXPECT_EQ(caches.value().count_at_level(1), 2U);
-  EXPECT_EQ(caches.value().total_bytes_at_level(1), (48U + 32U) * 1024U);
+  EXPECT_EQ(caches.value().total_bytes_at_level(1),
+            std::optional<std::uint64_t>{(48U + 32U) * 1024U});
+}
+
+TEST_F(CacheTest, ALevelTotalIsUnknownWhenAnySizeAtThatLevelIs) {
+  // A partial sum would be a plausible wrong number. cpu1's L2 has no size
+  // file, so the L2 total is unknown -- but the L2 COUNT is still two, because
+  // the cache exists whether or not the kernel knows how big it is.
+  set_online("0-1");
+  add_cpu(0, "0", "0", "0");
+  add_cpu(1, "0", "1", "1");
+  add_cache(0, 0, "2", "Unified", "0", "2048K", "0");
+  add_cache(1, 0, "2", "Unified", "1", "", "1");
+
+  auto caches = discover();
+  ASSERT_TRUE(caches.has_value()) << describe(caches.error());
+  EXPECT_EQ(caches.value().count_at_level(2), 2U);
+  EXPECT_EQ(caches.value().total_bytes_at_level(2), std::nullopt);
+  EXPECT_EQ(caches.value().total_bytes_at_level(3), std::optional<std::uint64_t>{0})
+      << "no caches at a level is a known total of zero";
 }
 
 TEST_F(CacheTest, AMachineWithNoL3IsAMachineWithNoL3) {
@@ -223,7 +288,7 @@ TEST_F(CacheTest, AMachineWithNoL3IsAMachineWithNoL3) {
   ASSERT_TRUE(caches.has_value()) << describe(caches.error());
   EXPECT_EQ(caches.value().deepest_level(), 2U);
   EXPECT_EQ(caches.value().count_at_level(3), 0U) << "absent, not an error";
-  EXPECT_EQ(caches.value().total_bytes_at_level(3), 0U);
+  EXPECT_EQ(caches.value().total_bytes_at_level(3), std::optional<std::uint64_t>{0});
 }
 
 TEST_F(CacheTest, AMachineWithNoCacheDirectoriesAtAllIsEmptyRatherThanAFailure) {
@@ -238,18 +303,22 @@ TEST_F(CacheTest, AMachineWithNoCacheDirectoriesAtAllIsEmptyRatherThanAFailure) 
   EXPECT_EQ(caches.value().deepest_level(), 0U);
 }
 
-TEST_F(CacheTest, CachesAreOrderedByLevelThenId) {
+TEST_F(CacheTest, CachesAreOrderedByLevelThenLowestSharerThenType) {
   build_typical_machine();
   auto caches = discover();
   ASSERT_TRUE(caches.has_value()) << describe(caches.error());
 
-  std::uint32_t previous = 0;
-  for (const Cache& cache : caches.value().caches()) {
-    EXPECT_GE(cache.identity.level, previous) << "levels must not go backwards";
-    previous = cache.identity.level;
-  }
-  ASSERT_FALSE(caches.value().caches().empty());
-  EXPECT_EQ(caches.value().caches().back().identity.level, 3U);
+  const std::vector<Cache>& all = caches.value().caches();
+  ASSERT_EQ(all.size(), 13U);
+  // L1: cpu0's Data then Instruction, then cpu1's pair, ... then L2s, then L3.
+  EXPECT_EQ(all[0].kind, (CacheKind{1, CacheType::kData}));
+  EXPECT_EQ(all[0].shared_with.ids().front(), 0U);
+  EXPECT_EQ(all[1].kind, (CacheKind{1, CacheType::kInstruction}));
+  EXPECT_EQ(all[1].shared_with.ids().front(), 0U);
+  EXPECT_EQ(all[2].kind, (CacheKind{1, CacheType::kData}));
+  EXPECT_EQ(all[2].shared_with.ids().front(), 1U);
+  EXPECT_EQ(all[8].kind.level, 2U);
+  EXPECT_EQ(all.back().kind.level, 3U);
 }
 
 // --- a source that will not answer -------------------------------------------
@@ -271,11 +340,11 @@ TEST_F(CacheTest, AnUnreadableIndexIsNotMistakenForTheEndOfTheList) {
   EXPECT_EQ(caches.error().availability, Availability::kUnreadable);
 }
 
-TEST_F(CacheTest, EveryOtherMissingAttributeIsASourceFailureToo) {
-  // One test per attribute rather than one representative, because each is a
-  // separate read with its own failure arm, and a representative would leave
-  // the others as arms no test has taken.
-  for (const char* missing : {"type", "id", "coherency_line_size", "shared_cpu_list"}) {
+TEST_F(CacheTest, TheAttributesEveryRealCacheHasAreRequired) {
+  // `level`, `type` and `shared_cpu_list` are the attributes the kernel always
+  // publishes for a real cache. Each is a separate read with its own failure
+  // arm, so one test per attribute rather than one representative.
+  for (const char* missing : {"type", "shared_cpu_list"}) {
     TearDown();
     SetUp();
     set_online("0");
@@ -287,6 +356,53 @@ TEST_F(CacheTest, EveryOtherMissingAttributeIsASourceFailureToo) {
     ASSERT_FALSE(caches.has_value()) << "succeeded without " << missing;
     EXPECT_EQ(caches.error().kind, DiscoveryFailure::Kind::kSource) << missing;
     EXPECT_EQ(caches.error().availability, Availability::kAbsent) << missing;
+  }
+}
+
+TEST_F(CacheTest, TheAttributesTheKernelHidesWhenUnknownAreOptional) {
+  // The kernel's cacheinfo omits `id`, `size` and `coherency_line_size` rather
+  // than writing zero when it does not know them. Each absence is a reading of
+  // a real machine, and the field it feeds is simply unknown.
+  for (const char* missing : {"id", "size", "coherency_line_size"}) {
+    TearDown();
+    SetUp();
+    set_online("0");
+    add_cpu(0, "0", "0", "0");
+    add_cache(0, 0, "1", "Data", "0", "48K", "0");
+    ASSERT_TRUE(std::filesystem::remove(cpu_dir(0) / "cache" / "index0" / missing));
+
+    auto caches = discover();
+    ASSERT_TRUE(caches.has_value())
+        << "refused without " << missing << ": " << describe(caches.error());
+    ASSERT_EQ(caches.value().count(), 1U);
+    const Cache& cache = caches.value().caches().front();
+    const std::string_view name{missing};
+    EXPECT_EQ(cache.id.has_value(), name != "id");
+    EXPECT_EQ(cache.size_bytes.has_value(), name != "size");
+    EXPECT_EQ(cache.line_bytes.has_value(), name != "coherency_line_size");
+  }
+}
+
+TEST_F(CacheTest, AnOptionalAttributeThatIsUnreadableIsStillAFailure) {
+  // Absent is the ONLY thing an optional attribute may be short of a value.
+  // "We could not read it" and "the kernel does not know it" are different
+  // facts, and folding the first into the second would hide a denied or broken
+  // attribute behind a shrug. Each is made a directory, so open succeeds and
+  // the read fails EISDIR -- a real errno, not a fake.
+  for (const char* broken : {"id", "size", "coherency_line_size"}) {
+    TearDown();
+    SetUp();
+    set_online("0");
+    add_cpu(0, "0", "0", "0");
+    add_cache(0, 0, "1", "Data", "0", "48K", "0");
+    const std::filesystem::path attribute = cpu_dir(0) / "cache" / "index0" / broken;
+    ASSERT_TRUE(std::filesystem::remove(attribute));
+    std::filesystem::create_directories(attribute);
+
+    auto caches = discover();
+    ASSERT_FALSE(caches.has_value()) << "succeeded with an unreadable " << broken;
+    EXPECT_EQ(caches.error().kind, DiscoveryFailure::Kind::kSource) << broken;
+    EXPECT_EQ(caches.error().availability, Availability::kUnreadable) << broken;
   }
 }
 
@@ -342,22 +458,30 @@ TEST_F(CacheTest, TheScanStopsAtTheIndexBoundRatherThanWalkingForever) {
   // bound exists so a tree that is not what we think cannot become a walk.
   set_online("0");
   add_cpu(0, "0", "0", "0");
+  // Sixteen DISTINCT caches: eight levels, Data and Instruction at each. All
+  // shared by {0}, so sixteen entries of one kind would be sixteen views of one
+  // cache and collapse to one -- which the first version of this test tripped
+  // over. Identity is (kind, sharers), so the kind has to differ.
   for (std::uint32_t index = 0; index < CacheHierarchy::kMaxCacheIndex; ++index) {
-    add_cache(0, index, "1", "Data", std::to_string(index), "1K", "0");
+    const std::string level = std::to_string(index / 2 + 1);
+    const std::string type = index % 2 == 0 ? "Data" : "Instruction";
+    add_cache(0, index, level, type, std::to_string(index), "1K", "0");
   }
   // A seventeenth exists on disk and must NOT be read.
-  add_cache(0, CacheHierarchy::kMaxCacheIndex, "1", "Data", "999", "1K", "0");
+  add_cache(0, CacheHierarchy::kMaxCacheIndex, "8", "Unified", "999", "1K", "0");
 
   auto caches = discover();
   ASSERT_TRUE(caches.has_value()) << describe(caches.error());
   EXPECT_EQ(caches.value().count(), CacheHierarchy::kMaxCacheIndex);
+  for (const Cache& cache : caches.value().caches()) {
+    EXPECT_NE(cache.kind, (CacheKind{8, CacheType::kUnified})) << "index16 was read";
+  }
 }
 
 TEST_F(CacheTest, TwoReadingsOfOneCacheMustAgreeOnEveryField) {
-  // Cache::operator== is defaulted, which compares each member in turn and
-  // stops at the first difference. The "described differently" test above
-  // differs in SIZE, the second member; these differ in the third and fourth,
-  // so every comparison arm is one a test has actually taken.
+  // Every CPU a cache claims to serve must publish that same cache, field for
+  // field. The "described differently" test above differs in size; these
+  // differ in line size, in the shared set itself, and (below) in id.
   set_online("0-1");
   add_cpu(0, "0", "0", "0");
   add_cpu(1, "0", "1", "1");
@@ -395,23 +519,18 @@ TEST_F(CacheTest, TwoReadingsOfOneCacheMustAgreeOnEveryField) {
   auto by_set = discover();
   ASSERT_FALSE(by_set.has_value());
   EXPECT_NE(describe(by_set.error()).find("described differently"), std::string::npos);
-}
 
-TEST_F(CacheTest, AMissingSizeIsASourceFailure) {
-  set_online("0");
+  TearDown();
+  SetUp();
+  set_online("0-1");
   add_cpu(0, "0", "0", "0");
-  const std::filesystem::path d = cpu_dir(0) / "cache" / "index0";
-  write(d / "level", "1");
-  write(d / "type", "Data");
-  write(d / "id", "0");
-  write(d / "shared_cpu_list", "0");
-  write(d / "coherency_line_size", "64");
-  // size deliberately not written.
-
-  auto caches = discover();
-  ASSERT_FALSE(caches.has_value());
-  EXPECT_EQ(caches.error().kind, DiscoveryFailure::Kind::kSource);
-  EXPECT_EQ(caches.error().availability, Availability::kAbsent);
+  add_cpu(1, "0", "1", "1");
+  add_cache(0, 0, "3", "Unified", "0", "8192K", "0-1");
+  add_cache(1, 0, "3", "Unified", "7", "8192K", "0-1");  // same cache, different id
+  auto by_id = discover();
+  ASSERT_FALSE(by_id.has_value());
+  EXPECT_NE(describe(by_id.error()).find("described differently"), std::string::npos)
+      << "id is corroboration: where two sharers report it, they must report the same one";
 }
 
 // --- the machine contradicting itself ----------------------------------------
@@ -528,19 +647,24 @@ TEST(RealCacheTest, TheRunningMachinesCachesDescribeThemselvesConsistently) {
   // of the one running the test. A machine publishing no cache information at
   // all is legitimate, so everything below is conditional on there being some.
   for (const Cache& cache : caches.value().caches()) {
-    EXPECT_GE(cache.identity.level, 1U);
-    EXPECT_GT(cache.size_bytes, 0U);
+    EXPECT_GE(cache.kind.level, 1U);
     EXPECT_FALSE(cache.shared_with.empty());
     EXPECT_LE(cache.shared_with.size(), cpus.value().logical_cpu_count())
         << "a cache cannot serve more CPUs than the machine has";
-    if (cache.line_bytes != 0) {
-      EXPECT_GE(cache.line_bytes, 8U) << "a cache line smaller than a word is not a cache line";
+    // size, line and id are each legitimately unknown on some real kernel --
+    // CI's arm64 runner publishes no `id` -- so they are checked only where the
+    // kernel chose to say.
+    if (cache.size_bytes.has_value()) {
+      EXPECT_GT(*cache.size_bytes, 0U);
+    }
+    if (cache.line_bytes.has_value()) {
+      EXPECT_GE(*cache.line_bytes, 8U) << "a cache line smaller than a word is not a cache line";
     }
   }
 
   if (caches.value().count() > 0) {
     EXPECT_GE(caches.value().deepest_level(), 1U);
-    EXPECT_GT(caches.value().total_bytes_at_level(1), 0U) << "a machine with caches has an L1";
+    EXPECT_GE(caches.value().count_at_level(1), 1U) << "a machine with caches has an L1";
   }
 }
 

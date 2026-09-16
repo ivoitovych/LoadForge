@@ -306,6 +306,17 @@ Four facts, each probed from the running machine before the cache module was des
 - **Some virtualised machines publish no `cache/` directory at all.** Zero caches is a fact
   about the machine, not a failure to read it — the scan terminates on the first *absent*
   index, and nothing else terminates it.
+- **`cache/indexN/id` does not exist on arm64.** Found by CI, not by probing: the
+  `ubuntu-24.04-arm` jobs failed with
+  `/sys/devices/system/cpu/cpu0/cache/index0/id: not offered by this kernel` while every
+  x86 job passed. The kernel's cacheinfo only publishes `id` when the architecture supplies
+  one — x86 derives it from CPUID leaf 4; arm64 generally does not — and the same
+  visibility rule hides `size`, `coherency_line_size` and `ways_of_associativity` whenever
+  the value is unknown, rather than writing zero. So a module that keyed on `id` refused
+  every arm64 machine. The identity of a cache is now `(level, type, shared_cpu_list)`,
+  which is what a cache *is* from the CPUs' side, and `id`/`size`/`line` are optional
+  fields. This is the second time the ARM64 CI matrix found something no local run could
+  (§1.2 was the first), which is the whole argument for the matrix.
 
 ---
 
@@ -541,6 +552,22 @@ permanent. Two plausible checks fail that test:
 
 The T8 test against the real `/sys` is what guards the checks that *were* kept: if any is
 too strict, that test is the one that says so.
+
+*And one that the arm64 CI job forced (§1.14):* the first version was itself the kind of
+check that refuses a real machine — not a cross-check, but a **required attribute that is
+not universal**. Requiring `id` refused every arm64 kernel. The rules that came out of it:
+
+- Identity is `(level, type, shared_cpu_list)`; nothing depends on `id` being present.
+- **Absent is a reading; anything else is a failure.** An optional attribute that is
+  *denied* or *unreadable* still fails discovery, because "we could not read it" and "the
+  kernel does not know it" are different facts, and folding the first into the second would
+  hide a broken attribute behind a shrug. A test makes each optional attribute a directory
+  (real `EISDIR`) and asserts the failure.
+- A level total is `optional`: **one unknown size makes the sum unknown, not smaller.**
+- `id`, where two sharers both report it, must agree — that is the identical-record check,
+  which compares every field. But "two caches of one kind with different sharers have
+  different ids" is *not* checked: probably true of every kernel, and "probably" is the
+  wrong standard for a check whose failure mode is refusing a real machine.
 
 *Two smaller decisions:*
 
@@ -884,9 +911,11 @@ by exactly the test written for it. Two things carried forward:
 
 Every change goes through a pull request so that CI runs on it before it reaches `main`.
 The friction is real — a fix that would be one commit becomes a branch, a push and a wait
-— and it has already paid for itself twice: the ARM64 loader difference (§1.2) and the
-merge-commit sign-off failure (§1.5) were both found by CI on a pull request, and neither
-was findable locally.
+— and it has already paid for itself three times: the ARM64 loader difference (§1.2), the
+merge-commit sign-off failure (§1.5) and the arm64 kernel publishing no cache `id` (§1.14)
+were all found by CI on a pull request, and none was findable locally. The third is the
+sharpest: every local check was green, every x86 job was green, and the module would have
+refused every arm64 machine it ever ran on.
 
 ### 5.2 Parallel work is possible even with an unmerged pull request under review
 

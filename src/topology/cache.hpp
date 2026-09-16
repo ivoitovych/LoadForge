@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,29 +22,52 @@ enum class CacheType : std::uint8_t { kData, kInstruction, kUnified };
 /// The word for a CacheType, and the exact text sysfs writes for it.
 [[nodiscard]] std::string_view describe(CacheType type) noexcept;
 
-/// Which cache this is, across the whole machine.
+/// What sort of cache: its level and what it holds.
 ///
-/// All three parts are needed. `id` is unique only within a level -- every
-/// level numbers its caches from zero -- and a level holds both a data and an
-/// instruction cache with the SAME id on nearly every machine. Verified: this
-/// kernel reports L1 Data id=0 and L1 Instruction id=0 for cpu0, two different
-/// caches that an identity of (level, id) alone would merge into one.
-struct CacheId {
+/// Not an identity on its own -- every CPU has an L1 Data cache -- but half of
+/// one. The other half is WHICH CPUs share it; see Cache.
+struct CacheKind {
   std::uint32_t level = 0;
   CacheType type = CacheType::kUnified;
-  std::uint32_t id = 0;
 
-  [[nodiscard]] friend bool operator==(const CacheId&, const CacheId&) = default;
+  [[nodiscard]] friend bool operator==(const CacheKind&, const CacheKind&) = default;
 };
 
 /// One cache, as the kernel describes it.
+///
+/// WHAT IDENTIFIES A CACHE, AND WHY IT IS NOT `id`
+/// ----------------------------------------------
+/// A cache is identified by its kind and the set of CPUs that share it. Two
+/// entries with the same level, type and `shared_cpu_list` are two views of one
+/// piece of silicon, read through two CPUs; that is the definition of a shared
+/// cache, and it is what deduplication keys on.
+///
+/// sysfs also offers `cache/indexN/id`, and the first version of this module
+/// keyed on that instead. It was wrong on every arm64 machine: the kernel only
+/// publishes `id` when the architecture supplies one (x86 derives it from
+/// CPUID; arm64 generally does not), and a reader that required it refused
+/// hardware that was describing itself perfectly well. Found by CI's arm64
+/// runner -- the first x86 machine it ran on could not have shown it.
+///
+/// So `id` is OPTIONAL, and so are `size_bytes` and `line_bytes`: the kernel's
+/// cacheinfo hides each of these attributes when it does not know the value,
+/// rather than writing zero. Absent means "not known", and every one of these
+/// is a legitimate reading of a real machine rather than a failure to read it.
+/// `level`, `type` and `shared_cpu_list` are the ones always present for a
+/// real cache, and the ones this module requires.
 struct Cache {
-  CacheId identity;
-  std::uint64_t size_bytes = 0;
-  std::uint32_t line_bytes = 0;
-  /// Every CPU this cache serves. Includes the CPU whose directory it was read
-  /// from, and is the same set no matter which of them you read it through.
+  CacheKind kind;
+  /// Every CPU this cache serves -- including the one it was read through, and
+  /// the same set whichever of them it is read through. With `kind`, this IS
+  /// the cache's identity.
   CpuList shared_with;
+
+  std::optional<std::uint64_t> size_bytes;
+  std::optional<std::uint32_t> line_bytes;
+  /// The kernel's own id, when it publishes one. Corroboration, not identity:
+  /// every CPU sharing a cache must report the same id for it (checked), but
+  /// nothing here depends on the id being there.
+  std::optional<std::uint32_t> id;
 
   [[nodiscard]] friend bool operator==(const Cache&, const Cache&) = default;
 };
@@ -54,13 +78,9 @@ struct Cache {
 /// ----------------------------------------
 /// sysfs publishes a cache once per CPU that can see it: a shared L3 appears in
 /// four CPUs' `cache/` directories on a four-CPU machine, describing ONE piece
-/// of silicon. Deduplicating on `(level, type, id)` is what turns four readings
-/// back into one cache -- and reading all four first, rather than taking the
-/// first and moving on, is what makes them CHECKABLE against each other.
-///
-/// Verified on the machine this was written against: `cache/index3/id` reads 0
-/// from all four CPUs, while `index0`..`index2` (L1d, L1i, L2) each report an
-/// id equal to the CPU's own number.
+/// of silicon. Reading all four first, rather than taking the first and moving
+/// on, is what makes them CHECKABLE against each other; deduplication happens
+/// only after the checks have passed.
 ///
 /// WHAT IS CHECKED, AND WHAT DELIBERATELY IS NOT
 /// --------------------------------------------
@@ -68,9 +88,9 @@ struct Cache {
 ///
 ///   * a cache's shared set contains the CPU it was read through;
 ///   * every CPU in that set is one the CPU topology found online;
-///   * every CPU sharing a cache publishes an IDENTICAL record for it --
-///     same size, same line size, same shared set. Sharing a cache is an
-///     equivalence relation, exactly as sharing a core is;
+///   * every CPU a cache claims to serve publishes an IDENTICAL record for it
+///     -- same size, line size and id where known, same shared set. Sharing a
+///     cache is an equivalence relation, exactly as sharing a core is;
 ///   * sharing only ever widens with level: the CPUs sharing a CPU's L1 are a
 ///     subset of those sharing its L2, and so on. That is the defining
 ///     structural property of a cache hierarchy.
@@ -85,6 +105,10 @@ struct Cache {
 ///     L1 instruction and L1 data caches differ in size at the SAME level
 ///     (32K and 48K here), and nothing forbids an unusual arrangement further
 ///     up. The nesting check above already catches the corruption this would.
+///   * that `id`, where present, agrees with the shared set -- that two caches
+///     of one kind with different sharers carry different ids. Probably true of
+///     every kernel, and "probably" is the wrong standard for a check whose
+///     failure mode is refusing a real machine.
 class CacheHierarchy {
  public:
   /// Highest `cache/indexN` examined before giving up.
@@ -106,7 +130,8 @@ class CacheHierarchy {
       platform::FileSystem& filesystem, const CpuTopology& cpus,
       std::string_view sysfs_root = kDefaultSysfsRoot);
 
-  /// Distinct caches, ordered by level and then by id.
+  /// Distinct caches, ordered by level, then by the lowest CPU sharing them,
+  /// then by type -- so a CPU's L1 Data and L1 Instruction sit together.
   [[nodiscard]] const std::vector<Cache>& caches() const noexcept { return caches_; }
 
   [[nodiscard]] std::size_t count() const noexcept { return caches_.size(); }
@@ -119,8 +144,12 @@ class CacheHierarchy {
   [[nodiscard]] std::uint32_t deepest_level() const noexcept;
 
   /// Total bytes across every distinct cache at a level, counted once each
-  /// however many CPUs share them.
-  [[nodiscard]] std::uint64_t total_bytes_at_level(std::uint32_t level) const noexcept;
+  /// however many CPUs share them -- or nothing, if the size of any cache at
+  /// that level is unknown. A partial sum would be a plausible wrong number,
+  /// which is the one thing this module does not produce. A level with no
+  /// caches totals zero, and that is known.
+  [[nodiscard]] std::optional<std::uint64_t> total_bytes_at_level(
+      std::uint32_t level) const noexcept;
 
  private:
   explicit CacheHierarchy(std::vector<Cache> caches) : caches_(std::move(caches)) {}
