@@ -140,6 +140,20 @@ class Source {
   /// and the second is the malformed one.
   [[nodiscard]] core::Result<CpuList, Unavailable> cpu_list();
 
+  /// The attribute parsed as a signed integer -- or why it could not be.
+  ///
+  /// Signed, and that is not laziness. `core_id` and `physical_package_id` are
+  /// **-1** on a kernel that cannot determine them, which happens on some
+  /// virtualised and arm64 machines. An unsigned parser would refuse that as
+  /// "not a digit" and report a malformed file, which is a lie: the file is
+  /// exactly what the kernel meant to write, and the truth is that the kernel
+  /// does not know. Reading it faithfully lets the caller say so.
+  ///
+  /// Accepts an optional leading '-' and digits, nothing else -- no whitespace,
+  /// no '+', no hex. The kernel writes none of those, and accepting them would
+  /// turn a file that is not what we think into a plausible number.
+  [[nodiscard]] core::Result<std::int64_t, Unavailable> integer();
+
  private:
   platform::FileSystem* filesystem_;
   std::string path_;

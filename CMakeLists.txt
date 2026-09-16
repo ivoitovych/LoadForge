@@ -81,6 +81,7 @@ loadforge_enable_coverage(loadforge_platform)
 add_library(loadforge_topology STATIC
   src/topology/cpu_list.cpp
   src/topology/source.cpp
+  src/topology/cpu_topology.cpp
 )
 target_link_libraries(loadforge_topology PUBLIC loadforge_platform)
 loadforge_set_warnings(loadforge_topology)

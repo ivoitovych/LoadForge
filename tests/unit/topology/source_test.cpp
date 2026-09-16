@@ -312,6 +312,139 @@ TEST_F(SourceTest, ACpuListPropagatesAReadFailureUnchanged) {
   EXPECT_NE(list.error().detail.find("No such file"), std::string::npos);
 }
 
+// --- integer -----------------------------------------------------------------
+
+TEST_F(SourceTest, AnIntegerIsReadFromTheValue) {
+  syscalls.set_content("42\n");
+  Source source(filesystem, "/sys/devices/system/cpu/cpu0/topology/core_id");
+
+  auto value = source.integer();
+  ASSERT_TRUE(value.has_value());
+  EXPECT_EQ(value.value(), 42);
+  EXPECT_TRUE(source.has_been_read());
+}
+
+TEST_F(SourceTest, ANegativeIntegerIsReadRatherThanRefused) {
+  // The kernel writes -1 into core_id and physical_package_id when it cannot
+  // determine them. Refusing it as "not a digit" would report a malformed file,
+  // which is a lie: the file is exactly what the kernel meant to write. Reading
+  // it faithfully is what lets a caller distinguish "your kernel wrote
+  // something strange" from "your kernel does not know", and only the second
+  // has an answer the user can act on.
+  syscalls.set_content("-1\n");
+  Source source(filesystem, "/sys/devices/system/cpu/cpu0/topology/core_id");
+
+  auto value = source.integer();
+  ASSERT_TRUE(value.has_value());
+  EXPECT_EQ(value.value(), -1);
+}
+
+TEST_F(SourceTest, ZeroReadsAsZero) {
+  syscalls.set_content("0\n");
+  Source source(filesystem, "/sys/x");
+  auto value = source.integer();
+  ASSERT_TRUE(value.has_value());
+  EXPECT_EQ(value.value(), 0);
+}
+
+TEST_F(SourceTest, AnEmptyValueIsMalformedForAnIntegerEvenThoughItIsAValidCpuList) {
+  // The same input, two different right answers. `offline` being empty means no
+  // CPUs are offline; an empty core_id means nothing at all, and no kernel
+  // attribute holding a number is ever written blank.
+  syscalls.set_content("\n");
+  Source source(filesystem, "/sys/devices/system/cpu/cpu0/topology/core_id");
+
+  auto value = source.integer();
+  ASSERT_FALSE(value.has_value());
+  EXPECT_EQ(value.error().kind, Availability::kMalformed);
+}
+
+TEST_F(SourceTest, ABareMinusSignIsMalformed) {
+  syscalls.set_content("-\n");
+  Source source(filesystem, "/sys/x");
+  auto value = source.integer();
+  ASSERT_FALSE(value.has_value());
+  EXPECT_EQ(value.error().kind, Availability::kMalformed);
+}
+
+TEST_F(SourceTest, TextThatIsNotANumberIsMalformedAndQuotesItself) {
+  syscalls.set_content("banana\n");
+  Source source(filesystem, "/sys/x");
+
+  auto value = source.integer();
+  ASSERT_FALSE(value.has_value());
+  EXPECT_EQ(value.error().kind, Availability::kMalformed);
+  EXPECT_NE(value.error().detail.find("banana"), std::string::npos);
+}
+
+TEST_F(SourceTest, ACharacterBelowTheDigitsIsRefusedAsWellAsOneAbove) {
+  // Both halves of the range check, deliberately. "banana" only ever exercises
+  // the upper bound -- every letter sorts above '9' -- so a parser that had
+  // dropped the lower test entirely would still have passed the test above it
+  // while accepting a space, a comma or a '+' as part of a number.
+  for (const std::string value : {"1 2", "1+2", "1,2", "1.2"}) {
+    syscalls.set_content(value + "\n");
+    Source source(filesystem, "/sys/x");
+    auto parsed = source.integer();
+    ASSERT_FALSE(parsed.has_value()) << "accepted \"" << value << "\"";
+    EXPECT_EQ(parsed.error().kind, Availability::kMalformed);
+  }
+}
+
+TEST_F(SourceTest, ARunOfDigitsLongEnoughToWrapIsRefusedRatherThanWrapped) {
+  syscalls.set_content("99999999999999999999999999\n");
+  Source source(filesystem, "/sys/x");
+
+  auto value = source.integer();
+  ASSERT_FALSE(value.has_value());
+  EXPECT_EQ(value.error().kind, Availability::kMalformed);
+  EXPECT_NE(value.error().detail.find("larger than"), std::string::npos);
+}
+
+TEST_F(SourceTest, TheBoundIsEnforcedAtTheEdgeRatherThanEventually) {
+  // The test above passed against a loop that multiplied first and compared
+  // after -- which is undefined behaviour, caught only by UBSan. It passed for
+  // the wrong reason: the wrapped value happened to exceed the bound on a later
+  // digit, so the expected error arrived without the guard ever having worked.
+  //
+  // These two cases pin the boundary exactly, one digit either side, so the
+  // check has to be correct rather than merely eventually loud. Neither can
+  // overflow anything, so neither can pass by accident.
+  syscalls.set_content("1000000000000000000\n");  // Exactly the bound: accepted.
+  {
+    Source source(filesystem, "/sys/x");
+    auto value = source.integer();
+    ASSERT_TRUE(value.has_value());
+    EXPECT_EQ(value.value(), 1'000'000'000'000'000'000);
+  }
+
+  syscalls.set_content("1000000000000000001\n");  // One past it: refused.
+  {
+    Source source(filesystem, "/sys/x");
+    auto value = source.integer();
+    ASSERT_FALSE(value.has_value());
+    EXPECT_EQ(value.error().kind, Availability::kMalformed);
+  }
+}
+
+TEST_F(SourceTest, TheBoundAppliesToNegativeValuesToo) {
+  syscalls.set_content("-1000000000000000001\n");
+  Source source(filesystem, "/sys/x");
+
+  auto value = source.integer();
+  ASSERT_FALSE(value.has_value());
+  EXPECT_EQ(value.error().kind, Availability::kMalformed);
+}
+
+TEST_F(SourceTest, AnIntegerPropagatesAReadFailureUnchanged) {
+  syscalls.fail_open(EACCES);
+  Source source(filesystem, "/sys/x");
+
+  auto value = source.integer();
+  ASSERT_FALSE(value.has_value());
+  EXPECT_EQ(value.error().kind, Availability::kDenied);
+}
+
 // --- Source against a real kernel (T8) ---------------------------------------
 
 class RealSourceTest : public ::testing::Test {
