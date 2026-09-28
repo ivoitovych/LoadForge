@@ -113,6 +113,19 @@ struct DiscoveryFailure {
 /// Human-readable rendering, suitable for putting in front of a user.
 [[nodiscard]] std::string describe(const DiscoveryFailure& failure);
 
+/// A DiscoveryFailure for a source that would not answer, carrying the
+/// source's own classification and detail.
+///
+/// Shared by every discovery module -- CPUs, caches, NUMA -- and public for
+/// that reason: the third private copy was the signal. Both strings are copied
+/// into locals before the aggregate so that it is built from moves alone;
+/// journal §1.13 explains the coverage edge two allocating members in one
+/// initialiser would otherwise create.
+[[nodiscard]] DiscoveryFailure from_source(const Unavailable& unavailable);
+
+/// A DiscoveryFailure for sources that all answered and cannot all be true.
+[[nodiscard]] DiscoveryFailure contradiction(std::string subject, std::string detail);
+
 /// What the machine's CPUs actually are: how many, on which cores, in which
 /// packages, and whether any core carries more than one thread.
 ///

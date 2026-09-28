@@ -20,21 +20,6 @@ std::string cpu_directory(std::string_view sysfs_root, std::uint32_t id) {
   return std::string{sysfs_root} + "/devices/system/cpu/cpu" + std::to_string(id);
 }
 
-DiscoveryFailure from_source(const Unavailable& unavailable) {
-  // Both strings copied into locals first, so the aggregate below constructs
-  // from moves alone. Journal §1.13: two allocating members in one initialiser
-  // force a cleanup path carrying a branch no test can ever take.
-  std::string subject = unavailable.path;
-  std::string detail = unavailable.detail;
-  return DiscoveryFailure{DiscoveryFailure::Kind::kSource, unavailable.kind, std::move(subject),
-                          std::move(detail)};
-}
-
-DiscoveryFailure contradiction(std::string subject, std::string detail) {
-  return DiscoveryFailure{DiscoveryFailure::Kind::kContradiction, Availability::kPresent,
-                          std::move(subject), std::move(detail)};
-}
-
 /// Reads one of the small integer ids the kernel writes per CPU.
 ///
 /// A NEGATIVE value is refused, with its own wording, and that case is the
@@ -68,6 +53,21 @@ core::Result<std::uint32_t, DiscoveryFailure> read_id(platform::FileSystem& file
 std::string name_of(std::uint32_t id) { return "cpu" + std::to_string(id); }
 
 }  // namespace
+
+DiscoveryFailure from_source(const Unavailable& unavailable) {
+  // Both strings copied into locals first, so the aggregate below constructs
+  // from moves alone. Journal §1.13: two allocating members in one initialiser
+  // force a cleanup path carrying a branch no test can ever take.
+  std::string subject = unavailable.path;
+  std::string detail = unavailable.detail;
+  return DiscoveryFailure{DiscoveryFailure::Kind::kSource, unavailable.kind, std::move(subject),
+                          std::move(detail)};
+}
+
+DiscoveryFailure contradiction(std::string subject, std::string detail) {
+  return DiscoveryFailure{DiscoveryFailure::Kind::kContradiction, Availability::kPresent,
+                          std::move(subject), std::move(detail)};
+}
 
 std::string describe(const DiscoveryFailure& failure) {
   if (failure.kind == DiscoveryFailure::Kind::kContradiction) {

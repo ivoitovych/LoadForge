@@ -31,18 +31,6 @@ std::string index_directory(std::string_view sysfs_root, std::uint32_t cpu, std:
          "/cache/index" + std::to_string(index);
 }
 
-DiscoveryFailure source_failure(const Unavailable& unavailable) {
-  std::string subject = unavailable.path;
-  std::string detail = unavailable.detail;
-  return DiscoveryFailure{DiscoveryFailure::Kind::kSource, unavailable.kind, std::move(subject),
-                          std::move(detail)};
-}
-
-DiscoveryFailure disagreement(std::string subject, std::string detail) {
-  return DiscoveryFailure{DiscoveryFailure::Kind::kContradiction, Availability::kPresent,
-                          std::move(subject), std::move(detail)};
-}
-
 core::Result<CacheType, std::string_view> parse_type(std::string_view text) {
   // Exactly the three strings the kernel writes, matched exactly. A prefix or
   // case-insensitive match would turn an unexpected value into a plausible
@@ -74,17 +62,17 @@ core::Result<std::optional<std::uint32_t>, DiscoveryFailure> read_optional_count
     if (value.error().kind == Availability::kAbsent) {
       return std::optional<std::uint32_t>{};
     }
-    return source_failure(value.error());
+    return from_source(value.error());
   }
   if (value.value() < 0) {
     std::string detail = "the kernel reports " + std::to_string(value.value()) +
                          ", and a cache cannot have a negative one";
-    return disagreement(path, std::move(detail));
+    return contradiction(path, std::move(detail));
   }
   if (value.value() > CpuList::kMaxCpuId) {
     std::string detail = "the kernel reports " + std::to_string(value.value()) +
                          ", which is past anything a cache attribute holds";
-    return disagreement(path, std::move(detail));
+    return contradiction(path, std::move(detail));
   }
   return std::optional<std::uint32_t>{static_cast<std::uint32_t>(value.value())};
 }
@@ -98,18 +86,18 @@ core::Result<std::optional<std::uint64_t>, DiscoveryFailure> read_optional_size(
     if (text.error().kind == Availability::kAbsent) {
       return std::optional<std::uint64_t>{};
     }
-    return source_failure(text.error());
+    return from_source(text.error());
   }
   auto size = parse_cache_size(text.value());
   if (!size.has_value()) {
     std::string detail = "\"" + text.value() + "\": " + std::string{size.error()};
-    return disagreement(path, std::move(detail));
+    return contradiction(path, std::move(detail));
   }
   // The kernel hides `size` rather than writing zero, so a zero that IS
   // written is not "unknown" -- it is a file that is not what we think.
   if (size.value() == 0) {
     std::string detail = "a cache of zero bytes is not a cache";
-    return disagreement(path, std::move(detail));
+    return contradiction(path, std::move(detail));
   }
   return std::optional<std::uint64_t>{size.value()};
 }
@@ -152,30 +140,30 @@ core::Result<std::optional<Cache>, DiscoveryFailure> read_index(platform::FileSy
     if (level_value.error().kind == Availability::kAbsent) {
       return std::optional<Cache>{};
     }
-    return source_failure(level_value.error());
+    return from_source(level_value.error());
   }
   if (level_value.value() < 1 || level_value.value() > kMaxCacheLevel) {
     std::string detail = "the kernel reports level " + std::to_string(level_value.value()) +
                          ", which is not a cache level";
-    return disagreement(level_path, std::move(detail));
+    return contradiction(level_path, std::move(detail));
   }
   const auto level = static_cast<std::uint32_t>(level_value.value());
 
   Source type_source(filesystem, directory + "/type");
   auto type_text = type_source.text();
   if (!type_text.has_value()) {
-    return source_failure(type_text.error());
+    return from_source(type_text.error());
   }
   auto type = parse_type(type_text.value());
   if (!type.has_value()) {
     std::string detail = "\"" + type_text.value() + "\" is " + std::string{type.error()};
-    return disagreement(directory + "/type", std::move(detail));
+    return contradiction(directory + "/type", std::move(detail));
   }
 
   Source shared_source(filesystem, directory + "/shared_cpu_list");
   auto shared = shared_source.cpu_list();
   if (!shared.has_value()) {
-    return source_failure(shared.error());
+    return from_source(shared.error());
   }
 
   // A cache is shared with at least the CPU it was read through. The cheapest
@@ -184,7 +172,7 @@ core::Result<std::optional<Cache>, DiscoveryFailure> read_index(platform::FileSy
   // the shared set.
   if (!shared.value().contains(cpu)) {
     std::string detail = name_of(cpu) + " is not among the CPUs sharing its own cache";
-    return disagreement(directory + "/shared_cpu_list", std::move(detail));
+    return contradiction(directory + "/shared_cpu_list", std::move(detail));
   }
 
   // Everything below here the kernel may legitimately not publish.
@@ -229,8 +217,8 @@ std::optional<DiscoveryFailure> check_served_cpus_online(const std::vector<Readi
       if (!online) {
         std::string detail = name_of(reading.cache.kind) + " on " + name_of(reading.cpu) +
                              " claims to serve " + name_of(served) + ", which is not online";
-        return disagreement(index_directory(sysfs_root, reading.cpu, 0) + "/../shared_cpu_list",
-                            std::move(detail));
+        return contradiction(index_directory(sysfs_root, reading.cpu, 0) + "/../shared_cpu_list",
+                             std::move(detail));
       }
     }
   }
@@ -253,7 +241,8 @@ std::optional<DiscoveryFailure> check_nesting(const std::vector<Reading>& readin
           std::string detail = name_of(inner.cpu) + " shares " + name_of(inner.cache.kind) +
                                " with " + name_of(served) + " but does not share " +
                                name_of(outer.cache.kind) + " with it; caches nest";
-          return disagreement(index_directory(sysfs_root, inner.cpu, 0) + "/..", std::move(detail));
+          return contradiction(index_directory(sysfs_root, inner.cpu, 0) + "/..",
+                               std::move(detail));
         }
       }
     }
@@ -277,7 +266,8 @@ std::optional<DiscoveryFailure> check_sharers_agree(const std::vector<Reading>& 
         std::string detail = name_of(reading.cache.kind) + " is described differently by " +
                              name_of(reading.cpu) + " and " + name_of(sharer) +
                              ", which it claims to serve";
-        return disagreement(index_directory(sysfs_root, reading.cpu, 0) + "/..", std::move(detail));
+        return contradiction(index_directory(sysfs_root, reading.cpu, 0) + "/..",
+                             std::move(detail));
       }
     }
   }

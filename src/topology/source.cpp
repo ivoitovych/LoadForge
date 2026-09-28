@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "core/result.hpp"
 #include "platform/syscall_error.hpp"
@@ -192,6 +193,41 @@ core::Result<std::int64_t, Unavailable> Source::integer() {
     magnitude = magnitude * 10 + value_of_digit;
   }
   return negative ? -magnitude : magnitude;
+}
+
+core::Result<std::vector<std::string>, Unavailable> Source::lines() {
+  auto contents = filesystem_->read_file(path_);
+  if (!contents.has_value()) {
+    const platform::SyscallError& error = contents.error();
+    // Hoisted, and classified with the same `seen_` text() uses: a source that
+    // yielded lines once and is gone now has vanished, whichever reader asked.
+    std::string detail = describe(error);
+    const Availability kind = classify(error, seen_);
+    return Unavailable{kind, path_, std::move(detail)};
+  }
+  seen_ = true;
+
+  std::vector<std::string> lines;
+  const std::string& text = contents.value();
+  std::size_t start = 0;
+  while (start < text.size()) {
+    std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) {
+      end = text.size();  // A final line the kernel did not terminate.
+    }
+    std::string line = text.substr(start, end - start);
+    // A trailing carriage return would otherwise survive into a parsed value,
+    // exactly as read_first_line guards against.
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    lines.push_back(std::move(line));
+    start = end + 1;
+  }
+  // The loop condition is what keeps a terminating newline from producing a
+  // phantom empty last line: after the final '\n', start == text.size() and
+  // the loop simply ends.
+  return lines;
 }
 
 }  // namespace loadforge::topology
