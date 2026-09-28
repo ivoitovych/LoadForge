@@ -318,6 +318,32 @@ Four facts, each probed from the running machine before the cache module was des
   fields. This is the second time the ARM64 CI matrix found something no local run could
   (§1.2 was the first), which is the whole argument for the matrix.
 
+### 1.15 What sysfs writes for NUMA, and the number that does not add up
+
+Probed from the running machine, before the module was designed:
+
+- **`node/online`, `possible`, `has_cpu`, `has_memory` are CPU-list format** — the kernel
+  writes node masks with the same formatter — so `CpuList::parse` reads them unchanged.
+- **`nodeN/meminfo` is multi-line and every line is prefixed `Node N `**: 36 lines on this
+  kernel, zero without the prefix. The prefix is a cross-check for free — a file naming a
+  different node is not the file we think it is. `/proc/meminfo` has the same shape *without*
+  the prefix, which is why the MemTotal parser is not yet shared.
+- **`nodeN/distance` is single-space-separated integers, one per online node** (written
+  with `for_each_online_node`), so the row length is a certain cross-check against the
+  online set. Self-distance reads 10; that is the kernel's `LOCAL_DISTANCE` and the ACPI
+  SLIT convention, and is *not* checked.
+- **Node memory does not sum to system memory.** node0 — the only node — reports
+  `MemTotal: 5081316 kB` (4962 MiB) while `/proc/meminfo` reports 16481980 kB (16095 MiB),
+  and all 128 online 128-MiB memory blocks sit *under node0*. The node's own accounting
+  undercounts its own blocks. Whatever the cause in this VM's memory hotplug, the lesson is
+  what it always is: **a cross-check that would refuse this ordinary machine is wrong, not
+  the machine.** So there is no node-memory total, and nothing compares node memory to
+  anything.
+- **`cpu/cpuN/nodeM` is a link from the CPU's side to its node.** Independent of
+  `nodeM/cpulist`, so agreement between them is evidence (F21). It is used as
+  corroboration in the T8 test — a test that can fail — not as a rule in discovery that
+  could refuse a machine.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -585,6 +611,41 @@ threshold of 25. Splitting it into `read_index`, `check_served_cpus_online`,
 `check_nesting`, `deduplicate` and `ordered_before` made each check a named claim rather
 than a paragraph in a loop — which is what the doctrine says a cross-check *is*. The
 finding was correct and the fix was better code, not appeasement.
+
+### 2.11 NUMA: "not exposed" is an answer, and there is no memory total
+
+Two decisions, both about what *not* to produce.
+
+**A kernel that publishes no `node/` directory yields a layout with no nodes.** Not a
+refusal — nothing is wrong with a kernel built without NUMA — and not a fabricated single
+node holding every CPU and all memory. The fabrication is the tempting one, because every
+caller would find it convenient; it is also a plausible wrong answer about a node the kernel
+never described. `exposed()` says which case a caller is in, and `node_of()` answers null
+rather than a default, because there is no node to default to. Only *absence* of
+`node/online` means this; a denied or unreadable one is still a failure, with a real-`EISDIR`
+test to hold the line.
+
+**There is no total-memory accessor.** §1.15's finding — node0 reporting 4962 MiB on a
+16095 MiB machine — makes any sum misleading, and an accessor that is misleading on the
+first VM it meets should not exist. Per-node `memory_bytes` is offered with the caveat
+written on it.
+
+*The open thread from §6 is settled:* the multi-line reader is `Source::lines()`, a
+primitive on `Source` with the same `seen_` memory as `text()` — so a source that yielded
+lines once and is gone now is *vanished* whichever reader asks. What is *not* shared yet is
+the `Key: value kB` parsing, because `nodeN/meminfo` carries a `Node N ` prefix that
+`/proc/meminfo` does not, and generalising over one example is guessing. It lives in
+`numa.cpp` until M3's procfs reader gives it a second caller.
+
+*Also settled by the third copy:* `from_source` and `contradiction`, the two constructors
+of a `DiscoveryFailure`, are now public in `cpu_topology.hpp`. Two private copies were
+tolerable; the third was the signal.
+
+*And one compiler finding worth keeping:* a range-for over `parse(list).value().ids()`
+walks freed memory. Only the *final* temporary in a range expression has its lifetime
+extended in C++20; the `Result` that owns the vector dies before the first iteration.
+`-Wdangling-reference` caught it in a test fixture before it ran. Materialise the owner
+first; the loop borrows from a named object.
 
 ---
 
@@ -991,13 +1052,27 @@ Kept short and current; move an item to the relevant document once it is settled
   the capability-classifying `Source` that decides what a *failed* reading means (§2.6,
   §2.7). Review was waived by the owner rather than performed, which is worth remembering
   when reading that history: the gates are the only thing that has inspected it.
-- **Next in sequence:** the NUMA layout, the last part of topology discovery. CPUs (§2.8,
-  §2.9) and caches (§1.14, §2.10) have landed with their cross-checks. NUMA brings
-  `/sys/devices/system/node/nodeN/cpulist`, which must partition `online` — every online
-  CPU in exactly one node — and `meminfo`, a multi-line file where the single-line
-  `Source::text()` will not do. That is the first source needing a multi-line reader, and
-  the decision about where it lives (a `Source::lines()`, or a separate procfs-style
-  reader for M3's `/proc/meminfo`) should be made once for both.
+- **Topology discovery is complete:** CPUs (§2.8, §2.9), caches (§1.14, §2.10) and NUMA
+  (§1.15, §2.11), each with its cross-checks and its recorded list of checks deliberately
+  *not* made. The module ledger's `topology/` row is satisfied.
+- **Next in sequence:** `platform/affinity` — `sched_setaffinity` and its P7 states. It is
+  the first consumer of the topology, and the first place a cgroup cpuset can silently
+  narrow what `online` promised: a CPU the topology found may be one this process is not
+  allowed to run on. That gap between "exists" and "available to us" is the next capability
+  state, and it arrives with a real errno (`EINVAL` from a mask outside the cpuset) that
+  only the seam can force in CI.
+- **A flake to fix, with its evidence:**
+  `RealWaitStatus.RealStopAndContinueAreDistinguishedFromTermination` failed once, in the
+  coverage-instrumented build under `ctest -j4`, while passing in the debug, ASan, TSan and
+  scalar builds of the same source and 30/30 times in isolation in the same binary. The
+  `WCONTINUED` wait after `SIGCONT` returned an **exit with code 0** rather than a
+  continuation, and the following reap got `ECHILD`: the child had already terminated —
+  and with the wrong code, 0 rather than its 7. That shape says the stop was never
+  observed before the child ran on, and the code-0 exit says the child took a path the test
+  did not write (§1.9: under gcov a forked child's `_exit` is not what it looks like). It is
+  a P5 ordering the test assumes rather than enforces, in `platform`, and it belongs to the
+  supervision work — not to the topology change that happened to run alongside it. Until
+  then it is a known flake, not a green light: a second failure is real.
 - **Wanted: one local entry point that runs what CI runs.** There is currently none, so
   every contributor — and every session — assembles the list from memory and gets a
   different subset. That is how §4.8 happened: eleven checks run, the twelfth not recalled

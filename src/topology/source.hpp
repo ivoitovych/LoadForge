@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "core/result.hpp"
 #include "platform/fs.hpp"
@@ -153,6 +154,17 @@ class Source {
   /// no '+', no hex. The kernel writes none of those, and accepting them would
   /// turn a file that is not what we think into a plausible number.
   [[nodiscard]] core::Result<std::int64_t, Unavailable> integer();
+
+  /// Every line of the attribute, each stripped of its line ending -- or why
+  /// there are none.
+  ///
+  /// For the few multi-line files under /sys. `node/nodeN/meminfo` is the
+  /// first; M3's `/proc/meminfo` has the same shape. A file that ends in a
+  /// newline does NOT yield a trailing empty line: the kernel terminates every
+  /// line, so a phantom last entry would be counted by anything that counts
+  /// lines, and would be wrong every time. An empty file yields no lines,
+  /// which -- as with text() -- is a reading and not an absence.
+  [[nodiscard]] core::Result<std::vector<std::string>, Unavailable> lines();
 
  private:
   platform::FileSystem* filesystem_;

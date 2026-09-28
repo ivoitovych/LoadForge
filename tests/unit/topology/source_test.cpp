@@ -445,6 +445,85 @@ TEST_F(SourceTest, AnIntegerPropagatesAReadFailureUnchanged) {
   EXPECT_EQ(value.error().kind, Availability::kDenied);
 }
 
+// --- lines -------------------------------------------------------------------
+
+TEST_F(SourceTest, LinesSplitsAMultiLineValue) {
+  syscalls.set_content("Node 0 MemTotal:  5081316 kB\nNode 0 MemFree:   3911652 kB\n");
+  Source source(filesystem, "/sys/devices/system/node/node0/meminfo");
+
+  auto lines = source.lines();
+  ASSERT_TRUE(lines.has_value());
+  EXPECT_EQ(lines.value(), (std::vector<std::string>{"Node 0 MemTotal:  5081316 kB",
+                                                     "Node 0 MemFree:   3911652 kB"}));
+  EXPECT_TRUE(source.has_been_read());
+}
+
+TEST_F(SourceTest, ATerminatingNewlineDoesNotProduceAPhantomEmptyLine) {
+  // The kernel terminates every line. Anything that counts lines would count
+  // the phantom, and be wrong every time.
+  syscalls.set_content("one\ntwo\n");
+  Source source(filesystem, "/sys/x");
+  auto lines = source.lines();
+  ASSERT_TRUE(lines.has_value());
+  EXPECT_EQ(lines.value().size(), 2U);
+}
+
+TEST_F(SourceTest, AnUnterminatedLastLineIsStillALine) {
+  syscalls.set_content("one\ntwo");
+  Source source(filesystem, "/sys/x");
+  auto lines = source.lines();
+  ASSERT_TRUE(lines.has_value());
+  EXPECT_EQ(lines.value(), (std::vector<std::string>{"one", "two"}));
+}
+
+TEST_F(SourceTest, LinesStripsCarriageReturnsAsFirstLineDoes) {
+  syscalls.set_content("one\r\ntwo\r\n");
+  Source source(filesystem, "/sys/x");
+  auto lines = source.lines();
+  ASSERT_TRUE(lines.has_value());
+  EXPECT_EQ(lines.value(), (std::vector<std::string>{"one", "two"}));
+}
+
+TEST_F(SourceTest, AnEmptyFileHasNoLinesAndIsStillASuccess) {
+  syscalls.set_content("");
+  Source source(filesystem, "/sys/x");
+  auto lines = source.lines();
+  ASSERT_TRUE(lines.has_value());
+  EXPECT_TRUE(lines.value().empty());
+  EXPECT_TRUE(source.has_been_read());
+}
+
+TEST_F(SourceTest, ABlankLineInTheMiddleIsKeptAsAnEmptyString) {
+  // Dropping it would shift every later line's index; only the phantom after
+  // the terminator is not a line.
+  syscalls.set_content("one\n\nthree\n");
+  Source source(filesystem, "/sys/x");
+  auto lines = source.lines();
+  ASSERT_TRUE(lines.has_value());
+  EXPECT_EQ(lines.value(), (std::vector<std::string>{"one", "", "three"}));
+}
+
+TEST_F(SourceTest, LinesClassifiesAFailureWithTheSameMemoryTextUses) {
+  syscalls.set_content("one\n");
+  Source source(filesystem, "/sys/x");
+  ASSERT_TRUE(source.lines().has_value());
+
+  syscalls.fail_open(ENOENT);
+  auto second = source.lines();
+  ASSERT_FALSE(second.has_value());
+  EXPECT_EQ(second.error().kind, Availability::kVanished);
+  EXPECT_EQ(second.error().path, "/sys/x");
+}
+
+TEST_F(SourceTest, LinesReportsADeniedSourceAsDenied) {
+  syscalls.fail_open(EACCES);
+  Source source(filesystem, "/sys/x");
+  auto lines = source.lines();
+  ASSERT_FALSE(lines.has_value());
+  EXPECT_EQ(lines.error().kind, Availability::kDenied);
+  EXPECT_FALSE(source.has_been_read());
+}
+
 // --- Source against a real kernel (T8) ---------------------------------------
 
 class RealSourceTest : public ::testing::Test {

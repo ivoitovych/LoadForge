@@ -20,6 +20,7 @@ add_executable(loadforge_unit_tests
   unit/topology/source_test.cpp
   unit/topology/cpu_topology_test.cpp
   unit/topology/cache_test.cpp
+  unit/topology/numa_test.cpp
   unit/platform/real_syscalls_test.cpp
   unit/platform/result_instantiations_test.cpp
   unit/third_party/tomlplusplus_smoke_test.cpp
