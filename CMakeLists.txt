@@ -95,11 +95,23 @@ loadforge_enable_coverage(loadforge_topology)
 
 # ---- cli --------------------------------------------------------------------
 add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp)
-target_link_libraries(loadforge_cli PUBLIC loadforge_core)
+target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)
 loadforge_enable_coverage(loadforge_cli)
+
+# ---- config -----------------------------------------------------------------
+# TOML parse, schema validation, resolution. The vendored parser is a PRIVATE
+# dependency: nothing that includes config.hpp compiles toml.hpp, and the
+# executable still links nothing but the C and C++ runtime.
+loadforge_provide_tomlplusplus()
+add_library(loadforge_config STATIC src/config/config.cpp)
+target_link_libraries(loadforge_config PUBLIC loadforge_core PRIVATE loadforge::tomlplusplus)
+loadforge_set_warnings(loadforge_config)
+loadforge_set_fp_contract(loadforge_config)
+loadforge_enable_sanitizers(loadforge_config)
+loadforge_enable_coverage(loadforge_config)
 
 # ---- executable -------------------------------------------------------------
 add_executable(loadforge src/main/main.cpp)

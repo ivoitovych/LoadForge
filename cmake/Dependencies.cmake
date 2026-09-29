@@ -53,5 +53,11 @@ function(loadforge_provide_tomlplusplus)
   target_include_directories(loadforge_tomlplusplus SYSTEM INTERFACE
     "${CMAKE_SOURCE_DIR}/third_party/tomlplusplus")
   # Header-only: no compiled TU, no runtime dependency, nothing to link.
-  target_compile_definitions(loadforge_tomlplusplus INTERFACE TOML_EXCEPTIONS=1)
+  #
+  # Exceptions OFF: toml::parse then returns a parse_result that either holds
+  # the table or the error, and config/ reads it like any other Result. A
+  # catch clause carries a type-match branch no test can take (the handler
+  # either matches or the exception is rethrown), which the coverage gate
+  # counted and refused; the value-returning API has no such edge.
+  target_compile_definitions(loadforge_tomlplusplus INTERFACE TOML_EXCEPTIONS=0)
 endfunction()

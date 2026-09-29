@@ -1,4 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# EnumCastOutOfRange is off because it fires inside the vendored TOML
+# formatter's flag enum (toml.hpp, a SYSTEM header) whenever config/ renders a
+# document, at a location no NOLINT in this tree can reach. The project's own
+# enums are never cast from integers outside the tests that prove describe()
+# is total, and tests are not tidied.
 Checks: >
   bugprone-*,
   concurrency-*,
@@ -12,7 +17,8 @@ Checks: >
   -readability-identifier-length,
   -misc-include-cleaner,
   -cppcoreguidelines-avoid-magic-numbers,
-  -readability-magic-numbers
+  -readability-magic-numbers,
+  -clang-analyzer-optin.core.EnumCastOutOfRange
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/src/.*'
 FormatStyle: file

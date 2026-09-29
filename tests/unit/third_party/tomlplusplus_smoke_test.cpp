@@ -44,7 +44,9 @@ enabled = true
 )";
 
 TEST(VendoredTomlPlusPlus, ParsesTheShapeConfigWillUse) {
-  const toml::table config = toml::parse(kConfig);
+  const toml::parse_result parsed = toml::parse(kConfig);
+  ASSERT_TRUE(parsed.succeeded());
+  const toml::table& config = parsed.table();
 
   EXPECT_EQ(config["run"]["mode"].value_or(std::string_view{}), "stress");
   EXPECT_EQ(config["run"]["duration"].value_or(std::string_view{}), "5h");
@@ -65,7 +67,9 @@ TEST(VendoredTomlPlusPlus, ParsesTheShapeConfigWillUse) {
 // depend on this to tell "the user did not set it" from "the user set it to the
 // default", which are different facts about a run.
 TEST(VendoredTomlPlusPlus, AbsentKeyIsAbsentRatherThanDefaulted) {
-  const toml::table config = toml::parse(kConfig);
+  const toml::parse_result parsed = toml::parse(kConfig);
+  ASSERT_TRUE(parsed.succeeded());
+  const toml::table& config = parsed.table();
 
   EXPECT_FALSE(config["run"]["no_such_key"].is_value());
   EXPECT_EQ(config["run"]["no_such_key"].value_or(-1), -1);
@@ -76,23 +80,24 @@ TEST(VendoredTomlPlusPlus, AbsentKeyIsAbsentRatherThanDefaulted) {
 // Returning an empty table for a malformed document would let a corrupt config
 // silently become a default one — and a stress run at default limits is not the
 // run the user asked for.
-TEST(VendoredTomlPlusPlus, MalformedDocumentThrowsRatherThanDefaulting) {
-  EXPECT_THROW((void)toml::parse("[run\nmode = "), toml::parse_error);
-
-  try {
-    (void)toml::parse("[run\nmode = ");
-    FAIL() << "a malformed document parsed without error";
-  } catch (const toml::parse_error& error) {
-    // The error must locate the problem, or a user cannot act on it.
-    EXPECT_GT(error.source().begin.line, 0U);
-    EXPECT_FALSE(std::string_view{error.description()}.empty());
-  }
+TEST(VendoredTomlPlusPlus, MalformedDocumentFailsRatherThanDefaulting) {
+  // Built with TOML_EXCEPTIONS=0 (cmake/Dependencies.cmake says why), so the
+  // failure is a value: a parse_result that says it failed and carries the
+  // error, never a table.
+  const toml::parse_result result = toml::parse("[run\nmode = ");
+  ASSERT_TRUE(result.failed()) << "a malformed document parsed without error";
+  ASSERT_FALSE(static_cast<bool>(result));
+  // The error must locate the problem, or a user cannot act on it.
+  EXPECT_GT(result.error().source().begin.line, 0U);
+  EXPECT_FALSE(std::string_view{result.error().description()}.empty());
 }
 
 // Type confusion must fail rather than coerce. "duration = 5" where a string is
 // expected is a config error, not a 5.
 TEST(VendoredTomlPlusPlus, WrongTypeDoesNotSilentlyCoerce) {
-  const toml::table config = toml::parse("[run]\nduration = 5\n");
+  const toml::parse_result parsed = toml::parse("[run]\nduration = 5\n");
+  ASSERT_TRUE(parsed.succeeded());
+  const toml::table& config = parsed.table();
 
   EXPECT_EQ(config["run"]["duration"].value_or(std::string_view{"unset"}), "unset");
   EXPECT_EQ(config["run"]["duration"].value_or(0), 5);

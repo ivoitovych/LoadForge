@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The smallest run LoadForge accepts: one workload, for a short while, under
+# no limits it does not already apply. The M1 controller runs the null
+# workload with it; later milestones name real workloads here.
+
+schema_version = 1
+
+[run]
+mode     = "stress"
+duration = "30s"
+
+[[workload]]
+name    = "null"
+threads = "all"

@@ -225,7 +225,7 @@ those, so a blank there means a real exemption and never an oversight.
 |---|---|---|---|---|
 | `core/` | M0 ✅ | P1, P3 | T1 | Result, units, duration, byte size — done, 100% |
 | `main/` | M0 ✅ | P1, P3 | T1, T8 | CLI dispatch, selftest digest |
-| `config/` | M1 | P1, P2, P3 | T1, T8 | TOML parse, schema validation, resolution. Parser vendored and smoke-tested (X1 closed) |
+| `config/` | M1 ✅ | P1, P3 | T1, T8 | **Shipped.** TOML parse, schema validation, resolution. Corrected against what was built: the failing open is not behind the seam (PLAN §4.2), so it is reached by real files at T8 rather than injected at T2, and the row no longer claims P2 |
 | `platform` (seam, `fs`) | M1 ✅ | P1, P2, P3 | T1, T2, T8 | **Shipped.** The substitutable `Syscalls` and the reader above it. Corrected against what was built: the row previously claimed P7 and omitted P3 and T8. `fs` itself has no capability states — a source being present, absent or forbidden is a property of the *telemetry sources* that use it, and those arrive at M3 |
 | `platform/clock` | M1 | P1, P3 | T1 | Monotonic time; fake clock for the rest of the suite |
 | `platform/process` | M1 | P1, P2, P6 | T1, T7 | fork/exec, signals, reaping, `PR_SET_PDEATHSIG` (F9) |

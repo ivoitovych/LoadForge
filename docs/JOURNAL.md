@@ -427,6 +427,41 @@ lesson each session relearns; the seam's `send_signal` comment is the one that s
 
 ---
 
+### 1.18 Config: what the TOML library coerces, what the stream throws, and what a v1 cgroup looks like
+
+- **toml++ answers `value<int64_t>()` for a boolean.** `threads = true` read as one thread
+  and `enabled = 1` would have read as true. The library documents the coercion; the schema
+  exists to refuse it. Every integer and boolean read now checks the node's own type first,
+  and the test that found it (`threads = true` accepted where the message expected "found
+  boolean") is the test that keeps it found. A float with an integral value coerces the same
+  way, so `95.0` is refused as "found floating-point" rather than read as 95.
+- **libstdc++ throws from reading a directory; it does not set `badbit`.** `std::ifstream`
+  opens a directory (the kernel allows `open(dir, O_RDONLY)`, as the seam's T8 established
+  for the raw call), and the first read throws `std::ios_base::failure` with `EISDIR`
+  regardless of the stream's exception mask. The `in.bad()` check written first was
+  unreachable and the exception escaped the test. The file is now read with C stdio, where
+  `ferror` reports the same fact as a value: "cannot read the file", distinct from "cannot
+  open the file" for an absent one and from an empty document (F3: absent, unreadable, empty
+  and malformed are four facts).
+- **A `catch` clause is a branch no test can take.** The handler's type match is an edge
+  gcov counts — matched, or rethrown — and the rethrow arm is unreachable for a handler that
+  catches what is thrown. `--exclude-throw-branches` does not remove it. So the vendored
+  parser is built with `TOML_EXCEPTIONS=0`, `toml::parse` returns a `parse_result` that
+  config reads like any other `Result`, and there is no `try` in the module. This is §1.13's
+  landing-pad finding from the other side: not a cleanup block, a handler.
+- **A top-level key written after `[run]` belongs to `[run]`.** Obvious once said; a test
+  placed `workload = []` after the run table and asserted a top-level refusal it could not get.
+  Recorded because a user's file will do the same and the message — "run.workload: unknown
+  key" — is correct and will look wrong to them.
+- **This container is cgroup v1.** `/sys/fs/cgroup/memory.max` does not exist; the memory
+  controller is at `/sys/fs/cgroup/memory/` and `/proc/self/cgroup` lists `memory:/…`
+  separately from the unified `0::/` line. The reader that resolves a memory share (F7) will
+  meet both hierarchies and must treat "no cgroup limit found" as *unlimited by the cgroup*,
+  not as a failure — the ceiling is then `MemAvailable` alone. `resolve_memory` takes an
+  optional for exactly that reason.
+
+---
+
 ## 2. Decisions, and the alternatives that were rejected
 
 The choice is in `PLAN.md`; what follows is the reasoning that does not survive
@@ -788,6 +823,51 @@ minimum; `value_or` stays as it is, since a fallback for a mapping makes no sens
 whole pages the way the kernel accounts for it, and refusing the unrounded `munmap` length
 the way the kernel does. The ledger names `memory_test.cpp` as the builder and the marker
 comment says why the state cannot be committed or arranged in CI.
+
+---
+
+### 2.14 Config: an unknown key is a refusal, a wrong type is a refusal, and there is no default duration
+
+`config::parse` refuses any key it does not know, at every level, naming the key and the
+keys it does know. The alternative — ignore what you do not understand, as most parsers do
+— means `max_temprature_c = 95` runs with no thermal limit and says nothing. There is no
+default duration and no default mode for the same reason: a file that forgot them would run
+for some length the user never chose. The exit criterion this serves (IMPLEMENTATION.md §4,
+M1 item 5) says every rejection path is tested for the message it produces, and it is: the
+tests assert the exact text, the dotted key and the line.
+
+**Domains are stated once and bounded on purpose.** A temperature limit is 1..150 °C because
+no silicon this project will meet has a junction limit past ~125, so 950 is 95 with a digit
+stuck to it and a run that trusted it would never stop. A duration must exceed zero. A byte
+size must exceed zero — the way to ask for no memory is to leave the key out. Threads is a
+positive integer or `"all"` and is *not* bounded against a CPU count here, because the
+topology is the only honest ceiling and it is not known until discovery runs; the scheduler
+compares the two.
+
+**`schema_version` is required and must be the one this build reads.** A file from a later
+LoadForge is refused whole rather than half-read: the key this build does not know may be
+the one that bounds the run, and the unknown-key rule would catch it anyway — but "schema 2
+is not one this build reads" is the message a user can act on, and "unknown key `thermal`"
+is not.
+
+**Memory resolution is arithmetic here and reading elsewhere.** `resolve_memory` takes a
+`MemoryBudget` — `MemAvailable` and an optional cgroup limit — and answers a byte count:
+a share is a share of the lower of the two, rounded down, computed without overflow; an
+absolute size larger than the ceiling is refused, never clamped, because a run that quietly
+used less would report results for a workload nobody configured. Reading the budget is
+platform knowledge (procfs, and both cgroup hierarchies per §1.18) and lands with the
+controller. F7's "reserve headroom" is deliberately not baked in as a constant: it belongs
+in the config as a stated number, once there is a workload that needs it.
+
+*The alternative rejected:* routing the file read through the syscall seam so that a failing
+open could be injected. PLAN §4.2 is explicit that config reading is ordinary file I/O, and
+the real failures — an absent path, a directory — are produced with real files in T8 and by
+the built binary through `--check-config`. The ledger row says so rather than claiming a
+T2 it does not have.
+
+*The round trip:* `to_toml` renders through the library's own formatter and the test parses
+the rendering back to an equal `Config`, for both the minimal and the full document. A run
+record can carry exactly what it ran with, in a form the reader accepts.
 
 ---
 
@@ -1229,10 +1309,17 @@ Kept short and current; move an item to the relevant document once it is settled
   this entry was wrong and is worth keeping: `ENOMEM` from `mlock` under `RLIMIT_MEMLOCK` was
   called "the one CI can actually provoke" — it cannot, because CI is root and root ignores
   the limit. It is provoked from a child that drops privileges instead.
-- **Next in sequence:** `config` — TOML parse, schema validation, resolution against
-  `MemAvailable` and the cgroup limit (F7) — and then the worker/controller split. The
-  huge-page strategy, the lock and populate choices, and the NUMA node are now fields a
-  config can name, which is what F7 asked for.
+- **`config` is in (§1.18, §2.14):** parse, schema validation with every refusal named and
+  line-numbered, round trip, and the memory-share arithmetic. `loadforge --check-config FILE`
+  is the first user-facing command past `--version`. Not yet in: the *reader* of the memory
+  budget (`MemAvailable` plus the cgroup limit under either hierarchy) — it lands with the
+  controller, which is the first thing that needs the number — and config fields for the
+  memory module's huge-page, lock, populate and NUMA choices, which wait for the workload
+  that first sets them.
+- **Next in sequence:** the controller/worker split — `worker/{scheduler,ipc}`,
+  `controller/{orchestration,safety,supervision}`, the console reporter — driving the null
+  workload from `config/quick.toml` for its configured duration. The M1 exit criteria in
+  IMPLEMENTATION.md §4 are the checklist.
 - **Resolved — a flake, with its fix:**
   `RealWaitStatus.RealStopAndContinueAreDistinguishedFromTermination` failed once under
   the coverage build and once under ASan, in different sessions, while passing 30/30 in

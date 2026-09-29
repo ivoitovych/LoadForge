@@ -39,6 +39,19 @@ tiers   = ["T1"]
 note    = "Pure value logic: Result, ParseError, duration and byte-size parsing. No syscalls, so no P2."
 
 [[module]]
+path    = "src/config"
+classes = ["P1", "P3"]
+tiers   = ["T1", "T8"]
+note    = """
+TOML parse, schema validation and memory resolution. P3 is the substance: every \
+value has a stated domain and every boundary a test (a zero duration, zero \
+threads, a temperature past 150, a share past 100%). A failing open in load() \
+is P2-shaped but is not behind the seam -- docs/PLAN.md §4.2 keeps config reading \
+as ordinary file I/O -- so it is reached by a real missing path and a real \
+directory in T8 and by the built binary through --check-config, and the row \
+declares P1 and P3 rather than claiming a T2 it does not have."""
+
+[[module]]
 path    = "src/main"
 classes = ["P1", "P3"]
 tiers   = ["T1", "T8"]
