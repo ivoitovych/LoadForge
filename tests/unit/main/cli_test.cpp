@@ -94,6 +94,41 @@ TEST(Cli, TooManyArgumentsFails) {
   EXPECT_NE(r.err.find("single argument"), std::string::npos);
 }
 
+TEST(Cli, CheckConfigTakesExactlyOneFile) {
+  for (const std::vector<std::string_view>& args :
+       {std::vector<std::string_view>{"--check-config"},
+        std::vector<std::string_view>{"--check-config", "a.toml", "b.toml"}}) {
+    const Outcome r = invoke(args);
+    EXPECT_EQ(r.code, 2);
+    EXPECT_NE(r.err.find("exactly one FILE"), std::string::npos);
+    EXPECT_TRUE(r.out.empty());
+  }
+}
+
+TEST(Cli, CheckConfigAcceptsTheShippedQuickConfig) {
+  const Outcome r = invoke({"--check-config", LOADFORGE_SOURCE_DIR "/config/quick.toml"});
+  EXPECT_EQ(r.code, 0) << r.err;
+  EXPECT_EQ(r.out.substr(0, 4), "ok: ");
+  EXPECT_NE(r.out.find("stress for 30s, 1 workload(s)"), std::string::npos) << r.out;
+  EXPECT_TRUE(r.err.empty());
+}
+
+TEST(Cli, CheckConfigRefusesWithTheKeyAndLineOnStderr) {
+  const Outcome r =
+      invoke({"--check-config", LOADFORGE_SOURCE_DIR "/tests/fixtures/config/unknown-key.toml"});
+  EXPECT_EQ(r.code, 1);
+  EXPECT_TRUE(r.out.empty());
+  EXPECT_NE(r.err.find("unknown-key.toml:11: limits.max_temprature_c: unknown key"),
+            std::string::npos)
+      << r.err;
+}
+
+TEST(Cli, CheckConfigReportsAMissingFile) {
+  const Outcome r = invoke({"--check-config", LOADFORGE_SOURCE_DIR "/config/absent.toml"});
+  EXPECT_EQ(r.code, 1);
+  EXPECT_NE(r.err.find("absent.toml: cannot open the file"), std::string::npos) << r.err;
+}
+
 TEST(Cli, DiagnosticsGoToStderrNotStdout) {
   // A caller piping --version into a script must never receive an error message
   // on the same stream.

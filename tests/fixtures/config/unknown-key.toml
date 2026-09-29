@@ -1,0 +1,15 @@
+# A misspelled limit. The refusal this must produce is the reason unknown keys
+# are refused at all: ignored, this file would run with no thermal limit.
+
+schema_version = 1
+
+[run]
+mode     = "stress"
+duration = "30s"
+
+[limits]
+max_temprature_c = 95
+
+[[workload]]
+name    = "null"
+threads = "all"

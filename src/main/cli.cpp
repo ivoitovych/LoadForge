@@ -2,14 +2,18 @@
 #include "main/cli.hpp"
 
 #include <ostream>
+#include <string>
 #include <vector>
 
+#include "config/config.hpp"
+#include "core/duration.hpp"
 #include "main/selftest.hpp"
 
 namespace loadforge::cli {
 namespace {
 
 constexpr int kOk = 0;
+constexpr int kConfigRefused = 1;
 constexpr int kUsageError = 2;
 
 void print_usage(std::ostream& out) {
@@ -18,9 +22,26 @@ void print_usage(std::ostream& out) {
       << "Usage:\n"
       << "  loadforge --version\n"
       << "  loadforge --help\n"
+      << "  loadforge --check-config FILE   parse and validate a configuration\n"
       << "\n"
-      << "No workload commands yet: this is the M0 foundation build.\n"
+      << "No workload commands yet: the controller lands with M1.\n"
       << "See docs/PLAN.md for what lands when.\n";
+}
+
+/// Reads a configuration and says whether it would be accepted, and why not
+/// if not. Exit 1 on a refusal so a script can rely on it, and the message on
+/// stderr where a script expects a diagnostic.
+int check_config(std::string_view path, std::ostream& out, std::ostream& err) {
+  const auto loaded = config::load(std::string{path});
+  if (!loaded.has_value()) {
+    err << "loadforge: " << config::describe(loaded.error()) << "\n";
+    return kConfigRefused;
+  }
+  const config::Config& config = loaded.value();
+  out << "ok: " << path << ": " << config::describe(config.run.mode) << " for "
+      << core::to_string(config.run.duration) << ", " << config.workloads.size()
+      << " workload(s)\n";
+  return kOk;
 }
 
 }  // namespace
@@ -50,12 +71,19 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
     print_usage(out);
     return kOk;
   }
+  const std::string_view command = args.front();
+  if (command == "--check-config") {
+    if (args.size() != 2) {
+      err << "loadforge: --check-config takes exactly one FILE\n";
+      return kUsageError;
+    }
+    return check_config(args[1], out, err);
+  }
   if (args.size() > 1) {
     err << "loadforge: expected a single argument, got " << args.size() << "\n";
     return kUsageError;
   }
 
-  const std::string_view command = args.front();
   if (command == "--version" || command == "-V") {
     out << kVersion << "\n";
     return kOk;
