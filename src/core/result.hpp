@@ -60,7 +60,12 @@ class Result {
   [[nodiscard]] constexpr explicit operator bool() const noexcept { return has_value(); }
 
   /// The value. Throws std::bad_variant_access if this holds an error.
-  [[nodiscard]] constexpr const T& value() const { return std::get<0>(store_); }
+  [[nodiscard]] constexpr const T& value() const& { return std::get<0>(store_); }
+
+  /// The value, moved out of an rvalue Result. This is how a move-only
+  /// success value -- the first was platform::Mapping, which owns a mapping
+  /// and must not be copied -- leaves the Result that carried it.
+  [[nodiscard]] constexpr T&& value() && { return std::get<0>(std::move(store_)); }
 
   /// The error. Throws std::bad_variant_access if this holds a value.
   [[nodiscard]] constexpr const E& error() const { return std::get<1>(store_); }

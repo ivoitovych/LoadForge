@@ -17,6 +17,7 @@ add_executable(loadforge_unit_tests
   unit/platform/worker_pool_test.cpp
   unit/platform/clock_test.cpp
   unit/platform/affinity_test.cpp
+  unit/platform/memory_test.cpp
   unit/topology/cpu_list_test.cpp
   unit/topology/source_test.cpp
   unit/topology/cpu_topology_test.cpp

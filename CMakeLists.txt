@@ -69,6 +69,7 @@ add_library(loadforge_platform STATIC
   src/platform/worker_pool.cpp
   src/platform/clock.cpp
   src/platform/affinity.cpp
+  src/platform/memory.cpp
 )
 target_link_libraries(loadforge_platform PUBLIC loadforge_core)
 loadforge_set_warnings(loadforge_platform)

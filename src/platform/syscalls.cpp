@@ -2,8 +2,11 @@
 #include "platform/syscalls.hpp"
 
 #include <fcntl.h>
+#include <linux/mempolicy.h>
 #include <sched.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -223,6 +226,82 @@ core::Result<core::Ok, SyscallError> RealSyscalls::set_affinity(pid_t pid, const
   const int number = errno;
   return result_or_error<core::Ok>(core::Ok{}, failed, number, "sched_setaffinity",
                                    "pid " + std::to_string(pid));
+}
+
+namespace {
+
+/// The subject every memory call reports: the length, never the address. An
+/// address in a message is noise to a user and a different value on every run
+/// to a test; the length is what a reader can act on.
+std::string describe_length(std::size_t length) { return std::to_string(length) + " bytes"; }
+
+// The node mask crosses the seam as the array of unsigned long that mbind(2)
+// reads, built word by word -- bit n in word n / bits-per-long -- rather than
+// by copying bytes, so that the layout holds on either byte order.
+using NodeWords = std::array<unsigned long, kNodeMaskBits / (sizeof(unsigned long) * CHAR_BIT)>;
+static_assert(kNodeMaskBits % (sizeof(unsigned long) * CHAR_BIT) == 0,
+              "the node mask must be a whole number of words");
+
+NodeWords to_words(const NodeMask& nodes) {
+  constexpr std::size_t kBitsPerWord = sizeof(unsigned long) * CHAR_BIT;
+  NodeWords words{};
+  for (std::size_t node = 0; node < kNodeMaskBits; ++node) {
+    if (nodes.nodes.test(node)) {
+      words.at(node / kBitsPerWord) |= 1UL << (node % kBitsPerWord);
+    }
+  }
+  return words;
+}
+
+}  // namespace
+
+core::Result<void*, SyscallError> RealSyscalls::map_anonymous(std::size_t length, int extra_flags) {
+  // PROT and the base flags are fixed here because every mapping this project
+  // makes is anonymous, private and writable: a test pattern has to be written
+  // somewhere. MAP_POPULATE is deliberately not among them -- a populate that
+  // fails is silent inside mmap, and Memory populates afterwards with an
+  // madvise whose failure is reported.
+  void* address = ::mmap(nullptr, length, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | extra_flags, -1, 0);
+  const bool failed = address == MAP_FAILED;
+  const int number = errno;
+  return result_or_error<void*>(address, failed, number, "mmap", describe_length(length));
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::unmap(void* address, std::size_t length) {
+  const bool failed = ::munmap(address, length) != 0;
+  const int number = errno;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "munmap", describe_length(length));
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::lock_memory(void* address, std::size_t length) {
+  const bool failed = ::mlock(address, length) != 0;
+  const int number = errno;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "mlock", describe_length(length));
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::advise_memory(void* address, std::size_t length,
+                                                                 int advice) {
+  const bool failed = ::madvise(address, length, advice) != 0;
+  const int number = errno;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "madvise",
+                                   describe_length(length) + ", advice " + std::to_string(advice));
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::bind_memory(void* address, std::size_t length,
+                                                               const NodeMask& nodes) {
+  const NodeWords words = to_words(nodes);
+  // No libnuma: mbind(2) has no glibc wrapper, and linking a library for one
+  // call would add a runtime dependency the static release cannot carry. The
+  // maxnode argument is one more than the highest bit the kernel should read,
+  // which is how the kernel counts it (it decrements before use). syscall(2)
+  // is variadic like open(2), and there is no other spelling.
+  constexpr unsigned long kMaxNode = kNodeMaskBits + 1;
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const long rc = ::syscall(SYS_mbind, address, length, MPOL_BIND, words.data(), kMaxNode, 0);
+  const int number = errno;
+  const bool failed = rc != 0;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "mbind", describe_length(length));
 }
 
 }  // namespace loadforge::platform

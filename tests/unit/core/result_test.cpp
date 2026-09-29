@@ -3,7 +3,9 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 
 #include "core/parse_error.hpp"
@@ -42,6 +44,21 @@ TEST(Result, WorksWithNonTrivialValueTypes) {
   EXPECT_EQ(ok.value(), "held");
   const Result<std::string, ParseError> bad{ParseError::InvalidNumber};
   EXPECT_EQ(bad.value_or("fallback"), "fallback");
+}
+
+TEST(Result, AMoveOnlyValueLeavesAnRvalueResultByMove) {
+  // The first move-only success value was platform::Mapping, which owns a
+  // range of memory and must not be copied. A unique_ptr stands in for it
+  // here so the core test does not depend on the platform layer.
+  Result<std::unique_ptr<int>, ParseError> ok{std::make_unique<int>(7)};
+  const std::unique_ptr<int> taken = std::move(ok).value();
+  ASSERT_NE(taken, nullptr);
+  EXPECT_EQ(*taken, 7);
+  EXPECT_EQ(ok.value(), nullptr)
+      << "moved from, and still a valid Result";  // NOLINT(bugprone-use-after-move)
+
+  Result<std::unique_ptr<int>, ParseError> bad{ParseError::Empty};
+  EXPECT_THROW((void)std::move(bad).value(), std::bad_variant_access);
 }
 
 TEST(Result, MisuseThrowsRatherThanInvokingUndefinedBehaviour) {

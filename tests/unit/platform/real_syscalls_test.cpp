@@ -13,16 +13,24 @@
 // translation being right.
 
 #include <fcntl.h>
+#include <grp.h>
 #include <gtest/gtest.h>
 #include <sched.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
 #include <csignal>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <optional>
 #include <string>
 
 #include "platform/exit_status.hpp"
@@ -521,6 +529,305 @@ TEST_F(RealSyscallsTest, AffinityCallsOnAPidThatDoesNotExistAreESRCH) {
   auto placed = syscalls.set_affinity(kNoSuchPid, any);
   ASSERT_FALSE(placed.has_value());
   EXPECT_EQ(placed.error().number, ESRCH);
+}
+
+// --- memory against the real kernel ------------------------------------------
+//
+// Each answer the fake models is corroborated here (F21). The tests read and
+// write only memory this process mapped, and change no kernel setting: the
+// huge-page pool in particular is whatever the machine has, and the test
+// asserts the answer that pool implies rather than reserving pages on a host
+// it does not own.
+
+namespace {
+
+constexpr std::size_t kOneMiB = std::size_t{1} << 20;
+constexpr std::size_t kHugePage = std::size_t{2} << 20;
+constexpr int kHugeFlags = MAP_HUGETLB | (21 << MAP_HUGE_SHIFT);
+
+/// Unmaps however the test ends, so a failing assertion does not leak.
+class UnmapAtExit {
+ public:
+  UnmapAtExit(RealSyscalls& syscalls, void* address, std::size_t length)
+      : syscalls_(&syscalls), address_(address), length_(length) {}
+  ~UnmapAtExit() { (void)syscalls_->unmap(address_, length_); }
+  UnmapAtExit(const UnmapAtExit&) = delete;
+  UnmapAtExit& operator=(const UnmapAtExit&) = delete;
+  UnmapAtExit(UnmapAtExit&&) = delete;
+  UnmapAtExit& operator=(UnmapAtExit&&) = delete;
+
+ private:
+  RealSyscalls* syscalls_;
+  void* address_;
+  std::size_t length_;
+};
+
+NodeMask node(std::uint32_t id) {
+  NodeMask mask;
+  mask.nodes.set(id);
+  return mask;
+}
+
+/// Whether the sanitizer runtime answers mlock(2) itself. ASan and TSan
+/// intercept mlock, munlock and mlockall and return 0 without calling the
+/// kernel -- verified: under ASan, an mlock of an unmapped range "succeeded"
+/// and an unprivileged child met no RLIMIT_MEMLOCK at all. Their runtimes
+/// reserve terabytes of shadow address space, and a real lock of it would be
+/// ruinous, so the interception is deliberate on their part. The tests that
+/// assert the KERNEL's answer to mlock therefore skip, visibly, under a
+/// sanitizer; every other configuration runs them (journal §1.17).
+constexpr bool kMlockIsIntercepted =
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+    true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+    true;
+#else
+    false;
+#endif
+#else
+    false;
+#endif
+
+/// This process's locked bytes as the kernel accounts for them: VmLck in
+/// /proc/self/status. The oracle for whether an mlock did anything (F21).
+long locked_kib() {
+  std::ifstream in("/proc/self/status");
+  std::string key;
+  long value = 0;
+  while (in >> key) {
+    if (key == "VmLck:") {
+      in >> value;
+      return value;
+    }
+    in.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  }
+  return -1;
+}
+
+/// The 2 MiB pool's free count, or nothing when this kernel has no 2 MiB pool.
+std::optional<long> free_2mib_huge_pages() {
+  std::ifstream in("/sys/kernel/mm/hugepages/hugepages-2048kB/free_hugepages");
+  long count = 0;
+  if (!(in >> count)) {
+    return std::nullopt;
+  }
+  return count;
+}
+
+}  // namespace
+
+TEST_F(RealSyscallsTest, MapsWritesReadsBackAndUnmaps) {
+  auto mapped = syscalls.map_anonymous(kOneMiB, 0);
+  ASSERT_TRUE(mapped.has_value()) << describe(mapped.error());
+  ASSERT_NE(mapped.value(), nullptr);
+  auto* bytes = static_cast<unsigned char*>(mapped.value());
+  EXPECT_EQ(bytes[0], 0) << "anonymous memory arrives zeroed";
+  EXPECT_EQ(bytes[kOneMiB - 1], 0);
+  std::memset(bytes, 0xa5, kOneMiB);
+  EXPECT_EQ(bytes[kOneMiB - 1], 0xa5);
+  auto unmapped = syscalls.unmap(mapped.value(), kOneMiB);
+  EXPECT_TRUE(unmapped.has_value()) << describe(unmapped.error());
+}
+
+TEST_F(RealSyscallsTest, MapOfZeroBytesIsEINVAL) {
+  auto mapped = syscalls.map_anonymous(0, 0);
+  ASSERT_FALSE(mapped.has_value());
+  EXPECT_EQ(mapped.error().number, EINVAL);
+  EXPECT_EQ(mapped.error().call, "mmap");
+  EXPECT_EQ(mapped.error().subject, "0 bytes");
+}
+
+TEST_F(RealSyscallsTest, MapLargerThanTheAddressSpaceIsENOMEM) {
+  // 2^50 bytes: past the 47-bit user address space on x86-64 and the 48-bit
+  // one on arm64, and with overcommit in any mode the kernel refuses the
+  // reservation rather than the pages.
+  auto mapped = syscalls.map_anonymous(std::size_t{1} << 50, 0);
+  ASSERT_FALSE(mapped.has_value());
+  EXPECT_EQ(mapped.error().number, ENOMEM);
+}
+
+TEST_F(RealSyscallsTest, UnmapOfAnUnalignedAddressIsEINVAL) {
+  auto mapped = syscalls.map_anonymous(kOneMiB, 0);
+  ASSERT_TRUE(mapped.has_value());
+  const UnmapAtExit cleanup(syscalls, mapped.value(), kOneMiB);
+  auto* const unaligned = static_cast<unsigned char*>(mapped.value()) + 1;
+  auto unmapped = syscalls.unmap(unaligned, 4096);
+  ASSERT_FALSE(unmapped.has_value());
+  EXPECT_EQ(unmapped.error().number, EINVAL);
+  EXPECT_EQ(unmapped.error().call, "munmap");
+}
+
+TEST_F(RealSyscallsTest, AdvisesTransparentHugePagesAndPopulatesARealMapping) {
+  auto mapped = syscalls.map_anonymous(kHugePage, 0);
+  ASSERT_TRUE(mapped.has_value());
+  const UnmapAtExit cleanup(syscalls, mapped.value(), kHugePage);
+  auto advised = syscalls.advise_memory(mapped.value(), kHugePage, MADV_HUGEPAGE);
+  EXPECT_TRUE(advised.has_value()) << describe(advised.error());
+  auto populated = syscalls.advise_memory(mapped.value(), kHugePage, MADV_POPULATE_WRITE);
+  EXPECT_TRUE(populated.has_value()) << describe(populated.error());
+
+  auto* const unaligned = static_cast<unsigned char*>(mapped.value()) + 1;
+  auto bad = syscalls.advise_memory(unaligned, 4096, MADV_HUGEPAGE);
+  ASSERT_FALSE(bad.has_value());
+  EXPECT_EQ(bad.error().number, EINVAL);
+  EXPECT_EQ(bad.error().call, "madvise");
+  EXPECT_EQ(bad.error().subject, "4096 bytes, advice " + std::to_string(MADV_HUGEPAGE));
+}
+
+TEST_F(RealSyscallsTest, CallsOnARangeThatIsNoLongerMappedAnswerAsTheFakeModels) {
+  // The fake's answers for an unmapped range -- ENOMEM from madvise, EFAULT
+  // from mbind -- are the kernel's, checked here on a range this process
+  // mapped and released, so the addresses are ones nobody else will have
+  // taken. mlock's ENOMEM has its own test below, because a sanitizer
+  // answers mlock itself.
+  auto mapped = syscalls.map_anonymous(kOneMiB, 0);
+  ASSERT_TRUE(mapped.has_value());
+  void* const address = mapped.value();
+  ASSERT_TRUE(syscalls.unmap(address, kOneMiB).has_value());
+
+  auto advised = syscalls.advise_memory(address, kOneMiB, MADV_POPULATE_WRITE);
+  ASSERT_FALSE(advised.has_value());
+  EXPECT_EQ(advised.error().number, ENOMEM);
+
+  auto bound = syscalls.bind_memory(address, kOneMiB, node(0));
+  ASSERT_FALSE(bound.has_value());
+  EXPECT_EQ(bound.error().number, EFAULT);
+  EXPECT_EQ(bound.error().call, "mbind");
+}
+
+TEST_F(RealSyscallsTest, LocksARealMapping) {
+  // Succeeds for a privileged process regardless of RLIMIT_MEMLOCK, and for
+  // an unprivileged one under the 8 MiB default. The limit's two refusals are
+  // provoked from a child that drops privileges, below.
+  auto mapped = syscalls.map_anonymous(kOneMiB, 0);
+  ASSERT_TRUE(mapped.has_value());
+  const UnmapAtExit cleanup(syscalls, mapped.value(), kOneMiB);
+  const long before = locked_kib();
+  auto locked = syscalls.lock_memory(mapped.value(), kOneMiB);
+  ASSERT_TRUE(locked.has_value()) << describe(locked.error());
+  if (kMlockIsIntercepted) {
+    GTEST_SKIP() << "the sanitizer runtime answered mlock; the kernel was not asked";
+  }
+  EXPECT_GE(locked_kib() - before, static_cast<long>(kOneMiB / 1024))
+      << "the kernel's own accounting shows the lock";
+}
+
+TEST_F(RealSyscallsTest, MlockOnARangeThatIsNoLongerMappedIsENOMEM) {
+  if (kMlockIsIntercepted) {
+    GTEST_SKIP() << "the sanitizer runtime answers mlock without asking the kernel";
+  }
+  auto mapped = syscalls.map_anonymous(kOneMiB, 0);
+  ASSERT_TRUE(mapped.has_value());
+  void* const address = mapped.value();
+  ASSERT_TRUE(syscalls.unmap(address, kOneMiB).has_value());
+  auto locked = syscalls.lock_memory(address, kOneMiB);
+  ASSERT_FALSE(locked.has_value());
+  EXPECT_EQ(locked.error().number, ENOMEM);
+  EXPECT_EQ(locked.error().call, "mlock");
+}
+
+TEST_F(RealSyscallsTest, BindsToNodeZeroAndIsRefusedForANodeThisMachineLacks) {
+  auto mapped = syscalls.map_anonymous(kOneMiB, 0);
+  ASSERT_TRUE(mapped.has_value());
+  const UnmapAtExit cleanup(syscalls, mapped.value(), kOneMiB);
+
+  auto bound = syscalls.bind_memory(mapped.value(), kOneMiB, node(0));
+  EXPECT_TRUE(bound.has_value()) << describe(bound.error())
+                                 << " (node 0 has memory on every Linux machine)";
+
+  // The last representable node. A machine with 1024 nodes would make this
+  // wrong, and would be worth hearing about.
+  auto absent = syscalls.bind_memory(mapped.value(), kOneMiB, node(kNodeMaskBits - 1));
+  ASSERT_FALSE(absent.has_value());
+  EXPECT_EQ(absent.error().number, EINVAL);
+
+  auto empty = syscalls.bind_memory(mapped.value(), kOneMiB, NodeMask{});
+  ASSERT_FALSE(empty.has_value());
+  EXPECT_EQ(empty.error().number, EINVAL) << "an empty mask is no policy at all";
+
+  auto* const unaligned = static_cast<unsigned char*>(mapped.value()) + 1;
+  auto crooked = syscalls.bind_memory(unaligned, 4096, node(0));
+  ASSERT_FALSE(crooked.has_value());
+  EXPECT_EQ(crooked.error().number, EINVAL);
+}
+
+TEST_F(RealSyscallsTest, ExplicitHugePagesAnswerAccordingToThePoolThisMachineHas) {
+  // Three states, one assertion each, no skip: the pool is whatever it is,
+  // and the kernel's answer for it is what the fake claims for that state.
+  const std::optional<long> free_pages = free_2mib_huge_pages();
+  auto mapped = syscalls.map_anonymous(1, kHugeFlags);
+
+  if (!free_pages.has_value()) {
+    ASSERT_FALSE(mapped.has_value()) << "no 2 MiB pool exists, so no 2 MiB page can";
+    EXPECT_EQ(mapped.error().number, EINVAL);
+    return;
+  }
+  if (free_pages.value() == 0) {
+    ASSERT_FALSE(mapped.has_value()) << "the pool exists and is empty";
+    EXPECT_EQ(mapped.error().number, ENOMEM);
+    return;
+  }
+  ASSERT_TRUE(mapped.has_value()) << describe(mapped.error());
+  // The length trap the module is built around: a one-byte request took a
+  // whole page, and giving it back needs the rounded length.
+  auto unrounded = syscalls.unmap(mapped.value(), 1);
+  ASSERT_FALSE(unrounded.has_value());
+  EXPECT_EQ(unrounded.error().number, EINVAL);
+  auto rounded = syscalls.unmap(mapped.value(), kHugePage);
+  EXPECT_TRUE(rounded.has_value()) << describe(rounded.error());
+}
+
+TEST_F(RealSyscallsTest, AnUnprivilegedProcessMeetsRlimitMemlockBothWaysTheKernelSaysNo) {
+  // mlock ignores RLIMIT_MEMLOCK for a privileged process, and CI is one. So
+  // a child lowers the limit, drops to nobody, and reports the errno of a
+  // lock past the limit and of a lock under a limit of zero. If it cannot
+  // drop privileges the test is skipped rather than passed: an assertion
+  // about an unprivileged process made by a privileged one would be empty.
+  if (kMlockIsIntercepted) {
+    GTEST_SKIP() << "the sanitizer runtime answers mlock without asking the kernel";
+  }
+  constexpr int kCouldNotDrop = -1;
+  std::array<int, 2> pipe_fds{};
+  ASSERT_EQ(::pipe(pipe_fds.data()), 0);
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    ::close(pipe_fds[0]);
+    std::array<int, 2> answer{kCouldNotDrop, kCouldNotDrop};
+    const rlimit tiny{4096, 4096};
+    constexpr uid_t kNobody = 65534;
+    if (::setrlimit(RLIMIT_MEMLOCK, &tiny) == 0 && ::setgroups(0, nullptr) == 0 &&
+        ::setresgid(kNobody, kNobody, kNobody) == 0 &&
+        ::setresuid(kNobody, kNobody, kNobody) == 0) {
+      RealSyscalls unprivileged;
+      auto mapped = unprivileged.map_anonymous(kOneMiB, 0);
+      if (mapped.has_value()) {
+        auto past = unprivileged.lock_memory(mapped.value(), kOneMiB);
+        answer[0] = past.has_value() ? 0 : past.error().number;
+        const rlimit none{0, 0};
+        if (::setrlimit(RLIMIT_MEMLOCK, &none) == 0) {
+          auto under_zero = unprivileged.lock_memory(mapped.value(), 4096);
+          answer[1] = under_zero.has_value() ? 0 : under_zero.error().number;
+        }
+      }
+    }
+    const ssize_t wrote = ::write(pipe_fds[1], answer.data(), sizeof answer);
+    ::_exit(wrote == static_cast<ssize_t>(sizeof answer) ? 0 : 1);
+  }
+  ::close(pipe_fds[1]);
+  std::array<int, 2> answer{};
+  const ssize_t got = ::read(pipe_fds[0], answer.data(), sizeof answer);
+  ::close(pipe_fds[0]);
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "the child's write failed";
+  ASSERT_EQ(got, static_cast<ssize_t>(sizeof answer));
+  if (answer[0] == kCouldNotDrop) {
+    GTEST_SKIP() << "needs to run as root to drop privileges";
+  }
+  EXPECT_EQ(answer[0], ENOMEM) << "past the limit";
+  EXPECT_EQ(answer[1], EPERM) << "under a limit of zero, without CAP_IPC_LOCK";
 }
 
 }  // namespace

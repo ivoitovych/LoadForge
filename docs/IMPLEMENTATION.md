@@ -230,7 +230,7 @@ those, so a blank there means a real exemption and never an oversight.
 | `platform/clock` | M1 | P1, P3 | T1 | Monotonic time; fake clock for the rest of the suite |
 | `platform/process` | M1 | P1, P2, P6 | T1, T7 | fork/exec, signals, reaping, `PR_SET_PDEATHSIG` (F9) |
 | `platform/affinity` | M1 | P1, P2, P7 | T1, T2 | |
-| `platform/memory` | M1 | P1, P2, P3 | T1, T2 | mmap, huge pages, NUMA, mlock — each failure mode injected |
+| `platform/memory` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped.** mmap, huge pages, NUMA, mlock — each failure mode injected. Corrected against what was built: the huge-page pool is a P7 state (present, exhausted, unreserved) built in the fake, and T8 corroborates each kernel answer the fake models |
 | `platform/fpenv` | M2b | P1, P2, P3 | T1, T6 | MXCSR/FPCR assert and re-assert (F15) |
 | `platform/sysfs` | M3 | P1, P2, P7 | T1, T2 | |
 | `platform/procfs` | M3 | P1, P2, P7 | T1, T2 | |
