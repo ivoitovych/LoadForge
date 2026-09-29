@@ -2,13 +2,17 @@
 #include "platform/syscalls.hpp"
 
 #include <fcntl.h>
+#include <sched.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
+#include <climits>
 #include <csignal>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -148,6 +152,77 @@ core::Result<TimeSpec, SyscallError> RealSyscalls::read_clock(int clock_id) {
   return result_or_error<TimeSpec>(
       TimeSpec{static_cast<std::int64_t>(value.tv_sec), static_cast<std::int64_t>(value.tv_nsec)},
       failed, number, "clock_gettime", "clock " + std::to_string(clock_id));
+}
+
+// The seam's mask width is a plain constant so the header stays free of
+// <sched.h>. This is where the two are held to the same value -- and where the
+// LAYOUT the conversions below rely on is pinned: a cpu_set_t is exactly
+// CPU_SETSIZE bits of storage, bit `cpu` living in byte cpu/8 at bit cpu%8.
+static_assert(kAffinityMaskBits == CPU_SETSIZE,
+              "CpuMask must be exactly as wide as the kernel's cpu_set_t");
+static_assert(sizeof(cpu_set_t) * CHAR_BIT == CPU_SETSIZE,
+              "cpu_set_t must be a plain bit array with no padding");
+
+namespace {
+
+// The conversions read and write the set's bytes directly rather than through
+// CPU_ISSET and CPU_SET. Those macros carry a size guard -- `cpu / 8 < setsize`
+// -- that can never be false for a fixed-size cpu_set_t, so every use of them
+// left a branch no test could take, and the coverage gate correctly refused
+// to call it covered. Rung 3 of the exclusion ladder: delete the unreachable
+// code rather than excuse it. The layout this assumes is the one glibc
+// documents and the static_assert above pins; the real-kernel test cross-checks
+// every one of the 1024 bits against CPU_ISSET itself, so the macro is still
+// the oracle -- in the test, where an oracle belongs.
+using RawBytes = std::array<unsigned char, sizeof(cpu_set_t)>;
+
+CpuMask from_raw(const cpu_set_t& raw) {
+  RawBytes bytes{};
+  std::memcpy(bytes.data(), &raw, sizeof raw);
+  CpuMask mask;
+  for (std::size_t cpu = 0; cpu < kAffinityMaskBits; ++cpu) {
+    // .at(), and the widening cast, are for the checkers rather than for safety:
+    // cpu < kAffinityMaskBits keeps the index in range by construction, and
+    // unsigned char promotes to int before the shift, which -Wsign-conversion
+    // objects to when the result meets 1U.
+    const auto byte = static_cast<unsigned int>(bytes.at(cpu / CHAR_BIT));
+    if (((byte >> (cpu % CHAR_BIT)) & 1U) != 0U) {
+      mask.cpus.set(cpu);
+    }
+  }
+  return mask;
+}
+
+cpu_set_t to_raw(const CpuMask& mask) {
+  RawBytes bytes{};
+  for (std::size_t cpu = 0; cpu < kAffinityMaskBits; ++cpu) {
+    if (mask.cpus.test(cpu)) {
+      bytes.at(cpu / CHAR_BIT) |= static_cast<unsigned char>(1U << (cpu % CHAR_BIT));
+    }
+  }
+  cpu_set_t raw;
+  std::memcpy(&raw, bytes.data(), sizeof raw);
+  return raw;
+}
+
+}  // namespace
+
+core::Result<CpuMask, SyscallError> RealSyscalls::get_affinity(pid_t pid) {
+  cpu_set_t raw;
+  CPU_ZERO(&raw);
+  // Separate statements, for the reason send_signal spells out.
+  const bool failed = ::sched_getaffinity(pid, sizeof raw, &raw) != 0;
+  const int number = errno;
+  return result_or_error<CpuMask>(from_raw(raw), failed, number, "sched_getaffinity",
+                                  "pid " + std::to_string(pid));
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::set_affinity(pid_t pid, const CpuMask& mask) {
+  const cpu_set_t raw = to_raw(mask);
+  const bool failed = ::sched_setaffinity(pid, sizeof raw, &raw) != 0;
+  const int number = errno;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "sched_setaffinity",
+                                   "pid " + std::to_string(pid));
 }
 
 }  // namespace loadforge::platform

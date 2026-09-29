@@ -4,6 +4,7 @@
 
 #include <sys/types.h>
 
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -37,6 +38,24 @@ struct TimeSpec {
   std::int64_t nanoseconds = 0;
 
   [[nodiscard]] friend bool operator==(const TimeSpec&, const TimeSpec&) = default;
+};
+
+/// Width of a CPU affinity mask: the kernel's CPU_SETSIZE, which glibc fixes
+/// at 1024. Named here rather than taken from <sched.h> so the seam's header
+/// stays free of it; syscalls.cpp static_asserts the two agree.
+inline constexpr std::size_t kAffinityMaskBits = 1024;
+
+/// A CPU affinity mask exactly as sched_getaffinity(2) reports it and
+/// sched_setaffinity(2) accepts it: one bit per CPU id.
+///
+/// The seam exchanges the raw bits and nothing else. Which CPUs are online,
+/// which the cpuset permits, and what an EINVAL therefore means are all
+/// decisions, and decisions live above the seam where a test can reach both
+/// arms.
+struct CpuMask {
+  std::bitset<kAffinityMaskBits> cpus;
+
+  [[nodiscard]] friend bool operator==(const CpuMask&, const CpuMask&) = default;
 };
 
 /// The seam. Every system call the platform layer issues goes through here.
@@ -148,6 +167,18 @@ class Syscalls {
   /// and nothing else; naming the clocks, and arguing which one answers which
   /// question, is Clock's job above the seam where it can be tested.
   [[nodiscard]] virtual core::Result<TimeSpec, SyscallError> read_clock(int clock_id) = 0;
+
+  /// sched_getaffinity(2). pid 0 means the calling thread.
+  [[nodiscard]] virtual core::Result<CpuMask, SyscallError> get_affinity(pid_t pid) = 0;
+
+  /// sched_setaffinity(2). pid 0 means the calling thread.
+  ///
+  /// The kernel intersects the mask with what the cpuset permits and refuses
+  /// with EINVAL when nothing is left. It also, for a privileged caller, moves
+  /// ANY process -- verified: as root, pinning pid 1 succeeded and had to be
+  /// undone. Nothing above the seam passes a pid it did not fork.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> set_affinity(pid_t pid,
+                                                                          const CpuMask& mask) = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -170,6 +201,9 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] core::Result<Reaped, SyscallError> wait_any() override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> send_signal(pid_t pid, int signal) override;
   [[nodiscard]] core::Result<TimeSpec, SyscallError> read_clock(int clock_id) override;
+  [[nodiscard]] core::Result<CpuMask, SyscallError> get_affinity(pid_t pid) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> set_affinity(pid_t pid,
+                                                                  const CpuMask& mask) override;
 };
 
 }  // namespace loadforge::platform

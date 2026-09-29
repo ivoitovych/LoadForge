@@ -45,10 +45,11 @@ tiers   = ["T1", "T8"]
 note    = "CLI dispatch and the selftest digest. T8 runs the real binary, so main() is covered rather than excluded."
 
 [[module]]
-path    = "src/platform"
-classes = ["P1", "P2", "P3", "P6"]
-tiers   = ["T1", "T2", "T8"]
-note    = """
+path             = "src/platform"
+classes          = ["P1", "P2", "P3", "P6", "P7"]
+tiers            = ["T1", "T2", "T8"]
+fixture_builders = ["tests/unit/platform/affinity_test.cpp"]
+note             = """
 The seam. P2 is the reason this module exists: every errno of open(2), read(2) \
 and close(2) is forced through a substitutable Syscalls, because none of those \
 failure arms is a branch a coverage tool can see as uncovered. T2 is where the \
@@ -86,7 +87,17 @@ would have made their failing arms permanently unreachable and demanded the \
 project's first coverage exclusion. That template is instantiated per type, so \
 each instantiation carries its own coverage and each is exercised. \
 \
-No P7 yet: capability states arrive with the telemetry sources at M3.\
+Affinity brings the module's first P7, and the state is not a file: it is a \
+cpuset that permits fewer CPUs than the topology found. That cannot be \
+committed and cannot be arranged in CI, which runs as root in whatever cpuset \
+the runner gives it, so it is BUILT in FakeSyscalls, which models \
+sched_setaffinity the way the kernel behaves -- the mask is intersected with \
+what is permitted and refused with EINVAL when nothing is left. A fake that \
+accepted any mask would be laxer than the kernel and prove nothing about the \
+one case that matters. The real kernel's answers (EINVAL for an empty or \
+unknown mask, ESRCH for a vanished thread) are asserted against the calling \
+process ONLY: as root, sched_setaffinity moves any pid, and a probe that \
+pinned init proved it. The telemetry sources' P7 still arrives at M3.\
 """
 
 [[module]]

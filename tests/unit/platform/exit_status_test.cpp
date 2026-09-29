@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <csignal>
 #include <string>
@@ -296,12 +297,35 @@ TEST(RealWaitStatus, ARealNonKillSignalIsSignalledAndIsNotConfusedWithSigkill) {
 }
 
 TEST(RealWaitStatus, RealStopAndContinueAreDistinguishedFromTermination) {
+  // THE ORDERING THIS TEST DEPENDS ON, AND HOW IT IS ENFORCED
+  // ---------------------------------------------------------
+  // The parent must observe CONTINUED before the child exits. "Continued" is
+  // not a queued event the kernel holds for us; it is a state on the task, and
+  // the child's exit replaces it. The first version of this test let the child
+  // run straight from its SIGSTOP to _exit(7), and under ASan and under
+  // coverage instrumentation -- twice, in different builds -- the child got
+  // there before the parent's waitpid(WCONTINUED) was issued. That wait then
+  // reported the EXIT, the final reap got ECHILD, and the test failed in
+  // three places at once for one reason. In isolation it passed thirty times
+  // in a row, which is how a race looks.
+  //
+  // So the child now blocks on a pipe after resuming and exits only when the
+  // parent, having seen CONTINUED, tells it to. The order is a fact of the
+  // protocol rather than a hope about scheduling. If the parent dies first,
+  // the read returns EOF and the child exits anyway.
+  int go[2];
+  ASSERT_EQ(::pipe(go), 0);
+
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
+    ::close(go[1]);
     ::raise(SIGSTOP);
+    char byte = 0;
+    (void)::read(go[0], &byte, 1);  // Blocks until the parent has seen CONTINUED.
     ::_exit(7);
   }
+  ::close(go[0]);
 
   const ExitStatus stopped{wait_for(child, WUNTRACED)};
   EXPECT_EQ(stopped.termination(), Termination::kStopped);
@@ -312,6 +336,8 @@ TEST(RealWaitStatus, RealStopAndContinueAreDistinguishedFromTermination) {
   const ExitStatus continued{wait_for(child, WCONTINUED)};
   EXPECT_EQ(continued.termination(), Termination::kContinued);
 
+  ASSERT_EQ(::write(go[1], "x", 1), 1);  // Now, and only now, may it exit.
+  ::close(go[1]);
   const ExitStatus finished{wait_for(child)};
   EXPECT_EQ(finished.termination(), Termination::kExited);
   EXPECT_EQ(finished.code(), 7);
