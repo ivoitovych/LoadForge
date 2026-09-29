@@ -54,6 +54,13 @@ TEST(PlatformResults, StringInstantiation) { exercise<std::string>("95000\n", "f
 
 TEST(PlatformResults, OkInstantiation) { exercise<Ok>(Ok{}, Ok{}); }
 
+TEST(PlatformResults, PointerInstantiation) {
+  // What map_anonymous returns. The fallback is null, which is the one value
+  // mmap can never hand back, so a value_or that reached it would be visible.
+  int target = 0;
+  exercise<void*>(&target, nullptr);
+}
+
 TEST(PlatformResults, OksAreAllEqual) {
   // Ok carries no information, so any two are the same value. Stated as a
   // test because the comparison is real code that the gate counts.

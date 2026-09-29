@@ -367,6 +367,66 @@ after re-reading §4.4.
 
 ---
 
+### 1.17 Memory: what the kernel rounds, what it does not, and what root cannot see
+
+Probed on the running machine before the module was designed, `errno` on its own line every
+time — three throwaway probes still read it inside a `printf` argument list first, and one
+lost its child's output entirely by calling `_exit` without flushing. §4.4 is apparently a
+lesson each session relearns; the seam's `send_signal` comment is the one that survives.
+
+- **`MAP_HUGETLB` rounds the length up; `munmap` does not.** A one-byte `MAP_HUGETLB`
+  request maps and takes a whole 2 MiB page; `munmap` of that mapping with length 1 is
+  `EINVAL` and the mapping stays; `munmap` with 2 MiB succeeds. So the length a `Mapping`
+  remembers is the *rounded* one, computed above the seam where the overflow arm can be
+  tested, and the fake refuses the unrounded length exactly as the kernel does. A fake that
+  forgave it would have let a huge page leak on every explicit-huge-page run, silently, in
+  a destructor.
+- **`MAP_HUGETLB` with no pages reserved is `ENOMEM` from `mmap`**, not a `SIGBUS` on first
+  touch: with a private anonymous mapping the reservation is taken at map time. "Present
+  but exhausted" is therefore a reported refusal, not a crash later. With two pages
+  reserved, two one-byte maps succeed and the third is `ENOMEM`; a 2 MiB + 1 byte request
+  with one page left is `ENOMEM` too, because it needs two.
+- **Every call on an unmapped range has a different word.** `mlock` and `madvise` say
+  `ENOMEM`; `mbind` says `EFAULT`; `munmap` says nothing at all and succeeds. The fake
+  models the first three and is *stricter* than the kernel on the fourth — an unmap of an
+  address it never handed out is `EINVAL` — because a double unmap is a bug the suite
+  should see, and stricter is not laxer (§4.2).
+- **`mbind` has no glibc wrapper.** It is `syscall(SYS_mbind, …)` with a raw node bitmap,
+  and the `maxnode` argument is *one more* than the highest bit the kernel should read: the
+  kernel decrements it before use. An empty mask is `EINVAL`; a node without memory
+  (node 7, node 1023 on this one-node VM) is `EINVAL`; an unaligned address is `EINVAL`.
+  Node 0 succeeds. No `libnuma`, on purpose — the static release links nothing but the C
+  and C++ runtime.
+- **As root, `mlock` ignores `RLIMIT_MEMLOCK`.** CI runs as root, so the two refusals an
+  unprivileged process meets — `ENOMEM` past the limit, `EPERM` under a limit of zero
+  without `CAP_IPC_LOCK` — cannot be provoked in the test process. They are provoked in a
+  forked child that lowers the limit and drops to `nobody`, and reports both errnos over a
+  pipe. Not root → the test *skips*, visibly, rather than passing on an assertion a
+  privileged process cannot make.
+- **`MADV_POPULATE_WRITE` works on this kernel** (6.x; it needs 5.14). It is preferred to
+  `MAP_POPULATE` because the flag's failure is silent — `mmap` succeeds and the pages are
+  simply absent — and a memory test that believed its pages resident when they were not
+  would measure the page-fault handler. The `madvise` reports.
+- **A sanitizer answers `mlock` itself.** Under ASan, an `mlock` of an unmapped range
+  "succeeded", and an unprivileged child with `RLIMIT_MEMLOCK` of 4 KiB locked a mebibyte
+  without complaint — because ASan and TSan intercept `mlock`, `munlock` and `mlockall` and
+  return 0 without calling the kernel. Deliberate on their part: their runtimes reserve
+  terabytes of shadow address space and a real lock of it would be ruinous. So the tests
+  that assert the *kernel's* answer to `mlock` skip, visibly and by name, under a sanitizer,
+  and the successful-lock test reads `VmLck` from `/proc/self/status` afterwards — the
+  kernel's own accounting is the oracle (F21) that a lock happened at all. The fake and the
+  unsanitized builds carry the assertions; a suite whose only proof of `mlock` was "it
+  returned 0" would have proved nothing under exactly the build meant to catch memory bugs.
+- **Reserving huge pages is not something a test suite does to a host.** Writing
+  `/proc/sys/vm/nr_hugepages` on a machine that already has a reservation in use would
+  disturb whatever is using it. So there is no T8 test that reserves; the real-kernel test
+  reads the 2 MiB pool's `free_hugepages` and asserts the answer *that* pool implies — no
+  pool: `EINVAL`; empty pool: `ENOMEM`; pages free: success, and then the unrounded-length
+  `EINVAL`. Three arms, one assertion each, no skip. The pool is the module's P7 state, and
+  it is built in the fake (§2.13).
+
+---
+
 ## 2. Decisions, and the alternatives that were rejected
 
 The choice is in `PLAN.md`; what follows is the reasoning that does not survive
@@ -688,6 +748,46 @@ topology, which cannot be committed and cannot be arranged in CI. It is built in
 `FakeSyscalls`, which models the kernel's intersection semantics rather than a caller's
 hopes. The ledger names the test file as the builder, and the marker comment says why the
 "tree" is a process attribute this time.
+
+---
+
+### 2.13 Memory: the steps have an order, and a refusal names the step
+
+`Memory::map` runs map, bind, advise, populate, lock — in that order and no other. The NUMA
+policy and the huge-page advice govern how pages are *faulted*, so both must precede
+anything that touches the range; populating and locking touch it. A failure at any step
+unmaps what the earlier steps built, and the refusal names the step, because "cannot map
+memory" from a five-step operation tells a user nothing about which of five remedies
+applies. `Stage::kPopulate` is distinct from `Stage::kAdvise` although both are `madvise`:
+the syscall is the same and the meaning is not.
+
+**The huge-page strategy is a field of the request, never a default the kernel makes.**
+docs/PLAN.md F7 asks for an explicit recorded choice because the strategy changes TLB
+behaviour and therefore the result; a run record that did not say which was in effect would
+describe a measurement nobody can repeat. Explicit huge pages also *name their size* in the
+mmap flags — 2 MiB, always — rather than taking the kernel's default, which is 512 MiB on an
+arm64 kernel with 64 KiB base pages. "Huge pages" meaning a different size on a different
+machine would not be a record either.
+
+**Two requests are refused before the kernel is asked, and the refusal says so.** A
+huge-page rounding that overflows `size_t`, and a node id past 1023, which no Linux kernel
+can number. Both would otherwise reach the kernel as a wrapped length or an unbuildable mask.
+The refusal's `cause.call` names the *check* — "huge-page rounding", "node mask" — rather
+than a syscall, because a message that said `mbind(…): Invalid argument` about a call that
+was never made is §4.4 with extra steps. Everything else — a zero-length request, a node the
+machine lacks, an empty pool — goes to the kernel and the answer is classified (§2.12).
+
+*The alternative rejected:* `MAP_POPULATE`. Free, and silent when it fails. §1.17 has why.
+
+*A core change this forced:* `Result::value() &&`. `Mapping` is the first move-only success
+value in the project — an owner of a range that must not be copied — and a `Result` whose
+`value()` returned only `const T&` had no way to give it up. The ref-qualified pair is the
+minimum; `value_or` stays as it is, since a fallback for a mapping makes no sense.
+
+*Where the P7 fixture is:* the huge-page pool, in `FakeSyscalls`, consumed and refilled in
+whole pages the way the kernel accounts for it, and refusing the unrounded `munmap` length
+the way the kernel does. The ledger names `memory_test.cpp` as the builder and the marker
+comment says why the state cannot be committed or arranged in CI.
 
 ---
 
@@ -1124,12 +1224,15 @@ Kept short and current; move an item to the relevant document once it is settled
 - **Topology discovery is complete:** CPUs (§2.8, §2.9), caches (§1.14, §2.10) and NUMA
   (§1.15, §2.11), each with its cross-checks and its recorded list of checks deliberately
   *not* made. The module ledger's `topology/` row is satisfied.
-- **Next in sequence:** `platform/memory` — `mmap`, huge pages, `mlock`, `mbind` — the last
-  of the platform primitives M1 needs before `config` and the worker/controller split. Its
-  P2 surface is the widest yet (each call has several documented failures, and `ENOMEM` from
-  `mlock` under `RLIMIT_MEMLOCK` is the one CI can actually provoke), and its P7 state is
-  huge pages being configured but unavailable — present, absent, and "present but
-  exhausted" are three facts a fake can force and a real kernel can corroborate.
+- **The platform primitives M1 needs are complete:** `platform/memory` (§1.17, §2.13) joins
+  affinity, the clock and process supervision. One prediction in the previous version of
+  this entry was wrong and is worth keeping: `ENOMEM` from `mlock` under `RLIMIT_MEMLOCK` was
+  called "the one CI can actually provoke" — it cannot, because CI is root and root ignores
+  the limit. It is provoked from a child that drops privileges instead.
+- **Next in sequence:** `config` — TOML parse, schema validation, resolution against
+  `MemAvailable` and the cgroup limit (F7) — and then the worker/controller split. The
+  huge-page strategy, the lock and populate choices, and the NUMA node are now fields a
+  config can name, which is what F7 asked for.
 - **Resolved — a flake, with its fix:**
   `RealWaitStatus.RealStopAndContinueAreDistinguishedFromTermination` failed once under
   the coverage build and once under ASan, in different sessions, while passing 30/30 in

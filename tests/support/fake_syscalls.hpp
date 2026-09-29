@@ -2,10 +2,14 @@
 #ifndef LOADFORGE_TESTS_SUPPORT_FAKE_SYSCALLS_HPP
 #define LOADFORGE_TESTS_SUPPORT_FAKE_SYSCALLS_HPP
 
+#include <sys/mman.h>
+
 #include <cerrno>
 #include <cstddef>
 #include <deque>
+#include <limits>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -363,6 +367,147 @@ class FakeSyscalls final : public platform::Syscalls {
     return core::Ok{};
   }
 
+  // --- memory ------------------------------------------------------------------
+  //
+  // The P7 state of this module is a huge-page pool: present, empty, or
+  // present but too small for the request. The pool here is consumed by every
+  // MAP_HUGETLB mapping and refilled by its unmap, in whole pages, the way the
+  // kernel accounts for it -- and the way the kernel does NOT: it rounds a
+  // MAP_HUGETLB length up (verified: a one-byte request maps, and takes a
+  // page) but munmap does not round, so unmapping with the unrounded length is
+  // EINVAL and the mapping stays. A fake that forgave that would let a Mapping
+  // remember the wrong length and leak a huge page on every run.
+  //
+  // Where this fake is STRICTER than the kernel it says so: an unmap of an
+  // address it never handed out is EINVAL here and a silent success on Linux,
+  // because a double unmap is a bug the suite should see rather than one the
+  // kernel happens to tolerate. Stricter is not laxer.
+  //
+  // The memory handed out is real, from the heap, so a caller may write to it.
+
+  static constexpr std::size_t kFakeHugePageBytes = std::size_t{2} << 20;
+
+  /// Huge pages the pool holds. Defaults to none, which is what a fresh kernel
+  /// reserves, so a test that wants explicit huge pages says so.
+  void set_huge_pages_free(std::size_t pages) { huge_pages_free_ = pages; }
+  /// Which NUMA nodes have memory. Defaults to node 0 alone.
+  void permit_nodes(const platform::NodeMask& nodes) { permitted_nodes_ = nodes; }
+  /// RLIMIT_MEMLOCK as an unprivileged process meets it: zero is EPERM,
+  /// exceeding it is ENOMEM. Defaults to unlimited, as for a privileged one.
+  void set_lock_limit(std::size_t bytes) { lock_limit_ = bytes; }
+
+  void fail_map(int error) { map_error_ = error; }
+  void fail_unmap(int error) { unmap_error_ = error; }
+  void fail_lock(int error) { lock_error_ = error; }
+  /// Fail one advice and not another, so THP advice and populate are told apart.
+  void fail_advice(int advice, int error) { advice_errors_[advice] = error; }
+  void fail_bind(int error) { bind_error_ = error; }
+
+  [[nodiscard]] std::size_t live_mappings() const { return mappings_.size(); }
+  [[nodiscard]] std::size_t huge_pages_free() const { return huge_pages_free_; }
+  [[nodiscard]] std::size_t locked_bytes() const { return locked_bytes_; }
+  [[nodiscard]] int unmap_count() const { return unmap_count_; }
+  [[nodiscard]] const std::vector<int>& map_flags() const { return map_flags_; }
+  [[nodiscard]] const std::vector<int>& advice_given() const { return advice_given_; }
+  [[nodiscard]] const std::vector<platform::NodeMask>& binds() const { return binds_; }
+
+  core::Result<void*, platform::SyscallError> map_anonymous(std::size_t length,
+                                                            int extra_flags) override {
+    map_flags_.push_back(extra_flags);
+    const std::string subject = std::to_string(length) + " bytes";
+    if (map_error_ != 0) {
+      return platform::SyscallError{map_error_, "mmap", subject};
+    }
+    if (length == 0) {
+      return platform::SyscallError{EINVAL, "mmap", subject};
+    }
+    const bool huge = (extra_flags & MAP_HUGETLB) != 0;
+    std::size_t pages = 0;
+    if (huge) {
+      pages = (length + kFakeHugePageBytes - 1) / kFakeHugePageBytes;
+      if (pages > huge_pages_free_) {
+        return platform::SyscallError{ENOMEM, "mmap", subject};
+      }
+      huge_pages_free_ -= pages;
+      length = pages * kFakeHugePageBytes;
+    }
+    auto storage = std::make_unique<std::byte[]>(length);
+    void* const address = storage.get();
+    mappings_[address] = FakeMapping{std::move(storage), length, pages, 0};
+    return address;
+  }
+
+  core::Result<core::Ok, platform::SyscallError> unmap(void* address, std::size_t length) override {
+    ++unmap_count_;
+    const std::string subject = std::to_string(length) + " bytes";
+    const auto found = mappings_.find(address);
+    // Unknown address, or a length that is not the whole mapping: EINVAL. The
+    // second is exactly the kernel's answer for a huge-page mapping and the
+    // unrounded length; for ordinary pages the kernel would unmap part of the
+    // range, which nothing above the seam asks for.
+    if (found == mappings_.end() || found->second.bytes != length) {
+      return platform::SyscallError{EINVAL, "munmap", subject};
+    }
+    if (unmap_error_ != 0) {
+      return platform::SyscallError{unmap_error_, "munmap", subject};
+    }
+    huge_pages_free_ += found->second.huge_pages;
+    locked_bytes_ -= found->second.locked;
+    mappings_.erase(found);
+    return core::Ok{};
+  }
+
+  core::Result<core::Ok, platform::SyscallError> lock_memory(void* address,
+                                                             std::size_t length) override {
+    const std::string subject = std::to_string(length) + " bytes";
+    const auto found = mappings_.find(address);
+    if (found == mappings_.end()) {
+      return platform::SyscallError{ENOMEM, "mlock", subject};  // As the kernel says.
+    }
+    if (lock_error_ != 0) {
+      return platform::SyscallError{lock_error_, "mlock", subject};
+    }
+    if (lock_limit_ == 0) {
+      return platform::SyscallError{EPERM, "mlock", subject};
+    }
+    if (length > lock_limit_ - locked_bytes_) {
+      return platform::SyscallError{ENOMEM, "mlock", subject};
+    }
+    locked_bytes_ += length;
+    found->second.locked += length;
+    return core::Ok{};
+  }
+
+  core::Result<core::Ok, platform::SyscallError> advise_memory(void* address, std::size_t length,
+                                                               int advice) override {
+    advice_given_.push_back(advice);
+    const std::string subject = std::to_string(length) + " bytes, advice " + std::to_string(advice);
+    if (mappings_.find(address) == mappings_.end()) {
+      return platform::SyscallError{ENOMEM, "madvise", subject};  // As the kernel says.
+    }
+    if (const auto failed = advice_errors_.find(advice); failed != advice_errors_.end()) {
+      return platform::SyscallError{failed->second, "madvise", subject};
+    }
+    return core::Ok{};
+  }
+
+  core::Result<core::Ok, platform::SyscallError> bind_memory(
+      void* address, std::size_t length, const platform::NodeMask& nodes) override {
+    binds_.push_back(nodes);
+    const std::string subject = std::to_string(length) + " bytes";
+    if (mappings_.find(address) == mappings_.end()) {
+      return platform::SyscallError{EFAULT, "mbind", subject};  // As the kernel says.
+    }
+    if (bind_error_ != 0) {
+      return platform::SyscallError{bind_error_, "mbind", subject};
+    }
+    // An empty mask, or a node without memory: both EINVAL on Linux, verified.
+    if (nodes.nodes.none() || (nodes.nodes & ~permitted_nodes_.nodes).any()) {
+      return platform::SyscallError{EINVAL, "mbind", subject};
+    }
+    return core::Ok{};
+  }
+
  private:
   static constexpr int kFakeDescriptor = 42;
 
@@ -432,6 +577,33 @@ class FakeSyscalls final : public platform::Syscalls {
   std::map<int, platform::TimeSpec> clocks_;
   std::map<int, int> clock_errors_;
   std::vector<int> clocks_read_;
+
+  struct FakeMapping {
+    std::unique_ptr<std::byte[]> storage;
+    std::size_t bytes = 0;
+    std::size_t huge_pages = 0;  ///< Taken from the pool; returned on unmap.
+    std::size_t locked = 0;
+  };
+  std::map<void*, FakeMapping> mappings_;
+  std::size_t huge_pages_free_ = 0;
+  platform::NodeMask permitted_nodes_ = node_zero();
+  std::size_t lock_limit_ = std::numeric_limits<std::size_t>::max();
+  std::size_t locked_bytes_ = 0;
+  int map_error_ = 0;
+  int unmap_error_ = 0;
+  int lock_error_ = 0;
+  int bind_error_ = 0;
+  int unmap_count_ = 0;
+  std::map<int, int> advice_errors_;
+  std::vector<int> map_flags_;
+  std::vector<int> advice_given_;
+  std::vector<platform::NodeMask> binds_;
+
+  static platform::NodeMask node_zero() {
+    platform::NodeMask mask;
+    mask.nodes.set(0);
+    return mask;
+  }
 
  public:
   /// The pid the fake reports as the parent unless a test says otherwise.

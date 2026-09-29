@@ -58,6 +58,22 @@ struct CpuMask {
   [[nodiscard]] friend bool operator==(const CpuMask&, const CpuMask&) = default;
 };
 
+/// Width of a NUMA node mask. No Linux kernel numbers a node past 1023
+/// (CONFIG_NODES_SHIFT is at most 10), so a mask this wide names every node any
+/// kernel can have. Named here for the same reason kAffinityMaskBits is.
+inline constexpr std::size_t kNodeMaskBits = 1024;
+
+/// A NUMA node mask exactly as mbind(2) accepts it: one bit per node id.
+///
+/// The seam exchanges the raw bits and nothing else. Which nodes exist, which
+/// have memory, and what an EINVAL therefore means are decisions, and they
+/// live above the seam.
+struct NodeMask {
+  std::bitset<kNodeMaskBits> nodes;
+
+  [[nodiscard]] friend bool operator==(const NodeMask&, const NodeMask&) = default;
+};
+
 /// The seam. Every system call the platform layer issues goes through here.
 ///
 /// WHY THIS INTERFACE EXISTS, AND WHY IT IS EXACTLY THIS NARROW
@@ -179,6 +195,38 @@ class Syscalls {
   /// undone. Nothing above the seam passes a pid it did not fork.
   [[nodiscard]] virtual core::Result<core::Ok, SyscallError> set_affinity(pid_t pid,
                                                                           const CpuMask& mask) = 0;
+
+  /// mmap(2) of `length` bytes of anonymous, private, readable and writable
+  /// memory, with `extra_flags` added to MAP_PRIVATE|MAP_ANONYMOUS. The one
+  /// extra flag anything above the seam passes is MAP_HUGETLB with its size.
+  ///
+  /// Takes the raw flags rather than an enum for the reason read_clock takes a
+  /// raw clock id: the seam stays a translation. Deciding which huge-page
+  /// strategy to ask for is Memory's job, above the seam, where it is tested.
+  [[nodiscard]] virtual core::Result<void*, SyscallError> map_anonymous(std::size_t length,
+                                                                        int extra_flags) = 0;
+
+  /// munmap(2). Reported rather than discarded, because a failing unmap is a
+  /// leak the caller may need to know about -- and for a huge-page mapping
+  /// it is the answer to an unrounded length (verified: EINVAL).
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> unmap(void* address,
+                                                                   std::size_t length) = 0;
+
+  /// mlock(2). Faults the pages in and pins them, subject to RLIMIT_MEMLOCK
+  /// for an unprivileged caller and to nothing for a privileged one.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> lock_memory(void* address,
+                                                                         std::size_t length) = 0;
+
+  /// madvise(2) with the raw advice value: MADV_HUGEPAGE, MADV_POPULATE_WRITE.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> advise_memory(void* address,
+                                                                           std::size_t length,
+                                                                           int advice) = 0;
+
+  /// mbind(2) with MPOL_BIND: every page of the range must come from `nodes`.
+  /// Issued before the range is touched, since the policy governs the faults.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> bind_memory(void* address,
+                                                                         std::size_t length,
+                                                                         const NodeMask& nodes) = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -204,6 +252,17 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] core::Result<CpuMask, SyscallError> get_affinity(pid_t pid) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> set_affinity(pid_t pid,
                                                                   const CpuMask& mask) override;
+  [[nodiscard]] core::Result<void*, SyscallError> map_anonymous(std::size_t length,
+                                                                int extra_flags) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> unmap(void* address,
+                                                           std::size_t length) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> lock_memory(void* address,
+                                                                 std::size_t length) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> advise_memory(void* address,
+                                                                   std::size_t length,
+                                                                   int advice) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> bind_memory(void* address, std::size_t length,
+                                                                 const NodeMask& nodes) override;
 };
 
 }  // namespace loadforge::platform
