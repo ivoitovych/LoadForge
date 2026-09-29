@@ -343,6 +343,27 @@ Probed from the running machine, before the module was designed:
   `nodeM/cpulist`, so agreement between them is evidence (F21). It is used as
   corroboration in the T8 test — a test that can fail — not as a rule in discovery that
   could refuse a machine.
+### 1.16 Affinity: three facts the kernel makes plain, and one it hides
+
+Probed on the running machine before the module was designed, with `errno` read on its
+own line — the first probe read it inside a `printf` argument list and reported `errno=0
+Success` for every failing call, which is §4.4 exactly, in a throwaway program, ten minutes
+after re-reading §4.4.
+
+- **`EINVAL` is one word for three facts:** an empty mask, a mask naming only CPUs the
+  machine lacks (`{63}` on a 4-CPU box, `{1000}`), and a mask naming only CPUs the cpuset
+  withholds. The kernel does not say which. The requested mask in the message is what lets a
+  reader tell.
+- **`ESRCH` for a pid that does not exist**, from both `sched_getaffinity` and
+  `sched_setaffinity`, including pid −1.
+- **As root, `sched_setaffinity(1, …)` succeeds.** The probe pinned this container's init
+  to CPU 2 and had to put it back. CI runs as root. So every real-kernel test targets the
+  *calling* process, and the seam's own doc says nothing above it passes a pid it did not
+  fork.
+- **The one it hides:** when the mask overlaps the cpuset only partly, the call *succeeds*
+  and the thread is confined to the intersection, with no word about what was withheld. That
+  silence is the whole reason `missing_from` exists — the capability question has to be
+  asked, before or after, because the kernel will not volunteer the answer.
 
 ---
 
@@ -646,6 +667,27 @@ walks freed memory. Only the *final* temporary in a range expression has its lif
 extended in C++20; the `Result` that owns the vector dies before the first iteration.
 `-Wdangling-reference` caught it in a test fixture before it ran. Materialise the owner
 first; the loop borrows from a named object.
+### 2.12 Affinity asks the kernel; it does not pre-empt it
+
+`Affinity::place` sends every mask to the kernel — empty ones, ones naming CPU 1000 on a
+four-CPU machine — and classifies the answer. It could refuse those above the seam for
+free. It does not, because that would be this code deciding what the kernel will accept
+instead of asking, and the kernel is the authority on three things that can all change
+between a check here and the call: the cpuset, which CPUs are online this instant, and
+whether the thread still exists. The one thing decided above the seam is the *meaning* of
+the answer — `EINVAL` is "no usable CPU", `ESRCH` is "the thread is gone", `EPERM` is "not
+ours to move" — because that is where a test can reach every arm.
+
+*The alternative rejected:* a `CpuMask` that cannot be empty by construction. Tidy, and it
+would have removed a real case from the tests: the fake must refuse an empty mask *because
+the kernel does*, and asserting that is how the fake is shown to be no laxer than the thing
+it models (§4.2).
+
+*Where the P7 fixture is:* not on disk. The hostile state is a cpuset narrower than the
+topology, which cannot be committed and cannot be arranged in CI. It is built in
+`FakeSyscalls`, which models the kernel's intersection semantics rather than a caller's
+hopes. The ledger names the test file as the builder, and the marker comment says why the
+"tree" is a process attribute this time.
 
 ---
 
@@ -964,6 +1006,33 @@ by exactly the test written for it. Two things carried forward:
   harness now prints "MUTANT DID NOT COMPILE" as its own outcome, so the column can never
   be blank.
 
+### 4.11 A test that hoped for an ordering instead of enforcing one
+
+`RealStopAndContinueAreDistinguishedFromTermination` forked a child that did
+`raise(SIGSTOP); _exit(7)`, then in the parent: wait for the stop, send `SIGCONT`, wait
+with `WCONTINUED`, wait for the exit. It passed for nine pull requests and thirty
+consecutive isolated runs, then failed under the coverage build, and again under ASan.
+
+The mechanism: **"continued" is a state on the task, not an event the kernel queues.** The
+child's exit replaces it. After `SIGCONT` there was nothing stopping the child from running
+straight to `_exit` before the parent's `waitpid(WCONTINUED)` was issued — and once it had,
+that wait reported the *exit*, the final reap got `ECHILD`, and three assertions failed for
+one cause. Instrumented builds shifted the timing just enough.
+
+The §6 note written after the first failure guessed at gcov and `_exit` (§1.9). That was
+wrong; the code-0 exit was the test's own `wait_for` helper returning a zeroed status after
+`ECHILD`. **The second failure, under a different instrumentation, was what made the
+mechanism visible — which is what "a second failure is real" was for.**
+
+The fix is a pipe: the child blocks on a read after resuming, and the parent writes to it
+only after it has *seen* `CONTINUED`. The ordering is now a fact of the protocol.
+
+*The general rule, which the T7 supervision tier will live by:* **a test of a lifecycle
+transition must enforce every ordering it depends on with a synchronisation the test
+controls — a pipe, a barrier, a wait — never with the child's own speed.** A test that
+passes because the child is usually slow enough is a test that fails when the build gets
+slower, which is exactly when it is needed.
+
 ---
 
 ## 5. Process knowledge
@@ -1055,24 +1124,16 @@ Kept short and current; move an item to the relevant document once it is settled
 - **Topology discovery is complete:** CPUs (§2.8, §2.9), caches (§1.14, §2.10) and NUMA
   (§1.15, §2.11), each with its cross-checks and its recorded list of checks deliberately
   *not* made. The module ledger's `topology/` row is satisfied.
-- **Next in sequence:** `platform/affinity` — `sched_setaffinity` and its P7 states. It is
-  the first consumer of the topology, and the first place a cgroup cpuset can silently
-  narrow what `online` promised: a CPU the topology found may be one this process is not
-  allowed to run on. That gap between "exists" and "available to us" is the next capability
-  state, and it arrives with a real errno (`EINVAL` from a mask outside the cpuset) that
-  only the seam can force in CI.
-- **A flake to fix, with its evidence:**
-  `RealWaitStatus.RealStopAndContinueAreDistinguishedFromTermination` failed once, in the
-  coverage-instrumented build under `ctest -j4`, while passing in the debug, ASan, TSan and
-  scalar builds of the same source and 30/30 times in isolation in the same binary. The
-  `WCONTINUED` wait after `SIGCONT` returned an **exit with code 0** rather than a
-  continuation, and the following reap got `ECHILD`: the child had already terminated —
-  and with the wrong code, 0 rather than its 7. That shape says the stop was never
-  observed before the child ran on, and the code-0 exit says the child took a path the test
-  did not write (§1.9: under gcov a forked child's `_exit` is not what it looks like). It is
-  a P5 ordering the test assumes rather than enforces, in `platform`, and it belongs to the
-  supervision work — not to the topology change that happened to run alongside it. Until
-  then it is a known flake, not a green light: a second failure is real.
+- **Next in sequence:** `platform/memory` — `mmap`, huge pages, `mlock`, `mbind` — the last
+  of the platform primitives M1 needs before `config` and the worker/controller split. Its
+  P2 surface is the widest yet (each call has several documented failures, and `ENOMEM` from
+  `mlock` under `RLIMIT_MEMLOCK` is the one CI can actually provoke), and its P7 state is
+  huge pages being configured but unavailable — present, absent, and "present but
+  exhausted" are three facts a fake can force and a real kernel can corroborate.
+- **Resolved — a flake, with its fix:**
+  `RealWaitStatus.RealStopAndContinueAreDistinguishedFromTermination` failed once under
+  the coverage build and once under ASan, in different sessions, while passing 30/30 in
+  isolation. §4.11 has the mechanism; the test now enforces the ordering it used to assume.
 - **Wanted: one local entry point that runs what CI runs.** There is currently none, so
   every contributor — and every session — assembles the list from memory and gets a
   different subset. That is how §4.8 happened: eleven checks run, the twelfth not recalled

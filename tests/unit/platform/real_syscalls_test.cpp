@@ -14,11 +14,13 @@
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
+#include <sched.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <csignal>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -370,8 +372,8 @@ TEST_F(RealSyscallsTest, WaitAnyReapsARealChildAndReportsItsStatusWord) {
 
 TEST(SyscallResultTest, TheFailingArmWorksForEveryTypeTheSeamInstantiates) {
   // A template is compiled once per type, so each instantiation carries its own
-  // coverage. The fork instantiation is exercised above; these are the other
-  // two the seam uses, and without them their failing arms would be reported as
+  // coverage. The fork instantiation is exercised above; these are the others
+  // the seam uses, and without them their failing arms would be reported as
   // never executed even though the code is identical.
   const auto reaped = result_or_error<Reaped>(Reaped{}, true, ECHILD, "waitpid", "any child");
   ASSERT_FALSE(reaped.has_value());
@@ -381,6 +383,11 @@ TEST(SyscallResultTest, TheFailingArmWorksForEveryTypeTheSeamInstantiates) {
   ASSERT_FALSE(signalled.has_value());
   EXPECT_EQ(signalled.error().number, ESRCH);
   EXPECT_EQ(signalled.error().subject, "pid 1234");
+
+  const auto affinity =
+      result_or_error<CpuMask>(CpuMask{}, true, ESRCH, "sched_getaffinity", "pid 1234");
+  ASSERT_FALSE(affinity.has_value());
+  EXPECT_EQ(affinity.error().call, "sched_getaffinity");
 }
 
 TEST(SyscallResultTest, TheValueIsIgnoredWhenTheCallFailed) {
@@ -388,6 +395,132 @@ TEST(SyscallResultTest, TheValueIsIgnoredWhenTheCallFailed) {
   // smuggle it through: -1 is not a pid.
   const auto result = result_or_error<pid_t>(-1, true, ENOMEM, "fork", "worker process");
   ASSERT_FALSE(result.has_value());
+}
+
+// --- affinity against the real kernel ----------------------------------------
+//
+// Every call here targets the CALLING process. sched_setaffinity(2) will move
+// any process for a privileged caller -- verified on this container as root,
+// where pinning pid 1 succeeded and had to be undone -- and CI runs as root.
+// A test that touched another pid would be a test that could confine init.
+
+/// Puts the process back where it started, however the test ends.
+class RestoreAffinity {
+ public:
+  explicit RestoreAffinity(RealSyscalls& syscalls) : syscalls_(&syscalls) {
+    auto current = syscalls_->get_affinity(0);
+    if (current.has_value()) {
+      original_ = current.value();
+    }
+  }
+  ~RestoreAffinity() { (void)syscalls_->set_affinity(0, original_); }
+  RestoreAffinity(const RestoreAffinity&) = delete;
+  RestoreAffinity& operator=(const RestoreAffinity&) = delete;
+  RestoreAffinity(RestoreAffinity&&) = delete;
+  RestoreAffinity& operator=(RestoreAffinity&&) = delete;
+
+  [[nodiscard]] const CpuMask& original() const { return original_; }
+
+ private:
+  RealSyscalls* syscalls_;
+  CpuMask original_;
+};
+
+TEST_F(RealSyscallsTest, GetAffinityReportsAtLeastOneCpuAndNoMoreThanAreOnline) {
+  auto mask = syscalls.get_affinity(0);
+  ASSERT_TRUE(mask.has_value()) << describe(mask.error());
+  const auto count = static_cast<long>(mask.value().cpus.count());
+  EXPECT_GE(count, 1) << "this code is running on one";
+  EXPECT_LE(count, ::sysconf(_SC_NPROCESSORS_ONLN))
+      << "a cpuset can permit fewer than are online, never more";
+}
+
+TEST_F(RealSyscallsTest, SetAffinityToOnePermittedCpuIsVisibleThroughGetAffinity) {
+  const RestoreAffinity restore(syscalls);
+  ASSERT_TRUE(restore.original().cpus.any());
+  // The lowest CPU we are currently permitted, so the choice is valid under any
+  // cpuset CI happens to run in.
+  std::size_t chosen = 0;
+  while (!restore.original().cpus.test(chosen)) {
+    ++chosen;
+  }
+  CpuMask one;
+  one.cpus.set(chosen);
+
+  auto placed = syscalls.set_affinity(0, one);
+  ASSERT_TRUE(placed.has_value()) << describe(placed.error());
+  auto now = syscalls.get_affinity(0);
+  ASSERT_TRUE(now.has_value());
+  EXPECT_EQ(now.value(), one) << "exactly the one CPU, no more";
+}
+
+TEST_F(RealSyscallsTest, TheMaskLayoutAgreesWithGlibcsOwnMacrosOnEveryBit) {
+  // The seam converts cpu_set_t by reading its bytes directly, on a documented
+  // layout it static_asserts. This is the oracle for that layout (F21): glibc's
+  // CPU_ISSET, consulted here in the test on the same kernel answer, for all
+  // 1024 positions -- set and unset alike. A byte-order or bit-order mistake in
+  // the conversion would show as a CPU reported where the macro sees none.
+  cpu_set_t raw;
+  CPU_ZERO(&raw);
+  ASSERT_EQ(::sched_getaffinity(0, sizeof raw, &raw), 0);
+  auto through_seam = syscalls.get_affinity(0);
+  ASSERT_TRUE(through_seam.has_value());
+  for (std::size_t cpu = 0; cpu < kAffinityMaskBits; ++cpu) {
+    EXPECT_EQ(through_seam.value().cpus.test(cpu), CPU_ISSET(cpu, &raw) != 0) << "cpu " << cpu;
+  }
+
+  // And the other direction: a mask built here, set through the seam, read back
+  // raw. The chosen CPU is one we are currently permitted, so the set succeeds
+  // under any cpuset CI runs in.
+  const RestoreAffinity restore(syscalls);
+  std::size_t chosen = 0;
+  while (!restore.original().cpus.test(chosen)) {
+    ++chosen;
+  }
+  CpuMask one;
+  one.cpus.set(chosen);
+  ASSERT_TRUE(syscalls.set_affinity(0, one).has_value());
+  CPU_ZERO(&raw);
+  ASSERT_EQ(::sched_getaffinity(0, sizeof raw, &raw), 0);
+  EXPECT_EQ(CPU_COUNT(&raw), 1);
+  EXPECT_TRUE(CPU_ISSET(chosen, &raw));
+}
+
+TEST_F(RealSyscallsTest, SetAffinityWithAnEmptyMaskIsEINVAL) {
+  const RestoreAffinity restore(syscalls);
+  auto placed = syscalls.set_affinity(0, CpuMask{});
+  ASSERT_FALSE(placed.has_value());
+  EXPECT_EQ(placed.error().number, EINVAL);
+  EXPECT_EQ(placed.error().call, "sched_setaffinity");
+  EXPECT_EQ(placed.error().subject, "pid 0");
+}
+
+TEST_F(RealSyscallsTest, SetAffinityNamingOnlyACpuThisMachineLacksIsEINVAL) {
+  const RestoreAffinity restore(syscalls);
+  // The last representable id. A machine with 1024 CPUs would make this test
+  // wrong, and would be worth hearing about.
+  CpuMask absent;
+  absent.cpus.set(kAffinityMaskBits - 1);
+  auto placed = syscalls.set_affinity(0, absent);
+  ASSERT_FALSE(placed.has_value());
+  EXPECT_EQ(placed.error().number, EINVAL);
+}
+
+TEST_F(RealSyscallsTest, AffinityCallsOnAPidThatDoesNotExistAreESRCH) {
+  // A pid past pid_max on any default kernel. Never a real process, so nothing
+  // is moved -- and if it ever were real, ESRCH is not what would come back,
+  // which is the assertion.
+  constexpr pid_t kNoSuchPid = 4194305;
+  auto got = syscalls.get_affinity(kNoSuchPid);
+  ASSERT_FALSE(got.has_value());
+  EXPECT_EQ(got.error().number, ESRCH);
+  EXPECT_EQ(got.error().subject, "pid 4194305");
+
+  CpuMask any;
+  any.cpus.set(0);
+  auto placed = syscalls.set_affinity(kNoSuchPid, any);
+  ASSERT_FALSE(placed.has_value());
+  EXPECT_EQ(placed.error().number, ESRCH);
 }
 
 }  // namespace

@@ -313,6 +313,56 @@ class FakeSyscalls final : public platform::Syscalls {
     return core::Ok{};
   }
 
+  // --- affinity ----------------------------------------------------------------
+  //
+  // Modelled the way the kernel behaves, not the way a caller might hope:
+  // set_affinity intersects the requested mask with what the cpuset PERMITS and
+  // refuses with EINVAL when nothing is left -- which is also what an empty
+  // mask, or one naming only CPUs this machine lacks, gets. That intersection
+  // is the whole P7 state of this module: a CPU the topology found is not
+  // necessarily one this process may run on. A fake that accepted any mask
+  // would be laxer than the kernel, and the tests above the seam would prove
+  // nothing about the case that matters.
+
+  /// What the cpuset permits. Defaults to every CPU, so a test states only the
+  /// narrowing it is about.
+  void permit_cpus(const platform::CpuMask& permitted) {
+    permitted_ = permitted;
+    current_affinity_.cpus &= permitted_.cpus;
+  }
+  /// What get_affinity reports until a successful set changes it.
+  void set_current_affinity(const platform::CpuMask& current) { current_affinity_ = current; }
+  void fail_get_affinity(int error) { get_affinity_error_ = error; }
+  void fail_set_affinity(int error) { set_affinity_error_ = error; }
+
+  [[nodiscard]] const platform::CpuMask& current_affinity() const { return current_affinity_; }
+  [[nodiscard]] const std::vector<pid_t>& affinity_pids() const { return affinity_pids_; }
+
+  core::Result<platform::CpuMask, platform::SyscallError> get_affinity(pid_t pid) override {
+    affinity_pids_.push_back(pid);
+    if (get_affinity_error_ != 0) {
+      return platform::SyscallError{get_affinity_error_, "sched_getaffinity",
+                                    "pid " + std::to_string(pid)};
+    }
+    return current_affinity_;
+  }
+
+  core::Result<core::Ok, platform::SyscallError> set_affinity(
+      pid_t pid, const platform::CpuMask& mask) override {
+    affinity_pids_.push_back(pid);
+    if (set_affinity_error_ != 0) {
+      return platform::SyscallError{set_affinity_error_, "sched_setaffinity",
+                                    "pid " + std::to_string(pid)};
+    }
+    platform::CpuMask effective;
+    effective.cpus = mask.cpus & permitted_.cpus;
+    if (effective.cpus.none()) {
+      return platform::SyscallError{EINVAL, "sched_setaffinity", "pid " + std::to_string(pid)};
+    }
+    current_affinity_ = effective;
+    return core::Ok{};
+  }
+
  private:
   static constexpr int kFakeDescriptor = 42;
 
@@ -366,6 +416,18 @@ class FakeSyscalls final : public platform::Syscalls {
   int signal_error_ = 0;
   std::map<pid_t, int> signal_errors_;
   std::vector<std::pair<pid_t, int>> signals_sent_;
+
+  platform::CpuMask permitted_ = all_cpus();
+  platform::CpuMask current_affinity_ = all_cpus();
+  int get_affinity_error_ = 0;
+  int set_affinity_error_ = 0;
+  std::vector<pid_t> affinity_pids_;
+
+  static platform::CpuMask all_cpus() {
+    platform::CpuMask mask;
+    mask.cpus.set();
+    return mask;
+  }
 
   std::map<int, platform::TimeSpec> clocks_;
   std::map<int, int> clock_errors_;
