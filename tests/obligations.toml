@@ -52,6 +52,21 @@ directory in T8 and by the built binary through --check-config, and the row \
 declares P1 and P3 rather than claiming a T2 it does not have."""
 
 [[module]]
+path    = "src/worker/ipc"
+classes = ["P1", "P2", "P5"]
+tiers   = ["T1", "T2"]
+note    = """
+The heartbeat region: a memfd of single-writer seqlock slots, no lock anywhere \
+(PLAN §4.6 prefers a design with nothing to recover over one that recovers). P2 \
+is every failure of memfd_create, ftruncate, mmap and fcntl, forced through the \
+fake. P5 is the seqlock protocol itself: the ordering tests carry the written \
+synchronisation argument and run under TSan, and a writer that dies mid-update \
+is modelled as an odd sequence that readers report as torn rather than wait on. \
+Real-kernel corroboration of the three seam calls -- close-on-exec set, cleared \
+on request, a child seeing the parent's writes through its own mapping -- is in \
+tests/unit/platform/real_syscalls_test.cpp."""
+
+[[module]]
 path    = "src/main"
 classes = ["P1", "P3"]
 tiers   = ["T1", "T8"]

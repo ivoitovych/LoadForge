@@ -19,7 +19,8 @@ core::Result<ForkOutcome, SyscallError> WorkerLauncher::fork_worker() {
 }
 
 WorkerStartupFailure WorkerLauncher::become_worker(pid_t supervisor_pid,
-                                                   const std::vector<std::string>& argv) {
+                                                   const std::vector<std::string>& argv,
+                                                   const std::vector<int>& inherited_fds) {
   // Arm the death signal first, so the window in which this child can be
   // orphaned unnoticed is as short as the kernel allows.
   if (auto armed = syscalls_->set_parent_death_signal(kParentDeathSignal); !armed) {
@@ -38,6 +39,14 @@ WorkerStartupFailure WorkerLauncher::become_worker(pid_t supervisor_pid,
   // under any process that called PR_SET_CHILD_SUBREAPER.
   if (syscalls_->parent_pid() != supervisor_pid) {
     return WorkerStartupFailure::kParentDiedBeforeArming;
+  }
+
+  // Hand over exactly the descriptors this worker needs. Done after the race
+  // check, so an orphan does not go on to prepare for an exec it will not make.
+  for (const int fd : inherited_fds) {
+    if (auto kept = syscalls_->inherit_across_exec(fd); !kept) {
+      return WorkerStartupFailure::kDescriptorNotInherited;
+    }
   }
 
   // On success this does not return: the image is replaced and everything below

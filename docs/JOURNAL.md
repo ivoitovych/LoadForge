@@ -462,6 +462,45 @@ lesson each session relearns; the seam's `send_signal` comment is the one that s
 
 ---
 
+### 1.19 Shared memory across exec: what a memfd does, and what a refused attach must not do
+
+Probed before the heartbeat region was designed, then confirmed by the real-kernel tests:
+
+- **A `memfd` mapped `MAP_SHARED` survives `exec` through its descriptor, not its mapping.**
+  The worker is a fresh image and inherits nothing mapped; it inherits the descriptor
+  (once `FD_CLOEXEC` is cleared for exactly that one) and maps the same file. A write on
+  either side is visible on the other; the probe did it across a fork + exec of a different
+  program entirely. A fresh memfd is zero-filled, so a region's slots start as "never
+  published" with nothing written.
+- **`memfd_create` is close-on-exec by default (`MFD_CLOEXEC`), and that is the right
+  default.** Everything the controller opens stays close-on-exec; `become_worker` clears the
+  flag for the descriptors *that* worker needs, after the orphan race check and before
+  `exec`, so a worker starts with its own heartbeat region and record pipe and no sibling's.
+  A worker that cannot keep a descriptor has a startup failure of its own (code 123), like
+  the three before it.
+- **A refused `attach` must not close the descriptor it was handed.** The first version
+  built the region object before validating the header, and the object's destructor closed
+  the descriptor on the way out. In one process with one descriptor table — the fake, and
+  equally two views in one test — that closed the *creator's* descriptor, and the next
+  iteration of the header-corruption test failed with `EBADF` from `mmap` instead of the
+  layout fault it was staging. A region owns a descriptor only once it has attached;
+  before that it unmaps and leaves the descriptor alone.
+- **A failure arm exercised only in a forked child reads as never executed — §1.9, again.**
+  The first tests for `EFBIG` from `ftruncate` and `EMFILE` from `memfd_create` lowered the
+  limits in a forked child and reported the errnos over a pipe; the arms ran and the gate
+  still showed the lines at zero, because the child `_exit`s and flushes nothing. They now
+  run in the test process under a *soft* limit lowered for the scope and restored after
+  (`SIGXFSZ` ignored meanwhile, or the kernel kills the process instead of answering). The
+  rule stands: measure in the process that is measured.
+- **Two mappings of one file share an address in the fake, and must be counted, not
+  keyed.** The fake hands out the file's own storage for every `map_shared` of the same
+  descriptor (that is what makes the in-process "two views" tests honest), so a map keyed by
+  address silently merged a raw test mapping with the region's own, and the first unmap
+  erased both. A multimap counts them. Stricter than the kernel in one place: mapping past
+  the file's length is `EINVAL` here, where Linux maps it and `SIGBUS`es on first touch.
+
+---
+
 ## 2. Decisions, and the alternatives that were rejected
 
 The choice is in `PLAN.md`; what follows is the reasoning that does not survive
@@ -868,6 +907,48 @@ T2 it does not have.
 *The round trip:* `to_toml` renders through the library's own formatter and the test parses
 the rendering back to an equal `Config`, for both the minimal and the full document. A run
 record can carry exactly what it ran with, in a form the reader accepts.
+
+---
+
+### 2.15 Heartbeats are seqlock slots with no lock, and "torn" is the EOWNERDEAD with nothing to recover
+
+PLAN §4.6 says every process-shared lock must be robust and every acquirer must handle
+`EOWNERDEAD`, and in the same breath prefers designs with no shared lock at all. The
+heartbeat region is that design: one writer per slot (slot 0 the controller, slot i+1 worker
+i), a sequence counter per slot, and nothing a reader ever waits for. The writer bumps the
+sequence to odd, writes the fields, bumps it to even, each step released; a reader acquires
+the sequence, reads the fields, fences, re-reads the sequence, and keeps the sample only if
+the value was even and unchanged. The synchronisation argument is written out above the P5
+test, where it runs under TSan against a writer thread publishing twenty thousand beats whose
+every field derives from one number — a torn sample is detectable by inspection, and none
+appears.
+
+**A writer that dies mid-update leaves its sequence odd forever.** Every reader then reports
+`kTorn` after a bounded number of retries (64) instead of spinning. That is the whole
+EOWNERDEAD rule, discharged by construction: there is no protected state to make consistent
+because no reader ever depended on the writer finishing. The ledger's obligation for
+process-shared locks will record this module as holding none, and the gate for that lands
+with the supervision increment.
+
+**The header is validated on attach (F18).** Magic, version, slot count and slot size each
+have their own fault and their own message naming found and expected. A worker that mapped
+the wrong descriptor would otherwise read somebody else's bytes as heartbeats, and a region
+from a later LoadForge would be half-read rather than refused.
+
+**What a beat carries is deliberately small.** A `CLOCK_MONOTONIC` timestamp (the one clock
+every process shares a reading of), a progress counter, a phase, and a pid. `liveness()`
+turns the timestamp into never-beat / fresh / stale against an allowance the caller states;
+`progressed()` turns the counter into "working" versus "alive and stuck". Those two words are
+the difference between a slow worker and a wedged one, which the misbehaviour catalogue
+(IMPLEMENTATION §4) requires the controller to tell apart. A beat from the future counts as
+fresh: both clocks are the same clock, so it can only mean the reader's own reading is the
+older one.
+
+*The alternative rejected:* a pipe per worker carrying heartbeat records. It needs no
+shared memory, but a wedged worker holds its pipe open and no EOF arrives — PLAN F9's
+correction to revision 6 — so staleness would still have to be judged by timestamp, and a
+pipe adds a reader loop and a framing format to get the same answer the slot gives in one
+acquire load.
 
 ---
 
@@ -1316,10 +1397,16 @@ Kept short and current; move an item to the relevant document once it is settled
   controller, which is the first thing that needs the number — and config fields for the
   memory module's huge-page, lock, populate and NUMA choices, which wait for the workload
   that first sets them.
-- **Next in sequence:** the controller/worker split — `worker/{scheduler,ipc}`,
-  `controller/{orchestration,safety,supervision}`, the console reporter — driving the null
-  workload from `config/quick.toml` for its configured duration. The M1 exit criteria in
-  IMPLEMENTATION.md §4 are the checklist.
+- **The controller/worker split is under way, in increments:** the heartbeat region
+  (`worker/ipc`, §1.19, §2.15) is in. Still to come, in order: the record pipe with
+  checksummed framing and a fuzzed reader; the worker entry point, null workload and
+  scheduler behind an internal `--worker` switch; controller supervision, safety and
+  orchestration with the console reporter behind a `stress` command (M1 exit criterion 1);
+  the fake-worker executable with the T7 misbehaviour catalogue and the two new gates
+  (no test-hook symbol in the shipped binary; a lock obligation per module in the ledger);
+  OOM classification from the kernel's own record (`/proc/vmstat oom_kill` or the cgroup's
+  `memory.events`) and the memory-budget reader. The M1 exit criteria in IMPLEMENTATION.md
+  §4 are the checklist.
 - **Resolved — a flake, with its fix:**
   `RealWaitStatus.RealStopAndContinueAreDistinguishedFromTermination` failed once under
   the coverage build and once under ASan, in different sessions, while passing 30/30 in

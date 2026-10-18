@@ -101,6 +101,19 @@ loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)
 loadforge_enable_coverage(loadforge_cli)
 
+# ---- worker -----------------------------------------------------------------
+# What runs inside a worker process and the IPC it shares with the controller.
+# Depends on platform for the seam; the controller depends on this, never the
+# other way round.
+add_library(loadforge_worker STATIC
+  src/worker/ipc/heartbeat.cpp
+)
+target_link_libraries(loadforge_worker PUBLIC loadforge_platform)
+loadforge_set_warnings(loadforge_worker)
+loadforge_set_fp_contract(loadforge_worker)
+loadforge_enable_sanitizers(loadforge_worker)
+loadforge_enable_coverage(loadforge_worker)
+
 # ---- config -----------------------------------------------------------------
 # TOML parse, schema validation, resolution. The vendored parser is a PRIVATE
 # dependency: nothing that includes config.hpp compiles toml.hpp, and the

@@ -830,5 +830,136 @@ TEST_F(RealSyscallsTest, AnUnprivilegedProcessMeetsRlimitMemlockBothWaysTheKerne
   EXPECT_EQ(answer[1], EPERM) << "under a limit of zero, without CAP_IPC_LOCK";
 }
 
+// --- memory files against the real kernel ----------------------------------------
+
+TEST_F(RealSyscallsTest, AMemoryFileIsCloseOnExecUntilHandedOverAndMapsShared) {
+  auto fd = syscalls.create_memory_file("loadforge-test", 4096);
+  ASSERT_TRUE(fd.has_value()) << describe(fd.error());
+  ASSERT_GE(fd.value(), 0);
+  // glibc's own view of the flag is the oracle (F21), before and after.
+  EXPECT_NE(::fcntl(fd.value(), F_GETFD) & FD_CLOEXEC, 0) << "close-on-exec by default";
+  auto handed = syscalls.inherit_across_exec(fd.value());
+  ASSERT_TRUE(handed.has_value()) << describe(handed.error());
+  EXPECT_EQ(::fcntl(fd.value(), F_GETFD) & FD_CLOEXEC, 0) << "cleared on request";
+
+  auto mapped = syscalls.map_shared(fd.value(), 4096);
+  ASSERT_TRUE(mapped.has_value()) << describe(mapped.error());
+  auto* const bytes = static_cast<unsigned char*>(mapped.value());
+  EXPECT_EQ(bytes[0], 0) << "a fresh memfd is zero-filled";
+  bytes[0] = 0x5a;
+
+  // A child maps the same file anew and must see the byte, then change it.
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    RealSyscalls own;
+    auto view = own.map_shared(fd.value(), 4096);
+    if (!view.has_value()) {
+      ::_exit(2);
+    }
+    auto* const seen = static_cast<unsigned char*>(view.value());
+    if (seen[0] != 0x5a) {
+      ::_exit(3);
+    }
+    seen[0] = 0xa5;
+    ::_exit(0);
+  }
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << "2: map failed, 3: did not see";
+  EXPECT_EQ(bytes[0], 0xa5) << "the child's write came back through the file";
+
+  EXPECT_TRUE(syscalls.unmap(mapped.value(), 4096).has_value());
+  EXPECT_TRUE(syscalls.close(fd.value()).has_value());
+}
+
+/// Lowers one soft resource limit for the scope and restores it however the
+/// test ends. Soft only: the hard limit is never touched, so raising the soft
+/// limit back is always permitted.
+class SoftLimit {
+ public:
+  SoftLimit(int resource, rlim_t soft) : resource_(resource) {
+    ::getrlimit(resource_, &original_);
+    const rlimit lowered{soft, original_.rlim_max};
+    applied_ = ::setrlimit(resource_, &lowered) == 0;
+  }
+  ~SoftLimit() { ::setrlimit(resource_, &original_); }
+  SoftLimit(const SoftLimit&) = delete;
+  SoftLimit& operator=(const SoftLimit&) = delete;
+  SoftLimit(SoftLimit&&) = delete;
+  SoftLimit& operator=(SoftLimit&&) = delete;
+  [[nodiscard]] bool applied() const { return applied_; }
+
+ private:
+  int resource_;
+  rlimit original_{};
+  bool applied_ = false;
+};
+
+TEST_F(RealSyscallsTest, SizingAMemoryFilePastRlimitFsizeIsEFBIG) {
+  // In this process, not a child: a forked child that _exits never flushes
+  // its coverage counters (journal §1.9), so the failure arm would run and
+  // still read as never executed. The limit is lowered for the scope only,
+  // and SIGXFSZ is ignored meanwhile, or the kernel would kill the process
+  // instead of answering EFBIG.
+  const auto previous = ::signal(SIGXFSZ, SIG_IGN);
+  {
+    const SoftLimit tiny_file(RLIMIT_FSIZE, 4096);
+    ASSERT_TRUE(tiny_file.applied());
+    auto sized = syscalls.create_memory_file("loadforge-test", 8192);
+    ASSERT_FALSE(sized.has_value());
+    EXPECT_EQ(sized.error().number, EFBIG);
+    EXPECT_EQ(sized.error().call, "ftruncate");
+    EXPECT_EQ(sized.error().subject, "loadforge-test, 8192 bytes");
+  }
+  ::signal(SIGXFSZ, previous);
+  auto sized = syscalls.create_memory_file("loadforge-test", 8192);
+  ASSERT_TRUE(sized.has_value()) << "the limit was restored";
+  EXPECT_TRUE(syscalls.close(sized.value()).has_value());
+}
+
+TEST_F(RealSyscallsTest, CreatingAMemoryFileWithNoDescriptorNumberFreeIsEMFILE) {
+  // The lowest free descriptor number is found by taking one and giving it
+  // back; a soft RLIMIT_NOFILE equal to it leaves no number a new descriptor
+  // could take.
+  auto probe = syscalls.create_memory_file("loadforge-test", 4096);
+  ASSERT_TRUE(probe.has_value());
+  const int lowest_free = probe.value();
+  ASSERT_TRUE(syscalls.close(lowest_free).has_value());
+  {
+    const SoftLimit no_room(RLIMIT_NOFILE, static_cast<rlim_t>(lowest_free));
+    ASSERT_TRUE(no_room.applied());
+    auto created = syscalls.create_memory_file("loadforge-test", 4096);
+    ASSERT_FALSE(created.has_value());
+    EXPECT_EQ(created.error().number, EMFILE);
+    EXPECT_EQ(created.error().call, "memfd_create");
+    EXPECT_EQ(created.error().subject, "loadforge-test");
+  }
+  auto created = syscalls.create_memory_file("loadforge-test", 4096);
+  ASSERT_TRUE(created.has_value()) << "the limit was restored";
+  EXPECT_TRUE(syscalls.close(created.value()).has_value());
+}
+
+TEST_F(RealSyscallsTest, MappingOrHandingOverADescriptorThatIsNotOpenIsEBADF) {
+  auto mapped = syscalls.map_shared(-1, 4096);
+  ASSERT_FALSE(mapped.has_value());
+  EXPECT_EQ(mapped.error().number, EBADF);
+  EXPECT_EQ(mapped.error().call, "mmap");
+  EXPECT_EQ(mapped.error().subject, "fd -1, 4096 bytes");
+  auto handed = syscalls.inherit_across_exec(-1);
+  ASSERT_FALSE(handed.has_value());
+  EXPECT_EQ(handed.error().number, EBADF);
+  EXPECT_EQ(handed.error().call, "fcntl");
+}
+
+TEST_F(RealSyscallsTest, MappingZeroBytesOfAMemoryFileIsEINVAL) {
+  auto fd = syscalls.create_memory_file("loadforge-test", 4096);
+  ASSERT_TRUE(fd.has_value());
+  auto mapped = syscalls.map_shared(fd.value(), 0);
+  ASSERT_FALSE(mapped.has_value());
+  EXPECT_EQ(mapped.error().number, EINVAL);
+  EXPECT_TRUE(syscalls.close(fd.value()).has_value());
+}
+
 }  // namespace
 }  // namespace loadforge::platform
