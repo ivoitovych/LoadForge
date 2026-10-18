@@ -384,4 +384,19 @@ core::Result<std::vector<Readiness>, SyscallError> RealSyscalls::poll_readable(
   return readiness;
 }
 
+core::Result<core::Ok, SyscallError> RealSyscalls::ignore_signal(int signal) {
+  // sigaction rather than signal(2): the latter's semantics vary by libc
+  // flags, and this needs exactly one thing, the disposition set to ignore
+  // with no mask and no flags.
+  struct sigaction action {};
+  action.sa_handler = SIG_IGN;  // NOLINT(cppcoreguidelines-pro-type-union-access)
+  ::sigemptyset(&action.sa_mask);
+  const bool failed = ::sigaction(signal, &action, nullptr) != 0;
+  const int number = errno;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "sigaction",
+                                   "signal " + std::to_string(signal));
+}
+
+pid_t RealSyscalls::process_id() { return ::getpid(); }
+
 }  // namespace loadforge::platform

@@ -321,17 +321,71 @@ class FakeSyscalls final : public platform::Syscalls {
 
   [[nodiscard]] const std::vector<int>& clocks_read() const { return clocks_read_; }
 
+  /// Every clock advances by this many nanoseconds on each read of it, so a
+  /// loop that reads the clock each tick sees time pass within one call. The
+  /// step applies per clock id, so three clocks read together stay within a
+  /// step of each other -- far below the suspend threshold.
+  void advance_clocks_per_read(std::int64_t nanoseconds) { clock_step_ns_ = nanoseconds; }
+
+  /// Fail a clock on its Nth read (1-based) and succeed before and after, so
+  /// a loop's mid-run failure arm is reachable without failing its first read.
+  void fail_clock_on_read(int clock_id, int nth, int error) {
+    clock_failures_at_[clock_id] = std::pair{nth, error};
+  }
+
   core::Result<platform::TimeSpec, platform::SyscallError> read_clock(int clock_id) override {
     clocks_read_.push_back(clock_id);
+    const int nth = ++reads_per_clock_[clock_id];
     if (const auto failed = clock_errors_.find(clock_id); failed != clock_errors_.end()) {
       return platform::SyscallError{failed->second, "clock_gettime",
                                     "clock " + std::to_string(clock_id)};
     }
-    if (const auto found = clocks_.find(clock_id); found != clocks_.end()) {
-      return found->second;
+    if (const auto scheduled = clock_failures_at_.find(clock_id);
+        scheduled != clock_failures_at_.end() && scheduled->second.first == nth) {
+      return platform::SyscallError{scheduled->second.second, "clock_gettime",
+                                    "clock " + std::to_string(clock_id)};
     }
-    return platform::TimeSpec{0, 0};
+    platform::TimeSpec value{0, 0};
+    if (const auto found = clocks_.find(clock_id); found != clocks_.end()) {
+      value = found->second;
+    }
+    // Advanced AFTER the value is taken, so the first read reports the base
+    // and each later read is one step further on; carried as whole seconds
+    // plus nanoseconds so a long run cannot overflow the nanoseconds field.
+    // Only a stepping clock is normalised: a test that set a nonsense reading
+    // on purpose gets it back exactly as set.
+    if (clock_step_ns_ != 0) {
+      const std::int64_t advance = clock_step_ns_ * (nth - 1);
+      value.seconds += advance / 1'000'000'000;
+      value.nanoseconds += advance % 1'000'000'000;
+      if (value.nanoseconds >= 1'000'000'000) {
+        value.seconds += 1;
+        value.nanoseconds -= 1'000'000'000;
+      } else if (value.nanoseconds < 0) {  // A negative step: borrow a second.
+        value.seconds -= 1;
+        value.nanoseconds += 1'000'000'000;
+      }
+    }
+    return value;
   }
+
+  // --- signals and identity --------------------------------------------------------
+
+  void fail_ignore_signal(int error) { ignore_signal_error_ = error; }
+  [[nodiscard]] const std::vector<int>& signals_ignored() const { return signals_ignored_; }
+
+  core::Result<core::Ok, platform::SyscallError> ignore_signal(int signal) override {
+    signals_ignored_.push_back(signal);
+    if (ignore_signal_error_ != 0) {
+      return platform::SyscallError{ignore_signal_error_, "sigaction",
+                                    "signal " + std::to_string(signal)};
+    }
+    return core::Ok{};
+  }
+
+  /// The pid this fake reports as its own.
+  static constexpr pid_t kFakePid = 4242;
+  pid_t process_id() override { return kFakePid; }
 
   core::Result<core::Ok, platform::SyscallError> send_signal(pid_t pid, int signal) override {
     signals_sent_.emplace_back(pid, signal);
@@ -873,6 +927,11 @@ class FakeSyscalls final : public platform::Syscalls {
   std::map<int, platform::TimeSpec> clocks_;
   std::map<int, int> clock_errors_;
   std::vector<int> clocks_read_;
+  std::map<int, int> reads_per_clock_;
+  std::map<int, std::pair<int, int>> clock_failures_at_;
+  std::int64_t clock_step_ns_ = 0;
+  int ignore_signal_error_ = 0;
+  std::vector<int> signals_ignored_;
 
   struct FakeMapping {
     std::unique_ptr<std::byte[]> storage;

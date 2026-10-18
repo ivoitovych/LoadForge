@@ -289,6 +289,17 @@ class Syscalls {
   /// heartbeat interval: this is the one blocking call in its loop.
   [[nodiscard]] virtual core::Result<std::vector<Readiness>, SyscallError> poll_readable(
       const std::vector<int>& fds, int timeout_ms) = 0;
+
+  /// sigaction(2) setting the signal's disposition to SIG_IGN. A worker
+  /// ignores SIGPIPE so that a write to a controller that has gone is a
+  /// reported EPIPE rather than a death by signal 13, which a supervisor
+  /// could not tell from a fault. The kernel refuses for SIGKILL and SIGSTOP
+  /// (EINVAL), which is the failing arm's real-kernel test.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> ignore_signal(int signal) = 0;
+
+  /// getpid(2). Cannot fail. A worker stamps its beats with it so a reader
+  /// can tell a slot's writer from a stale pid the controller remembers.
+  [[nodiscard]] virtual pid_t process_id() = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -334,6 +345,8 @@ class RealSyscalls final : public Syscalls {
       int fd, std::span<const std::byte> bytes) override;
   [[nodiscard]] core::Result<std::vector<Readiness>, SyscallError> poll_readable(
       const std::vector<int>& fds, int timeout_ms) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> ignore_signal(int signal) override;
+  [[nodiscard]] pid_t process_id() override;
 };
 
 }  // namespace loadforge::platform

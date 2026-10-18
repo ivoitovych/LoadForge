@@ -530,6 +530,24 @@ Probed for the record channel, then pinned by the real-kernel tests:
   whole by the short-write loop while the reader drains concurrently; the fork test sends
   one to prove the loop is not decorative.
 
+### 1.21 Signals and a stepping clock: what the worker entry needed from the seam and the fake
+
+- **`sigaction` refuses `SIGKILL` with `EINVAL`,** which is the failing arm of
+  `ignore_signal` against the real kernel; glibc's own `sigaction` query is the oracle for
+  the disposition before and after. The worker ignores `SIGPIPE` first thing, because a
+  write to a controller that has gone must be a reported `EPIPE` and not a death by signal
+  13 — which a supervisor could not tell from a fault.
+- **A loop that reads the clock each tick needs a clock that moves inside one call.** The
+  fake's clocks were fixed values per id; `advance_clocks_per_read` makes each id step on
+  each of its own reads, so three clocks read together stay within a step of one another
+  (far below the suspend threshold) and tick *k* sees *k* steps. The stepping is applied
+  only when asked for, because a clock test sets a deliberately nonsense reading and must
+  get it back exactly — the first version normalised it and broke that test. A negative
+  step, from a base far from zero, is a clock running backwards: the one case
+  `Clock::between` refuses, reachable now without a scripted sequence.
+- **A failure on the *N*th read of a clock** (`fail_clock_on_read`) reaches the loop's
+  mid-run clock arm without failing its first reading, which is a different line.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -1034,6 +1052,48 @@ one across `exec`. Ownership arrives with the supervision increment, where the c
 holds every read end and the launcher hands each write end to its worker; putting it in the
 channel classes now would have decided the controller's design from below.
 
+### 2.17 The worker process: an internal switch, a null workload, and four ways out
+
+`loadforge --worker …` is the internal switch of PLAN §4.6: the controller re-executes the
+binary with it and nothing else does. It is not in `--help` because it is not a command a
+person runs, and it is not a test hook because it does exactly what a worker does in
+production and nothing a test could ask for — the fake worker with the misbehaviour
+catalogue is a separate executable, as IMPLEMENTATION §4 requires.
+
+**The arguments are a round trip.** `argv_for` builds what the controller execs and
+`parse_args` reads it back; a test says the two agree, which is what keeps them from
+drifting (the config module's rule). Every key is required exactly once, every value has a
+stated domain, and a refusal names the key — the controller writes these, so a refusal is
+a bug report, and `kBadArguments` (125) is its own exit code. Two bounds were deliberately
+*not* put in the parser: which ids a CPU mask can name is `mask_of`'s rule and which the
+machine has is the kernel's, so `--cpus` is bounded to the type and the refusal comes from
+the authority (and the first version bounded it in the parser, which made the `mask_of`
+arm in `run` unreachable — a branch with no test is a branch nobody has shown to work).
+
+**One tick: read the clock, beat, then judge.** The beat goes out before the duration check
+so a worker about to complete has still reported itself alive, and before the controller
+check so a worker about to leave has left its final progress. Then one `poll` on the
+control pipe is the tick's wait: a byte is a stop request (a clean completion, how a run
+ends early on request), a hang-up is the controller gone, the timeout is the interval. The
+controller's own beat is judged against the allowance each tick; a controller that *never*
+beat is given the allowance and then treated as stale, because a controller publishes its
+first beat before it spawns anyone. A controller slot that cannot be read — a controller
+that died inside `publish` — is its own reason, not an error, because the worker's answer
+is the same: leave.
+
+**Four exit codes, none colliding with the launcher's.** 0 completed; 119 setup failed
+(could not attach, report, or be placed; or the loop itself failed); 124 controller lost
+(hung up, stale, unreadable — not the worker's fault and not a completion); 125 bad
+arguments. The launcher's 120–123 sit between, and a `static_assert` keeps it so. Every
+way out that still has a channel writes an error record first, so the controller learns
+*why* from the pipe and not only *that* from the status word; a way out whose channel is
+the thing that failed does not try twice.
+
+*The alternative rejected:* a `SIGTERM` handler for graceful stop. The default disposition
+terminates, which the controller can classify as "stopped on request" when it was the one
+that asked; a handler would add a P5 path (signal during publish) for no new capability
+the control pipe does not already give.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
@@ -1482,10 +1542,12 @@ Kept short and current; move an item to the relevant document once it is settled
   memory module's huge-page, lock, populate and NUMA choices, which wait for the workload
   that first sets them.
 - **The controller/worker split is under way, in increments:** the heartbeat region
-  (`worker/ipc`, §1.19, §2.15) and the record channel (§1.20, §2.16) are in, with the
-  seam calls each needed (memfd, shared map, close-on-exec handover; pipe, write, poll).
-  Still to come, in order: the worker entry point, null workload and
-  scheduler behind an internal `--worker` switch; controller supervision, safety and
+  (`worker/ipc`, §1.19, §2.15), the record channel (§1.20, §2.16) and the worker process
+  itself (§1.21, §2.17: the internal `--worker` switch, the null workload loop, four exit
+  codes) are in, with the seam calls each needed (memfd, shared map, close-on-exec
+  handover; pipe, write, poll; ignore-signal, getpid). The worker has run for real only
+  in-process so far — the CLI tests hold the controller's side over the real seam.
+  Still to come, in order: controller supervision, safety and
   orchestration with the console reporter behind a `stress` command (M1 exit criterion 1);
   the fake-worker executable with the T7 misbehaviour catalogue and the two new gates
   (no test-hook symbol in the shipped binary; a lock obligation per module in the ledger);
