@@ -26,6 +26,8 @@ add_executable(loadforge_unit_tests
   unit/topology/numa_test.cpp
   unit/worker/ipc/heartbeat_test.cpp
   unit/worker/ipc/record_test.cpp
+  unit/worker/scheduler_test.cpp
+  unit/worker/entry_test.cpp
   unit/platform/real_syscalls_test.cpp
   unit/platform/result_instantiations_test.cpp
   unit/third_party/tomlplusplus_smoke_test.cpp
@@ -67,3 +69,13 @@ set_tests_properties(cli_check_config_missing PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_check_config_refused
          COMMAND loadforge --check-config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/unknown-key.toml")
 set_tests_properties(cli_check_config_refused PROPERTIES WILL_FAIL TRUE)
+
+# The worker's internal switch, through the real binary: misused, it must
+# refuse with the bad-arguments code and name the argument. The worker run
+# for real, with a region and pipes, is driven in-process by the CLI tests
+# and by the supervision tier once the controller exists.
+add_test(NAME cli_worker_bad_args_code
+         COMMAND sh -c "'$<TARGET_FILE:loadforge>' --worker --slot 0; test $? -eq 125")
+add_test(NAME cli_worker_bad_args_message COMMAND loadforge --worker --slot 0)
+set_tests_properties(cli_worker_bad_args_message PROPERTIES
+                     PASS_REGULAR_EXPRESSION "loadforge --worker: --workers: required")

@@ -8,6 +8,8 @@
 #include "config/config.hpp"
 #include "core/duration.hpp"
 #include "main/selftest.hpp"
+#include "platform/syscalls.hpp"
+#include "worker/entry.hpp"
 
 namespace loadforge::cli {
 namespace {
@@ -72,6 +74,14 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
     return kOk;
   }
   const std::string_view command = args.front();
+  if (command == worker::kWorkerSwitch) {
+    // The internal switch (docs/PLAN.md §4.6): this process is a worker the
+    // controller re-executed. Real system calls, because there is nothing
+    // else a worker could run on; the worker's own decisions are tested
+    // through worker::run with a fake.
+    platform::RealSyscalls syscalls;
+    return worker::run(syscalls, args.subspan(1), err);
+  }
   if (command == "--check-config") {
     if (args.size() != 2) {
       err << "loadforge: --check-config takes exactly one FILE\n";

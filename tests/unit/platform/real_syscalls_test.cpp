@@ -1099,6 +1099,28 @@ TEST_F(RealSyscallsTest, CreatingAPipeWithNoDescriptorNumberFreeIsEMFILE) {
   EXPECT_TRUE(syscalls.close(created.value().write_fd).has_value());
 }
 
+TEST_F(RealSyscallsTest, IgnoresASignalAndIsRefusedForTheOneThatCannotBeIgnored) {
+  // glibc's sigaction is the oracle for the disposition, before and after.
+  struct sigaction before {};
+  ASSERT_EQ(::sigaction(SIGPIPE, nullptr, &before), 0);
+  auto ignored = syscalls.ignore_signal(SIGPIPE);
+  ASSERT_TRUE(ignored.has_value()) << describe(ignored.error());
+  struct sigaction after {};
+  ASSERT_EQ(::sigaction(SIGPIPE, nullptr, &after), 0);
+  EXPECT_EQ(after.sa_handler, SIG_IGN);  // NOLINT(cppcoreguidelines-pro-type-union-access)
+  ASSERT_EQ(::sigaction(SIGPIPE, &before, nullptr), 0) << "restored for the other tests";
+
+  auto refused = syscalls.ignore_signal(SIGKILL);
+  ASSERT_FALSE(refused.has_value());
+  EXPECT_EQ(refused.error().number, EINVAL);
+  EXPECT_EQ(refused.error().call, "sigaction");
+  EXPECT_EQ(refused.error().subject, "signal 9");
+}
+
+TEST_F(RealSyscallsTest, ProcessIdIsTheKernelsAnswer) {
+  EXPECT_EQ(syscalls.process_id(), ::getpid());
+}
+
 TEST_F(RealSyscallsTest, MappingZeroBytesOfAMemoryFileIsEINVAL) {
   auto fd = syscalls.create_memory_file("loadforge-test", 4096);
   ASSERT_TRUE(fd.has_value());
