@@ -36,7 +36,7 @@
 path    = "src/core"
 classes = ["P1", "P3"]
 tiers   = ["T1"]
-note    = "Pure value logic: Result, ParseError, duration and byte-size parsing. No syscalls, so no P2."
+note    = "Pure value logic: Result, ParseError, duration and byte-size parsing, and CRC-32 pinned to the published check value. No syscalls, so no P2."
 
 [[module]]
 path    = "src/config"
@@ -53,7 +53,7 @@ declares P1 and P3 rather than claiming a T2 it does not have."""
 
 [[module]]
 path    = "src/worker/ipc"
-classes = ["P1", "P2", "P5"]
+classes = ["P1", "P2", "P3", "P4", "P5"]
 tiers   = ["T1", "T2"]
 note    = """
 The heartbeat region: a memfd of single-writer seqlock slots, no lock anywhere \
@@ -64,7 +64,25 @@ synchronisation argument and run under TSan, and a writer that dies mid-update \
 is modelled as an odd sequence that readers report as torn rather than wait on. \
 Real-kernel corroboration of the three seam calls -- close-on-exec set, cleared \
 on request, a child seeing the parent's writes through its own mapping -- is in \
-tests/unit/platform/real_syscalls_test.cpp."""
+tests/unit/platform/real_syscalls_test.cpp. \
+\
+The record channel brings P3 and P4. P3: the empty payload, the largest payload, \
+and one byte more; every prefix of a frame yields nothing and the last byte \
+completes it. P4 is what the channel is FOR: a frame is verified by a checksum \
+over its header and payload, and each corruption has its own classification -- \
+bad magic, bad version, oversized, bad checksum, truncated -- with found and \
+expected in the detail. The reader never resynchronises past a fault, because a \
+reader that skipped ahead would turn one corrupt byte into a quietly shorter \
+stream of findings. The exhaustive test corrupts every byte of a multi-frame \
+stream in turn, under random chunking, and requires a fault at or before the \
+corrupted frame with every earlier frame delivered intact and no record ever \
+delivered that was not sent. P2 here is write, read, pipe2 and poll: short \
+writes, EINTR to the bound, EPIPE, EBADF, EAGAIN, a write that transfers \
+nothing. The pipe is driven against the kernel too -- a forked child sends \
+three records, one of them larger than the pipe buffer, and the parent polls \
+and drains to the end -- and the seam's own answers (POLLHUP with bytes still \
+queued, POLLNVAL for a closed number, a negative number ignored, EPIPE, EINVAL \
+past RLIMIT_NOFILE, EMFILE) are in real_syscalls_test.cpp."""
 
 [[module]]
 path    = "src/main"

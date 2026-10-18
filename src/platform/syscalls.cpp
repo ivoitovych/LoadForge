@@ -3,6 +3,7 @@
 
 #include <fcntl.h>
 #include <linux/mempolicy.h>
+#include <poll.h>
 #include <sched.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -337,6 +339,49 @@ core::Result<core::Ok, SyscallError> RealSyscalls::inherit_across_exec(int fd) {
   const bool failed = ::fcntl(fd, F_SETFD, 0) != 0;
   const int number = errno;
   return result_or_error<core::Ok>(core::Ok{}, failed, number, "fcntl", describe_fd(fd));
+}
+
+core::Result<PipeEnds, SyscallError> RealSyscalls::create_pipe() {
+  std::array<int, 2> fds{-1, -1};
+  // O_CLOEXEC for the same reason open_read sets it: a worker must inherit
+  // exactly the descriptors it is given, and nothing else of its parent's.
+  if (::pipe2(fds.data(), O_CLOEXEC) != 0) {
+    return SyscallError{errno, "pipe2", "record channel"};
+  }
+  return PipeEnds{fds[0], fds[1]};
+}
+
+core::Result<std::size_t, SyscallError> RealSyscalls::write(int fd,
+                                                            std::span<const std::byte> bytes) {
+  const ssize_t count = ::write(fd, bytes.data(), bytes.size());
+  if (count < 0) {
+    return SyscallError{errno, "write", describe_fd(fd)};
+  }
+  return static_cast<std::size_t>(count);
+}
+
+core::Result<std::vector<Readiness>, SyscallError> RealSyscalls::poll_readable(
+    const std::vector<int>& fds, int timeout_ms) {
+  std::vector<pollfd> entries;
+  entries.reserve(fds.size());
+  for (const int fd : fds) {
+    entries.push_back(pollfd{fd, POLLIN, 0});
+  }
+  // A timeout expiring is not a failure: it is the controller's heartbeat
+  // tick, and poll reports it as zero descriptors ready, which is what the
+  // all-false Readiness values below say.
+  const bool failed = ::poll(entries.data(), entries.size(), timeout_ms) < 0;
+  const int number = errno;
+  if (failed) {
+    return SyscallError{number, "poll", std::to_string(fds.size()) + " descriptors"};
+  }
+  std::vector<Readiness> readiness;
+  readiness.reserve(entries.size());
+  for (const pollfd& entry : entries) {
+    readiness.push_back(Readiness{(entry.revents & POLLIN) != 0, (entry.revents & POLLHUP) != 0,
+                                  (entry.revents & POLLERR) != 0, (entry.revents & POLLNVAL) != 0});
+  }
+  return readiness;
 }
 
 }  // namespace loadforge::platform

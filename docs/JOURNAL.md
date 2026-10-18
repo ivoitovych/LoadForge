@@ -499,6 +499,37 @@ Probed before the heartbeat region was designed, then confirmed by the real-kern
   erased both. A multimap counts them. Stricter than the kernel in one place: mapping past
   the file's length is `EINVAL` here, where Linux maps it and `SIGBUS`es on first touch.
 
+### 1.20 Pipes and poll: what the kernel reports at each end, and the two things it does not
+
+Probed for the record channel, then pinned by the real-kernel tests:
+
+- **`POLLHUP` and `POLLIN` arrive together.** A pipe whose writer has closed with bytes still
+  queued polls as readable *and* hung up; only once the bytes are drained is it hung up
+  alone, and `read` then returns 0. So `Readiness` is four booleans rather than an enum, and
+  the controller must drain on either flag and treat the read that returns 0 — not the flag
+  — as the end of the stream. A loop that stopped draining on `POLLHUP` would lose a
+  worker's last records.
+- **`poll` does not fail for a closed descriptor, and ignores a negative one.** A number
+  that was open a moment ago comes back `POLLNVAL` with the rest of the entries answered
+  normally; a negative number is skipped entirely and reports nothing. Both verified; the
+  fake is stricter about the second (reports it invalid), because nothing above the seam
+  has a reason to poll a descriptor it does not hold.
+- **The one `poll` failure a process can provoke on itself is `EINVAL` past
+  `RLIMIT_NOFILE`,** and the limit can be lowered after the descriptors are open without
+  affecting them. That is how the failing arm of `poll_readable` runs in the test process
+  (§1.9 rule) rather than being a permanent exclusion.
+- **`write` to a pipe with no reader is `EPIPE` only if `SIGPIPE` is not delivered.** The
+  default disposition kills the process before `write` can answer. The test ignores the
+  signal for its scope; the worker entry point will ignore it for the process, so that a
+  controller that died is a reported `EPIPE` (and then the death-signal exit) rather than
+  a worker that vanished with signal 13 — which would look, to a supervisor, exactly like
+  a fault.
+- **A `write` on the read end, or on a descriptor opened read-only, is `EBADF`,** which is
+  why the fake answers `EBADF` to a write on anything but a pipe's write end. And a frame
+  larger than the pipe buffer (64 KiB payload against a 64 KiB default buffer) is written
+  whole by the short-write loop while the reader drains concurrently; the fork test sends
+  one to prove the loop is not decorative.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -950,6 +981,59 @@ correction to revision 6 — so staleness would still have to be judged by times
 pipe adds a reader loop and a framing format to get the same answer the slot gives in one
 acquire load.
 
+### 2.16 Records are checksummed frames, and a reader that finds one bad frame stops reading
+
+The second IPC: a worker's *findings* travel to the controller over a pipe, one per worker,
+the worker holding the write end across `exec` and the controller the read end. Where the
+heartbeat slot answers "is it alive", the record pipe answers "what did it find", and the
+two have opposite requirements: a beat may be lost or torn and the next one replaces it; a
+record must arrive exactly as sent or be known not to have.
+
+**Every frame is a header and a CRC-32 over the header and the payload.** Magic, version,
+type, length, checksum, then the payload, little-endian and written down in
+`worker/ipc/record.hpp` so a reader can be checked against the document rather than the
+writer. The checksum covers the *header* too, so that a corrupted length or type is a
+checksum fault and not a plausible frame of a different shape. The CRC is IEEE 802.3 /
+zlib, pinned to the published check value `crc32("123456789") == 0xCBF43926` and to zlib's
+answers for three other inputs, because a checksum that was merely self-consistent could
+not be told from one whose table had a typo (F21 again: the test must reach outside the
+code).
+
+**Each corruption has its own classification, and the reader never resynchronises.** Bad
+magic, bad version, oversized, bad checksum, truncated — found and expected in the detail,
+in the order a reader can check them: magic and version before the length is believed, the
+length before anything is allocated or waited for, the checksum once every covered byte has
+arrived. The first fault is final: later `next()` calls, more bytes, and `finish()` all
+report the same fault, and the source stops reading. *The alternative rejected* is the
+usual one — scan forward for the next magic and carry on — and it is rejected because a
+reader that heals around a corrupt frame turns one bad byte into a silently shorter stream
+of findings, and a shorter stream of findings is a hardware verdict with evidence missing.
+Garbage in must never become a verdict out; a channel that went bad is reported as a
+channel that went bad, and the controller decides what that says about the worker.
+
+**The exhaustive corruption test is the module's reason to exist, so it is exhaustive.**
+Every byte of a five-frame stream is corrupted in turn, twice (a flipped bit and a random
+replacement), under random chunking so the reader's answer cannot depend on how the bytes
+arrived. The requirement is three-fold: a fault at or before the corrupted frame; every
+frame before it delivered intact; no record ever delivered that was not sent. Random noise
+is fuzzed as well, for the crash case.
+
+**The size limit binds both ends.** `kMaxPayloadBytes` (64 KiB) is refused by `encode` as
+well as by the reader, so a writer cannot produce a frame no reader would accept — and a
+reader that believed a corrupt length field would be the easiest thing on the machine to
+crash with one byte.
+
+**A drain either succeeds whole or reports the fault.** Records completed by the same read
+as the corruption are not handed back alongside it. The controller's answer to a corrupt
+channel must not depend on partial findings, and "the records before the corruption" is a
+set whose boundary the corruption itself may have moved.
+
+**The ends do not own the descriptor.** `RecordWriter` and `RecordSource` write to and read
+from a number they are given; the pipe ends belong to whoever created the pipe and handed
+one across `exec`. Ownership arrives with the supervision increment, where the controller
+holds every read end and the launcher hands each write end to its worker; putting it in the
+channel classes now would have decided the controller's design from below.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
@@ -1398,8 +1482,9 @@ Kept short and current; move an item to the relevant document once it is settled
   memory module's huge-page, lock, populate and NUMA choices, which wait for the workload
   that first sets them.
 - **The controller/worker split is under way, in increments:** the heartbeat region
-  (`worker/ipc`, §1.19, §2.15) is in. Still to come, in order: the record pipe with
-  checksummed framing and a fuzzed reader; the worker entry point, null workload and
+  (`worker/ipc`, §1.19, §2.15) and the record channel (§1.20, §2.16) are in, with the
+  seam calls each needed (memfd, shared map, close-on-exec handover; pipe, write, poll).
+  Still to come, in order: the worker entry point, null workload and
   scheduler behind an internal `--worker` switch; controller supervision, safety and
   orchestration with the console reporter behind a `stress` command (M1 exit criterion 1);
   the fake-worker executable with the T7 misbehaviour catalogue and the two new gates

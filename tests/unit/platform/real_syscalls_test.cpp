@@ -32,6 +32,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "platform/exit_status.hpp"
 #include "platform/fs.hpp"
@@ -950,6 +951,152 @@ TEST_F(RealSyscallsTest, MappingOrHandingOverADescriptorThatIsNotOpenIsEBADF) {
   ASSERT_FALSE(handed.has_value());
   EXPECT_EQ(handed.error().number, EBADF);
   EXPECT_EQ(handed.error().call, "fcntl");
+}
+
+TEST(SeamValuesTest, PipeEndsAndReadinessCompareFieldByField) {
+  const PipeEnds ends{3, 4};
+  EXPECT_EQ(ends, (PipeEnds{3, 4}));
+  EXPECT_NE(ends, (PipeEnds{5, 4}));
+  EXPECT_NE(ends, (PipeEnds{3, 5}));
+
+  const Readiness none;
+  EXPECT_EQ(none, Readiness{});
+  EXPECT_NE(none, (Readiness{true, false, false, false}));
+  EXPECT_NE(none, (Readiness{false, true, false, false}));
+  EXPECT_NE(none, (Readiness{false, false, true, false}));
+  EXPECT_NE(none, (Readiness{false, false, false, true}));
+}
+
+TEST_F(RealSyscallsTest, APipeIsCloseOnExecAtBothEndsAndPollSeesBytesThenTheHangUp) {
+  auto created = syscalls.create_pipe();
+  ASSERT_TRUE(created.has_value()) << describe(created.error());
+  const PipeEnds pipe = created.value();
+  ASSERT_GE(pipe.read_fd, 0);
+  ASSERT_GE(pipe.write_fd, 0);
+  EXPECT_NE(pipe.read_fd, pipe.write_fd);
+  EXPECT_NE(::fcntl(pipe.read_fd, F_GETFD) & FD_CLOEXEC, 0);
+  EXPECT_NE(::fcntl(pipe.write_fd, F_GETFD) & FD_CLOEXEC, 0);
+
+  // Empty and open: nothing to report, and poll returns when the timeout
+  // expires rather than failing.
+  auto idle = syscalls.poll_readable({pipe.read_fd, pipe.write_fd}, 0);
+  ASSERT_TRUE(idle.has_value()) << describe(idle.error());
+  ASSERT_EQ(idle.value().size(), 2U);
+  EXPECT_EQ(idle.value()[0], Readiness{});
+  EXPECT_EQ(idle.value()[1], Readiness{}) << "POLLIN was asked for; a writable end is silent";
+
+  const std::array<std::byte, 3> bytes{std::byte{'a'}, std::byte{'b'}, std::byte{'c'}};
+  auto count = syscalls.write(pipe.write_fd, bytes);
+  ASSERT_TRUE(count.has_value()) << describe(count.error());
+  EXPECT_EQ(count.value(), 3U);
+  auto readable = syscalls.poll_readable({pipe.read_fd}, 0);
+  ASSERT_TRUE(readable.has_value());
+  EXPECT_EQ(readable.value()[0], (Readiness{true, false, false, false}));
+
+  ASSERT_TRUE(syscalls.close(pipe.write_fd).has_value());
+  // Bytes still queued AND the writer gone: both at once, as the kernel says.
+  auto both = syscalls.poll_readable({pipe.read_fd}, 0);
+  ASSERT_TRUE(both.has_value());
+  EXPECT_EQ(both.value()[0], (Readiness{true, true, false, false}));
+
+  std::string buffer(16, '\0');
+  auto got = syscalls.read(pipe.read_fd, buffer.data(), buffer.size());
+  ASSERT_TRUE(got.has_value());
+  EXPECT_EQ(buffer.substr(0, got.value()), "abc");
+  auto eof = syscalls.read(pipe.read_fd, buffer.data(), buffer.size());
+  ASSERT_TRUE(eof.has_value());
+  EXPECT_EQ(eof.value(), 0U) << "end of file once the writer is gone and the bytes are drained";
+  auto hung = syscalls.poll_readable({pipe.read_fd}, 0);
+  ASSERT_TRUE(hung.has_value());
+  EXPECT_EQ(hung.value()[0], (Readiness{false, true, false, false}));
+  EXPECT_TRUE(syscalls.close(pipe.read_fd).has_value());
+}
+
+TEST_F(RealSyscallsTest, WritingToAPipeNobodyReadsIsEPIPEAndItsWriteEndPollsAsAnError) {
+  // SIGPIPE would kill the process before write could answer; the worker
+  // ignores it for the same reason, and the test does so for its scope.
+  const auto previous = ::signal(SIGPIPE, SIG_IGN);
+  auto created = syscalls.create_pipe();
+  ASSERT_TRUE(created.has_value());
+  const PipeEnds pipe = created.value();
+  ASSERT_TRUE(syscalls.close(pipe.read_fd).has_value());
+  auto polled = syscalls.poll_readable({pipe.write_fd}, 0);
+  ASSERT_TRUE(polled.has_value());
+  EXPECT_EQ(polled.value()[0], (Readiness{false, false, true, false}));
+  const std::array<std::byte, 1> byte{std::byte{'x'}};
+  auto count = syscalls.write(pipe.write_fd, byte);
+  ASSERT_FALSE(count.has_value());
+  EXPECT_EQ(count.error().number, EPIPE);
+  EXPECT_EQ(count.error().call, "write");
+  EXPECT_EQ(count.error().subject, "fd " + std::to_string(pipe.write_fd));
+  EXPECT_TRUE(syscalls.close(pipe.write_fd).has_value());
+  ::signal(SIGPIPE, previous);
+}
+
+TEST_F(RealSyscallsTest, WritingADescriptorThatIsNotOpenIsEBADFAndPollingItIsInvalid) {
+  const std::array<std::byte, 1> byte{std::byte{'x'}};
+  auto count = syscalls.write(-1, byte);
+  ASSERT_FALSE(count.has_value());
+  EXPECT_EQ(count.error().number, EBADF);
+  EXPECT_EQ(count.error().subject, "fd -1");
+  // poll does not fail for a closed descriptor; it marks that one POLLNVAL
+  // and answers for the rest, which is why Readiness carries the flag. A
+  // NEGATIVE number is different again: poll ignores the entry and reports
+  // nothing for it (verified: -1 came back all clear), so the closed one here
+  // is a real number that was open a moment ago.
+  auto created = syscalls.create_pipe();
+  ASSERT_TRUE(created.has_value());
+  const PipeEnds pipe = created.value();
+  ASSERT_TRUE(syscalls.close(pipe.read_fd).has_value());
+  auto polled = syscalls.poll_readable({pipe.read_fd, pipe.write_fd, -1}, 0);
+  ASSERT_TRUE(polled.has_value()) << describe(polled.error());
+  ASSERT_EQ(polled.value().size(), 3U);
+  EXPECT_EQ(polled.value()[0], (Readiness{false, false, false, true})) << "closed: POLLNVAL";
+  EXPECT_EQ(polled.value()[1], (Readiness{false, false, true, false})) << "no reader: POLLERR";
+  EXPECT_EQ(polled.value()[2], Readiness{}) << "negative: ignored";
+  EXPECT_TRUE(syscalls.close(pipe.write_fd).has_value());
+}
+
+TEST_F(RealSyscallsTest, PollingMoreDescriptorsThanTheOpenFileLimitAllowsIsEINVAL) {
+  // The one failure of poll(2) a process can provoke on itself: nfds past
+  // RLIMIT_NOFILE. The limit is lowered for the scope only; the descriptors
+  // already open are unaffected by it.
+  auto created = syscalls.create_pipe();
+  ASSERT_TRUE(created.has_value());
+  const PipeEnds pipe = created.value();
+  {
+    const SoftLimit one(RLIMIT_NOFILE, 1);
+    ASSERT_TRUE(one.applied());
+    auto polled = syscalls.poll_readable({pipe.read_fd, pipe.write_fd}, 0);
+    ASSERT_FALSE(polled.has_value());
+    EXPECT_EQ(polled.error().number, EINVAL);
+    EXPECT_EQ(polled.error().call, "poll");
+    EXPECT_EQ(polled.error().subject, "2 descriptors");
+  }
+  auto polled = syscalls.poll_readable({pipe.read_fd, pipe.write_fd}, 0);
+  EXPECT_TRUE(polled.has_value()) << "the limit was restored";
+  EXPECT_TRUE(syscalls.close(pipe.read_fd).has_value());
+  EXPECT_TRUE(syscalls.close(pipe.write_fd).has_value());
+}
+
+TEST_F(RealSyscallsTest, CreatingAPipeWithNoDescriptorNumberFreeIsEMFILE) {
+  auto probe = syscalls.create_memory_file("loadforge-test", 4096);
+  ASSERT_TRUE(probe.has_value());
+  const int lowest_free = probe.value();
+  ASSERT_TRUE(syscalls.close(lowest_free).has_value());
+  {
+    const SoftLimit no_room(RLIMIT_NOFILE, static_cast<rlim_t>(lowest_free));
+    ASSERT_TRUE(no_room.applied());
+    auto created = syscalls.create_pipe();
+    ASSERT_FALSE(created.has_value());
+    EXPECT_EQ(created.error().number, EMFILE);
+    EXPECT_EQ(created.error().call, "pipe2");
+    EXPECT_EQ(created.error().subject, "record channel");
+  }
+  auto created = syscalls.create_pipe();
+  ASSERT_TRUE(created.has_value()) << "the limit was restored";
+  EXPECT_TRUE(syscalls.close(created.value().read_fd).has_value());
+  EXPECT_TRUE(syscalls.close(created.value().write_fd).has_value());
 }
 
 TEST_F(RealSyscallsTest, MappingZeroBytesOfAMemoryFileIsEINVAL) {

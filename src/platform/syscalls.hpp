@@ -7,6 +7,7 @@
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,29 @@ struct NodeMask {
   std::bitset<kNodeMaskBits> nodes;
 
   [[nodiscard]] friend bool operator==(const NodeMask&, const NodeMask&) = default;
+};
+
+/// The two ends of a pipe, as pipe2(2) hands them out.
+struct PipeEnds {
+  int read_fd = -1;
+  int write_fd = -1;
+
+  [[nodiscard]] friend bool operator==(const PipeEnds&, const PipeEnds&) = default;
+};
+
+/// What poll(2) reported for one descriptor, as four facts rather than a bit
+/// mask: readable (POLLIN), the far end gone (POLLHUP), an error condition
+/// (POLLERR), or a descriptor that is not open at all (POLLNVAL). The kernel
+/// sets several at once -- a pipe whose writer closed with bytes still queued
+/// is readable AND hung up -- so these are not alternatives, and deciding what
+/// a combination means is the controller's job, above the seam.
+struct Readiness {
+  bool readable = false;
+  bool hung_up = false;
+  bool error = false;
+  bool invalid = false;
+
+  [[nodiscard]] friend bool operator==(const Readiness&, const Readiness&) = default;
 };
 
 /// The seam. Every system call the platform layer issues goes through here.
@@ -246,6 +270,25 @@ class Syscalls {
   /// Called in the child between fork and exec for exactly the descriptors
   /// that worker needs, and no other.
   [[nodiscard]] virtual core::Result<core::Ok, SyscallError> inherit_across_exec(int fd) = 0;
+
+  /// pipe2(2) with O_CLOEXEC on both ends. A worker's record channel: the
+  /// controller keeps the read end, the worker inherits the write end, and
+  /// end of file on the read end is the one signal that cannot be faked --
+  /// it arrives when the last writer is gone, however it went.
+  [[nodiscard]] virtual core::Result<PipeEnds, SyscallError> create_pipe() = 0;
+
+  /// write(2). Returns the byte count, which may be short; callers loop. The
+  /// mirror of read: a short write is not an error. Takes bytes rather than
+  /// chars because what crosses a record pipe is a frame, not text.
+  [[nodiscard]] virtual core::Result<std::size_t, SyscallError> write(
+      int fd, std::span<const std::byte> bytes) = 0;
+
+  /// poll(2) for POLLIN on each descriptor, waiting at most `timeout_ms`
+  /// (negative waits forever, zero does not wait). One Readiness per
+  /// descriptor, in the order given. The timeout is the controller's
+  /// heartbeat interval: this is the one blocking call in its loop.
+  [[nodiscard]] virtual core::Result<std::vector<Readiness>, SyscallError> poll_readable(
+      const std::vector<int>& fds, int timeout_ms) = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -286,6 +329,11 @@ class RealSyscalls final : public Syscalls {
                                                                    std::size_t length) override;
   [[nodiscard]] core::Result<void*, SyscallError> map_shared(int fd, std::size_t length) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> inherit_across_exec(int fd) override;
+  [[nodiscard]] core::Result<PipeEnds, SyscallError> create_pipe() override;
+  [[nodiscard]] core::Result<std::size_t, SyscallError> write(
+      int fd, std::span<const std::byte> bytes) override;
+  [[nodiscard]] core::Result<std::vector<Readiness>, SyscallError> poll_readable(
+      const std::vector<int>& fds, int timeout_ms) override;
 };
 
 }  // namespace loadforge::platform

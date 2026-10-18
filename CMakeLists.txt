@@ -46,6 +46,7 @@ add_library(loadforge_core STATIC
   src/core/duration.cpp
   src/core/byte_size.cpp
   src/core/parse_number.cpp
+  src/core/crc32.cpp
 )
 target_include_directories(loadforge_core PUBLIC src "${CMAKE_BINARY_DIR}/generated")
 loadforge_set_warnings(loadforge_core)
@@ -107,6 +108,7 @@ loadforge_enable_coverage(loadforge_cli)
 # other way round.
 add_library(loadforge_worker STATIC
   src/worker/ipc/heartbeat.cpp
+  src/worker/ipc/record.cpp
 )
 target_link_libraries(loadforge_worker PUBLIC loadforge_platform)
 loadforge_set_warnings(loadforge_worker)
