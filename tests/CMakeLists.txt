@@ -7,6 +7,7 @@ add_executable(loadforge_unit_tests
   unit/core/result_test.cpp
   unit/core/duration_test.cpp
   unit/core/byte_size_test.cpp
+  unit/core/crc32_test.cpp
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
   unit/config/config_test.cpp
@@ -24,6 +25,7 @@ add_executable(loadforge_unit_tests
   unit/topology/cache_test.cpp
   unit/topology/numa_test.cpp
   unit/worker/ipc/heartbeat_test.cpp
+  unit/worker/ipc/record_test.cpp
   unit/platform/real_syscalls_test.cpp
   unit/platform/result_instantiations_test.cpp
   unit/third_party/tomlplusplus_smoke_test.cpp

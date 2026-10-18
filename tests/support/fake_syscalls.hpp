@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -100,6 +101,9 @@ class FakeSyscalls final : public platform::Syscalls {
   core::Result<std::size_t, platform::SyscallError> read(int fd, char* buffer,
                                                          std::size_t size) override {
     ++read_count_;
+    if (const auto pipe = pipe_readers_.find(fd); pipe != pipe_readers_.end()) {
+      return read_pipe(fd, *pipe->second, buffer, size);
+    }
     if (auto bad = check_descriptor(fd, "read"); !bad.has_value()) {
       return bad.error();
     }
@@ -132,6 +136,20 @@ class FakeSyscalls final : public platform::Syscalls {
   }
 
   core::Result<core::Ok, platform::SyscallError> close(int fd) override {
+    if (const auto reader = pipe_readers_.find(fd); reader != pipe_readers_.end()) {
+      reader->second->read_open = false;
+      pipe_readers_.erase(reader);
+      inheritable_.erase(fd);
+      ++close_count_;
+      return core::Ok{};
+    }
+    if (const auto writer = pipe_writers_.find(fd); writer != pipe_writers_.end()) {
+      writer->second->write_open = false;
+      pipe_writers_.erase(writer);
+      inheritable_.erase(fd);
+      ++close_count_;
+      return core::Ok{};
+    }
     if (memory_files_.contains(fd)) {
       // The storage stays alive while a mapping holds it, exactly as a memfd's
       // pages outlive its last descriptor.
@@ -575,11 +593,127 @@ class FakeSyscalls final : public platform::Syscalls {
     if (inherit_error_ != 0) {
       return platform::SyscallError{inherit_error_, "fcntl", describe(fd)};
     }
-    if (!memory_files_.contains(fd) && !(fd == kFakeDescriptor && descriptor_open_)) {
+    if (!is_open(fd)) {
       return platform::SyscallError{EBADF, "fcntl", describe(fd)};
     }
     inheritable_.insert(fd);
     return core::Ok{};
+  }
+
+  // --- pipes ---------------------------------------------------------------------
+  //
+  // A pipe is two descriptors over one byte queue. The model is the kernel's
+  // where a test can tell: bytes arrive in order and may be delivered short;
+  // a read with the queue empty is end of file once the write end is closed;
+  // a write with the read end closed is EPIPE (the kernel also raises SIGPIPE,
+  // which the worker ignores; the fake cannot raise it and does not pretend
+  // to); poll reports readable while bytes are queued and hung up once the
+  // writer is gone, both at once when both hold, and POLLNVAL for a
+  // descriptor that is not open.
+  //
+  // Stricter than the kernel in two places, on purpose. A read of an empty pipe
+  // whose writer is still open would BLOCK on Linux, and a fake cannot block,
+  // so it answers EAGAIN: nothing above the seam reads without polling first,
+  // and a test that does has found a bug in the code, not in the fake. And a
+  // poll entry with a negative number, which the kernel silently ignores, is
+  // reported invalid here, because nothing above the seam has a reason to
+  // poll a descriptor it does not hold.
+
+  /// One scripted write: accept this many bytes (short when fewer than
+  /// offered, zero to transfer nothing), or raise an errno instead.
+  struct WriteStep {
+    std::size_t accept = 0;
+    int error = 0;
+  };
+
+  /// Script the write sequence exactly: short writes, EINTR, a mid-stream
+  /// failure. Unscripted writes accept everything offered.
+  void script_writes(std::vector<WriteStep> steps) { writes_.assign(steps.begin(), steps.end()); }
+  /// Raise this errno from every write, forever: the caller's interrupt bound.
+  void always_fail_write(int error) { persistent_write_error_ = error; }
+  void fail_create_pipe(int error) { pipe_error_ = error; }
+  void fail_poll(int error) { poll_error_ = error; }
+  /// Deliver at most this many bytes per pipe read, so a frame arrives in
+  /// pieces. Defaults to everything queued.
+  void limit_pipe_reads(std::size_t bytes) { pipe_read_limit_ = bytes; }
+  /// What poll reports for this descriptor, overriding the model: a reader
+  /// that is told "readable" with nothing queued, or an error condition.
+  void script_readiness(int fd, platform::Readiness readiness) {
+    scripted_readiness_[fd] = readiness;
+  }
+
+  [[nodiscard]] int write_count() const { return write_count_; }
+  [[nodiscard]] int poll_count() const { return poll_count_; }
+  [[nodiscard]] const std::vector<int>& poll_timeouts() const { return poll_timeouts_; }
+  /// Everything written to this pipe's write end so far, in order.
+  [[nodiscard]] std::string pipe_contents(int write_fd) const {
+    const auto writer = pipe_writers_.find(write_fd);
+    return writer == pipe_writers_.end() ? std::string{} : writer->second->queue;
+  }
+  /// Queue bytes for a pipe's reader directly, as if a writer in another
+  /// process had sent them.
+  void deliver_to_pipe(int read_fd, const std::string& bytes) {
+    pipe_readers_.at(read_fd)->queue += bytes;
+  }
+
+  core::Result<platform::PipeEnds, platform::SyscallError> create_pipe() override {
+    if (pipe_error_ != 0) {
+      return platform::SyscallError{pipe_error_, "pipe2", "record channel"};
+    }
+    auto pipe = std::make_shared<FakePipe>();
+    const int read_fd = next_pipe_fd_++;
+    const int write_fd = next_pipe_fd_++;
+    pipe_readers_[read_fd] = pipe;
+    pipe_writers_[write_fd] = pipe;
+    open_count_ += 2;
+    return platform::PipeEnds{read_fd, write_fd};
+  }
+
+  core::Result<std::size_t, platform::SyscallError> write(
+      int fd, std::span<const std::byte> bytes) override {
+    ++write_count_;
+    const std::size_t size = bytes.size();
+    const auto writer = pipe_writers_.find(fd);
+    // A descriptor that is not a pipe's write end is EBADF: the fake's other
+    // descriptors are opened read-only, and the kernel says the same of them.
+    if (writer == pipe_writers_.end()) {
+      return platform::SyscallError{EBADF, "write", describe(fd)};
+    }
+    if (persistent_write_error_ != 0) {
+      return platform::SyscallError{persistent_write_error_, "write", describe(fd)};
+    }
+    std::size_t accepted = size;
+    if (!writes_.empty()) {
+      const WriteStep step = writes_.front();
+      writes_.pop_front();
+      if (step.error != 0) {
+        return platform::SyscallError{step.error, "write", describe(fd)};
+      }
+      accepted = step.accept < size ? step.accept : size;
+    }
+    if (!writer->second->read_open) {
+      return platform::SyscallError{EPIPE, "write", describe(fd)};
+    }
+    for (const std::byte byte : bytes.first(accepted)) {
+      writer->second->queue.push_back(static_cast<char>(std::to_integer<unsigned char>(byte)));
+    }
+    return accepted;
+  }
+
+  core::Result<std::vector<platform::Readiness>, platform::SyscallError> poll_readable(
+      const std::vector<int>& fds, int timeout_ms) override {
+    ++poll_count_;
+    poll_timeouts_.push_back(timeout_ms);
+    if (poll_error_ != 0) {
+      return platform::SyscallError{poll_error_, "poll",
+                                    std::to_string(fds.size()) + " descriptors"};
+    }
+    std::vector<platform::Readiness> readiness;
+    readiness.reserve(fds.size());
+    for (const int fd : fds) {
+      readiness.push_back(readiness_of(fd));
+    }
+    return readiness;
   }
 
   core::Result<core::Ok, platform::SyscallError> bind_memory(
@@ -605,6 +739,9 @@ class FakeSyscalls final : public platform::Syscalls {
   /// that confuses the two kinds gets EBADF, not a coincidence.
   static constexpr int kFirstMemoryFd = 100;
 
+  /// Pipe descriptors start past the memory-file range for the same reason.
+  static constexpr int kFirstPipeFd = 200;
+
   static std::string describe(int fd) { return "fd " + std::to_string(fd); }
 
   /// EBADF for a descriptor this fake never handed out, or already took back.
@@ -613,6 +750,71 @@ class FakeSyscalls final : public platform::Syscalls {
       return platform::SyscallError{EBADF, call, describe(fd)};
     }
     return core::Ok{};
+  }
+
+  /// Any descriptor of any kind this fake currently has open.
+  [[nodiscard]] bool is_open(int fd) const {
+    return (fd == kFakeDescriptor && descriptor_open_) || memory_files_.contains(fd) ||
+           pipe_readers_.contains(fd) || pipe_writers_.contains(fd);
+  }
+
+  struct FakePipe {
+    std::string queue;
+    bool read_open = true;
+    bool write_open = true;
+  };
+
+  core::Result<std::size_t, platform::SyscallError> read_pipe(int fd, FakePipe& pipe, char* buffer,
+                                                              std::size_t size) {
+    if (persistent_read_error_ != 0) {
+      return platform::SyscallError{persistent_read_error_, "read", describe(fd)};
+    }
+    // A scripted errno applies to a pipe read too; scripted BYTES do not,
+    // because a pipe's bytes come from its writer.
+    if (!reads_.empty() && reads_.front().error != 0) {
+      const int error = reads_.front().error;
+      reads_.pop_front();
+      return platform::SyscallError{error, "read", describe(fd)};
+    }
+    if (pipe.queue.empty()) {
+      if (pipe.write_open) {
+        return platform::SyscallError{EAGAIN, "read", describe(fd)};  // Would block.
+      }
+      return std::size_t{0};  // End of file: the writer is gone.
+    }
+    std::size_t count = pipe.queue.size() < size ? pipe.queue.size() : size;
+    if (count > pipe_read_limit_) {
+      count = pipe_read_limit_;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+      buffer[i] = pipe.queue[i];
+    }
+    pipe.queue.erase(0, count);
+    return count;
+  }
+
+  [[nodiscard]] platform::Readiness readiness_of(int fd) const {
+    if (const auto scripted = scripted_readiness_.find(fd); scripted != scripted_readiness_.end()) {
+      return scripted->second;
+    }
+    if (const auto reader = pipe_readers_.find(fd); reader != pipe_readers_.end()) {
+      platform::Readiness readiness;
+      readiness.readable = !reader->second->queue.empty();
+      readiness.hung_up = !reader->second->write_open;
+      return readiness;
+    }
+    if (const auto writer = pipe_writers_.find(fd); writer != pipe_writers_.end()) {
+      platform::Readiness readiness;
+      readiness.error = !writer->second->read_open;  // POLLERR: no reader left.
+      return readiness;
+    }
+    platform::Readiness readiness;
+    if (is_open(fd)) {
+      readiness.readable = true;  // A regular file is always readable.
+    } else {
+      readiness.invalid = true;
+    }
+    return readiness;
   }
 
   std::deque<ReadStep> reads_;
@@ -701,6 +903,19 @@ class FakeSyscalls final : public platform::Syscalls {
   std::vector<int> map_flags_;
   std::vector<int> advice_given_;
   std::vector<platform::NodeMask> binds_;
+
+  std::map<int, std::shared_ptr<FakePipe>> pipe_readers_;
+  std::map<int, std::shared_ptr<FakePipe>> pipe_writers_;
+  std::map<int, platform::Readiness> scripted_readiness_;
+  std::deque<WriteStep> writes_;
+  int next_pipe_fd_ = kFirstPipeFd;
+  int pipe_error_ = 0;
+  int poll_error_ = 0;
+  int persistent_write_error_ = 0;
+  int write_count_ = 0;
+  int poll_count_ = 0;
+  std::size_t pipe_read_limit_ = std::numeric_limits<std::size_t>::max();
+  std::vector<int> poll_timeouts_;
 
   static platform::NodeMask node_zero() {
     platform::NodeMask mask;
