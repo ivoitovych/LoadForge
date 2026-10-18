@@ -10,6 +10,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -131,6 +132,14 @@ class FakeSyscalls final : public platform::Syscalls {
   }
 
   core::Result<core::Ok, platform::SyscallError> close(int fd) override {
+    if (memory_files_.contains(fd)) {
+      // The storage stays alive while a mapping holds it, exactly as a memfd's
+      // pages outlive its last descriptor.
+      memory_files_.erase(fd);
+      inheritable_.erase(fd);
+      ++close_count_;
+      return core::Ok{};
+    }
     if (auto bad = check_descriptor(fd, "close"); !bad.has_value()) {
       return bad.error();
     }
@@ -440,6 +449,23 @@ class FakeSyscalls final : public platform::Syscalls {
   core::Result<core::Ok, platform::SyscallError> unmap(void* address, std::size_t length) override {
     ++unmap_count_;
     const std::string subject = std::to_string(length) + " bytes";
+    // Several mappings of one file share an address here (the fake hands out
+    // the file's own storage), so they are counted, and an unmap releases one.
+    if (shared_mappings_.contains(address)) {
+      const auto range = shared_mappings_.equal_range(address);
+      auto match = range.first;
+      while (match != range.second && match->second != length) {
+        ++match;
+      }
+      if (match == range.second) {
+        return platform::SyscallError{EINVAL, "munmap", subject};
+      }
+      if (unmap_error_ != 0) {
+        return platform::SyscallError{unmap_error_, "munmap", subject};
+      }
+      shared_mappings_.erase(match);
+      return core::Ok{};
+    }
     const auto found = mappings_.find(address);
     // Unknown address, or a length that is not the whole mapping: EINVAL. The
     // second is exactly the kernel's answer for a huge-page mapping and the
@@ -491,6 +517,71 @@ class FakeSyscalls final : public platform::Syscalls {
     return core::Ok{};
   }
 
+  // --- memory files and shared mappings -------------------------------------------
+  //
+  // A memory file is the one thing that can carry a region across exec: the
+  // worker is a fresh image and inherits descriptors, not mappings. The model
+  // here is the kernel's: a file has a length, every map_shared of the same
+  // descriptor returns the SAME storage (that is what shared means, and it is
+  // what lets a supervisor and a "worker" in one test process see each other's
+  // writes), the descriptor is close-on-exec until inherit_across_exec says
+  // otherwise, and the storage outlives the descriptor while a mapping holds
+  // it. Stricter than the kernel in one place, on purpose: mapping more than
+  // the file's length is EINVAL here, where Linux would map it and SIGBUS on
+  // the first touch past the end -- a crash is not an answer a test can read.
+
+  void fail_create_memory_file(int error) { memory_file_error_ = error; }
+  void fail_map_shared(int error) { map_shared_error_ = error; }
+  void fail_inherit(int error) { inherit_error_ = error; }
+
+  /// Whether the descriptor would survive exec: cleared of close-on-exec.
+  [[nodiscard]] bool inheritable(int fd) const { return inheritable_.contains(fd); }
+  [[nodiscard]] std::size_t live_shared_mappings() const { return shared_mappings_.size(); }
+  [[nodiscard]] const std::vector<std::string>& memory_file_names() const {
+    return memory_file_names_;
+  }
+
+  core::Result<int, platform::SyscallError> create_memory_file(const std::string& name,
+                                                               std::size_t length) override {
+    memory_file_names_.push_back(name);
+    if (memory_file_error_ != 0) {
+      return platform::SyscallError{memory_file_error_, "memfd_create", name};
+    }
+    const int fd = next_memory_fd_++;
+    memory_files_[fd] = std::make_shared<std::vector<std::byte>>(length);
+    ++open_count_;
+    return fd;
+  }
+
+  core::Result<void*, platform::SyscallError> map_shared(int fd, std::size_t length) override {
+    const std::string subject = describe(fd) + ", " + std::to_string(length) + " bytes";
+    const auto file = memory_files_.find(fd);
+    if (file == memory_files_.end()) {
+      return platform::SyscallError{EBADF, "mmap", subject};
+    }
+    if (map_shared_error_ != 0) {
+      return platform::SyscallError{map_shared_error_, "mmap", subject};
+    }
+    if (length == 0 || length > file->second->size()) {
+      return platform::SyscallError{EINVAL, "mmap", subject};
+    }
+    void* const address = file->second->data();
+    shared_storage_[address] = file->second;  // Keeps the bytes alive past close().
+    shared_mappings_.emplace(address, length);
+    return address;
+  }
+
+  core::Result<core::Ok, platform::SyscallError> inherit_across_exec(int fd) override {
+    if (inherit_error_ != 0) {
+      return platform::SyscallError{inherit_error_, "fcntl", describe(fd)};
+    }
+    if (!memory_files_.contains(fd) && !(fd == kFakeDescriptor && descriptor_open_)) {
+      return platform::SyscallError{EBADF, "fcntl", describe(fd)};
+    }
+    inheritable_.insert(fd);
+    return core::Ok{};
+  }
+
   core::Result<core::Ok, platform::SyscallError> bind_memory(
       void* address, std::size_t length, const platform::NodeMask& nodes) override {
     binds_.push_back(nodes);
@@ -510,6 +601,9 @@ class FakeSyscalls final : public platform::Syscalls {
 
  private:
   static constexpr int kFakeDescriptor = 42;
+  /// Memory-file descriptors start well away from kFakeDescriptor so a test
+  /// that confuses the two kinds gets EBADF, not a coincidence.
+  static constexpr int kFirstMemoryFd = 100;
 
   static std::string describe(int fd) { return "fd " + std::to_string(fd); }
 
@@ -585,6 +679,15 @@ class FakeSyscalls final : public platform::Syscalls {
     std::size_t locked = 0;
   };
   std::map<void*, FakeMapping> mappings_;
+  std::map<int, std::shared_ptr<std::vector<std::byte>>> memory_files_;
+  std::map<void*, std::shared_ptr<std::vector<std::byte>>> shared_storage_;
+  std::multimap<void*, std::size_t> shared_mappings_;
+  std::set<int> inheritable_;
+  std::vector<std::string> memory_file_names_;
+  int next_memory_fd_ = kFirstMemoryFd;
+  int memory_file_error_ = 0;
+  int map_shared_error_ = 0;
+  int inherit_error_ = 0;
   std::size_t huge_pages_free_ = 0;
   platform::NodeMask permitted_nodes_ = node_zero();
   std::size_t lock_limit_ = std::numeric_limits<std::size_t>::max();

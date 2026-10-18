@@ -55,6 +55,7 @@ enum class WorkerStartupFailure : std::uint8_t {
   kExecFailed = 120,              ///< execv returned, so the image was never replaced.
   kParentDiedBeforeArming = 121,  ///< Orphaned in the window fork..prctl.
   kDeathSignalUnavailable = 122,  ///< prctl(PR_SET_PDEATHSIG) failed.
+  kDescriptorNotInherited = 123,  ///< A descriptor the worker needs could not be kept across exec.
 };
 
 /// Creates worker processes, and is the code that runs inside one before it
@@ -114,8 +115,15 @@ class WorkerLauncher {
   /// arrives, because the death it was armed for has already happened. Without
   /// this check the worker runs on with no supervisor -- the exact orphan the
   /// signal exists to prevent.
+  ///
+  /// `inherited_fds` are the descriptors this worker must carry across exec --
+  /// its heartbeat region, its record pipe. Everything the supervisor opens is
+  /// close-on-exec, so a worker starts with exactly the descriptors named here
+  /// and no sibling's. They are cleared of close-on-exec after the race check
+  /// and before exec; a failure there is a startup failure like the others.
   [[nodiscard]] WorkerStartupFailure become_worker(pid_t supervisor_pid,
-                                                   const std::vector<std::string>& argv);
+                                                   const std::vector<std::string>& argv,
+                                                   const std::vector<int>& inherited_fds = {});
 
   /// The error from the most recent failed exec, for the supervisor's report.
   ///

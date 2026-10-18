@@ -215,6 +215,42 @@ TEST(WorkerLauncherTest, AMatchingParentPidProceedsToExec) {
   EXPECT_EQ(syscalls.exec_count(), 1);
 }
 
+TEST(WorkerLauncherTest, TheChildHandsOverExactlyTheDescriptorsItIsGiven) {
+  FakeSyscalls syscalls;
+  WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+  auto region = syscalls.create_memory_file("beats", 128);
+  auto pipe_end = syscalls.create_memory_file("records", 128);
+  ASSERT_TRUE(region.has_value() && pipe_end.has_value());
+  EXPECT_FALSE(syscalls.inheritable(region.value())) << "close-on-exec until handed over";
+
+  const auto code =
+      launcher.become_worker(FakeSyscalls::kFakeSupervisorPid, {"loadforge"}, {region.value()});
+  EXPECT_EQ(code, WorkerStartupFailure::kExecFailed) << "the fake cannot exec; it got that far";
+  EXPECT_TRUE(syscalls.inheritable(region.value()));
+  EXPECT_FALSE(syscalls.inheritable(pipe_end.value())) << "a descriptor not named stays closed";
+}
+
+TEST(WorkerLauncherTest, ADescriptorThatCannotBeHandedOverStopsTheWorkerBeforeExec) {
+  FakeSyscalls syscalls;
+  syscalls.fail_inherit(EBADF);
+  WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+  const auto code = launcher.become_worker(FakeSyscalls::kFakeSupervisorPid, {"loadforge"}, {7});
+  EXPECT_EQ(code, WorkerStartupFailure::kDescriptorNotInherited);
+  EXPECT_EQ(syscalls.exec_count(), 0) << "no exec without the descriptors the worker needs";
+}
+
+TEST(WorkerLauncherTest, AnOrphanDoesNotPrepareDescriptorsForAnExecItWillNotMake) {
+  FakeSyscalls syscalls;
+  syscalls.set_parent_pid(1);
+  WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+  auto region = syscalls.create_memory_file("beats", 128);
+  ASSERT_TRUE(region.has_value());
+  const auto code =
+      launcher.become_worker(FakeSyscalls::kFakeSupervisorPid, {"loadforge"}, {region.value()});
+  EXPECT_EQ(code, WorkerStartupFailure::kParentDiedBeforeArming);
+  EXPECT_FALSE(syscalls.inheritable(region.value())) << "the race check comes first";
+}
+
 TEST(WorkerLauncherTest, StartupFailureCodesAreDistinctAndSurviveExit) {
   // These cross a process boundary as a single byte. exit(2) keeps the low 8
   // bits only, so a code above 255 would report as something else entirely --
@@ -222,12 +258,16 @@ TEST(WorkerLauncherTest, StartupFailureCodesAreDistinctAndSurviveExit) {
   const int exec_failed = static_cast<int>(WorkerStartupFailure::kExecFailed);
   const int orphaned = static_cast<int>(WorkerStartupFailure::kParentDiedBeforeArming);
   const int no_signal = static_cast<int>(WorkerStartupFailure::kDeathSignalUnavailable);
+  const int not_inherited = static_cast<int>(WorkerStartupFailure::kDescriptorNotInherited);
 
   EXPECT_NE(exec_failed, orphaned);
   EXPECT_NE(exec_failed, no_signal);
   EXPECT_NE(orphaned, no_signal);
+  EXPECT_NE(not_inherited, exec_failed);
+  EXPECT_NE(not_inherited, orphaned);
+  EXPECT_NE(not_inherited, no_signal);
 
-  for (const int code : {exec_failed, orphaned, no_signal}) {
+  for (const int code : {exec_failed, orphaned, no_signal, not_inherited}) {
     EXPECT_GT(code, 2) << "must not collide with success or ordinary failure";
     EXPECT_LT(code, 126) << "126 and 127 are the shell's, and >255 wraps to something else";
     EXPECT_EQ(code & 0xff, code) << "must survive exit(2)'s truncation to one byte";

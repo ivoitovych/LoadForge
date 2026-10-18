@@ -227,6 +227,25 @@ class Syscalls {
   [[nodiscard]] virtual core::Result<core::Ok, SyscallError> bind_memory(void* address,
                                                                          std::size_t length,
                                                                          const NodeMask& nodes) = 0;
+
+  /// memfd_create(2) with MFD_CLOEXEC, sized with ftruncate(2). Returns the
+  /// descriptor. This is how a region of memory survives exec: the worker is
+  /// a fresh image, so it cannot inherit a mapping, but it can inherit the
+  /// descriptor and map the same file. Close-on-exec by default, so no child
+  /// but the intended one carries it; inherit_across_exec hands it over.
+  [[nodiscard]] virtual core::Result<int, SyscallError> create_memory_file(const std::string& name,
+                                                                           std::size_t length) = 0;
+
+  /// mmap(2) of `length` bytes of `fd`, MAP_SHARED, readable and writable,
+  /// from offset 0. Writes are visible to every process mapping the same
+  /// file, which is the whole point.
+  [[nodiscard]] virtual core::Result<void*, SyscallError> map_shared(int fd,
+                                                                     std::size_t length) = 0;
+
+  /// fcntl(F_SETFD, 0): clears FD_CLOEXEC so the descriptor survives exec.
+  /// Called in the child between fork and exec for exactly the descriptors
+  /// that worker needs, and no other.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> inherit_across_exec(int fd) = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -263,6 +282,10 @@ class RealSyscalls final : public Syscalls {
                                                                    int advice) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> bind_memory(void* address, std::size_t length,
                                                                  const NodeMask& nodes) override;
+  [[nodiscard]] core::Result<int, SyscallError> create_memory_file(const std::string& name,
+                                                                   std::size_t length) override;
+  [[nodiscard]] core::Result<void*, SyscallError> map_shared(int fd, std::size_t length) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> inherit_across_exec(int fd) override;
 };
 
 }  // namespace loadforge::platform

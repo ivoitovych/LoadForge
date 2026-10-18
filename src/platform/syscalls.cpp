@@ -18,6 +18,7 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace loadforge::platform {
@@ -302,6 +303,40 @@ core::Result<core::Ok, SyscallError> RealSyscalls::bind_memory(void* address, st
   const int number = errno;
   const bool failed = rc != 0;
   return result_or_error<core::Ok>(core::Ok{}, failed, number, "mbind", describe_length(length));
+}
+
+core::Result<int, SyscallError> RealSyscalls::create_memory_file(const std::string& name,
+                                                                 std::size_t length) {
+  const int fd = ::memfd_create(name.c_str(), MFD_CLOEXEC);
+  if (fd < 0) {
+    return SyscallError{errno, "memfd_create", name};
+  }
+  // Sized here rather than by the caller: a descriptor to a zero-length file
+  // is a mapping that faults on first touch, a plausible-looking handle to
+  // nothing, which is the shape this project refuses to hand out.
+  if (::ftruncate(fd, static_cast<off_t>(length)) != 0) {
+    const int number = errno;
+    (void)::close(fd);
+    std::string subject = name + ", " + describe_length(length);
+    return SyscallError{number, "ftruncate", std::move(subject)};
+  }
+  return fd;
+}
+
+core::Result<void*, SyscallError> RealSyscalls::map_shared(int fd, std::size_t length) {
+  void* address = ::mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  const bool failed = address == MAP_FAILED;
+  const int number = errno;
+  return result_or_error<void*>(address, failed, number, "mmap",
+                                describe_fd(fd) + ", " + describe_length(length));
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::inherit_across_exec(int fd) {
+  // fcntl(2) is variadic, like open(2) and prctl(2); see the note in open_read.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const bool failed = ::fcntl(fd, F_SETFD, 0) != 0;
+  const int number = errno;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "fcntl", describe_fd(fd));
 }
 
 }  // namespace loadforge::platform
