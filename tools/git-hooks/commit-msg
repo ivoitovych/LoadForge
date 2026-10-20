@@ -17,6 +17,13 @@ while IFS= read -r key; do
     echo "commit-msg: trailer '$key'; only Signed-off-by is allowed." >&2; bad=1; }
 done < <(sed -n 's/^\([^:]*\):.*/\1/p' <<< "$trailers")
 
+# A "-by:" line above the closing paragraph is not a trailer to git, but it
+# reads as one to a person and to every tool that greps for it. Anywhere in the
+# message, the only line of that shape allowed is Signed-off-by.
+while IFS= read -r key; do
+  echo "commit-msg: a '$key' line; only Signed-off-by is allowed." >&2; bad=1
+done < <(git stripspace --strip-comments < "$msg" | grep -oiE '^[a-z][a-z0-9-]*-by:' | grep -viE '^signed-off-by:$')
+
 ident="$(git var GIT_AUTHOR_IDENT)" || { echo "commit-msg: git has no author identity." >&2; exit 1; }
 author="$(sed -n 's/.*<\(.*\)>.*/\1/p' <<< "$ident" | tr '[:upper:]' '[:lower:]')"
 found=1

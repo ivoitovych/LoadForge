@@ -939,6 +939,10 @@ git -C "$idr" checkout -q -B c4 "$root"
 id_commit Owner owner@example.invalid $'odd trailer\n\nAnything-Else: here\nSigned-off-by: Owner <owner@example.invalid>'
 out="$(idg)"; expect "any trailer but Signed-off-by FAILS"            1 $? "trailer 'Anything-Else'" "$out"
 
+git -C "$idr" checkout -q -B c4b "$root"
+id_commit Owner owner@example.invalid $'buried co-author\n\nCo-authored-by: Someone <someone@example.invalid>\n\nprose after it\n\nSigned-off-by: Owner <owner@example.invalid>'
+out="$(idg)"; expect "a co-author line outside the trailers FAILS"   1 $? "a 'Co-authored-by:' line" "$out"
+
 # A signature, made by writing the header into a commit object directly: no key
 # is needed to show that the gate refuses the shape.
 signed="$(git -C "$idr" cat-file commit "$root" | sed '/^committer /a gpgsig -----BEGIN SSH SIGNATURE-----\n -----END SSH SIGNATURE-----' |

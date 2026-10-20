@@ -75,6 +75,8 @@ commit "$r" $'five\n\nSession: https://example.invalid/s/1\nSigned-off-by: Owner
 expect "an unanticipated trailer is refused"                   1 $? "Session" "$out"
 commit "$r" $'five\n\nSigned-off-by: Owner <stranger@example.invalid>'
 expect "a sign-off for someone else is refused"                1 $? "Signed-off-by" "$out"
+commit "$r" $'buried\n\nCo-authored-by: Someone <s@example.invalid>\n\nmore prose'"$SOB"
+expect "a co-author line above the trailer block is refused"   1 $? "Co-authored-by" "$out"
 commit "$r" "six: prose mentioning Co-authored-by is not a trailer$SOB"
 expect "a sign-off in the right form is accepted"              0 $?
 

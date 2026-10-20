@@ -94,6 +94,12 @@ for c in "${commits[@]}"; do
   while IFS= read -r key; do
     [ -z "$key" ] || [ "$key" = "Signed-off-by" ] || report "$c" "trailer '$key'; only Signed-off-by is allowed"
   done < <(git log -1 --format='%(trailers:only,unfold)' "$c" | sed -n 's/^\([^:]*\):.*/\1/p')
+
+  # A "-by:" line outside the trailer block is not a trailer to git, but it
+  # reads as one. Anywhere in the message, Signed-off-by is the only one.
+  while IFS= read -r key; do
+    report "$c" "a '$key' line; only Signed-off-by is allowed"
+  done < <(git log -1 --format='%B' "$c" | grep -oiE '^[a-z][a-z0-9-]*-by:' | grep -viE '^signed-off-by:$')
 done
 
 echo "identity: ${#commits[@]} commit(s) checked, ${bad} problem(s)"
