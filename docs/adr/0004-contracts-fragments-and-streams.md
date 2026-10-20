@@ -146,8 +146,9 @@ declares another module or two, a module declared twice, and any file in the fra
 directory that is not a `.toml` fragment. It also gained `provides` and `consumes`: each
 name must be a suite declared under `tests/contracts/`, and the module's own tests —
 `tests/<tier>/<module path below src>/`, less those of a more specific module, never
-`tests/contracts/` — must instantiate it. Seventeen tooling tests cover the additions,
-each refusal among them.
+`tests/contracts/` — must instantiate it. Seventeen tooling tests cover the ledger's
+additions, each refusal among them, and four more the glob: every fragment added, the
+exclusions honoured, a fragment that adds another refused at configure time.
 
 *Rejected:*
 
