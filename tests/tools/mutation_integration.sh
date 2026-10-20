@@ -125,8 +125,12 @@ else
   # one operator must not silently cover a different operator at the same place.
   printf '%s\n' "$location:cxx_ge_to_lt" > allow-wrong.txt
   OUT="$(python3 "$GATE" --report-dir build/mutation --allowlist allow-wrong.txt --root "$work" 2>&1)"
-  check "a different operator at the same location does NOT excuse it" 1 $? "UNEXPLAINED SURVIVOR" "$OUT"
-  check "and the wrong entry is reported as stale" 1 $? "STALE ALLOWLIST ENTRY" "$OUT"
+  # Two assertions about one run: both read the saved code, not $?, which the
+  # first check overwrites. This line never ran against real Mull output until
+  # the SARIF paths were resolved, so the slip waited until then to show.
+  wrong_rc=$?
+  check "a different operator at the same location does NOT excuse it" 1 "$wrong_rc" "UNEXPLAINED SURVIVOR" "$OUT"
+  check "and the wrong entry is reported as stale" 1 "$wrong_rc" "STALE ALLOWLIST ENTRY" "$OUT"
 fi
 
 echo; echo "  mutation integration: $pass passed, $fail failed"
