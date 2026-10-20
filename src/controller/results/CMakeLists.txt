@@ -33,9 +33,10 @@ endif()
 loadforge_component(loadforge_controller_results
   SOURCES
     verdict.cpp
+    document.cpp
     aggregate.cpp
     fingerprint.cpp
-  LINK loadforge_resources loadforge_topology loadforge_platform)
+  LINK loadforge_controller loadforge_resources loadforge_topology loadforge_platform)
 target_compile_definitions(loadforge_controller_results PRIVATE
   LOADFORGE_BUILD_FLAGS="${_lf_flags}"
   LOADFORGE_GIT_COMMIT="${_lf_commit}")

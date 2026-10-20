@@ -5,4 +5,5 @@ loadforge_test_suite(loadforge_unit_controller_results_tests
     verdict_test.cpp
     aggregate_test.cpp
     fingerprint_test.cpp
+    document_test.cpp
   LINK loadforge_controller_results loadforge_controller)
