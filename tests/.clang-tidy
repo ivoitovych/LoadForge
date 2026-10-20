@@ -11,6 +11,8 @@
 #   pro-bounds-*, avoid-c-arrays   raw buffers handed to read(2), pipe(2) and
 #                                  friends, exactly as the kernel takes them.
 #   pro-type-vararg                gtest's and printf's own interfaces.
+#   pro-type-reinterpret-cast      bytes viewed as chars or addresses for I/O
+#                                  buffers and provenance, as the kernel hands them.
 #   pro-type-const-cast            building argv for exec, whose type is char*.
 #   unchecked-optional-access      every access follows an ASSERT_TRUE the
 #                                  check cannot see through.
@@ -27,6 +29,7 @@ Checks: >
   -cppcoreguidelines-avoid-c-arrays,
   -modernize-avoid-c-arrays,
   -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-pro-type-const-cast,
   -bugprone-unchecked-optional-access,
   -bugprone-easily-swappable-parameters,

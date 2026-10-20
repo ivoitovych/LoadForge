@@ -141,6 +141,7 @@ TYPED_TEST_P(OracleContract, ChecksRunConcurrently) {
   const std::vector<OracleCase> wrong = TypeParam::wrong();
   cases.insert(cases.end(), wrong.begin(), wrong.end());
   std::vector<std::size_t> alone;
+  alone.reserve(cases.size());
   for (const OracleCase& unit : cases) {
     alone.push_back(oracle_suite::check(*oracle, unit).index());
   }
