@@ -2,11 +2,42 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/graph and nothing else.
 
 [[module]]
-path    = "src/workloads/graph"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the graph specification alone (spec.hpp, ADR 0004): the vertex mapping, the accumulators and the exact PageRank constants, each tested in tests/contracts/workloads/. \
-The graph stream takes this row over with the workload and owes what \
-IMPLEMENTATION §3 lists for it -- P4 and P5, and T3, T4, T5, T5b, T6 -- with \
-provides = ["WorkloadContract"]."""
+path     = "src/workloads/graph"
+classes  = ["P1", "P3", "P4", "P5"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+P1: every decision of the unit's computation -- the counting sort of the edges, \
+the BFS and its choice between a top-down step (serial for a small frontier, \
+over the executor for a large one) and a bottom-up step, and the PageRank \
+sweep with its tail of terms that fill no whole vector -- each taken by a \
+generated unit and by hand-built graphs (a ring, a star, self-loops, a path of \
+32768 levels) against an independent reference that is exact because the \
+specification pins every operation (T3). The three kernels (scalar, AVX2, \
+NEON) are one table behind the dispatch seam and are held to the same bits. \
+P3: the totality of compute() over input bytes -- a vertex number not below V \
+is reduced modulo V, every constant byte pattern and random bytes are an input \
+with an exact answer -- and the edges of the configuration: a decomposition \
+outside {1, 2, 4, 8} refused by value, a path without a kernel refused by \
+name, a footprint of exactly one unit and one byte less (T1, T3, T4). \
+P4: the graph is what the verifier checks, so what it owes is what the checker \
+depends on. T5 injects single and multiple bit flips into the output and \
+asserts the classification verification/record.hpp assigns, flips every low \
+bit of head words in the input and asserts the output changes, and pins the \
+one corruption the output cannot show (a bit of a vertex number above bit 14, \
+reduced away by specification) as the input-integrity bracket's to find. T5b \
+shows that a compute() that has not run is never a pass: whatever the output \
+buffer held, another unit's correct answer included, does not survive, and \
+neither does what the scratch held. \
+P5: the BFS shares the distances, one counter and the slots of the next \
+frontier between tasks of a step, with memory_order_relaxed and a written \
+argument (graph.cpp); the ordering test is thirty repeated runs on threads \
+that claim work in whatever order they get to it, compared bit for bit, plus \
+the TSan job. T6: BitExactFixedDecomposition, and stronger: the same bits for \
+one decomposition at any thread count, schedule, ISA path, scratch start and \
+scratch content; the same distances for every decomposition; different rank \
+bits for each pair of decompositions; golden digests that the AArch64 job \
+reproduces. WorkloadContract is run against the implementation for every \
+decomposition and every path the build has; ExecutorContract against the \
+three executors the tests run it with (serial, partitioned, pulling)."""
