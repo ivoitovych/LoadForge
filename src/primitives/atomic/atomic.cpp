@@ -160,4 +160,10 @@ HandoffOutcome handoff(worker::Executor& executor, Ordering ordering, std::uint6
   return outcome;
 }
 
+// Bitwise & on the comparisons: no short-circuit, so no branch for a test to miss.
+bool Outcome::operator==(const Outcome& other) const noexcept {
+  return ((total) == (other.total)) &
+         ((ticket_sum) == (other.ticket_sum));
+}
+
 }  // namespace loadforge::primitives::atomic

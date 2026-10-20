@@ -54,7 +54,9 @@ struct Tally {
   std::uint64_t below = 0;
   std::uint64_t above = 0;
 
-  [[nodiscard]] bool operator==(const Tally&) const = default;
+  /// Defined in branch.cpp, not defaulted here: one definition, so coverage
+  /// is not split across translation units (JOURNAL §1.22).
+  [[nodiscard]] bool operator==(const Tally& other) const noexcept;
 };
 
 enum class ConfigError : std::uint8_t {

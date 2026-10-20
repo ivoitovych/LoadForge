@@ -63,4 +63,11 @@ core::Result<Tally, ConfigError> run(worker::Executor& executor, const Config& c
   return total;
 }
 
+// Bitwise & on the comparisons: no short-circuit, so no branch for a test to miss.
+bool Tally::operator==(const Tally& other) const noexcept {
+  return ((taken) == (other.taken)) &
+         ((below) == (other.below)) &
+         ((above) == (other.above));
+}
+
 }  // namespace loadforge::primitives::branch

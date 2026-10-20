@@ -130,7 +130,9 @@ struct Outcome {
   /// 0 .. total-1 is total * (total - 1) / 2; zero for kSharded.
   std::uint64_t ticket_sum = 0;
 
-  [[nodiscard]] bool operator==(const Outcome&) const = default;
+  /// Defined in atomic.cpp, not defaulted here: one definition, so coverage
+  /// is not split across translation units (JOURNAL §1.22).
+  [[nodiscard]] bool operator==(const Outcome& other) const noexcept;
 };
 
 /// The ticket sum a correct kShared run of `total` increments gives, modulo
