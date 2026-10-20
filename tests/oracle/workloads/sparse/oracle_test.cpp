@@ -153,12 +153,12 @@ TEST(SparseOracle, TheIterateIsTheSolutionToWithinTheErrorTheResidualAllows) {
 
   long double largest = 0.0L;
   for (std::size_t i = 0; i < kRows; ++i) {
-    largest = std::max(largest, std::fabs(static_cast<long double>(
-                                              check::f64_at(output, 0, i)) -
-                                          exact[i]));
+    largest = std::max(largest,
+                       std::fabs(static_cast<long double>(check::f64_at(output, 0, i)) - exact[i]));
   }
   // x^ - x* = A^-1 r, so |x^ - x*|_inf <= |r|_2 / lambda_min, lambda_min >= 5/4.
-  const double tolerance = residual_norm_factor() * 1.0 * std::sqrt(static_cast<double>(kRows)) / 1.25;
+  const double tolerance =
+      residual_norm_factor() * 1.0 * std::sqrt(static_cast<double>(kRows)) / 1.25;
   EXPECT_LE(largest, tolerance);
   EXPECT_LE(largest, 1e-13L) << "and in fact the iterate is the solution to roundoff";
 
@@ -172,8 +172,8 @@ TEST(SparseOracle, TheIterateIsTheSolutionToWithinTheErrorTheResidualAllows) {
 TEST(SparseOracle, TheExplicitResidualIsBMinusAXToRoundoffAndFarBelowTheBound) {
   sparse_tests::SerialExecutor serial;
   double largest_ratio = 0.0;
-  for (const std::uint64_t seed : {std::uint64_t{21}, std::uint64_t{22}, std::uint64_t{23},
-                                   std::uint64_t{24}}) {
+  for (const std::uint64_t seed :
+       {std::uint64_t{21}, std::uint64_t{22}, std::uint64_t{23}, std::uint64_t{24}}) {
     const auto workload = tests::make_workload(seed, 0);
     ASSERT_NE(workload, nullptr);
     const Bytes input = tests::generate_input(*workload, 0);

@@ -3,9 +3,10 @@
 // WorkloadContract against the sparse workload, at every chunk size the
 // specification has.
 
+#include "contracts/workloads/workload_contract.hpp"
+
 #include <gtest/gtest.h>
 
-#include "contracts/workloads/workload_contract.hpp"
 #include "workloads/sparse/sparse.hpp"
 #include "workloads/sparse/spec.hpp"
 

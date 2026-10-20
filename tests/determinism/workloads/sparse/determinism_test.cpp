@@ -47,8 +47,8 @@ struct Executors {
 
 TEST(SparseDeterminism, ForOneChunkSizeTheBytesAreTheSameAtAnyThreadCountAndOrder) {
   Executors executors;
-  worker::Executor* const all[] = {&executors.reverse, &executors.one, &executors.two,
-                                   &executors.three, &executors.four, &executors.seven};
+  worker::Executor* const all[] = {&executors.reverse, &executors.one,  &executors.two,
+                                   &executors.three,   &executors.four, &executors.seven};
   for (const std::uint32_t rows : kChunkRows) {
     const auto workload = tests::make_workload(kSeed, rows);
     ASSERT_NE(workload, nullptr);

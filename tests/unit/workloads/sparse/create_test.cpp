@@ -48,8 +48,8 @@ TEST(SparseCreate, TheLogicalTrafficAndTheOperationsAreTheAlgorithmsOwn) {
   const auto workload = made(config_of(kUnit));
   ASSERT_NE(workload, nullptr);
   // One SpMV: 112430 * (8 + 4 + 8) bytes and 16385 * 4 of row_ptr.
-  constexpr std::uint64_t spmv = 112430 * 20 + 16385 * 4;
-  constexpr std::uint64_t vector = 16384 * 8;
+  constexpr std::uint64_t spmv = 112430ULL * 20 + 16385ULL * 4;
+  constexpr std::uint64_t vector = 16384ULL * 8;
   constexpr std::uint64_t expected_bytes =
       5 * vector + 16 * (spmv + 13 * vector) + (spmv + 3 * vector);
   EXPECT_EQ(expected_bytes, 67651932U) << "the arithmetic above, written once as a number";

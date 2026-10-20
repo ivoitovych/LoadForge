@@ -61,8 +61,10 @@ TEST(SparseProperty, ScalingTheRightHandSideByAPowerOfTwoScalesTheOutputExactly)
         with_rhs(input, [exponent](double b) { return std::ldexp(b, exponent); });
     const Bytes scaled = tests::solve(*workload, 2, scaled_input, serial);
     for (std::size_t i = 0; i < kRows; ++i) {
-      ASSERT_EQ(x_at(scaled, i), std::ldexp(x_at(base, i), exponent)) << "x " << i << " 2^" << exponent;
-      ASSERT_EQ(r_at(scaled, i), std::ldexp(r_at(base, i), exponent)) << "r " << i << " 2^" << exponent;
+      ASSERT_EQ(x_at(scaled, i), std::ldexp(x_at(base, i), exponent))
+          << "x " << i << " 2^" << exponent;
+      ASSERT_EQ(r_at(scaled, i), std::ldexp(r_at(base, i), exponent))
+          << "r " << i << " 2^" << exponent;
     }
   }
 }
@@ -73,8 +75,8 @@ TEST(SparseProperty, NegatingTheRightHandSideNegatesTheOutput) {
   ASSERT_NE(workload, nullptr);
   const Bytes input = tests::generate_input(*workload, 4);
   const Bytes base = tests::solve(*workload, 4, input, serial);
-  const Bytes negated = tests::solve(
-      *workload, 4, with_rhs(input, [](double b) { return -b; }), serial);
+  const Bytes negated =
+      tests::solve(*workload, 4, with_rhs(input, [](double b) { return -b; }), serial);
   for (std::size_t i = 0; i < kRows; ++i) {
     ASSERT_EQ(x_at(negated, i), -x_at(base, i)) << i;
     ASSERT_EQ(r_at(negated, i), -r_at(base, i)) << i;

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <ranges>
 #include <span>
 #include <string>
 #include <utility>
@@ -28,7 +29,7 @@ constexpr simd::KernelTable<KernelsAt> kKernelTable{.scalar = &scalar_kernels};
 // every operand of each step read or written once, wherever it lives.
 constexpr std::uint64_t kN = kRows;
 constexpr std::uint64_t kSpmvBytes = kNonZeros * (sizeof(double) + sizeof(std::uint32_t) +
-                                                  sizeof(double)) +  // value, column, x gather
+                                                  sizeof(double)) +     // value, column, x gather
                                      (kN + 1) * sizeof(std::uint32_t);  // row_ptr
 constexpr std::uint64_t kVectorBytes = kN * sizeof(double);
 // init: read b, write x, r, p, and read r once for r . r.
@@ -38,8 +39,7 @@ constexpr std::uint64_t kInitBytes = 5 * kVectorBytes;
 constexpr std::uint64_t kIterationBytes = kSpmvBytes + 13 * kVectorBytes;
 // the output: the SpMV of the residual, b read, x and the residual written.
 constexpr std::uint64_t kFinishBytes = kSpmvBytes + 3 * kVectorBytes;
-constexpr std::uint64_t kLogicalBytes =
-    kInitBytes + kIterationBytes * kIterations + kFinishBytes;
+constexpr std::uint64_t kLogicalBytes = kInitBytes + kIterationBytes * kIterations + kFinishBytes;
 // A product and a sum per stored entry for each SpMV, and per step per row:
 // init 2 (r . r), p . q 2, x and r updates 4, r . r 2, p update 2.
 constexpr std::uint64_t kOperations =
@@ -47,8 +47,7 @@ constexpr std::uint64_t kOperations =
 
 // The scratch one unit needs: x, r, p, q, the chunk partials, and a double's
 // alignment of slack, because scratch is only promised as bytes.
-constexpr std::uint64_t kScratchBytes =
-    (4 * kN + kMaxChunks) * sizeof(double) + alignof(double);
+constexpr std::uint64_t kScratchBytes = (4 * kN + kMaxChunks) * sizeof(double) + alignof(double);
 
 /// What one run() over the chunks does: the kernel it calls, with what.
 struct Job {
@@ -63,7 +62,7 @@ struct Job {
 /// slot unused: the chunk alone decides what is computed and where it is
 /// written, so no thread can show in the result.
 void run_chunk(void* context, std::size_t chunk, std::size_t /*slot*/) noexcept {
-  Job& job = *static_cast<Job*>(context);
+  const Job& job = *static_cast<Job*>(context);
   const Rows rows{chunk * job.chunk_rows, (chunk + 1) * job.chunk_rows};
   job.partials[chunk] = job.kernel(*job.work, rows, job.coefficient);
 }
@@ -81,7 +80,7 @@ std::span<double> doubles_in(std::span<std::byte> scratch, std::size_t count) no
   const auto address = std::bit_cast<std::uintptr_t>(scratch.data());
   const std::size_t pad = (alignof(double) - address % alignof(double)) % alignof(double);
   const std::span<std::byte> aligned = scratch.subspan(pad, count * sizeof(double));
-  return {static_cast<double*>(static_cast<void*>(aligned.data())), count};
+  return {std::bit_cast<double*>(aligned.data()), count};
 }
 
 double pair_value(std::uint64_t seed, std::uint64_t unit, std::size_t row,
@@ -91,7 +90,7 @@ double pair_value(std::uint64_t seed, std::uint64_t unit, std::size_t row,
 
 class SparseWorkload final : public Workload {
  public:
-  SparseWorkload(const WorkloadConfig& config, const Plan& plan, KernelsAt kernels)
+  SparseWorkload(const WorkloadConfig& config, const Plan& plan, KernelsAt kernels) noexcept
       : descriptor_{std::string(kName), 1, DeterminismClass::kBitExactFixedDecomposition,
                     verification::Contract::kBounded, simd::kernel_paths(kKernelTable)},
         plan_(plan),
@@ -117,38 +116,42 @@ class SparseWorkload final : public Workload {
     for (std::size_t row = 0; row < kRows; ++row) {
       store_u32(row_ptr, row, static_cast<std::uint32_t>(entry));
       // The entry left of the diagonal at distance o_k is the one pair (row - o_k, k) made.
-      for (std::size_t k = kOffsets.size(); k-- > 0;) {
-        if (row >= kOffsets[k]) {
-          put(row - kOffsets[k], pair_value(seed_, index, row - kOffsets[k], k));
+      std::size_t k = kOffsets.size();
+      for (const std::size_t offset : std::views::reverse(kOffsets)) {
+        --k;
+        if (row >= offset) {
+          put(row - offset, pair_value(seed_, index, row - offset, k));
         }
       }
       put(row, kDiagonal);
-      for (std::size_t k = 0; k < kOffsets.size(); ++k) {
-        if (row + kOffsets[k] < kRows) {
-          put(row + kOffsets[k], pair_value(seed_, index, row, k));
+      k = 0;
+      for (const std::size_t offset : kOffsets) {
+        if (row + offset < kRows) {
+          put(row + offset, pair_value(seed_, index, row, k));
         }
+        ++k;
       }
       store_f64(rhs, row, entry_value(rng::u64_of(rng::block_at(seed_, index, 3 * kRows + row))));
     }
     store_u32(row_ptr, kRows, static_cast<std::uint32_t>(entry));
   }
 
+  // The parameter list is the contract's (workload.hpp): output and scratch are both spans.
   void compute(std::uint64_t /*index*/, std::span<const std::byte> input,
-               std::span<std::byte> output, std::span<std::byte> scratch,
-               worker::Executor& executor) const noexcept override {
+               std::span<std::byte> output,  // NOLINT(bugprone-easily-swappable-parameters)
+               std::span<std::byte> scratch, worker::Executor& executor) const noexcept override {
     const std::size_t chunk_rows = plan_.decomposition;
     const std::size_t chunks = kRows / chunk_rows;
     const std::span<double> storage = doubles_in(scratch, 4 * kRows + kMaxChunks);
-    const Work work{
-        Matrix{input.subspan(kValuesOffset, kNonZeros * sizeof(double)),
-               input.subspan(kColumnsOffset, kNonZeros * sizeof(std::uint32_t)),
-               input.subspan(kRowPtrOffset, (kRows + 1) * sizeof(std::uint32_t))},
-        input.subspan(kRhsOffset, kRows * sizeof(double)),
-        storage.subspan(0, kRows),
-        storage.subspan(kRows, kRows),
-        storage.subspan(2 * kRows, kRows),
-        storage.subspan(3 * kRows, kRows),
-        output};
+    const Work work{Matrix{input.subspan(kValuesOffset, kNonZeros * sizeof(double)),
+                           input.subspan(kColumnsOffset, kNonZeros * sizeof(std::uint32_t)),
+                           input.subspan(kRowPtrOffset, (kRows + 1) * sizeof(std::uint32_t))},
+                    input.subspan(kRhsOffset, kRows * sizeof(double)),
+                    storage.subspan(0, kRows),
+                    storage.subspan(kRows, kRows),
+                    storage.subspan(2 * kRows, kRows),
+                    storage.subspan(3 * kRows, kRows),
+                    output};
     Job job;
     job.work = &work;
     job.partials = storage.subspan(4 * kRows, chunks);
@@ -199,8 +202,8 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
     detail += std::to_string(unit_bytes);
     return WorkloadError{WorkloadFault::kFootprintTooSmall, std::move(detail)};
   }
-  const Plan plan{kInputBytes, kOutputBytes, kScratchBytes, units, chunk_rows, kLogicalBytes,
-                  kOperations};
+  const Plan plan{kInputBytes, kOutputBytes,  kScratchBytes, units,
+                  chunk_rows,  kLogicalBytes, kOperations};
   return std::unique_ptr<Workload>(new SparseWorkload(config, plan, kernels));
 }
 

@@ -26,7 +26,7 @@
 
 namespace loadforge::workloads::sparse::check {
 
-enum class Verdict { kAgreement, kBoundedMismatch, kNotChecked };
+enum class Verdict : std::uint8_t { kAgreement, kBoundedMismatch, kNotChecked };
 
 struct Outcome {
   Verdict verdict = Verdict::kNotChecked;
@@ -47,8 +47,7 @@ inline double f64_at(std::span<const std::byte> bytes, std::size_t offset, std::
 inline std::uint32_t u32_at(std::span<const std::byte> bytes, std::size_t offset,
                             std::size_t index) {
   std::uint32_t value = 0;
-  std::memcpy(&value, bytes.data() + offset + index * sizeof(std::uint32_t),
-              sizeof(std::uint32_t));
+  std::memcpy(&value, bytes.data() + offset + index * sizeof(std::uint32_t), sizeof(std::uint32_t));
   return value;
 }
 
@@ -134,8 +133,7 @@ inline Outcome check(std::span<const std::byte> input, std::span<const std::byte
       scale += std::fabs(a) * std::fabs(x);
     }
     residual[row] = signed_sum;
-    const double tolerance =
-        clamp_tolerance(row_tolerance_factor(row_length(row)) * scale);
+    const double tolerance = clamp_tolerance(row_tolerance_factor(row_length(row)) * scale);
     const double difference = std::fabs(f64_at(output, kRows * sizeof(double), row) - signed_sum);
     ++outcome.blocks_compared;
     if (!(difference <= tolerance)) {

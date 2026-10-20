@@ -111,7 +111,8 @@ TEST(SparseGenerate, TheRightHandSideIsInTheRangeTheSpecificationGives) {
     const double b = load_f64(rhs, row);
     ASSERT_GE(b, -1.0);
     ASSERT_LT(b, 1.0);
-    ASSERT_EQ(b * 4503599627370496.0, std::nearbyint(b * 4503599627370496.0)) << "a multiple of 2^-52";
+    ASSERT_EQ(b * 4503599627370496.0, std::nearbyint(b * 4503599627370496.0))
+        << "a multiple of 2^-52";
     lowest = std::min(lowest, b);
     highest = std::max(highest, b);
   }

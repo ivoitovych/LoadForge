@@ -3,6 +3,8 @@
 // The kernels and the reduction tree, on matrices and vectors small enough to
 // be worked by hand, and on the bytes a corrupt input would hold.
 
+#include "workloads/sparse/kernels.hpp"
+
 #include <gtest/gtest.h>
 
 #include <array>
@@ -14,7 +16,6 @@
 #include <span>
 #include <vector>
 
-#include "workloads/sparse/kernels.hpp"
 #include "workloads/sparse/spec.hpp"
 
 namespace loadforge::workloads::sparse {
@@ -206,8 +207,8 @@ TEST(SparseKernels, SpmvDotFormsQAndSumsPTimesQOverItsRows) {
 
 TEST(SparseKernels, AColumnPastTheVectorGathersFromTheMaskedIndexNotFromOutsideIt) {
   Diagonal diagonal;
-  store_u32(diagonal.columns, 5, 0xFFFFFFFFU);        // masked: kRows - 1
-  store_u32(diagonal.columns, 6, kRows + 2);          // masked: 2
+  store_u32(diagonal.columns, 5, 0xFFFFFFFFU);  // masked: kRows - 1
+  store_u32(diagonal.columns, 6, kRows + 2);    // masked: 2
   const Bytes rhs = f64_bytes(std::vector<double>(kRows, 0.0));
   Vectors v;
   for (std::size_t i = 0; i < kRows; ++i) {

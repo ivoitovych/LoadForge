@@ -44,8 +44,7 @@ inline constexpr std::size_t kMaxChunks = kRows / kChunkRows.front();
 /// bytes (a memory copy, so no alignment is assumed of the input).
 [[nodiscard]] inline double load_f64(std::span<const std::byte> bytes, std::size_t index) noexcept {
   double value = 0.0;
-  std::memcpy(&value, bytes.subspan(index * sizeof(double), sizeof(double)).data(),
-              sizeof(double));
+  std::memcpy(&value, bytes.subspan(index * sizeof(double), sizeof(double)).data(), sizeof(double));
   return value;
 }
 
@@ -58,8 +57,7 @@ inline constexpr std::size_t kMaxChunks = kRows / kChunkRows.front();
 }
 
 inline void store_f64(std::span<std::byte> bytes, std::size_t index, double value) noexcept {
-  std::memcpy(bytes.subspan(index * sizeof(double), sizeof(double)).data(), &value,
-              sizeof(double));
+  std::memcpy(bytes.subspan(index * sizeof(double), sizeof(double)).data(), &value, sizeof(double));
 }
 
 inline void store_u32(std::span<std::byte> bytes, std::size_t index, std::uint32_t value) noexcept {

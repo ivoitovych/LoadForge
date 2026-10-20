@@ -76,14 +76,20 @@ TEST(SparseFaultInjection, AFlippedBitInTheIterateFiresTheRowCheckOfTheFirstRowT
   // x^_j appears in rows j - 1031, j - 97, j - 1, j, j + 1, j + 97, j + 1031
   // that exist; the first check to fail is the least of them. A bit of the
   // exponent, so the change is far above the roundoff of a product.
-  for (const std::size_t column : {std::size_t{5}, std::size_t{1031}, std::size_t{9000},
-                                   kRows - 1}) {
+  for (const std::size_t column :
+       {std::size_t{5}, std::size_t{1031}, std::size_t{9000}, kRows - 1}) {
     Bytes output = clean_unit().output;
     flip_bit(output, column * sizeof(double) + 7, 6);  // the top exponent bit
     const Outcome outcome = check::check(clean_unit().input, output);
     ASSERT_EQ(outcome.verdict, Verdict::kBoundedMismatch) << column;
     EXPECT_EQ(outcome.check, "residual-row");
-    const std::size_t expected_row = column >= 1031 ? column - 1031 : column >= 97 ? column - 97 : column >= 1 ? column - 1 : 0;
+    std::size_t expected_row = 0;
+    for (const std::size_t distance : {std::size_t{1031}, std::size_t{97}, std::size_t{1}}) {
+      if (column >= distance) {
+        expected_row = column - distance;
+        break;
+      }
+    }
     EXPECT_EQ(outcome.element, expected_row) << "x^ index " << column;
     EXPECT_EQ(outcome.blocks_compared, expected_row + 1) << "the 1-based ordinal of the check";
     EXPECT_GT(outcome.residual, outcome.tolerance);
@@ -112,7 +118,7 @@ TEST(SparseFaultInjection, ABitAboveTheRoundoffOfAProductIsSeenAndOneBelowItIsNo
   flip_bit(high, 3000 * sizeof(double) + 2, 4);  // mantissa bit 20
   EXPECT_EQ(check::check(clean_unit().input, high).verdict, Verdict::kBoundedMismatch);
   Bytes low = clean_unit().output;
-  flip_bit(low, 3000 * sizeof(double), 0);       // mantissa bit 0
+  flip_bit(low, 3000 * sizeof(double), 0);  // mantissa bit 0
   EXPECT_EQ(check::check(clean_unit().input, low).verdict, Verdict::kAgreement)
       << "the least bit of one entry is below a derived tolerance, by design";
 }
@@ -130,9 +136,10 @@ TEST(SparseFaultInjection, AnIterateNotYetConvergedPassesTheRowChecksAndFailsThe
     const std::size_t last = check::u32_at(clean_unit().input, kRowPtrOffset, row + 1);
     double residual = check::f64_at(clean_unit().input, kRhsOffset, row);
     for (; entry < last; ++entry) {
-      residual = std::fma(-check::f64_at(clean_unit().input, kValuesOffset, entry),
-                          check::f64_at(output, 0, check::u32_at(clean_unit().input, kColumnsOffset, entry)),
-                          residual);
+      residual = std::fma(
+          -check::f64_at(clean_unit().input, kValuesOffset, entry),
+          check::f64_at(output, 0, check::u32_at(clean_unit().input, kColumnsOffset, entry)),
+          residual);
     }
     put_f64(output, kRows * sizeof(double), row, residual);
   }
@@ -144,8 +151,8 @@ TEST(SparseFaultInjection, AnIterateNotYetConvergedPassesTheRowChecksAndFailsThe
 }
 
 TEST(SparseFaultInjection, ANaNOrAnInfinityInTheOutputIsAMismatchNeverAPass) {
-  for (const double bad : {std::numeric_limits<double>::quiet_NaN(),
-                           std::numeric_limits<double>::infinity()}) {
+  for (const double bad :
+       {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
     Bytes in_x = clean_unit().output;
     put_f64(in_x, 0, 40, bad);
     const Outcome x_outcome = check::check(clean_unit().input, in_x);
@@ -176,8 +183,8 @@ TEST(SparseFaultInjection, CorruptionOfTheInputBeforeTheSolveIsNotSeenByTheResid
   sparse_tests::SerialExecutor serial;
   const auto workload = tests::make_workload(41, 0);
   Bytes input = clean_unit().input;
-  // One off-diagonal value (and not its mirror: entry 1 is row 0's column 1), changed within its range, so
-  // the matrix is no longer symmetric but the check does not test that.
+  // One off-diagonal value (and not its mirror: entry 1 is row 0's column 1), changed within its
+  // range, so the matrix is no longer symmetric but the check does not test that.
   put_f64(input, kValuesOffset, 1, 0.0625);  // row 0's entry at column 1
   const Bytes output = tests::solve(*workload, 1, input, serial);
   const Outcome outcome = check::check(input, output);
@@ -252,8 +259,7 @@ TEST(SparseFaultInjection, AnInputTheToleranceCannotBeDerivedFromIsNotChecked) {
 }
 
 TEST(SparseFaultInjection, AllZeroBytesEvidenceIsNotChecked) {
-  expect_not_checked(Bytes(kInputBytes, std::byte{0}), Bytes(kOutputBytes, std::byte{0}),
-                     "zeros");
+  expect_not_checked(Bytes(kInputBytes, std::byte{0}), Bytes(kOutputBytes, std::byte{0}), "zeros");
 }
 
 }  // namespace
