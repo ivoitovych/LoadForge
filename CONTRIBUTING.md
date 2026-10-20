@@ -129,6 +129,22 @@ In your first pull request, also add the email you commit with to
 new identity is admitted by a reviewed one-line change. Commits are unsigned, and carry no
 trailer but `Signed-off-by`: one author per commit, no co-authors.
 
+### Git hooks
+
+The repository ships hooks that refuse, at commit and push time, what CI would refuse
+after the push: an identity not in `.github/commit-identities`, a signature, a trailer
+other than `Signed-off-by`, a missing sign-off, and a branch name other than `main` or
+`feature|fix|docs|chore|refactor/<slug>` (lowercase letters, digits, `.`, `_`, `-`).
+Install them once per clone, which covers its linked worktrees:
+
+```bash
+tools/install-git-hooks.sh
+```
+
+The installer is idempotent, changes no git configuration, and leaves alone any hook of
+yours it did not install. Hooks can be skipped with `--no-verify`; CI enforces the same
+rules regardless.
+
 ## Licensing
 
 LoadForge is **GPL-3.0-or-later**. By contributing you agree your work is licensed the

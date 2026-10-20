@@ -1,0 +1,30 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# LOADFORGE-REPO-HOOK
+#
+# Message gate: the only trailer a message may carry is Signed-off-by, and one
+# Signed-off-by must name the author identity about to be recorded. This is
+# tools/check-commit-identity.sh and tools/check-dco.sh, applied before the
+# commit exists. Trailers are allowlisted, never listed by name.
+set -uo pipefail
+
+msg="${1:?usage: commit-msg <message-file>}"
+bad=0
+trailers="$(git stripspace --strip-comments < "$msg" | git interpret-trailers --parse)"
+
+while IFS= read -r key; do
+  [ -z "$key" ] || [ "$key" = "Signed-off-by" ] || {
+    echo "commit-msg: trailer '$key'; only Signed-off-by is allowed." >&2; bad=1; }
+done < <(sed -n 's/^\([^:]*\):.*/\1/p' <<< "$trailers")
+
+ident="$(git var GIT_AUTHOR_IDENT)" || { echo "commit-msg: git has no author identity." >&2; exit 1; }
+author="$(sed -n 's/.*<\(.*\)>.*/\1/p' <<< "$ident" | tr '[:upper:]' '[:lower:]')"
+found=1
+while IFS= read -r email; do
+  [ "$(tr '[:upper:]' '[:lower:]' <<< "$email")" = "$author" ] && found=0
+done < <(sed -n 's/^Signed-off-by:.*<\(.*\)>.*/\1/p' <<< "$trailers")
+if [ "$found" -ne 0 ]; then
+  echo "commit-msg: no Signed-off-by for <$author>; commit with 'git commit -s'." >&2
+  bad=1
+fi
+exit "$bad"
