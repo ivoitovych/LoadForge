@@ -2,11 +2,36 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/sparse and nothing else.
 
 [[module]]
-path    = "src/workloads/sparse"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the sparse specification alone (spec.hpp, ADR 0004): the matrix structure and byte layout, the chunk sizes and the tolerance factors, each tested in tests/contracts/workloads/. \
-The sparse stream takes this row over with the workload and owes what \
-IMPLEMENTATION §3 lists for it -- P4 and P5, and T3, T4, T5, T5b, T6 -- with \
-provides = ["WorkloadContract"]."""
+path     = "src/workloads/sparse"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+P1: the decisions of the solver, the kernels, the row clamps and the generator's \
+edge rows (T1; the specification's own definitions are tested in tests/contracts/). \
+P3: the value domains of a unit -- the first and last rows with their four entries, \
+a row_ptr out of order, out of range or huge, a column past the vector, NaN and \
+infinity in b or in the values, every chunk size the specification has and every one \
+it does not -- all of it total over input bytes (T1, T4). \
+P4: the workload has no verification code of its own; its verification outcomes are \
+the output the independent oracle judges. T3 is a scalar SpMV and the explicit \
+residual written from the specification, run on the output (n row checks and the \
+residual norm), and a long-double solution found another way. T5 flips bits in the \
+iterate and the explicit residual and asserts which check fires and at which row, \
+passes a self-consistent unconverged iterate that only the norm catches, and shows \
+that corruption of the input before the solve redefines the problem (the limit \
+verification.md §4a names). T5b makes the check impossible -- wrong sizes, a \
+structure or value the tolerance cannot be derived from, a zero right-hand side -- \
+and asserts NotChecked with nothing compared, never a pass. T6: \
+BitExactFixedDecomposition -- byte-identical at 1, 2, 3, 4 and 7 threads and either \
+order for each chunk size, within the derived bound across chunk sizes, and one \
+recorded digest per chunk size for the scalar path on every architecture. \
+No P5: the workload has no atomic, lock or ordering protocol of its own; the one \
+concurrency fact it relies on is the executor's (run() returns after every task, and \
+their writes happen-before it), and its T6 tests run on real threads under TSan. \
+No P2: it makes no system call and allocates nothing. \
+provides: WorkloadContract, run against the workload at every chunk size. \
+consumes: ExecutorContract, run against the tests' own executors \
+(tests/unit/workloads/sparse/executors.hpp), which are what the T3-T6 tests run the \
+workload on."""
