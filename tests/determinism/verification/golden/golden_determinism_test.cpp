@@ -99,7 +99,7 @@ TEST(GoldenDeterminism, TheCommittedVectorDetectsAnIntendedChangeAndCallsItNoFau
   // Exit criterion 4 against the committed vector itself: the workload's bits
   // change and its version moves, and the report is a declared change -- a
   // stale vector, never an error record and never a hardware verdict.
-  std::ifstream file(kFixture);
+  const std::ifstream file(kFixture);
   std::stringstream text;
   text << file.rdbuf();
   const auto committed = parse_golden(text.str());

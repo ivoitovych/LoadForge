@@ -121,7 +121,7 @@ TEST(SealFaultInjection, CorruptInputUnderACorruptSealIsStillAnAlarm) {
   const Generated generated = generate();
   for (unsigned bit = 0; bit < 64; ++bit) {
     Bytes corrupted = generated.input;
-    corrupted[bit * 61] ^= std::byte{0x01};
+    corrupted[std::size_t{bit} * 61] ^= std::byte{0x01};
     Seal sealed = generated.sealed;
     sealed.crc ^= std::uint64_t{1} << bit;
     expect_alarm(check_before_use(corrupted, sealed), "both corrupted");

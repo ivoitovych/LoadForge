@@ -47,7 +47,12 @@ TEST(CompareProperty, TheDifferenceIsWhatTheFlippedBitsAre) {
     Bytes expected(size);
     rng::fill_stream(77, static_cast<std::uint64_t>(round), expected);
     // Flips clustered sometimes and spread sometimes, so every class occurs.
-    const std::uint64_t span_bits = (round % 4 == 0) ? 64 : (round % 4 == 1) ? 512 : size * 8;
+    std::uint64_t span_bits = size * 8;
+    if (round % 4 == 0) {
+      span_bits = 64;
+    } else if (round % 4 == 1) {
+      span_bits = 512;
+    }
     const std::uint64_t base = random() % (size * 8);
     std::set<std::uint64_t> bits;
     const int count = 1 + static_cast<int>(random() % 6);

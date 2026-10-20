@@ -193,7 +193,7 @@ TEST(GoldenFile, AFileThatEndsEarlyNamesWhatWasExpected) {
     const GoldenError error = refused(std::string(text));
     EXPECT_EQ(error.detail, "the file ends where " + std::string(wanted) + " was expected");
   }
-  std::string body(kSampleBody);
+  const std::string body(kSampleBody);
   for (const std::string_view key :
        {"isa", "seed", "footprint_bytes", "decomposition", "resolved_decomposition", "units",
         "unit 0", "unit 1", "digest"}) {

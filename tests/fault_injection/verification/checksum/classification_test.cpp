@@ -30,9 +30,12 @@ constexpr std::size_t kUnitBytes = 4096;
 /// check makes of `actual` against it.
 class Injection : public ::testing::Test {
  protected:
-  Injection() : truth_(kUnitBytes), actual_(kUnitBytes) {
-    rng::fill_stream(0x5EED, 42, truth_);
-    actual_ = truth_;
+  Injection() : truth_(unit_input()), actual_(truth_) {}
+
+  static Bytes unit_input() {
+    Bytes input(kUnitBytes);
+    rng::fill_stream(0x5EED, 42, input);
+    return input;
   }
 
   void flip(std::size_t byte, unsigned bit) { actual_[byte] ^= static_cast<std::byte>(1U << bit); }
@@ -62,7 +65,7 @@ class Injection : public ::testing::Test {
   }
 
   [[nodiscard]] const Difference& difference() const {
-    static Difference none;
+    static const Difference none;
     const std::optional<ErrorRecord> made = record();
     if (!made.has_value()) {
       return none;
@@ -121,7 +124,8 @@ TEST_F(Injection, AdjacentBytesAcrossAWordBoundaryAreWithinOneLine) {
 
 TEST_F(Injection, AWholeCacheLineCorruptedIsWithinOneLine) {
   // IMPLEMENTATION M2a's "whole-cache-line" class.
-  for (std::size_t byte = 3 * 64; byte < 4 * 64; ++byte) {
+  constexpr std::size_t kLine = 64;
+  for (std::size_t byte = 3 * kLine; byte < 4 * kLine; ++byte) {
     actual_[byte] = ~truth_[byte];
   }
   EXPECT_EQ(bit_class(), BitClass::kWithinCacheLine);
