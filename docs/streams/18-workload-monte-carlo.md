@@ -1,6 +1,6 @@
 # Stream 18 — Workload: Monte Carlo
 
-**State:** not started  
+**State:** built and pushed on `feature/workload-monte-carlo`; local gate run 2026-10-20 15:55 UTC  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier A — a bounded component built against a written contract  
