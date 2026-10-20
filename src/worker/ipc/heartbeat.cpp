@@ -105,6 +105,17 @@ struct alignas(HeartbeatRegion::kSlotBytes) Slot {
 static_assert(sizeof(Slot) == HeartbeatRegion::kSlotBytes);
 static_assert(std::atomic_ref<std::uint64_t>::is_always_lock_free,
               "a seqlock across processes needs lock-free 64-bit atomics");
+static_assert(std::atomic_ref<std::uint32_t>::is_always_lock_free);
+
+// The field offsets, pinned. The controller and its workers are the same binary,
+// so they cannot disagree about this layout; the pins are so that changing it is
+// a deliberate edit, made together with a new kRegionVersion, and never a side
+// effect of reordering a struct.
+static_assert(offsetof(Header, magic) == 0 && offsetof(Header, version) == 4 &&
+              offsetof(Header, slot_count) == 8 && offsetof(Header, slot_bytes) == 12);
+static_assert(offsetof(Slot, sequence) == 0 && offsetof(Slot, timestamp_ns) == 8 &&
+              offsetof(Slot, progress) == 16 && offsetof(Slot, phase) == 24 &&
+              offsetof(Slot, pid) == 28);
 
 RegionError syscall_error(platform::SyscallError cause) {
   return RegionError{RegionFault::kSyscall, std::string{}, std::move(cause)};
@@ -331,7 +342,13 @@ core::Result<std::optional<Heartbeat>, RegionError> HeartbeatRegion::observe(
       return std::optional<Heartbeat>{beat};
     }
   }
-  return layout_error(RegionFault::kTorn, count_detail("retries", kMaxTornRetries, 0));
+  // Not count_detail: there is no expected count here, only attempts that all
+  // found a write in progress, and "expected 0" read as if retries were a
+  // budget overrun rather than a slot never seen at rest.
+  std::string detail = "no consistent sample in ";
+  detail += std::to_string(kMaxTornRetries);
+  detail += " attempts";
+  return layout_error(RegionFault::kTorn, std::move(detail));
 }
 
 bool sample_is_consistent(std::uint64_t before, std::uint64_t after) noexcept {
