@@ -134,7 +134,7 @@ inline Bytes compute_unit(const Workload& workload, std::uint64_t index, const B
   return output;
 }
 
-enum class Kind { kAgreement, kBoundedMismatch, kNotChecked };
+enum class Kind : std::uint8_t { kAgreement, kBoundedMismatch, kNotChecked };
 
 struct Verdict {
   Kind kind = Kind::kNotChecked;

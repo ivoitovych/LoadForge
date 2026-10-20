@@ -8,3 +8,9 @@ loadforge_component(loadforge_workloads_fft
   SOURCES
     kernel.cpp
     fft.cpp)
+
+# The stage kernels run on the executor's threads; without atomic counter
+# updates gcov counts can go negative under the coverage build.
+if(LOADFORGE_COVERAGE)
+  target_compile_options(loadforge_workloads_fft PRIVATE -fprofile-update=atomic)
+endif()

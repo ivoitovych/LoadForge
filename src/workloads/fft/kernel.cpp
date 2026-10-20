@@ -20,6 +20,8 @@ double load_double(std::span<const std::byte> bytes, std::size_t index) noexcept
   return std::bit_cast<double>(bits);
 }
 
+// An index and a value; the call sites name both.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void store_double(std::span<std::byte> bytes, std::size_t index, double value) noexcept {
   const auto bits = std::bit_cast<std::uint64_t>(value);
   for (std::size_t byte = 0; byte < sizeof(double); ++byte) {

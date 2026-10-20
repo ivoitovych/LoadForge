@@ -45,8 +45,8 @@ inline constexpr std::size_t kEighth = kPoints / 8;
   const bool mirrored = r > detail::kEighth;
   const std::span<const OctantRow> octant{kOctant};
   const OctantRow& row = octant[mirrored ? detail::kQuarter - r : r];
-  const double first = std::bit_cast<double>(row.cos_bits);
-  const double second = std::bit_cast<double>(row.sin_bits);
+  const auto first = std::bit_cast<double>(row.cos_bits);
+  const auto second = std::bit_cast<double>(row.sin_bits);
   const double c = mirrored ? second : first;
   const double s = mirrored ? first : second;
   // Rotating by `quadrant` quarter turns: (c, s) -> (cos, sin) of the angle.

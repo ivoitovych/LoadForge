@@ -80,6 +80,9 @@ TEST(FftKernel, TheTableOffersExactlyTheScalarKernelForEachRadix) {
     EXPECT_EQ(table.avx512, nullptr);
     EXPECT_EQ(table.neon, nullptr);
     EXPECT_EQ(simd::kernel_paths(table), simd::IsaSet{simd::IsaPath::kScalar});
+    EXPECT_EQ(simd::kernel_at(table, simd::IsaPath::kScalar), table.scalar);
+    EXPECT_EQ(simd::kernel_at(table, static_cast<simd::IsaPath>(200)), nullptr)
+        << "a value outside the enumeration has no kernel";
   }
   EXPECT_NE(stage_kernels(2).scalar, stage_kernels(4).scalar);
 }
@@ -110,7 +113,7 @@ TEST(FftKernel, AnImpulseTransformsToTheRowOfTheTwiddleTable) {
   Threads serial(1);
   for (const std::uint32_t radix : kRadices) {
     for (const std::size_t position : {std::size_t{0}, std::size_t{1}, std::size_t{37}}) {
-      std::vector<double> x(2 * 64, 0.0);
+      std::vector<double> x(std::size_t{2} * 64, 0.0);
       x[2 * position] = 1.0;
       const std::vector<double> got = testing::to_doubles(run_transform(radix, 64, x, serial));
       for (std::size_t k = 0; k < 64; ++k) {
@@ -125,7 +128,7 @@ TEST(FftKernel, AnImpulseTransformsToTheRowOfTheTwiddleTable) {
 TEST(FftKernel, ConstantInputGivesOneBinAndZeroElsewhereExactly) {
   Threads serial(1);
   for (const std::uint32_t radix : kRadices) {
-    std::vector<double> x(2 * 256, 0.0);
+    std::vector<double> x(std::size_t{2} * 256, 0.0);
     for (std::size_t j = 0; j < 256; ++j) {
       x[2 * j] = 0.5;
     }

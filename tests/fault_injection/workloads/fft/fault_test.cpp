@@ -241,7 +241,7 @@ TEST_P(FftFault, ACorruptedInputIsCaughtByRegenerationNotByTheTransformThatFollo
 TEST_P(FftFault, EvidenceOfTheWrongSizeIsNotCheckedNotMismatched) {
   for (const std::size_t size :
        {std::size_t{0}, kOutputBytes - 1, kOutputBytes + 1, kInputBytes * 2}) {
-    Bytes bad(size);
+    const Bytes bad(size);
     const Verdict short_output = check(bad);
     EXPECT_EQ(short_output.kind, Kind::kNotChecked) << size;
     EXPECT_EQ(short_output.blocks_compared, 0U);

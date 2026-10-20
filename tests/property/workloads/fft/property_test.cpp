@@ -37,11 +37,11 @@ class FftProperty : public ::testing::TestWithParam<std::uint32_t> {
     return testing::to_doubles(testing::compute_unit(*workload_, 0, testing::to_bytes(x), serial_));
   }
 
-  [[nodiscard]] std::vector<double> input(std::uint64_t unit) const {
+  [[nodiscard]] static std::vector<double> input(std::uint64_t unit) {
     return testing::spec_input(77, unit);
   }
 
-  [[nodiscard]] double bound(const std::vector<double>& x) const {
+  [[nodiscard]] static double bound(const std::vector<double>& x) {
     return 64.0 * testing::norm2(x) * bin_tolerance_factor(GetParam());
   }
 

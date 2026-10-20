@@ -7,3 +7,8 @@
 loadforge_test_suite(loadforge_oracle_workloads_fft_tests
   SOURCES oracle_test.cpp
   LINK loadforge_workloads_fft)
+
+# Real threads under the coverage build (see src/workloads/fft/CMakeLists.txt).
+if(LOADFORGE_COVERAGE)
+  target_compile_options(loadforge_oracle_workloads_fft_tests PRIVATE -fprofile-update=atomic)
+endif()
