@@ -61,6 +61,9 @@ void put_u32(std::vector<std::byte>& bytes, std::size_t offset, std::uint32_t wo
   }
 }
 
+/// The byte offset of double `index`.
+constexpr std::size_t bytes_at(std::size_t index) { return index * sizeof(double); }
+
 constexpr std::size_t kIterateAt = 0;
 constexpr std::size_t kResidualAt = spec::kRows * sizeof(double);
 
@@ -92,7 +95,7 @@ TEST(SparseFaultInjection, AnExponentFlipInTheIterateIsNamedAtTheFirstRowThatRea
   for (const std::size_t column :
        {std::size_t{0}, std::size_t{500}, std::size_t{5000}, spec::kRows - 1}) {
     Unit unit = good_unit();
-    flip(unit.output, kIterateAt + column * 8, 62);
+    flip(unit.output, kIterateAt + bytes_at(column), 62);
     const BoundedMismatch found = mismatch_of(check_unit(unit));
     EXPECT_EQ(found.check, "residual-row");
     const std::size_t row = first_row_touching(column);
@@ -106,7 +109,7 @@ TEST(SparseFaultInjection, AnExponentFlipInTheIterateIsNamedAtTheFirstRowThatRea
 TEST(SparseFaultInjection, AnExponentFlipInTheReportedResidualIsNamedAtItsRow) {
   for (const std::size_t row : {std::size_t{0}, std::size_t{9001}, spec::kRows - 1}) {
     Unit unit = good_unit();
-    flip(unit.output, kResidualAt + row * 8, 62);
+    flip(unit.output, kResidualAt + bytes_at(row), 62);
     const BoundedMismatch found = mismatch_of(check_unit(unit));
     EXPECT_EQ(found.check, "residual-row");
     EXPECT_EQ(found.element, std::optional<std::uint64_t>(row));
@@ -116,9 +119,9 @@ TEST(SparseFaultInjection, AnExponentFlipInTheReportedResidualIsNamedAtItsRow) {
 
 TEST(SparseFaultInjection, OfSeveralFailingRowsTheFirstIsNamed) {
   Unit unit = good_unit();
-  flip(unit.output, kResidualAt + 12000 * 8, 62);
-  flip(unit.output, kResidualAt + 700 * 8, 62);
-  flip(unit.output, kResidualAt + 4000 * 8, 62);
+  flip(unit.output, kResidualAt + bytes_at(12000), 62);
+  flip(unit.output, kResidualAt + bytes_at(700), 62);
+  flip(unit.output, kResidualAt + bytes_at(4000), 62);
   const BoundedMismatch found = mismatch_of(check_unit(unit));
   EXPECT_EQ(found.element, std::optional<std::uint64_t>(700));
   EXPECT_EQ(found.blocks_compared, 701U);
@@ -149,7 +152,7 @@ TEST(SparseFaultInjection, ANaNOrInfinityInTheIterateFailsAtTheFirstRowThatReads
        {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
         -std::numeric_limits<double>::infinity()}) {
     Unit unit = good_unit();
-    put_double(unit.output, kIterateAt + 6000 * 8, bad);
+    put_double(unit.output, kIterateAt + bytes_at(6000), bad);
     const BoundedMismatch found = mismatch_of(check_unit(unit));
     EXPECT_EQ(found.element, std::optional<std::uint64_t>(first_row_touching(6000)));
     EXPECT_TRUE(std::isnan(found.residual) || std::isinf(found.residual));
@@ -162,7 +165,7 @@ TEST(SparseFaultInjection, ANaNOrInfinityInTheReportedResidualIsAMismatch) {
   for (const double bad :
        {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
     Unit unit = good_unit();
-    put_double(unit.output, kResidualAt + 42 * 8, bad);
+    put_double(unit.output, kResidualAt + bytes_at(42), bad);
     const BoundedMismatch found = mismatch_of(check_unit(unit));
     EXPECT_EQ(found.element, std::optional<std::uint64_t>(42));
     EXPECT_TRUE(std::isfinite(found.tolerance));
@@ -205,10 +208,10 @@ TEST(SparseFaultInjection, AnErrorBelowTheRoundoffOfAProductIsUnseenAndAboveItIs
   // Bit 0 of an entry of x moves a product by 2^-52 of itself, inside the
   // rounding the bound allows; bit 40 is far outside it.
   Unit unit = good_unit();
-  flip(unit.output, kIterateAt + 5000 * 8, 0);
+  flip(unit.output, kIterateAt + bytes_at(5000), 0);
   EXPECT_TRUE(std::holds_alternative<Agreement>(check_unit(unit)));
   unit = good_unit();
-  flip(unit.output, kIterateAt + 5000 * 8, 40);
+  flip(unit.output, kIterateAt + bytes_at(5000), 40);
   EXPECT_TRUE(std::holds_alternative<BoundedMismatch>(check_unit(unit)));
 }
 
@@ -222,7 +225,7 @@ TEST(SparseFaultInjection, ACorruptedMatrixValueIsJudgedByTheOutputItDidNotProdu
   const std::size_t off_diagonal = system.row_ptr[5000] + 6;  // row 5000's column 6031
   ASSERT_NE(system.columns[off_diagonal], 5000U);
   Unit unit = good_unit();
-  flip(unit.input, spec::kValuesOffset + off_diagonal * 8, 40);
+  flip(unit.input, spec::kValuesOffset + bytes_at(off_diagonal), 40);
   const Verdict verdict = check_unit(unit);
   EXPECT_TRUE(std::holds_alternative<BoundedMismatch>(verdict));
 }
@@ -286,7 +289,7 @@ TEST(SparseNotPerformed, AColumnThatIsNotTheFixedStructureIsNotChecked) {
     expect_not_checked(check_unit(unit));
   }
   Unit unit = good_unit();  // a column out of range
-  put_u32(unit.input, spec::kColumnsOffset + 40 * 4, 0xFFFFFFFFU);
+  put_u32(unit.input, spec::kColumnsOffset + std::size_t{160}, 0xFFFFFFFFU);
   expect_not_checked(check_unit(unit));
 }
 
@@ -321,12 +324,12 @@ TEST(SparseNotPerformed, ARightHandSideTheToleranceDoesNotCoverIsNotChecked) {
         -std::numeric_limits<double>::infinity(), 1.0000000000000002, -1.0000000000000002, 7.0}) {
     for (const std::size_t row : {std::size_t{0}, std::size_t{8000}, spec::kRows - 1}) {
       Unit unit = good_unit();
-      put_double(unit.input, spec::kRhsOffset + row * 8, bad);
+      put_double(unit.input, spec::kRhsOffset + bytes_at(row), bad);
       expect_not_checked(check_unit(unit));
     }
   }
   Unit edge = good_unit();  // -1 is generated, and is covered
-  put_double(edge.input, spec::kRhsOffset + 8 * 8, -1.0);
+  put_double(edge.input, spec::kRhsOffset + bytes_at(8), -1.0);
   EXPECT_FALSE(std::holds_alternative<NotChecked>(check_unit(edge)));
 }
 
@@ -351,7 +354,7 @@ TEST(SparseNotPerformed, AMatrixThatIsNotSymmetricIsNotAnInputProblemTheOracleCh
   Unit unit = good_unit();
   // Row 1's entry at column 0 is the mirror of row 0's entry at column 1.
   const std::size_t mirror = system.row_ptr[1] + 0;
-  put_double(unit.input, spec::kValuesOffset + mirror * 8, 0.0625);
+  put_double(unit.input, spec::kValuesOffset + bytes_at(mirror), 0.0625);
   EXPECT_FALSE(std::holds_alternative<NotChecked>(check_unit(unit)));
 }
 

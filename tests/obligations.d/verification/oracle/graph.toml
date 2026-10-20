@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/graph and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/graph"
+classes  = ["P1", "P2", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The independent oracle of the graph workload, written from \
+src/workloads/graph/spec.hpp alone. The specification pins the arithmetic, so \
+the contract is Contract::kExact: the oracle recomputes the whole expected \
+output -- a scalar BFS from the source and sixteen PageRank sweeps in the \
+specification's order of additions, for the plan's accumulator count -- and \
+compares every byte, naming the distances before the ranks. P1: each \
+decision of the BFS (a vertex reached or already reached), of the \
+accumulator assignment, of the comparison (the first differing byte, the \
+section it is in, no difference) and of the check. P2: the one allocation \
+the check makes -- about four megabytes of working memory -- goes through a \
+factory the oracle is given, and a factory that returns nothing makes the \
+check NotChecked with nothing compared, never an agreement; the factory is \
+asked once per check and not at all for evidence that cannot be checked. P3: \
+heads and a source beyond V, reduced modulo V as the specification's \
+totality says (0xFFFFFFFF, 3V + r, 0x80000000 + r), against a model written \
+as a gather over explicit in-edge lists; a graph whose edges all go to \
+vertex 0; self-loops only, where nothing but the source is reached; a \
+ring with chords, where the BFS is long; every accumulator count (1, 2, 4, \
+8) against the model; the window of a difference in the last bytes of the \
+output (eight bytes remain) and a difference spread over more than a window. \
+P4 is the module's subject. T5: a single bit in each section, at the \
+first byte, the last byte of the distances, the first byte of the ranks and \
+the last byte of the output, is a single-bit difference with the right \
+offsets; several bits in one word, two words of one line and two lines are \
+each classified as the record model classifies them, with the popcount over \
+the whole comparison and the window of the first 64 bytes; both sections \
+wrong names the distances; a distance one too large, a vertex marked \
+unreachable, one bit of a rank, a NaN or an infinity or a negative zero where \
+a rank belongs are each a mismatch; a corrupted input is judged by the output \
+it did not produce, a corrupted source moves the distances. T3: scipy's \
+distances (the real tool) and the specification's ranks for 1, 2, 4 and 8 \
+accumulators (a Python model of the specification's text, checked against \
+scipy's power iteration to 1e-13 in the generator that wrote them, \
+tests/fixtures/verification/oracle/graph/, with the commands and the machine) \
+are agreed with for their own accumulator count and refused for every other, \
+since the order of the sums is part of the answer; the Python model, scipy, \
+the C++ gather model and the oracle agree on the bytes. T5b: evidence of the \
+wrong size on either side, and memory that cannot be allocated, are \
+NotChecked with nothing compared.\
+"""
