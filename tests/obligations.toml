@@ -121,9 +121,11 @@ this is the worker's lifecycle from the inside -- attach, report started, run, \
 and the four ways out (complete, setup failed, controller lost, bad arguments), \
 each its own exit code chosen not to collide with the launcher's 120-123 (a \
 static_assert says so). Every way out is forced through the fake (T2): a signal \
-that cannot be ignored, a descriptor that is not a region, a record pipe with \
-no reader, a CPU no mask can name, a cpuset that withholds the CPU asked for, a \
-poll that fails, a finished record that cannot be sent. P3 is the argument \
+that cannot be ignored, a descriptor that is not a region, a started or \
+finished record the channel refuses (setup failed), a record pipe with no \
+reader at either record (controller lost: EPIPE says the reader is gone), a \
+CPU no mask can name, a cpuset that withholds the CPU asked for, a poll that \
+fails. P3 is the argument \
 parser: every key required once, every value with a stated domain and its \
 boundary refused by name, and the argv the controller builds parses back to \
 the same arguments. The loop's own P6 -- stop on time, stop on request, leave \
@@ -140,8 +142,10 @@ path    = "src/controller"
 classes = ["P1", "P2", "P3", "P6"]
 tiers   = ["T1", "T2", "T7"]
 note    = """
-The supervisor. P6 is its whole subject: spawn, the controller's own beat \
-before the first fork, the deadline's stop request, the escalation ladder \
+The supervisor. P6 is its whole subject: the topology snapshot the stress \
+command takes before the run and the plan carries before the first fork \
+(START to RUNNING; refused by the command when /sys will not describe the \
+machine), spawn, the controller's own beat before the first fork, the deadline's stop request, the escalation ladder \
 (request, SIGTERM, SIGKILL, each after its grace), reap, drain, classify. \
 The classification table (supervision) is pure and tested row by row against \
 the misbehaviour catalogue of IMPLEMENTATION 4, including the pairs that must \
@@ -155,7 +159,9 @@ the control write, the release. T7 is tests/supervision: the shipped binary \
 as the worker, N >= 2 in every case -- two complete for the duration, one is \
 killed from outside while the other completes, and the controller itself is \
 killed and every orphan is reaped by the test as subreaper and found dead by \
-the parent-death signal within a bounded time. \
+the parent-death signal within a bounded time; and a real snapshot of this \
+machine's /sys is in the plan before the spawn of two real workers, its CPU \
+count checked against sysconf. \
 \
 The misbehaviour catalogue of IMPLEMENTATION 4 is tests/supervision/catalogue_test.cpp: \
 the controller runs tests/support/fake_worker, a second implementation of the \
@@ -163,7 +169,9 @@ worker contract that misbehaves on demand, and every reachable row is a test \
 with N >= 2 -- exit 0 with no zombie, exit non-zero, SIGSEGV, SIGBUS and SIGABRT \
 with the timeline kept, a silent hang holding its descriptors, a spin beside a \
 slow worker that completes, a record pipe closed early, a truncated record, a \
-bad checksum, SIGTERM ignored and SIGKILL one grace later, and (N = 3) \
+bad checksum, a stop byte written to a control pipe nobody reads (EPIPE, \
+never death by SIGPIPE: the row "exit just before the deadline stop" without \
+its race), SIGTERM ignored and SIGKILL one grace later, and (N = 3) \
 grandchildren left spinning, which the controller now kills with their worker's \
 process group as it reaps the worker. A worker deaf to its control pipe is \
 ended by the parent-death signal alone when the controller is killed: the one \
@@ -179,10 +187,18 @@ judgement (every outcome: enough, none, too few, a count that went back, \
 unreadable at either end) are pure and tested row by row; the loop is driven \
 against the controller's own fake of the record's contract \
 (resources/oom_kill_record.hpp), never the reader's tests (docs/adr/0003). \
-The real OOM kill of a real fake worker, the catalogue's last open row, is \
-a T7 test still to write now that both halves exist; the kernel's side of it -- a child really OOM-killed moves its \
-cgroup's count by one, and a kill -9 moves it by none -- is the reader's \
-T8, in tests/unit/resources."""
+End to end, T7 in catalogue_test.cpp: three fake workers in a memory \
+cgroup the test makes and moves itself into, limited to 256 MiB, so the \
+workers are born there and the record the controller opens before the first \
+fork reads that cgroup's count; one allocates until the kernel's OOM killer \
+ends it (kOomKilled, the count moved by one), one dies by SIGSEGV beside it \
+(kFault), one completes. It skips, quoting the kernel's refusal, where no \
+such cgroup can be made (cgroup v2 without delegation and not root). Its \
+companion runs wherever a count can be read: a SIGKILL from outside, the \
+same record consulted, stays kKilled and says the count did not move. The \
+kernel's side alone -- a child really OOM-killed moves its cgroup's count by \
+one, and a kill -9 moves it by none -- is the reader's T8, in \
+tests/unit/resources."""
 
 [[module]]
 path             = "src/resources"
@@ -317,6 +333,7 @@ fixture_builders = [
   "tests/unit/topology/cpu_topology_test.cpp",
   "tests/unit/topology/cache_test.cpp",
   "tests/unit/topology/numa_test.cpp",
+  "tests/unit/topology/snapshot_test.cpp",
 ]
 note             = """
 The sysfs CPU-list parser, and the Source that decides what a failed reading \
@@ -403,5 +420,10 @@ Source::lines(); the MemTotal parsing stays in numa.cpp until /proc/meminfo \
 at M3 gives it a second caller. Its size parser is its \
 own rather than core::parse_byte_size, which rejects the bare K sysfs writes \
 and accepts the percentages a cache size must never; a test pins that boundary \
-in both directions so nobody unifies them.\
+in both directions so nobody unifies them. \
+\
+The Snapshot takes the three together, once, for the controller to hold \
+before it forks (PLAN 4.1): whole or not taken, the first half to refuse is \
+the answer, and a layout the kernel does not publish is described as not \
+exposed, never as zero.\
 """

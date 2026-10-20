@@ -87,6 +87,7 @@ add_library(loadforge_topology STATIC
   src/topology/cpu_topology.cpp
   src/topology/cache.cpp
   src/topology/numa.cpp
+  src/topology/snapshot.cpp
 )
 target_link_libraries(loadforge_topology PUBLIC loadforge_platform)
 loadforge_set_warnings(loadforge_topology)

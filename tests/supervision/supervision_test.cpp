@@ -29,7 +29,10 @@
 #include "controller/orchestration.hpp"
 #include "controller/report.hpp"
 #include "core/duration.hpp"
+#include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
+#include "topology/cpu_topology.hpp"
+#include "topology/snapshot.hpp"
 
 namespace loadforge::controller {
 namespace {
@@ -126,6 +129,40 @@ TEST(SupervisionTest, TwoWorkersCompleteForTheConfiguredDuration) {
   EXPECT_EQ(reporter.events[0].substr(0, 22), "spawned 2 worker(s): p");
 }
 
+TEST(SupervisionTest, TheMachineIsDescribedOnceBeforeTheFirstWorkerIsForked) {
+  // START -> RUNNING in the state machine of IMPLEMENTATION §4 M1: the
+  // topology snapshot is taken before the fork. Taken here from this
+  // machine's /sys as `loadforge stress` takes it, handed to a run of two real
+  // workers, and found in the plan, which reaches the reporter before the
+  // "spawned" event and so before any worker existed. The count is checked
+  // against sysconf, a source discovery does not read.
+  platform::RealSyscalls syscalls;
+  platform::FileSystem filesystem(syscalls);
+  auto machine = topology::take_snapshot(filesystem);
+  ASSERT_TRUE(machine.has_value()) << topology::describe(machine.error());
+  const long online = ::sysconf(_SC_NPROCESSORS_ONLN);
+  ASSERT_GT(online, 0);
+  EXPECT_EQ(machine.value().cpus.logical_cpu_count(), static_cast<std::size_t>(online));
+
+  WatchingReporter reporter;
+  bool planned_before_spawn = false;
+  reporter.on_spawned = [&reporter, &planned_before_spawn](const std::vector<pid_t>& pids) {
+    EXPECT_EQ(pids.size(), 2U);
+    planned_before_spawn = reporter.plans.size() == 1;
+  };
+  RunOptions options = quick_options();
+  options.topology = &machine.value();
+  Controller controller(syscalls, reporter);
+  auto report = controller.run(two_null_workloads(core::Duration{300}), options);
+  ASSERT_TRUE(report.has_value()) << describe(report.error());
+  EXPECT_TRUE(all_clean(report.value()));
+  EXPECT_TRUE(planned_before_spawn) << "the plan came after the workers";
+  ASSERT_EQ(reporter.plans.size(), 1U);
+  EXPECT_EQ(reporter.plans[0].topology, topology::describe(machine.value()));
+  EXPECT_EQ(reporter.plans[0].topology.substr(0, std::to_string(online).size() + 15),
+            std::to_string(online) + " logical CPU(s)");
+}
+
 TEST(SupervisionTest, AWorkerKilledFromOutsideIsReportedKilledWhileTheOtherCompletes) {
   platform::RealSyscalls syscalls;
   WatchingReporter reporter;
@@ -218,7 +255,9 @@ TEST(SupervisionTest, AControllerKilledLeavesNoWorkerBehind) {
     // closes its end of the control pipe, which wakes the worker's poll. Which
     // lands first is the scheduler's choice: an earlier version of this test
     // accepted only SIGKILL and failed in about one run in ten when the worker
-    // left first, exiting 124, controller lost. What this test cannot show is
+    // left first, exiting 124, controller lost. A worker whose started record
+    // meets the dead controller's pipe leaves with 124 too (EPIPE: the reader
+    // is gone; journal §2.27). What this test cannot show is
     // that the death signal works for a worker that never looks at its pipe:
     // with the signal disarmed it still passes, every worker leaving on the
     // hang-up. MisbehaviourCatalogue.AWorkerDeafToItsControlPipeIsEndedByThe-

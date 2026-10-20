@@ -28,10 +28,13 @@ TEST(ConsoleReporterTest, TheBannerNamesTheRunAndWhetherEachLimitIsEnforced) {
   plan.executable = "/usr/bin/loadforge";
   plan.limits = {controller::LimitStatus{"duration", true, "30s"},
                  controller::LimitStatus{"temperature", false, "not until M3"}};
+  plan.topology = "4 logical CPU(s) on 4 core(s) in 1 package(s); 13 cache(s), deepest L3";
   reporter.run_starting(plan);
   EXPECT_EQ(out.str(), std::string{"loadforge "} + std::string{core::kVersion} +
                            ": stress for 30s with 2 worker(s), null workload\n"
                            "  executable: /usr/bin/loadforge\n"
+                           "  topology: 4 logical CPU(s) on 4 core(s) in 1 package(s); 13 "
+                           "cache(s), deepest L3\n"
                            "  limit duration: enforced (30s)\n"
                            "  limit temperature: NOT ENFORCED (not until M3)\n");
 }

@@ -50,14 +50,19 @@
 //   hang              Alive, silent, descriptors held open: no beat, no read.
 //   spin              Beats with a fresh timestamp and never advances progress.
 //   close-records     Closes its record pipe, works on, exits 0.
+//   close-control     Closes its control pipe, so the deadline's stop byte
+//                     goes to a pipe nobody reads; beats on past its duration
+//                     until the controller has ticked three times more, then
+//                     finishes and exits 0.
 //   truncated-record  Writes a finished frame short by one byte, exits 0.
 //   bad-checksum      Writes a finished frame with one payload bit flipped.
 //   ignore-term       Ignores SIGTERM and its control pipe, beats forever.
 //   orphan            Forks a grandchild that spins on a core, then exits 1.
 //   deaf              Never reads its control pipe and never stops on its own:
 //                     only the parent-death signal can end it.
-//   allocate          Maps and touches memory until the OOM killer ends it.
-//                     For the OOM tier, under a memory limit; never run bare.
+//   allocate          Raises its oom_score_adj to 1000, then maps and touches
+//                     memory until the OOM killer ends it. For the OOM row,
+//                     under a memory limit; never run bare.
 //
 // Every misbehaviour but complete, ignore-term and deaf starts with the same
 // prelude: the started record, one beat with progress 1, and a wait until the
@@ -130,6 +135,7 @@ enum class Behaviour : std::uint8_t {
   kHang,
   kSpin,
   kCloseRecords,
+  kCloseControl,
   kTruncatedRecord,
   kBadChecksum,
   kIgnoreTerm,
@@ -143,7 +149,7 @@ struct Named {
   Behaviour behaviour;
 };
 
-constexpr std::array<Named, 17> kCatalogue{{
+constexpr std::array<Named, 18> kCatalogue{{
     {"complete", Behaviour::kComplete},
     {"outlast", Behaviour::kOutlast},
     {"slow", Behaviour::kSlow},
@@ -155,6 +161,7 @@ constexpr std::array<Named, 17> kCatalogue{{
     {"hang", Behaviour::kHang},
     {"spin", Behaviour::kSpin},
     {"close-records", Behaviour::kCloseRecords},
+    {"close-control", Behaviour::kCloseControl},
     {"truncated-record", Behaviour::kTruncatedRecord},
     {"bad-checksum", Behaviour::kBadChecksum},
     {"ignore-term", Behaviour::kIgnoreTerm},
@@ -497,6 +504,7 @@ class Worker {
   [[noreturn]] void beat_forever(bool spin_without_progress);
   int orphan();
   int allocate();
+  int close_control();
   int corrupt_frame(bool truncate);
 
   Args args_;
@@ -577,11 +585,44 @@ int Worker::orphan() {
   return kExitWorkerError;
 }
 
+/// Makes this process the OOM killer's first choice: oom_score_adj 1000 adds
+/// the whole of the limit's pages to its score, more than any other process
+/// in the cgroup can have, so the kernel picks it and not the controller or a
+/// companion that happened to charge the page that crossed the limit. Raising
+/// one's own adjustment needs no privilege. False, with the errno, when the
+/// kernel would not take it.
+bool make_first_oom_choice(int& error) {
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const int fd = ::open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);
+  if (fd < 0) {
+    error = errno;
+    return false;
+  }
+  constexpr std::string_view kMost = "1000";
+  const ssize_t written = ::write(fd, kMost.data(), kMost.size());
+  error = errno;
+  ::close(fd);
+  return written == static_cast<ssize_t>(kMost.size());
+}
+
 int Worker::allocate() {
+  if (int error = 0; !make_first_oom_choice(error)) {
+    (void)send(ipc::RecordType::kError,
+               "cannot raise oom_score_adj to 1000: errno " + std::to_string(error));
+    return kExitWorkerError;
+  }
   constexpr std::size_t kChunkBytes = std::size_t{64} << 20U;
+  // A ceiling of its own, far above any limit a test sets: a worker run
+  // where no limit binds stops at 1 GiB and says so, rather than taking the
+  // machine's memory until the global OOM killer chooses among everything.
+  constexpr std::uint64_t kMostChunks = 16;
   const auto page = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
   std::uint64_t progress = 1;
   while (true) {
+    if (progress > kMostChunks) {
+      (void)send(ipc::RecordType::kError, "touched 1 GiB and was not killed: no limit binds");
+      return kExitWorkerError;
+    }
     void* chunk =
         ::mmap(nullptr, kChunkBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (chunk == MAP_FAILED) {
@@ -594,6 +635,36 @@ int Worker::allocate() {
     }
     beat(++progress);
   }
+}
+
+int Worker::close_control() {
+  // With the controller's copy closed at spawn and this one closed here, the
+  // read end has no holder: the stop byte at the deadline is EPIPE for the
+  // controller, deterministically -- the state a worker that exited just
+  // before the deadline leaves, without the race over whether it was reaped
+  // first.
+  ::close(args_.control_fd);
+  const std::int64_t started = monotonic_ns();
+  std::uint64_t progress = 1;
+  while (monotonic_ns() - started < args_.duration_ns) {
+    sleep_for_ns(args_.interval_ns);
+    beat(++progress);
+  }
+  // This worker started after the controller's clock did, so its duration
+  // has passed for the controller too. A controller tick reads its clock,
+  // beats, and requests the stop; three beats from here, the third begins
+  // after the tick that requested it has finished.
+  const std::uint64_t seen = controller_beats();
+  const std::int64_t give_up_at = monotonic_ns() + args_.stale_after_ns;
+  while (controller_beats() < seen + 3) {
+    if (monotonic_ns() > give_up_at) {
+      (void)send(ipc::RecordType::kError, "controller lost after the deadline");
+      return kExitControllerLost;
+    }
+    sleep_for_ns(args_.interval_ns / 4);
+    beat(progress);
+  }
+  return send(ipc::RecordType::kFinished, finished_text(progress)) ? 0 : kExitSetupFailed;
 }
 
 int Worker::corrupt_frame(bool truncate) {
@@ -662,6 +733,8 @@ int Worker::run() {
       }
       return 0;
     }
+    case Behaviour::kCloseControl:
+      return close_control();
     case Behaviour::kTruncatedRecord:
       return corrupt_frame(true);
     case Behaviour::kBadChecksum:

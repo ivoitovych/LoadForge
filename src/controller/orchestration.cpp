@@ -27,6 +27,7 @@
 #include "platform/syscalls.hpp"
 #include "platform/worker_pool.hpp"
 #include "resources/oom_kill_record.hpp"
+#include "topology/snapshot.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -680,6 +681,11 @@ core::Result<RunReport, ControllerError> Run::execute() {
   plan.workers = workers_.size();
   plan.executable = options_->executable;
   plan.limits = limit_statuses(*config_, options_->budget, options_->budget_unread);
+  if (options_->topology != nullptr) {
+    plan.topology = topology::describe(*options_->topology);
+  } else {
+    plan.topology = "no snapshot offered";
+  }
   reporter_->run_starting(plan);
 
   auto spawned = spawn();

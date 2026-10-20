@@ -12,6 +12,7 @@
 #include "core/result.hpp"
 #include "platform/syscalls.hpp"
 #include "resources/oom_kill_record.hpp"
+#include "topology/snapshot.hpp"
 
 namespace loadforge::controller {
 
@@ -32,6 +33,13 @@ struct RunOptions {
   /// is consulted: such a death is then reported as a kill, which is the fact.
   /// Not owned; it must outlive the run.
   resources::OomKillRecord* oom_record = nullptr;
+  /// The machine, described once before the first fork (docs/PLAN.md §4.1;
+  /// the transition out of START in IMPLEMENTATION §4 M1). The caller takes
+  /// it, as it reads the budget and opens the record, so that it exists
+  /// before the controller can fork; `loadforge stress` refuses to start
+  /// without one. Null when none is offered, which the plan then says. Not
+  /// owned; it must outlive the run.
+  const topology::Snapshot* topology = nullptr;
 
   [[nodiscard]] friend bool operator==(const RunOptions&, const RunOptions&) = default;
 };

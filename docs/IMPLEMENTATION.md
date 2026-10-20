@@ -406,7 +406,7 @@ classifier depends on all of them, so the band is reserved as a whole:
 | 0 | worker | Completed, or stopped on request | completed, if its finished record arrived |
 | 119 | worker | Its own setup failed | worker error |
 | 120–123 | launcher (`platform/process.hpp`) | Exec failed; orphaned before arming; death signal unavailable; descriptor not inherited | startup failed |
-| 124 | worker | It judged the controller lost: hung up, stale or unreadable. A controller that was merely stalled, stopped or paged out for longer than the allowance produces this too | controller lost (reported) |
+| 124 | worker | It judged the controller lost: hung up (its control pipe, or a record pipe with no reader left), stale or unreadable. A controller that was merely stalled, stopped or paged out for longer than the allowance produces this too | controller lost (reported) |
 | 125 | worker (`worker/entry.hpp`) | The internal switch was used wrongly: a controller bug | startup failed |
 
 Codes 0–2 and 126–127 are never reserved, and nothing above 255 is used: `exit(2)` keeps
@@ -450,6 +450,19 @@ workflows, and the ledger gate refuses an undeclared lock (§2.5; JOURNAL §2.21
 5. Config round-trips through TOML with schema validation, and every rejection path is
    tested for the message it produces.
 6. 100% line and branch, zero exclusions; obligation ledger current.
+
+**Exit review (2026-10-20 04:44 UTC, `reviews/m1-exit-review-2026-10-20-0444-UTC.md`):**
+criteria 1 to 6 are met, each with the tests that prove it named in the review. The review
+closed four gaps on the way: the START to RUNNING transition had no topology snapshot (now
+taken by `loadforge stress` before the run and refused on a `/sys` that will not describe the
+machine); the OOM row had no end-to-end test (now a fake worker really OOM-killed under a
+memory cgroup, reported `kOomKilled` beside a fault, run as root in CI); the "exit just
+before the deadline stop" row had no T7 test; and a worker whose controller died before its
+started record reported its own setup failure instead of the controller lost. **M1 is not
+yet marked complete:** the obligation every milestone exits under includes the mutation
+gate, and the pinned Mull has not yet swept `src/`. M1 is complete when its first run
+(scheduled 2026-10-26 03:17 UTC, or an owner's dispatch before then) reports zero
+unexplained survivors.
 
 **Blocked on:** nothing. Q10 is closed — multiple worker processes, one executable
 (`PLAN.md` §4.6) — which was the only decision M1 could not start without, because it
@@ -716,7 +729,7 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 
 ## 10. Status
 
-**M0 complete. M1 in progress; on `main`, everything M1 builds through the controller.**
+**M0 complete. M1: every exit criterion met; complete once the first mutation sweep reports clean.**
 
 The working queue, item by item, is [`ROADMAP.md`](ROADMAP.md); this section is the
 summary it is kept consistent with.
@@ -736,28 +749,24 @@ two gates M1 adds: no test-hook symbol in the shipped binary; the `EOWNERDEAD` o
 per lock in the ledger), and `resources` (the memory budget and the OOM-kill record). The
 ledger in §3 marks each ✅ with the corrections made against what was actually built.
 
-**Against the M1 exit criteria in §4:** criteria 5 (config round-trips; every rejection
-tested for its message) and 6 (100% / zero exclusions; ledger current) are met on `main`.
-Criterion 1 (the controller runs the null workload for the configured duration and honours
-its limits) is met on `main` with its T7 tier, and the memory limit is honoured against a
-real ceiling: `src/resources` reads `MemAvailable` and the cgroup limit under either
-hierarchy, and `stress` reports memory NOT ENFORCED only when that budget cannot be read,
-with the reader's reason. Criterion 2 is met for every transition but one: COMPLETE, FAULT
-(`SIGSEGV`, `SIGBUS`, `SIGABRT`), TIMEOUT (the hang and the spin) and the controller killed
-each have a T7 test against the fake worker, and the controller-killed case is proved for a
-worker that ignores its control pipe, which only the parent-death signal can end.
-Criterion 3 is met on the classification side: a SIGKILL the controller did not send is
-`kOomKilled` only when the cgroup's OOM-kill count accounts for it, asserted row by row in
-the table and through the loop against the controller's own fake of the record, and the
-kernel's side (a child really OOM-killed moves the count by one, a `kill -9` by none) is
-asserted against the real kernel. What remains of criteria 2 and 3 is one T7 test: the
-fake worker's `allocate` misbehaviour, OOM-killed for real under a memory limit, reported
-`kOomKilled` end to end. Criterion 4 waits on the remaining injected paths. Of the
-catalogue's rows, "die holding a process-shared lock" has nothing to test, because there is
-no such lock (PLAN §4.6), and the ledger gate checks that on every run.
+**Against the M1 exit criteria in §4:** all six are met on the branch of the M1 exit review
+(`reviews/m1-exit-review-2026-10-20-0444-UTC.md`), which names the tests behind each
+criterion and each state-machine transition and audits every P2 path call site by call site.
+The review closed four gaps: the topology snapshot before the first fork (the START to
+RUNNING transition, which nothing implemented), the OOM row end to end (a fake worker really
+OOM-killed under a memory cgroup the test makes, `kOomKilled` beside a `SIGSEGV` fault; CI
+runs it as root, where a skip is a failure), the stop byte to a pipe nobody reads as a
+deterministic T7 test, and a worker's `EPIPE` on its record pipe reported as the controller
+lost (a flaky controller-killed test found it). Of the catalogue's rows, "die holding a
+process-shared lock" has nothing to test, because there is no such lock (PLAN §4.6), and the
+ledger gate checks that on every run.
 
-The next concrete actions, after the review fixes queued in the roadmap: that T7 OOM test,
-and the M1 exit review of every criterion in §4.
+**What remains of M1:** the mutation clause of the obligation every milestone exits under.
+Mull is pinned and scheduled, but has not yet swept `src/`; its first run is scheduled for
+2026-10-26 03:17 UTC, and an owner may dispatch it sooner. M1 is marked complete here and in
+§4 when that run reports zero unexplained survivors; a survivor is a test to strengthen
+first. Recorded and not an exit criterion: a worker's grandchild outlives a controller that
+is itself `SIGKILL`ed (JOURNAL §2.20); the real worker forks nothing.
 
 Outside the repository, and still owner-only: **branch protection on `main`**. The Mull
 pin, the other hard prerequisite for M2a, is in place (`mutation.yml`).

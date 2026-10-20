@@ -32,7 +32,8 @@ void ConsoleReporter::run_starting(const controller::RunPlan& plan) {
   *out_ << "loadforge " << core::kVersion << ": " << config::describe(plan.mode) << " for "
         << core::to_string(plan.duration) << " with " << plan.workers
         << " worker(s), null workload\n"
-        << "  executable: " << plan.executable << "\n";
+        << "  executable: " << plan.executable << "\n"
+        << "  topology: " << plan.topology << "\n";
   for (const controller::LimitStatus& limit : plan.limits) {
     *out_ << "  limit " << limit.name << ": " << (limit.enforced ? "enforced" : "NOT ENFORCED")
           << " (" << limit.note << ")\n";

@@ -32,7 +32,8 @@ inline constexpr std::string_view kWorkerSwitch = "--worker";
 ///   kSetupFailed     could not attach, could not report, could not be placed:
 ///                    the worker's own failure before or around its work.
 ///   kControllerLost  stopped because the controller hung up, went stale or
-///                    could not be read. Not the worker's fault, and not a
+///                    could not be read -- a record pipe with no reader left
+///                    (EPIPE) included. Not the worker's fault, and not a
 ///                    completion.
 ///   kBadArguments    the internal switch was used wrongly: a controller bug.
 enum class WorkerExit : std::uint8_t {
