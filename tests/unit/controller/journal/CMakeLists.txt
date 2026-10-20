@@ -6,5 +6,6 @@ loadforge_test_suite(loadforge_unit_controller_journal_tests
     format_test.cpp
     journal_test.cpp
     file_storage_test.cpp
+    file_journal_test.cpp
     file_ops_test.cpp
   LINK loadforge_controller_journal)
