@@ -4,7 +4,9 @@
 
 #include <sys/types.h>
 
+#include <array>
 #include <bitset>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -28,6 +30,29 @@ struct Reaped {
 
   [[nodiscard]] friend bool operator==(const Reaped&, const Reaped&) = default;
 };
+
+/// What fork(2)'s return value means: a negative pid is the failure `number`
+/// names; anything else is the answer -- 0 in the child, the child's pid in the
+/// parent -- which WorkerLauncher::fork_worker tells apart (process.hpp).
+///
+/// RealSyscalls::fork_process is the bare call and hands its answer here. The
+/// decision is a function of its own so that a test reaches every arm without
+/// creating a process: fork's failures cannot be induced in a test process
+/// (result_or_error says why), and its successes cannot be seen without
+/// forking, which the mutation sweep's tests may not do (docs/JOURNAL.md §2.28).
+///
+/// It runs in the child too, between fork and exec. The success arm therefore
+/// allocates nothing; only the failure arm, which no child reaches, builds the
+/// error's subject.
+[[nodiscard]] core::Result<pid_t, SyscallError> fork_result(pid_t pid, int number);
+
+/// What waitpid(-1, &status, WNOHANG)'s return value means: a negative pid is
+/// the failure `number` names (ECHILD when there are no children at all), 0 is
+/// children of which none has terminated, and a positive pid is the child
+/// reaped, with its status word. Above the seam for the reason fork_result is:
+/// RealSyscalls::reap_any_nonblocking stays the bare call.
+[[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_result(pid_t pid, int status,
+                                                                            int number);
 
 /// One clock reading, exactly as clock_gettime(2) reports it.
 ///
@@ -75,6 +100,27 @@ struct NodeMask {
 
   [[nodiscard]] friend bool operator==(const NodeMask&, const NodeMask&) = default;
 };
+
+/// A CpuMask as the bytes of a cpu_set_t: CPU n is bit n % CHAR_BIT of byte
+/// n / CHAR_BIT, the layout glibc documents and syscalls.cpp static_asserts.
+///
+/// The conversions are declared here, rather than kept private to the seam,
+/// so that a test can hold them to glibc's own CPU_SET and CPU_ISSET on every
+/// one of the 1024 bits without asking the kernel to move the test process.
+/// Through the kernel, a conversion that dropped every CPU but 0 passes on a
+/// machine whose only CPU is 0, and on any machine once a test has pinned
+/// itself there.
+using CpuMaskBytes = std::array<unsigned char, kAffinityMaskBits / CHAR_BIT>;
+[[nodiscard]] CpuMask cpu_mask_from_bytes(const CpuMaskBytes& bytes);
+[[nodiscard]] CpuMaskBytes cpu_mask_to_bytes(const CpuMask& mask);
+
+/// A NodeMask as the array of unsigned long that mbind(2) reads: node n is bit
+/// n % bits-per-long of word n / bits-per-long, built word by word rather than
+/// by copying bytes, so the layout holds on either byte order. Declared here
+/// for the reason the CPU conversions are: through the kernel, a machine with
+/// one node cannot tell most wrong layouts from the right one.
+using NodeMaskWords = std::array<unsigned long, kNodeMaskBits / (sizeof(unsigned long) * CHAR_BIT)>;
+[[nodiscard]] NodeMaskWords node_mask_to_words(const NodeMask& nodes);
 
 /// The two ends of a pipe, as pipe2(2) hands them out.
 struct PipeEnds {

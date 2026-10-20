@@ -31,6 +31,7 @@
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,31 @@ class RealSyscallsTest : public ::testing::Test {
 // which no timeout of Mull's reaches (tools/mutation-shard.py, which also
 // checks the name against what each test really does).
 class RealProcessSyscallsTest : public RealSyscallsTest {};
+
+/// Frees descriptor 0 for the length of a test and puts standard input back
+/// afterwards. A process can start with descriptor 0 closed -- a daemon, or a
+/// worker whose parent closed it -- and the kernel then hands 0 to the next
+/// descriptor it creates, since it always gives the lowest free number. That
+/// is a valid descriptor, and a call returning it has succeeded.
+class StandardInputSetAside {
+ public:
+  StandardInputSetAside() : saved_(::dup(0)) { ::close(0); }
+  ~StandardInputSetAside() {
+    if (saved_ >= 0) {
+      ::dup2(saved_, 0);
+      ::close(saved_);
+    } else {
+      ::close(0);  // It was closed when the test began; leave it so.
+    }
+  }
+  StandardInputSetAside(const StandardInputSetAside&) = delete;
+  StandardInputSetAside& operator=(const StandardInputSetAside&) = delete;
+  StandardInputSetAside(StandardInputSetAside&&) = delete;
+  StandardInputSetAside& operator=(StandardInputSetAside&&) = delete;
+
+ private:
+  int saved_;
+};
 
 TEST_F(RealSyscallsTest, OpensReadsAndClosesARealFile) {
   const std::string path = write("value", "95000\n");
@@ -175,6 +201,15 @@ TEST_F(RealSyscallsTest, TheDescriptorIsCloseOnExec) {
   EXPECT_TRUE(syscalls.close(opened.value()).has_value());
 }
 
+TEST_F(RealSyscallsTest, DescriptorZeroIsASuccessfulOpen) {
+  const std::string path = write("value", "x");
+  const StandardInputSetAside free_zero;
+  auto opened = syscalls.open_read(path);
+  ASSERT_TRUE(opened.has_value()) << describe(opened.error());
+  EXPECT_EQ(opened.value(), 0);
+  EXPECT_TRUE(syscalls.close(opened.value()).has_value());
+}
+
 // The whole stack, real kernel included: this is the T8 end of the seam, and it
 // is what would catch a FileSystem that works perfectly against the fake and
 // not at all against Linux.
@@ -263,6 +298,14 @@ TEST_F(RealSyscallsTest, ExecReturnsTheKernelsErrnoWhenItCannotReplaceTheImage) 
   // test can reach without actually exec'ing.
   const SyscallError error =
       syscalls.exec((directory / "not-here").string(), {"loadforge", "--worker", "--slot=0"});
+  EXPECT_EQ(error.number, ENOENT);
+  EXPECT_EQ(error.call, "execv");
+}
+
+TEST_F(RealSyscallsTest, ExecWithNoArgumentsAtAllStillReportsTheKernelsErrno) {
+  // The marshalled list is then the terminating null alone, and it is still
+  // handed to the kernel, which answers for the path.
+  const SyscallError error = syscalls.exec((directory / "not-here").string(), {});
   EXPECT_EQ(error.number, ENOENT);
   EXPECT_EQ(error.call, "execv");
 }
@@ -466,6 +509,53 @@ TEST(SyscallResultTest, TheValueIsIgnoredWhenTheCallFailed) {
   ASSERT_FALSE(result.has_value());
 }
 
+// --- what fork and a reap without waiting answered, decided above the seam ----
+//
+// The seam's two process calls are bare; these functions decide what their
+// answers mean. Every arm is reached here without creating a process, which is
+// how the mutation sweep -- which runs no test that forks -- sees them at all.
+
+TEST(ForkResultTest, ANegativePidIsTheFailureWithItsErrno) {
+  const auto result = fork_result(-1, EAGAIN);
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), (SyscallError{EAGAIN, "fork", "worker process"}));
+}
+
+TEST(ForkResultTest, ZeroIsTheChildsAnswerAndIsASuccess) {
+  // The boundary: 0 is not a failure but the side of the fork this process is
+  // on. Reading it as one would send every child down the error path.
+  const auto result = fork_result(0, EINTR);  // A stale errno means nothing here.
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value(), 0);
+}
+
+TEST(ForkResultTest, APositivePidIsTheParentsAnswerAndIsCarriedAsItIs) {
+  const auto result = fork_result(4321, EINTR);
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value(), 4321);
+}
+
+TEST(ReapResultTest, ANegativePidIsTheFailureWithItsErrno) {
+  const auto result = reap_result(-1, 0, ECHILD);
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), (SyscallError{ECHILD, "waitpid", "any child, without waiting"}));
+}
+
+TEST(ReapResultTest, ZeroIsChildrenOfWhichNoneHasTerminated) {
+  // The boundary: 0 is an answer -- nothing to reap yet -- and neither a
+  // failure nor a child numbered 0.
+  const auto result = reap_result(0, 0, EINTR);
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_FALSE(result.value().has_value());
+}
+
+TEST(ReapResultTest, APositivePidIsTheChildReapedWithItsStatusWord) {
+  const auto result = reap_result(4321, 9 << 8, EINTR);
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_TRUE(result.value().has_value());
+  EXPECT_EQ(*result.value(), (Reaped{4321, 9 << 8}));
+}
+
 // --- affinity against the real kernel ----------------------------------------
 //
 // Every call here targets the CALLING process. sched_setaffinity(2) will move
@@ -474,15 +564,25 @@ TEST(SyscallResultTest, TheValueIsIgnoredWhenTheCallFailed) {
 // A test that touched another pid would be a test that could confine init.
 
 /// Puts the process back where it started, however the test ends.
+///
+/// It reads and restores through glibc, never through the seam under test. It
+/// once used the seam, and a conversion that kept only CPU 0 then restored the
+/// process to CPU 0 alone, for the rest of the suite -- after which the test
+/// comparing the seam with CPU_ISSET saw one CPU both ways and agreed.
 class RestoreAffinity {
  public:
-  explicit RestoreAffinity(RealSyscalls& syscalls) : syscalls_(&syscalls) {
-    auto current = syscalls_->get_affinity(0);
-    if (current.has_value()) {
-      original_ = current.value();
+  RestoreAffinity() : saved_(::sched_getaffinity(0, sizeof raw_, &raw_) == 0) {
+    for (std::size_t cpu = 0; saved_ && cpu < kAffinityMaskBits; ++cpu) {
+      if (CPU_ISSET(cpu, &raw_)) {
+        original_.cpus.set(cpu);
+      }
     }
   }
-  ~RestoreAffinity() { (void)syscalls_->set_affinity(0, original_); }
+  ~RestoreAffinity() {
+    if (saved_) {
+      (void)::sched_setaffinity(0, sizeof raw_, &raw_);
+    }
+  }
   RestoreAffinity(const RestoreAffinity&) = delete;
   RestoreAffinity& operator=(const RestoreAffinity&) = delete;
   RestoreAffinity(RestoreAffinity&&) = delete;
@@ -491,7 +591,8 @@ class RestoreAffinity {
   [[nodiscard]] const CpuMask& original() const { return original_; }
 
  private:
-  RealSyscalls* syscalls_;
+  cpu_set_t raw_{};
+  bool saved_;
   CpuMask original_;
 };
 
@@ -505,7 +606,7 @@ TEST_F(RealSyscallsTest, GetAffinityReportsAtLeastOneCpuAndNoMoreThanAreOnline) 
 }
 
 TEST_F(RealSyscallsTest, SetAffinityToOnePermittedCpuIsVisibleThroughGetAffinity) {
-  const RestoreAffinity restore(syscalls);
+  const RestoreAffinity restore;
   ASSERT_TRUE(restore.original().cpus.any());
   // The lowest CPU we are currently permitted, so the choice is valid under any
   // cpuset CI happens to run in.
@@ -541,7 +642,7 @@ TEST_F(RealSyscallsTest, TheMaskLayoutAgreesWithGlibcsOwnMacrosOnEveryBit) {
   // And the other direction: a mask built here, set through the seam, read back
   // raw. The chosen CPU is one we are currently permitted, so the set succeeds
   // under any cpuset CI runs in.
-  const RestoreAffinity restore(syscalls);
+  const RestoreAffinity restore;
   std::size_t chosen = 0;
   while (!restore.original().cpus.test(chosen)) {
     ++chosen;
@@ -555,8 +656,40 @@ TEST_F(RealSyscallsTest, TheMaskLayoutAgreesWithGlibcsOwnMacrosOnEveryBit) {
   EXPECT_TRUE(CPU_ISSET(chosen, &raw));
 }
 
+TEST(MaskLayoutTest, EveryCpuBitConvertsAsGlibcsOwnMacrosPlaceIt) {
+  // The conversions themselves, without the kernel: glibc's CPU_SET and
+  // CPU_ISSET are the oracle for all 1024 positions, one CPU at a time. The
+  // real-kernel test above sees only the CPUs this machine has, and a single
+  // CPU numbered 0 cannot show a conversion that loses every other one.
+  for (std::size_t cpu = 0; cpu < kAffinityMaskBits; ++cpu) {
+    cpu_set_t raw;
+    CPU_ZERO(&raw);
+    CPU_SET(cpu, &raw);
+    CpuMaskBytes bytes{};
+    std::memcpy(bytes.data(), &raw, sizeof raw);
+    CpuMask expected;
+    expected.cpus.set(cpu);
+    ASSERT_EQ(cpu_mask_from_bytes(bytes), expected) << "reading cpu " << cpu;
+
+    const CpuMaskBytes written = cpu_mask_to_bytes(expected);
+    CPU_ZERO(&raw);
+    std::memcpy(&raw, written.data(), sizeof raw);
+    ASSERT_TRUE(CPU_ISSET(cpu, &raw)) << "writing cpu " << cpu;
+    ASSERT_EQ(CPU_COUNT(&raw), 1) << "writing cpu " << cpu;
+  }
+}
+
+TEST(MaskLayoutTest, AFullCpuMaskIsEveryBitOfEveryByte) {
+  CpuMask all;
+  all.cpus.set();
+  CpuMaskBytes full{};
+  full.fill(0xFF);
+  EXPECT_EQ(cpu_mask_to_bytes(all), full);
+  EXPECT_EQ(cpu_mask_from_bytes(full), all);
+}
+
 TEST_F(RealSyscallsTest, SetAffinityWithAnEmptyMaskIsEINVAL) {
-  const RestoreAffinity restore(syscalls);
+  const RestoreAffinity restore;
   auto placed = syscalls.set_affinity(0, CpuMask{});
   ASSERT_FALSE(placed.has_value());
   EXPECT_EQ(placed.error().number, EINVAL);
@@ -565,7 +698,7 @@ TEST_F(RealSyscallsTest, SetAffinityWithAnEmptyMaskIsEINVAL) {
 }
 
 TEST_F(RealSyscallsTest, SetAffinityNamingOnlyACpuThisMachineLacksIsEINVAL) {
-  const RestoreAffinity restore(syscalls);
+  const RestoreAffinity restore;
   // The last representable id. A machine with 1024 CPUs would make this test
   // wrong, and would be worth hearing about.
   CpuMask absent;
@@ -813,6 +946,25 @@ TEST_F(RealSyscallsTest, BindsToNodeZeroAndIsRefusedForANodeThisMachineLacks) {
   EXPECT_EQ(crooked.error().number, EINVAL);
 }
 
+TEST(MaskLayoutTest, EveryNodeBitLandsWhereTheKernelsBitmapPutsIt) {
+  // mbind reads the kernel's bitmap type -- an array of unsigned long, bit n
+  // in word n / bits-per-long -- and a cpu_set_t is the same type, which
+  // glibc's CPU_SET writes. So CPU_SET is the oracle for the node words too,
+  // on all 1024 positions; a machine with one node could not show a layout
+  // that sends every node to node 0.
+  static_assert(sizeof(cpu_set_t) == sizeof(NodeMaskWords));
+  for (std::size_t node = 0; node < kNodeMaskBits; ++node) {
+    cpu_set_t raw;
+    CPU_ZERO(&raw);
+    CPU_SET(node, &raw);
+    NodeMaskWords expected{};
+    std::memcpy(expected.data(), &raw, sizeof raw);
+    NodeMask one;
+    one.nodes.set(node);
+    ASSERT_EQ(node_mask_to_words(one), expected) << "node " << node;
+  }
+}
+
 TEST_F(RealSyscallsTest, ExplicitHugePagesAnswerAccordingToThePoolThisMachineHas) {
   // Three states, one assertion each, no skip: the pool is whatever it is,
   // and the kernel's answer for it is what the fake claims for that state.
@@ -1001,6 +1153,14 @@ TEST_F(RealSyscallsTest, CreatingAMemoryFileWithNoDescriptorNumberFreeIsEMFILE) 
   EXPECT_TRUE(syscalls.close(created.value()).has_value());
 }
 
+TEST_F(RealSyscallsTest, DescriptorZeroIsASuccessfulMemoryFile) {
+  const StandardInputSetAside free_zero;
+  auto created = syscalls.create_memory_file("loadforge-test", 4096);
+  ASSERT_TRUE(created.has_value()) << describe(created.error());
+  EXPECT_EQ(created.value(), 0);
+  EXPECT_TRUE(syscalls.close(created.value()).has_value());
+}
+
 TEST_F(RealSyscallsTest, MappingOrHandingOverADescriptorThatIsNotOpenIsEBADF) {
   auto mapped = syscalls.map_shared(-1, 4096);
   ASSERT_FALSE(mapped.has_value());
@@ -1115,6 +1275,20 @@ TEST_F(RealSyscallsTest, WritingADescriptorThatIsNotOpenIsEBADFAndPollingItIsInv
   EXPECT_EQ(polled.value()[1], (Readiness{false, false, true, false})) << "no reader: POLLERR";
   EXPECT_EQ(polled.value()[2], Readiness{}) << "negative: ignored";
   EXPECT_TRUE(syscalls.close(pipe.write_fd).has_value());
+}
+
+TEST_F(RealSyscallsTest, WritingNothingIsAWriteOfZeroBytesAndNotAFailure) {
+  // POSIX: zero bytes to a regular file returns 0 and has no other effect. A
+  // count of 0 is an answer, as it is from read at end of file.
+  const std::string path = write("empty", "");
+  const int fd =
+      ::open(path.c_str(), O_WRONLY | O_CLOEXEC);  // NOLINT(cppcoreguidelines-pro-type-vararg)
+  ASSERT_GE(fd, 0);
+  auto count = syscalls.write(fd, std::span<const std::byte>{});
+  ASSERT_TRUE(count.has_value()) << describe(count.error());
+  EXPECT_EQ(count.value(), 0U);
+  EXPECT_TRUE(syscalls.close(fd).has_value());
+  EXPECT_EQ(std::filesystem::file_size(path), 0U);
 }
 
 TEST_F(RealSyscallsTest, PollingMoreDescriptorsThanTheOpenFileLimitAllowsIsEINVAL) {
