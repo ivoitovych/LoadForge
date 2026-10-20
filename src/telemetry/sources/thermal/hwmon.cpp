@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "telemetry/sources/thermal/hwmon.hpp"
+
+#include <string>
+#include <utility>
+
+#include "topology/source.hpp"
+
+namespace loadforge::telemetry {
+
+std::vector<HwmonChip> find_hwmon_chips(platform::FileSystem& filesystem, std::string_view root) {
+  std::vector<HwmonChip> chips;
+  for (std::uint32_t index = 0; index < kMaxHwmonChips; ++index) {
+    std::string directory = std::string{root} + "/sys/class/hwmon/hwmon" + std::to_string(index);
+    topology::Source name_file(filesystem, directory + "/name");
+    auto name = name_file.text();
+    if (name.has_value()) {
+      chips.push_back(HwmonChip{std::move(directory), index, name.value()});
+    } else if (name.error().kind != topology::Availability::kAbsent) {
+      // Present but unreadable: the chip is there and its sensors may be
+      // readable, so it is kept, unnamed. Only a chip that is not there is
+      // skipped.
+      chips.push_back(HwmonChip{std::move(directory), index, std::string{}});
+    }
+  }
+  return chips;
+}
+
+std::string hwmon_provider(const HwmonChip& chip) {
+  if (chip.name.empty()) {
+    return "hwmon:hwmon" + std::to_string(chip.index);
+  }
+  return "hwmon:" + chip.name;
+}
+
+std::string read_label(platform::FileSystem& filesystem, const std::string& path) {
+  topology::Source label_file(filesystem, path);
+  auto label = label_file.text();
+  if (label.has_value()) {
+    return label.value();
+  }
+  return std::string{};
+}
+
+}  // namespace loadforge::telemetry
