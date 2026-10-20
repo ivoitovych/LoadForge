@@ -34,7 +34,7 @@
 
 Each fix lands in the pull request the review read, before that pull request merges. The review's last point is that tests, sanitizers and real-kernel checks must be run against the integrated heads, ARM64 included. CI does that on every pull request and on main after each merge; the logs are on each PR's checks page.
 
-## Verification evidence (added 2026-10-20 23:50 UTC)
+## Verification evidence (added 2026-10-20 23:40 UTC)
 
 Added under the rule of 2026-10-20 18:50 UTC (journal §4.13): a finding is reproduced or
 disproved before it is fixed, and the plan records the verdict with its evidence. This plan

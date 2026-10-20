@@ -44,7 +44,7 @@ Each lands as its own PR with a regression test that is red before the fix and g
 
 Order: EXT-01, EXT-02, EXT-03, as the review advises. Items 1 and 2 both change `src/controller/orchestration.cpp`, so they land one after the other, in one working branch each.
 
-## Verification evidence (added 2026-10-20 23:50 UTC)
+## Verification evidence (added 2026-10-20 23:40 UTC)
 
 Added under the rule of 2026-10-20 18:50 UTC (journal §4.13): a finding is reproduced or
 disproved before it is fixed, and the plan records the verdict with its evidence. Each

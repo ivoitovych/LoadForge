@@ -49,7 +49,7 @@
 - No coverage exclusion: R-01 and R-02 are both reachable from the fake.
 - No allowlisting of the R-06 mutant.
 
-## Verification evidence (added 2026-10-20 23:55 UTC)
+## Verification evidence (added 2026-10-20 23:40 UTC)
 
 Added under the rule of 2026-10-20 18:50 UTC (journal §4.13): a finding is reproduced or
 disproved before it is fixed, and the plan records the verdict with its evidence. This plan
