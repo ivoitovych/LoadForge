@@ -71,7 +71,7 @@ struct RunningPool {
 // --- spawning ----------------------------------------------------------------
 
 TEST(WorkerPoolTest, SpawningTwoWorkersLeavesTheSupervisorHoldingBothPids) {
-  RunningPool fixture{2};
+  const RunningPool fixture{2};
   ASSERT_TRUE(fixture.spawned);
 
   EXPECT_EQ(fixture.pool.live_count(), 2U);
@@ -280,6 +280,7 @@ TEST(WorkerPoolTest, ASuccessfulReapClearsTheInterruptRun) {
   // meaning the supervisor is stuck, and a total bound would end such a run.
   RunningPool fixture{2};
   std::vector<WaitStep> steps;
+  steps.reserve(2 * static_cast<std::size_t>(WorkerPool::kMaxConsecutiveInterrupts));
   for (int i = 0; i < WorkerPool::kMaxConsecutiveInterrupts - 1; ++i) {
     steps.push_back(WaitStep{{}, EINTR});
   }
@@ -393,7 +394,7 @@ TEST(WorkerPoolTest, SignallingAnEmptyPoolSucceedsWithoutTouchingAnything) {
 // --- accessors ----------------------------------------------------------------
 
 TEST(WorkerPoolTest, PidAtOutOfRangeIsZeroRatherThanUndefined) {
-  RunningPool fixture{2};
+  const RunningPool fixture{2};
   EXPECT_EQ(fixture.pool.pid_at(2), 0);
   EXPECT_EQ(fixture.pool.pid_at(9999), 0);
 }

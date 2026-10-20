@@ -127,7 +127,7 @@ TYPED_TEST_P(FpControlContract, AnAbsentPropertyIsLeftAsItIs) {
     dirty.default_nan = true;
   }
   this->control_->write(dirty);
-  FpState partial;  // names rounding and flush_to_zero only
+  const FpState partial{};  // names rounding and flush_to_zero only
   this->control_->write(partial);
   const FpState after = this->control_->read();
   EXPECT_EQ(after.denormals_are_zero, dirty.denormals_are_zero);
