@@ -31,6 +31,24 @@ set -euo pipefail
 REPORT="${1:?usage: check-coverage-complete.sh <coverage.xml> [source-dir]}"
 SOURCE_DIR="${2:-src}"
 
+# EACH ARCHITECTURE'S KERNELS ARE MEASURED ON THAT ARCHITECTURE
+# -------------------------------------------------------------
+# src/primitives/simd/x86/ holds x86-64 intrinsics and src/primitives/simd/arm/
+# AArch64 ones. Neither compiles on the other machine, so a report made on
+# x86-64 cannot name the ARM kernels and one made on AArch64 cannot name the
+# x86 kernels: each directory is expected exactly where it is built, and the
+# coverage job runs on both architectures so that each is measured somewhere.
+# Everything else is expected everywhere. The architecture is the machine's,
+# because the coverage build is native; LOADFORGE_COVERAGE_ARCH overrides it
+# for this script's own tests. An architecture with neither kind of kernel
+# expects neither directory.
+ARCH="${LOADFORGE_COVERAGE_ARCH:-$(uname -m)}"
+case "$ARCH" in
+  x86_64 | amd64) not_built=("primitives/simd/arm") ;;
+  aarch64 | arm64) not_built=("primitives/simd/x86") ;;
+  *) not_built=("primitives/simd/x86" "primitives/simd/arm") ;;
+esac
+
 [ -f "$REPORT" ] || {
   echo "check-coverage-complete: '$REPORT' does not exist." >&2
   echo "  No report was read, so nothing is certified. A missing report is a" >&2
@@ -55,13 +73,26 @@ source_parent="$(cd "$(dirname "$SOURCE_DIR")" && pwd)"
 source_name="$(basename "$SOURCE_DIR")"
 cd "$source_parent"
 
-mapfile -t sources < <(find "$source_name" -name '*.cpp' | sort)
+mapfile -t found < <(find "$source_name" -name '*.cpp' | sort)
+sources=()
+skipped=0
+for source in "${found[@]}"; do
+  expected=1
+  for directory in "${not_built[@]}"; do
+    case "$source" in "$source_name/$directory/"*) expected=0 ;; esac
+  done
+  if [ "$expected" -eq 1 ]; then
+    sources+=("$source")
+  else
+    skipped=$((skipped + 1))
+  fi
+done
 
 # A source tree with no .cpp files means the caller pointed this somewhere wrong.
 # Reporting "all 0 files present" would be the vacuous pass this gate exists to
 # prevent, so it is a failure instead.
 if [ "${#sources[@]}" -eq 0 ]; then
-  echo "check-coverage-complete: no .cpp files under '$SOURCE_DIR'." >&2
+  echo "check-coverage-complete: no .cpp files under '$SOURCE_DIR' that $ARCH builds." >&2
   echo "  An empty comparison set makes this check vacuous, so it fails." >&2
   exit 1
 fi
@@ -86,3 +117,6 @@ if [ "${#missing[@]}" -ne 0 ]; then
 fi
 
 echo "coverage report covers all ${#sources[@]} source file(s) under $SOURCE_DIR/"
+if [ "$skipped" -ne 0 ]; then
+  echo "  not expected on $ARCH: $skipped file(s) under $(printf '%s/ ' "${not_built[@]/#/$source_name/}")(built on another architecture)"
+fi

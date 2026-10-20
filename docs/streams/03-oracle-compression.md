@@ -1,6 +1,6 @@
 # Stream 03 — The compression oracle: an independent LZ4 block decoder
 
-**State:** not started  
+**State:** built and pushed on `feature/oracle-compression`, 2026-10-20 11:20 UTC; waiting for its pull request  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

@@ -67,6 +67,13 @@ class RealSyscallsTest : public ::testing::Test {
   RealSyscalls syscalls;
 };
 
+// The same fixture for the tests below that create a process. A test that
+// creates one is named RealProcess*, so the mutation sweep can leave it out:
+// a mutant that breaks fork or reap can leave a child holding Mull's pipes,
+// which no timeout of Mull's reaches (tools/mutation-shard.py, which also
+// checks the name against what each test really does).
+class RealProcessSyscallsTest : public RealSyscallsTest {};
+
 TEST_F(RealSyscallsTest, OpensReadsAndClosesARealFile) {
   const std::string path = write("value", "95000\n");
 
@@ -310,7 +317,7 @@ TEST_F(RealSyscallsTest, ParentPidMatchesGetppid) {
   EXPECT_GT(syscalls.parent_pid(), 0);
 }
 
-TEST_F(RealSyscallsTest, ForkProducesARealChildThatTheParentReaps) {
+TEST_F(RealProcessSyscallsTest, ForkProducesARealChildThatTheParentReaps) {
   const auto forked = syscalls.fork_process();
   ASSERT_TRUE(forked.has_value()) << describe(forked.error());
 
@@ -343,7 +350,7 @@ TEST(SyscallResultTest, AFailedCallYieldsTheErrnoAndSubject) {
   EXPECT_EQ(result.error().subject, "worker process");
 }
 
-TEST_F(RealSyscallsTest, SignallingAReapedPidIsESRCH) {
+TEST_F(RealProcessSyscallsTest, SignallingAReapedPidIsESRCH) {
   // A real ESRCH from a real kill, rather than a fake agreeing that kill
   // returns ESRCH. This is the race WorkerPool::signal_all tolerates: a worker
   // that died between the last reap and the signal. Reaping first makes it
@@ -380,7 +387,7 @@ TEST_F(RealSyscallsTest, WaitingWithNoChildrenIsECHILD) {
   EXPECT_EQ(reaped.error().call, "waitpid");
 }
 
-TEST_F(RealSyscallsTest, WaitAnyReapsARealChildAndReportsItsStatusWord) {
+TEST_F(RealProcessSyscallsTest, WaitAnyReapsARealChildAndReportsItsStatusWord) {
   const auto forked = syscalls.fork_process();
   ASSERT_TRUE(forked.has_value()) << describe(forked.error());
   if (forked.value() == 0) {
@@ -393,7 +400,7 @@ TEST_F(RealSyscallsTest, WaitAnyReapsARealChildAndReportsItsStatusWord) {
   EXPECT_EQ(ExitStatus{reaped.value().status}.code(), 9);
 }
 
-TEST_F(RealSyscallsTest, ReapingWithoutWaitingAnswersNothingYetThenTheChildThenECHILD) {
+TEST_F(RealProcessSyscallsTest, ReapingWithoutWaitingAnswersNothingYetThenTheChildThenECHILD) {
   // Children, none terminated: nothing. One terminated: that one. None at
   // all: ECHILD, the failing arm, reachable here because nothing blocks.
   int fds[2] = {-1, -1};
@@ -832,7 +839,7 @@ TEST_F(RealSyscallsTest, ExplicitHugePagesAnswerAccordingToThePoolThisMachineHas
   EXPECT_TRUE(rounded.has_value()) << describe(rounded.error());
 }
 
-TEST_F(RealSyscallsTest, AnUnprivilegedProcessMeetsRlimitMemlockBothWaysTheKernelSaysNo) {
+TEST_F(RealProcessSyscallsTest, AnUnprivilegedProcessMeetsRlimitMemlockBothWaysTheKernelSaysNo) {
   // mlock ignores RLIMIT_MEMLOCK for a privileged process, and CI is one. So
   // a child lowers the limit, drops to nobody, and reports the errno of a
   // lock past the limit and of a lock under a limit of zero. If it cannot
@@ -886,7 +893,7 @@ TEST_F(RealSyscallsTest, AnUnprivilegedProcessMeetsRlimitMemlockBothWaysTheKerne
 
 // --- memory files against the real kernel ----------------------------------------
 
-TEST_F(RealSyscallsTest, AMemoryFileIsCloseOnExecUntilHandedOverAndMapsShared) {
+TEST_F(RealProcessSyscallsTest, AMemoryFileIsCloseOnExecUntilHandedOverAndMapsShared) {
   auto fd = syscalls.create_memory_file("loadforge-test", 4096);
   ASSERT_TRUE(fd.has_value()) << describe(fd.error());
   ASSERT_GE(fd.value(), 0);

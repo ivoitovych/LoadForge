@@ -6,8 +6,17 @@ on:
 
 jobs:
   gate:
-    name: 100% line and branch
-    runs-on: ubuntu-24.04
+    # On both architectures: each one compiles kernels the other cannot
+    # (src/primitives/simd/x86/ and src/primitives/simd/arm/), so each is
+    # measured on its own machine, and the completeness check expects each
+    # kernel directory only where it is built. Everything else is measured on
+    # both, which also holds the rest of src/ to 100% on ARM64.
+    name: 100% line and branch / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: |
@@ -60,4 +69,4 @@ jobs:
         run: ./tools/check-test-obligations.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
-        with: { name: coverage-html, path: build/coverage/coverage.html* }
+        with: { name: 'coverage-html-${{ matrix.runner }}', path: build/coverage/coverage.html* }
