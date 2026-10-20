@@ -7,6 +7,8 @@
 // re-runner executes the same program once per rung, pinned where the rung
 // says. N >= 2 throughout.
 
+#include "verification/isolation/ladder.hpp"
+
 #include <gtest/gtest.h>
 #include <sched.h>
 #include <stdlib.h>
@@ -21,11 +23,12 @@
 #include "controller/isolate.hpp"
 #include "controller/orchestration.hpp"
 #include "controller/rerun.hpp"
+#include "main/cli.hpp"
+#include "main/outcome.hpp"
 #include "platform/affinity.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
 #include "topology/snapshot.hpp"
-#include "verification/isolation/ladder.hpp"
 #include "workloads/registry/registry.hpp"
 
 namespace loadforge::controller {
@@ -171,6 +174,44 @@ TEST(IsolationLadder, ACorruptionOfSeveralThreadsOnlyIsConcurrencyDependent) {
     EXPECT_EQ(report->finding, verification::Finding::kConcurrencyDependent);
     EXPECT_EQ(report->answers.single_thread, verification::Answer::kNo);
   }
+}
+
+TEST(IsolationLadder, TheCommandLineReportsAWrongResultIsolatesItAndExitsWithTheFindingsCode) {
+  platform::RealSyscalls syscalls;
+  platform::Affinity affinity(syscalls);
+  auto permitted = affinity.permitted();
+  ASSERT_TRUE(permitted.has_value());
+  if (platform::ids_of(permitted.value()).size() < 2) {
+    GTEST_SKIP() << "needs two CPUs this process may use";
+  }
+  ::setenv("LOADFORGE_FAULT", "all", 1);
+  platform::FileSystem filesystem(syscalls);
+  auto machine = topology::take_snapshot(filesystem);
+  ASSERT_TRUE(machine.has_value());
+  config::Config config;
+  config.run.mode = config::Mode::kStress;
+  config.run.duration = core::Duration{1500};
+  for (int worker = 0; worker < 2; ++worker) {
+    config.workloads.push_back(
+        config::Workload{"compression", config::Threads::count(1), true, {}});
+  }
+  cli::StressOptions options;
+  options.capabilities = false;
+  options.footprint_bytes = std::uint64_t{4} << 20U;
+  options.isolation_limit = 1;
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(cli::run_stress(syscalls, config, LOADFORGE_FAULTY_WORKER, machine.value(), options,
+                            out, err),
+            cli::kExitWrongResult)
+      << err.str();
+  const std::string text = out.str();
+  EXPECT_NE(text.find("ExactBitCorruption"), std::string::npos) << text;
+  EXPECT_NE(text.find("worker 0 isolation of ExactBitCorruption:"), std::string::npos) << text;
+  EXPECT_NE(text.find("      isolation: same core yes, another core yes, single thread yes\n"),
+            std::string::npos)
+      << text;
+  EXPECT_NE(text.find("not isolated: past the limit of 1 isolations"), std::string::npos) << text;
 }
 
 }  // namespace

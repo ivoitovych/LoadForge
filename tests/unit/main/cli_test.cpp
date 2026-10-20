@@ -26,6 +26,7 @@
 #include "support/fake_syscalls.hpp"
 #include "topology/cpu_topology.hpp"
 #include "topology/snapshot.hpp"
+#include "unit/controller/machine_tree.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -328,7 +329,8 @@ TEST(Cli, RunStressReturnsAFailedWorkersExitCodeInTheChild) {
   syscalls.set_parent_pid(testing::FakeSyscalls::kFakePid);
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err),
+  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(),
+                       over_a_fake(), out, err),
             120);
   EXPECT_TRUE(err.str().empty()) << err.str();
   EXPECT_EQ(syscalls.exec_count(), 1);
@@ -340,7 +342,9 @@ TEST(Cli, RunStressReportsAControllerFailureAndTheUncleanRun) {
   failing.script_forks({{0, EAGAIN}});
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(failing, two_workloads(), "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err), 1);
+  EXPECT_EQ(run_stress(failing, two_workloads(), "/opt/loadforge", one_cpu_machine(), over_a_fake(),
+                       out, err),
+            1);
   EXPECT_NE(err.str().find("loadforge: spawn: fork(worker process): Resource temporarily"),
             std::string::npos)
       << err.str();
@@ -354,8 +358,9 @@ TEST(Cli, RunStressReportsAControllerFailureAndTheUncleanRun) {
       {{platform::Reaped{1001, 0}, 0}, {platform::Reaped{1002, 0}, 0}});
   std::ostringstream report;
   std::ostringstream quiet;
-  EXPECT_EQ(
-      run_stress(unclean, two_workloads(), "/opt/loadforge", one_cpu_machine(), over_a_fake(), report, quiet), 3);
+  EXPECT_EQ(run_stress(unclean, two_workloads(), "/opt/loadforge", one_cpu_machine(), over_a_fake(),
+                       report, quiet),
+            3);
   EXPECT_NE(report.str().find("0 of 2 worker(s) completed"), std::string::npos) << report.str();
   EXPECT_NE(report.str().find("\n  topology: 1 logical CPU(s) on 1 core(s) in 1 package(s); "
                               "caches not exposed; NUMA not exposed\n"),
@@ -394,7 +399,9 @@ TEST(Cli, RunStressChecksMemoryAgainstTheBudgetItReads) {
   serve_machine(two_quick_exits(syscalls, 0), "MemAvailable:   1048576 kB\n");
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err), 3);
+  EXPECT_EQ(
+      run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err),
+      3);
   EXPECT_NE(out.str().find("limit memory: enforced (checked at start against a ceiling of 1GiB)"),
             std::string::npos)
       << out.str();
@@ -404,7 +411,9 @@ TEST(Cli, RunStressChecksMemoryAgainstTheBudgetItReads) {
   serve_machine(two_quick_exits(refusing, 0), "MemAvailable:   1048576 kB\n");
   std::ostringstream quiet;
   std::ostringstream refusal;
-  EXPECT_EQ(run_stress(refusing, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), quiet, refusal), 1);
+  EXPECT_EQ(run_stress(refusing, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), quiet,
+                       refusal),
+            1);
   EXPECT_NE(refusal.str().find("loadforge: memory: workload.first: "), std::string::npos)
       << refusal.str();
   EXPECT_EQ(refusing.fork_count(), 0) << "refused before any worker started";
@@ -417,7 +426,9 @@ TEST(Cli, RunStressSaysWhyMemoryIsNotEnforcedWhenTheBudgetCannotBeRead) {
   serve_machine(two_quick_exits(syscalls, 0), "MemTotal:       16479424 kB\n");
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err), 3);
+  EXPECT_EQ(
+      run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err),
+      3);
   EXPECT_NE(out.str().find("limit memory: NOT ENFORCED (no memory budget could be read: "
                            "/proc/meminfo: not offered by this kernel (no MemAvailable line"),
             std::string::npos)
@@ -429,7 +440,8 @@ TEST(Cli, RunStressConsultsTheOomRecordForASigkillNobodySent) {
   serve_machine(two_quick_exits(syscalls, SIGKILL), "MemAvailable:   1048576 kB\n");
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err),
+  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(),
+                       over_a_fake(), out, err),
             3);
   EXPECT_NE(out.str().find("worker 0 (pid 1001): killed; killed by signal 9"), std::string::npos)
       << out.str();
@@ -446,6 +458,241 @@ TEST(Cli, DiagnosticsGoToStderrNotStdout) {
   const Outcome r = invoke({"--nope"});
   EXPECT_TRUE(r.out.empty());
   EXPECT_FALSE(r.err.empty());
+}
+
+// --- stress --test ----------------------------------------------------------------------
+
+TEST(CliStressTest, AnUnknownWorkloadIsAUsageErrorThatListsThoseThisBuildHas) {
+  const Outcome r = invoke({"stress", "--test", "fft"});
+  EXPECT_EQ(r.code, 2);
+  EXPECT_EQ(r.err,
+            "loadforge: stress --test: no workload named 'fft'; this build has: compression "
+            "dense_linear monte_carlo sort\n");
+  EXPECT_TRUE(r.out.empty());
+}
+
+TEST(CliStressTest, EveryOptionIsRefusedByNameWhenItIsMisused) {
+  struct Case {
+    std::vector<std::string_view> options;
+    std::string expected;
+  };
+  const std::vector<Case> cases = {
+      {{"--duration"}, "--duration: missing its value"},
+      {{"--duration", "soon"}, "--duration: "},
+      {{"--workers", "0"}, "--workers: must be at least 1"},
+      {{"--workers", "many"}, "--workers: expected a whole number, got 'many'"},
+      {{"--workers", "2x"}, "--workers: expected a whole number, got '2x'"},
+      {{"--footprint", "big"}, "--footprint: "},
+      {{"--isa", "sse"}, "--isa: 'sse' is none of scalar, avx2, avx512, neon"},
+      {{"--seed", "-1"}, "--seed: expected a whole number, got '-1'"},
+      {{"--bogus", "1"}, "--bogus: not an option of stress --test, or given twice"},
+      {{"--workers", "1", "--workers", "2"},
+       "--workers: not an option of stress --test, or given twice"},
+      {{"--seed", "1", "--seed", "2"}, "--seed: not an option of stress --test, or given twice"},
+      {{"--duration", "1s", "--duration", "2s"},
+       "--duration: not an option of stress --test, or given twice"},
+      {{"--footprint", "1MiB", "--footprint", "2MiB"},
+       "--footprint: not an option of stress --test, or given twice"},
+      {{"--isa", "scalar", "--isa", "neon"},
+       "--isa: not an option of stress --test, or given twice"},
+  };
+  for (const Case& each : cases) {
+    std::vector<std::string_view> args{"stress", "--test", "compression"};
+    args.insert(args.end(), each.options.begin(), each.options.end());
+    const Outcome r = invoke(args);
+    EXPECT_EQ(r.code, 2) << each.expected;
+    EXPECT_EQ(r.err.substr(0, 26 + each.expected.size()),
+              "loadforge: stress --test: " + each.expected)
+        << r.err;
+    EXPECT_TRUE(r.out.empty());
+  }
+}
+
+TEST(CliStressTest, StressTakesAConfigOrATestAndNothingElse) {
+  for (const std::vector<std::string_view>& args :
+       {std::vector<std::string_view>{"stress", "--test"},
+        std::vector<std::string_view>{"stress", "--tests", "compression"}}) {
+    const Outcome r = invoke(args);
+    EXPECT_EQ(r.code, 2);
+    EXPECT_NE(r.err.find("stress takes --config FILE or --test NAME"), std::string::npos) << r.err;
+  }
+}
+
+/// A link to the shipped binary, which is what a real run's workers must be:
+/// in the unit tests /proc/self/exe is the test.
+class LinkToTheBinary {
+ public:
+  LinkToTheBinary()
+      : path_(std::filesystem::temp_directory_path() /
+              ("loadforge-link-" + std::to_string(::getpid()))) {
+    std::filesystem::remove(path_);
+    std::filesystem::create_symlink(LOADFORGE_BINARY, path_);
+  }
+  ~LinkToTheBinary() {
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+  }
+  LinkToTheBinary(const LinkToTheBinary&) = delete;
+  LinkToTheBinary& operator=(const LinkToTheBinary&) = delete;
+  LinkToTheBinary(LinkToTheBinary&&) = delete;
+  LinkToTheBinary& operator=(LinkToTheBinary&&) = delete;
+  [[nodiscard]] std::string path() const { return path_.string(); }
+
+ private:
+  std::filesystem::path path_;
+};
+
+TEST(CliStressTest, ATestThatCannotNameItsExecutableOrDescribeTheMachineIsRefusedBeforeAnyWorker) {
+  {
+    std::ostringstream out;
+    std::ostringstream err;
+    const std::vector<std::string_view> args{"compression", "--duration", "1s"};
+    EXPECT_EQ(stress_test(args, LOADFORGE_SOURCE_DIR "/no-such-link", "/sys", out, err), 1);
+    EXPECT_NE(err.str().find("cannot resolve this executable for the workers"), std::string::npos)
+        << err.str();
+  }
+  {
+    const LinkToTheBinary link;
+    std::ostringstream out;
+    std::ostringstream err;
+    const std::vector<std::string_view> args{"compression", "--duration", "1s"};
+    EXPECT_EQ(stress_test(args, link.path(), LOADFORGE_SOURCE_DIR "/no-such-sysfs", out, err), 1);
+    EXPECT_NE(err.str().find("cannot describe this machine before starting workers"),
+              std::string::npos)
+        << err.str();
+    EXPECT_TRUE(out.str().empty());
+  }
+}
+
+TEST(CliStressTest, ATestRunsRealWorkersForRealAndReportsWhatTheyChecked) {
+  const LinkToTheBinary link;
+  std::ostringstream out;
+  std::ostringstream err;
+  const std::vector<std::string_view> args{"compression", "--duration",  "1s",    "--workers",
+                                           "2",           "--footprint", "6MiB",  "--seed",
+                                           "7",           "--isa",       "scalar"};
+  EXPECT_EQ(stress_test(args, link.path(), "/sys", out, err), 0) << out.str() << err.str();
+  const std::string text = out.str();
+  EXPECT_NE(text.find("stress for 1s with 2 worker(s)\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("  workload compression: 1 thread(s) on cpu "), std::string::npos) << text;
+  EXPECT_NE(text.find("footprint 6MiB"), std::string::npos) << text;
+  EXPECT_NE(text.find("  floating point (asserted at startup): rounding to nearest"),
+            std::string::npos)
+      << text;
+  EXPECT_NE(text.find("  capabilities:\ntelemetry capability: "), std::string::npos) << text;
+  EXPECT_NE(text.find("2 of 2 worker(s) completed"), std::string::npos) << text;
+  EXPECT_NE(text.find("the oracle checked "), std::string::npos) << text;
+  EXPECT_NE(text.find(" sampled block(s) and found 0 wrong"), std::string::npos) << text;
+  EXPECT_NE(text.find("    findings: 0 wrong result(s), 0 check(s) not performed\n"),
+            std::string::npos)
+      << text;
+}
+
+TEST(CliStressTest, WithoutWorkersOrAFootprintATestTakesOneWorkerPerCpuTheProcessMayUse) {
+  const LinkToTheBinary link;
+  std::ostringstream out;
+  std::ostringstream err;
+  const std::vector<std::string_view> args{"compression", "--duration", "1s", "--footprint",
+                                           "4MiB"};
+  EXPECT_EQ(stress_test(args, link.path(), "/sys", out, err), 0) << out.str() << err.str();
+  EXPECT_NE(out.str().find("worker(s) completed"), std::string::npos) << out.str();
+}
+
+// --- the plan, over the fake -----------------------------------------------------------------
+
+TEST(CliStressTest, EveryChoiceReachesTheWorkerThroughTheArgv) {
+  const controller_testing::MachineTree tree(controller_testing::MachineShape{3, 128, true});
+  const topology::Snapshot machine = tree.accepted();
+  testing::FakeSyscalls syscalls;
+  syscalls.advance_clocks_per_read(10'000'000);
+  syscalls.script_forks({{0, 0}});  // This process is the first worker; its exec fails.
+  syscalls.set_parent_pid(testing::FakeSyscalls::kFakePid);
+  config::Config config = two_workloads();
+  config.workloads[0].name = "compression";
+  config.workloads[1].name = "compression";
+  config.workloads[0].threads = config::Threads::count(1);
+  config.workloads[1].threads = config::Threads::count(1);
+  StressOptions options = over_a_fake();
+  options.seed = 4;
+  options.isa = simd::IsaPath::kScalar;
+  options.footprint_bytes = std::uint64_t{4} << 20U;
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, options, out, err), 120);
+  const std::vector<std::string>& argv = syscalls.last_exec_argv();
+  std::vector<std::string_view> tail;
+  for (std::size_t at = 2; at < argv.size(); ++at) {
+    tail.emplace_back(argv[at]);
+  }
+  auto parsed = worker::parse_args(tail);
+  ASSERT_TRUE(parsed.has_value()) << parsed.error();
+  ASSERT_TRUE(parsed.value().workload.has_value());
+  EXPECT_EQ(parsed.value().workload->seed, 4U);
+  EXPECT_EQ(parsed.value().workload->line_bytes, 128U) << "the topology's, never an assumed 64";
+  EXPECT_EQ(parsed.value().workload->footprint_bytes, std::uint64_t{4} << 20U);
+  EXPECT_EQ(parsed.value().workload->numa_node, 0U);
+  EXPECT_EQ(parsed.value().cpus.size(), 1U);
+}
+
+TEST(CliStressTest, AMachineWhoseCacheLineIsNotKnownDoesNotRunAWorkload) {
+  const controller_testing::MachineTree tree(
+      controller_testing::MachineShape{2, std::nullopt, false});
+  const topology::Snapshot machine = tree.accepted();
+  testing::FakeSyscalls syscalls;
+  syscalls.advance_clocks_per_read(10'000'000);
+  config::Config config = two_workloads();
+  config.workloads[0].name = "compression";
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, over_a_fake(), out, err), 1);
+  EXPECT_NE(err.str().find("compression: the machine's cache-line size is not known"),
+            std::string::npos)
+      << err.str();
+  EXPECT_EQ(syscalls.fork_count(), 0);
+}
+
+TEST(CliStressTest, TheCpusAWorkerMayUseAreWhatTheKernelPermitsOfWhatTheSnapshotFound) {
+  const controller_testing::MachineTree tree(controller_testing::MachineShape{3, 64, false});
+  const topology::Snapshot machine = tree.accepted();
+  const auto cpus_of_first_worker = [&](testing::FakeSyscalls& syscalls) {
+    syscalls.advance_clocks_per_read(10'000'000);
+    syscalls.script_forks({{0, 0}});
+    syscalls.set_parent_pid(testing::FakeSyscalls::kFakePid);
+    config::Config config = two_workloads();
+    config.workloads[0].name = "compression";
+    config.workloads[0].threads = config::Threads::all();
+    std::ostringstream out;
+    std::ostringstream err;
+    EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, over_a_fake(), out, err),
+              120);
+    std::vector<std::string_view> tail;
+    const std::vector<std::string>& argv = syscalls.last_exec_argv();
+    for (std::size_t at = 2; at < argv.size(); ++at) {
+      tail.emplace_back(argv[at]);
+    }
+    return worker::parse_args(tail).value().cpus;
+  };
+  {
+    testing::FakeSyscalls syscalls;
+    platform::CpuMask only_one_and_two;
+    only_one_and_two.cpus.set(1);
+    only_one_and_two.cpus.set(2);
+    syscalls.permit_cpus(only_one_and_two);
+    syscalls.set_current_affinity(only_one_and_two);
+    EXPECT_EQ(cpus_of_first_worker(syscalls), (std::vector<std::uint32_t>{1, 2}));
+  }
+  {
+    testing::FakeSyscalls syscalls;
+    syscalls.fail_get_affinity(EIO);
+    EXPECT_EQ(cpus_of_first_worker(syscalls), (std::vector<std::uint32_t>{0, 1, 2}))
+        << "the kernel will not say: the snapshot's, and a placement refusal names any withheld";
+  }
+}
+
+TEST(Cli, TheReRunSwitchIsInternalAndRefusesBadArguments) {
+  const Outcome r = invoke({"--rerun", "--cpu", "0"});
+  EXPECT_EQ(r.code, 22);
+  EXPECT_EQ(r.err, "loadforge --rerun: --workload: required\n");
 }
 
 }  // namespace

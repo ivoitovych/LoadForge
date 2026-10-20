@@ -14,6 +14,8 @@
 #include "controller/supervision.hpp"
 #include "core/duration.hpp"
 #include "core/version.hpp"
+#include "verification/isolation.hpp"
+#include "verification/record.hpp"
 
 namespace loadforge::reporters {
 namespace {
@@ -77,6 +79,151 @@ TEST(ConsoleReporterTest, TheSummaryNamesEachWorkersFateAndWhatItSent) {
             "    started: slot 0 pid 42\n"
             "    finished: the controller asked for a stop\n"
             "  worker 1 (pid 43): fault; killed by signal 11; progress 7; running\n");
+}
+
+// --- verified workloads ----------------------------------------------------------------
+
+controller::WorkerReport a_verifying_worker() {
+  controller::WorkerReport worker;
+  worker.slot = 0;
+  worker.pid = 42;
+  worker.fate = controller::WorkerFate::kCompleted;
+  worker.termination = "exited with code 0";
+  worker.stop = "stop requested";
+  worker.progress = 12;
+  worker.work = controller::WorkerWork{};
+  worker.tally_seen = true;
+  worker.tally.units_computed = 12;
+  worker.tally.oracle_checked = 10;
+  worker.tally.oracle_blocks = 640;
+  worker.tally.oracle_failed = 1;
+  worker.tally.oracle_not_performed = 2;
+  worker.tally.integrity_checked = 6;
+  worker.tally.integrity_failed = 3;
+  return worker;
+}
+
+TEST(ConsoleReporterTest, TheBannerStatesEachWorkloadTheRegistersAndTheCapabilities) {
+  std::ostringstream out;
+  ConsoleReporter reporter(out);
+  controller::RunPlan plan;
+  plan.mode = config::Mode::kStress;
+  plan.duration = core::Duration{1000};
+  plan.workers = 2;
+  plan.executable = "/usr/bin/loadforge";
+  plan.topology = "t";
+  plan.workloads = {"compression: 1 thread(s) on cpu 0", "compression: 1 thread(s) on cpu 1"};
+  plan.environment = "floating point (asserted at startup): rounding to nearest";
+  plan.capabilities = "telemetry capability: 1 of 2 metric(s) present\n  thermal: 0 of 1 present\n";
+  reporter.run_starting(plan);
+  EXPECT_EQ(out.str(), std::string{"loadforge "} + std::string{core::kVersion} +
+                           ": stress for 1s with 2 worker(s)\n"
+                           "  executable: /usr/bin/loadforge\n"
+                           "  topology: t\n"
+                           "  workload compression: 1 thread(s) on cpu 0\n"
+                           "  workload compression: 1 thread(s) on cpu 1\n"
+                           "  floating point (asserted at startup): rounding to nearest\n"
+                           "  capabilities:\n"
+                           "telemetry capability: 1 of 2 metric(s) present\n"
+                           "  thermal: 0 of 1 present\n");
+  plan.capabilities = "no trailing newline";
+  std::ostringstream again;
+  ConsoleReporter second(again);
+  second.run_starting(plan);
+  EXPECT_NE(again.str().find("  capabilities:\nno trailing newline\n"), std::string::npos);
+}
+
+TEST(ConsoleReporterTest, WhatAWorkerCheckedIsToldAsSampledAndNeverAsCorrect) {
+  std::ostringstream out;
+  ConsoleReporter reporter(out);
+  controller::RunReport report;
+  report.workers = {a_verifying_worker()};
+  reporter.run_finished(report);
+  const std::string text = out.str();
+  EXPECT_NE(text.find("    verification: 12 unit(s) computed; the oracle checked 10 of them over "
+                      "640 sampled block(s) and found 1 wrong, 2 not checked; the input bracket "
+                      "covered 6 unit(s) and found 3 wrong\n"),
+            std::string::npos)
+      << text;
+  EXPECT_NE(text.find("    findings: 0 wrong result(s), 0 check(s) not performed\n"),
+            std::string::npos)
+      << text;
+  EXPECT_EQ(text.find("correct"), std::string::npos);
+}
+
+TEST(ConsoleReporterTest, AWorkerThatSentNoTallySaysNothingItCheckedIsKnown) {
+  std::ostringstream out;
+  ConsoleReporter reporter(out);
+  controller::RunReport report;
+  controller::WorkerReport worker = a_verifying_worker();
+  worker.tally_seen = false;
+  report.workers = {worker};
+  reporter.run_finished(report);
+  EXPECT_NE(out.str().find("    verification: this worker sent no tally; nothing it checked is "
+                           "known\n"),
+            std::string::npos)
+      << out.str();
+}
+
+TEST(ConsoleReporterTest, EveryFindingIsPrintedUnderItsWorkerAndTheOnesNotKeptAreCounted) {
+  std::ostringstream out;
+  ConsoleReporter reporter(out);
+  controller::RunReport report;
+  controller::WorkerReport worker = a_verifying_worker();
+  verification::VerificationNotPerformed unrun;
+  unrun.what = "oracle over compression units";
+  unrun.why = "no unit was sampled";
+  controller::FindingReport finding;
+  finding.record = unrun;
+  worker.findings = {finding};
+  worker.not_performed = 1;
+  worker.findings_dropped = 4;
+  report.workers = {worker};
+  reporter.run_finished(report);
+  const std::string text = out.str();
+  EXPECT_NE(
+      text.find("    findings: 0 wrong result(s), 1 check(s) not performed (4 more not kept)\n"),
+      std::string::npos)
+      << text;
+  EXPECT_NE(text.find("      VerificationNotPerformed"), std::string::npos) << text;
+  EXPECT_NE(text.find("      "), std::string::npos);
+}
+
+TEST(ConsoleReporterTest, IsolationIsToldInTheLaddersWordsAndNeverAsAVerdict) {
+  std::ostringstream out;
+  ConsoleReporter reporter(out);
+  controller::RunReport report;
+  controller::WorkerReport worker = a_verifying_worker();
+  verification::ExactBitCorruption wrong;
+  wrong.check = "decoded output against input";
+  controller::FindingReport isolated;
+  isolated.record = wrong;
+  verification::IsolationReport ladder;
+  ladder.answers = {verification::Answer::kYes, verification::Answer::kNo,
+                    verification::Answer::kYes};
+  ladder.finding = verification::derive_finding(ladder.answers);
+  ladder.confidence = verification::confidence_of(ladder.finding);
+  isolated.isolation = ladder;
+  controller::FindingReport skipped;
+  skipped.record = wrong;
+  skipped.not_isolated = "past the limit of 1 isolations";
+  verification::VerificationNotPerformed unrun;
+  unrun.what = "w";
+  unrun.why = "y";
+  controller::FindingReport unchecked;
+  unchecked.record = unrun;
+  worker.findings = {isolated, skipped, unchecked};
+  report.workers = {worker};
+  reporter.isolation_finished(report);
+  EXPECT_EQ(out.str(),
+            "  worker 0 isolation of ExactBitCorruption:\n"
+            "      isolation: same core yes, another core no, single thread yes\n"
+            "      " +
+                std::string{verification::describe(ladder.finding)} + " (confidence " +
+                std::string{verification::describe(ladder.confidence)} +
+                ")\n"
+                "  worker 0 ExactBitCorruption not isolated: past the limit of 1 isolations\n")
+      << "a check that was not made is not isolated and says nothing";
 }
 
 }  // namespace

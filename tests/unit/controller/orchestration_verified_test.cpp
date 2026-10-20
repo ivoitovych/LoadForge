@@ -16,6 +16,7 @@
 
 #include "controller/orchestration.hpp"
 #include "platform/fpenv/environment.hpp"
+#include "primitives/rng/philox.hpp"
 #include "support/fake_syscalls.hpp"
 #include "unit/controller/consumer_models.hpp"
 #include "unit/controller/machine_tree.hpp"
@@ -203,7 +204,8 @@ TEST(ControllerVerified, WithoutRegistersOrSourcesTheBannerSaysNothingOfThem) {
   rig.both_exit_after([] {});
   ASSERT_TRUE(rig.run().has_value());
   const RunPlan& plan = rig.reporter.plans[0];
-  EXPECT_EQ(plan.workloads, (std::vector<std::string>{"first: null workload", "first: null workload"}));
+  EXPECT_EQ(plan.workloads,
+            (std::vector<std::string>{"first: null workload", "first: null workload"}));
   EXPECT_TRUE(plan.environment.empty());
   EXPECT_TRUE(plan.capabilities.empty());
 }
@@ -226,7 +228,8 @@ TEST(ControllerVerified, ARunDoesNotStartOnRegistersItCannotPutRight) {
   auto result = rig.run();
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().stage, "floating-point environment");
-  EXPECT_NE(result.error().detail.find("flush_to_zero"), std::string::npos) << result.error().detail;
+  EXPECT_NE(result.error().detail.find("flush_to_zero"), std::string::npos)
+      << result.error().detail;
   EXPECT_EQ(rig.syscalls.fork_count(), 0);
 }
 
@@ -330,7 +333,8 @@ TEST(ControllerVerified, WhatIsNotARecordTheContractAllowsIsACorruptChannelNever
   const std::vector<Garbage> garbage = {
       {"an error record that is not an encoding",
        [](Rig& rig) {
-         rig.deliver(0, verification::kErrorRecordFrameType, std::vector<std::byte>(40, std::byte{0x7}));
+         rig.deliver(0, verification::kErrorRecordFrameType,
+                     std::vector<std::byte>(40, std::byte{0x7}));
        },
        "an error record that does not decode"},
       {"an error record of a version nobody speaks",
@@ -387,7 +391,8 @@ TEST(ControllerVerified, ARecordFromAWorkerThatRunsNothingIsNotBelieved) {
   EXPECT_EQ(result.value().workers[0].wrong_results, 0U);
 }
 
-TEST(ControllerVerified, AnErrorRecordWithNoWorkloadInItsProvenanceStillBelongsToTheWorkerThatSentIt) {
+TEST(ControllerVerified,
+     AnErrorRecordWithNoWorkloadInItsProvenanceStillBelongsToTheWorkerThatSentIt) {
   Rig rig;
   verification::VerificationNotPerformed bare;
   bare.what = "the bracket";
@@ -397,6 +402,59 @@ TEST(ControllerVerified, AnErrorRecordWithNoWorkloadInItsProvenanceStillBelongsT
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(result.value().workers[0].not_performed, 1U);
   EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+}
+
+/// A frame with one byte of the whole frame (header, checksum or payload) changed.
+std::string with_one_byte_changed(std::string frame, std::uint64_t pick) {
+  const std::size_t at = static_cast<std::size_t>(pick % frame.size());
+  frame[at] = static_cast<char>(static_cast<unsigned char>(frame[at]) ^ (1U << (pick / 7 % 8)));
+  return frame;
+}
+
+TEST(ControllerVerified, NoByteOfARecordFrameChangedInTransitMakesAFinding) {
+  // The IPC fuzz of docs/IMPLEMENTATION.md §4 extended to the record types: a
+  // whole frame with exactly one bit flipped is refused by the frame's checksum,
+  // wherever the bit is, and nothing the worker sent after it is read.
+  const std::string good =
+      frame_of(verification::kErrorRecordFrameType, verification::encode(a_wrong_result()));
+  for (std::uint64_t pick = 0; pick < 400; ++pick) {
+    Rig rig;
+    const std::string bad = with_one_byte_changed(good, pick);
+    rig.both_exit_after([&rig, &bad] {
+      rig.syscalls.deliver_to_pipe(kRecordRead0, bad);
+      rig.deliver_tally(0, a_tally(1));
+    });
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << pick << ": " << describe(result.error());
+    const WorkerReport& first = result.value().workers[0];
+    EXPECT_TRUE(first.findings.empty()) << pick;
+    EXPECT_EQ(first.wrong_results, 0U) << pick;
+    EXPECT_FALSE(first.tally_seen) << pick << ": nothing after a bad frame is read";
+    EXPECT_FALSE(is_clean(first.fate)) << pick;
+  }
+}
+
+TEST(ControllerVerified, WhateverBytesFillAWholeFrameNoInvalidRecordIsEverKept) {
+  // Well-framed garbage: valid checksums around random payloads, of every
+  // record type the controller reads and of types it does not.
+  for (std::uint64_t stream = 0; stream < 300; ++stream) {
+    std::vector<std::byte> payload(stream % 130);
+    rng::fill_stream(7, stream, payload);
+    if (stream % 3 == 0 && payload.size() >= 2) {
+      payload[0] = std::byte{verification::kRecordFormatVersion};
+      payload[1] = static_cast<std::byte>(1 + stream % 3);
+    }
+    const std::uint16_t type = stream % 5 == 0   ? worker::kTallyFrameType
+                               : stream % 5 == 1 ? static_cast<std::uint16_t>(stream % 64)
+                                                 : verification::kErrorRecordFrameType;
+    Rig rig;
+    rig.both_exit_after([&rig, &payload, type] { rig.deliver(0, type, payload); });
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << stream << ": " << describe(result.error());
+    for (const FindingReport& finding : result.value().workers[0].findings) {
+      EXPECT_TRUE(verification::is_valid(finding.record)) << stream;
+    }
+  }
 }
 
 TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {

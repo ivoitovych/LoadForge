@@ -10,6 +10,7 @@ add_executable(loadforge_unit_tests
   unit/core/crc32_test.cpp
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
+  unit/main/outcome_test.cpp
   unit/config/config_test.cpp
   unit/platform/syscall_error_test.cpp
   unit/platform/fs_test.cpp
@@ -96,6 +97,12 @@ set_tests_properties(cli_check_config_refused PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_worker_bad_args_code
          COMMAND sh -c "'$<TARGET_FILE:loadforge>' --worker --slot 0; test $? -eq 125")
 add_test(NAME cli_worker_bad_args_message COMMAND loadforge --worker --slot 0)
+# The re-run switch through the real binary: misused, it refuses with its own
+# code; used, it runs one unit on one CPU with every check on and exits clean.
+add_test(NAME cli_rerun_bad_args_code
+         COMMAND sh -c "'$<TARGET_FILE:loadforge>' --rerun --cpu 0; test $? -eq 22")
+add_test(NAME cli_rerun_runs_a_unit_clean
+         COMMAND sh -c "'$<TARGET_FILE:loadforge>' --rerun --workload compression --seed 5 --footprint-bytes 1048576 --threads 1 --decomposition 0 --isa scalar --line-bytes 64 --version 1 --iteration 7 --cpu 0; test $? -eq 0")
 set_tests_properties(cli_worker_bad_args_message PROPERTIES
                      PASS_REGULAR_EXPRESSION "loadforge --worker: --workers: required")
 
@@ -117,6 +124,23 @@ add_test(NAME cli_stress_refuses_other_modes
 set_tests_properties(cli_stress_refuses_other_modes PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_stress_usage COMMAND loadforge stress)
 set_tests_properties(cli_stress_usage PROPERTIES WILL_FAIL TRUE)
+# M2a exit criterion 1 and 5 and M2b exit criterion 1 through the real binary:
+# each workload is stressed, checked by its oracle, and the run says what the
+# machine can and cannot be read for before it starts.
+foreach(workload IN ITEMS compression dense_linear)
+  add_test(NAME cli_stress_test_${workload}
+           COMMAND loadforge stress --test ${workload} --duration 2s --workers 2 --footprint 6MiB)
+  set_tests_properties(cli_stress_test_${workload} PROPERTIES
+                       PASS_REGULAR_EXPRESSION
+                       "2 of 2 worker\\(s\\) completed.*the oracle checked [1-9][0-9]* of them over [1-9][0-9]* sampled block\\(s\\) and found 0 wrong")
+endforeach()
+add_test(NAME cli_stress_test_states_the_capabilities_first
+         COMMAND loadforge stress --test compression --duration 1s --workers 2 --footprint 6MiB)
+set_tests_properties(cli_stress_test_states_the_capabilities_first PROPERTIES
+                     PASS_REGULAR_EXPRESSION
+                     "capabilities:\ntelemetry capability: [0-9]+ of [0-9]+ metric\\(s\\) present.*spawned 2 worker")
+add_test(NAME cli_stress_test_unknown_workload COMMAND loadforge stress --test no_such)
+set_tests_properties(cli_stress_test_unknown_workload PROPERTIES WILL_FAIL TRUE)
 
 # The fake worker the supervision tier drives the controller against.
 add_subdirectory(support/fake_worker)
