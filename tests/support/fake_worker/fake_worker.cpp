@@ -511,7 +511,11 @@ int Worker::protocol(bool outlast, bool slow) {
   (void)send(ipc::RecordType::kStarted, started_text());
   const std::int64_t started = monotonic_ns();
   std::int64_t last_step = started;
-  std::uint64_t progress = 0;
+  // Progress 1 from the first beat: the controller's clock for "not
+  // progressing" runs from its own start, so the first change it sees must
+  // come as soon as the worker is seen, however long its exec took (a
+  // sanitizer runtime under load takes hundreds of milliseconds).
+  std::uint64_t progress = 1;
   while (true) {
     const std::int64_t now = monotonic_ns();
     beat(progress);

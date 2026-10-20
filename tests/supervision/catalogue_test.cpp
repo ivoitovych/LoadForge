@@ -321,7 +321,7 @@ INSTANTIATE_TEST_SUITE_P(MisbehaviourCatalogue, FaultSignal,
 TEST(MisbehaviourCatalogue, ASilentHangHoldingItsDescriptorsIsTimedOutByItsHeartbeat) {
   const Selector selector{"*=outlast,1=hang"};
   Recorder recorder;
-  const RunReport report = run_fake(workloads(2, kNeverMs), fake_options(600), recorder);
+  const RunReport report = run_fake(workloads(2, kNeverMs), fake_options(2000), recorder);
   ASSERT_EQ(report.workers.size(), 2U);
   expect_completed(report.workers[0]);
   const WorkerReport& hung = report.workers[1];
@@ -341,7 +341,7 @@ TEST(MisbehaviourCatalogue, ASpinWithoutProgressIsTimedOutWhileASlowWorkerComple
   // the same progress: alive, busy, and going nowhere.
   const Selector selector{"0=slow,1=spin"};
   Recorder recorder;
-  const RunReport report = run_fake(workloads(2, kNeverMs), fake_options(1000), recorder);
+  const RunReport report = run_fake(workloads(2, kNeverMs), fake_options(2000), recorder);
   ASSERT_EQ(report.workers.size(), 2U);
   expect_completed(report.workers[0]);
   EXPECT_GE(report.workers[0].progress, 2U);
