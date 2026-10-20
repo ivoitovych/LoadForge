@@ -2,11 +2,63 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/fft and nothing else.
 
 [[module]]
-path    = "src/workloads/fft"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the fft specification alone (spec.hpp, ADR 0004): the radices, the stage count, the twiddle constant and the tolerance factors, each tested in tests/contracts/workloads/. \
-The fft stream takes this row over with the workload and owes what \
-IMPLEMENTATION §3 lists for it -- P4 and P5, and T3, T4, T5, T5b, T6 -- with \
-provides = ["WorkloadContract"]."""
+path     = "src/workloads/fft"
+classes  = ["P1", "P3", "P4", "P5"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+fixtures = ["fft"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+The FFT workload (spec.hpp): the forward DFT of 4096 complex points, radix 2 or \
+4, Stockham autosort in decimation-in-time form, one executor run per stage. \
+No call of this module can fail at run time -- it makes no system call, \
+allocates nothing and reads no clock -- so there is no P2; its faults are \
+wrong bits, which is P4. \
+\
+P1 is each decision: the radix check, the kernel lookup by ISA path (a path \
+without a kernel is refused, never replaced), the footprint check, the \
+octant mirror and the quadrant rotation of the twiddle image, the \
+ping-pong buffer choice per stage, and the clamp of the last task of a stage \
+(unit/). P3 is the boundary of every input: the footprint at one unit and one \
+byte less, radices 0, 1, 3, 8 and 4096, the lowest and highest unit index, \
+non-finite and garbage input bytes, the pinned twiddles W[0], W[n/4], W[n/8] \
+and the absence of any negative zero in the table (unit/). The table is \
+compared with a file computed entry by entry with 120-digit arithmetic, no \
+symmetry used (fixtures/fft/, whose README names the command and machine). \
+\
+T3 is a direct DFT in long double at every bin of whole units and the \
+specification's own check at 17 places, Parseval, a round trip through the \
+forward workload, and the two radices against each other. T4 is power-of-two \
+scaling and negation, which must be exact, and linearity, conjugate symmetry, \
+the shift theorem and Parseval, which must hold within the derived bound. \
+\
+P4 means what the specification's check can and cannot see (T5): an exponent \
+or high-mantissa flip in a sampled bin is a dft-bin mismatch naming that bin \
+and its ordinal; the same flip in an unsampled bin is a Parseval mismatch; \
+NaN and infinity are mismatches; the smallest failing k is named; the \
+tolerance holds just inside and breaks just outside; a low-bit flip is shown \
+unseen, as the specification says it is; and a corrupted INPUT is caught by \
+regeneration, not by the transform that follows. T5b is the checks that \
+cannot be made: evidence of the wrong size, an input component not finite or \
+above 1, an all-zero input -- each NotChecked with zero blocks compared. The \
+checker is the test tree's own, written from spec.hpp alone; the oracle \
+stream's is separate. \
+\
+T6 holds BitExactFixedDecomposition to account: the bits of one thread at 2, \
+3, 4, 5, 7, 8 and 16 threads, thirty runs at seven, output and scratch \
+prefilled with noise, units in either order, and digests committed for the \
+scalar path; and the two radices agree within the tolerance and differ in \
+bits, which is what keeps the class from being BitExact. \
+\
+P5: the only synchronisation is the barrier at the end of each executor run, \
+between stages; the stage kernels write disjoint elements of one shared \
+buffer, so a task needs no private scratch. The ordering is the executor \
+contract's, exercised by the thread-count and repeat tests under real \
+threads, which run under TSan. \
+\
+provides WorkloadContract: instantiated for the default radix, radix 2 and \
+radix 4 (unit/contract_test.cpp). consumes ExecutorContract: instantiated \
+against this module's own stand-ins, one that runs on the calling thread and \
+one that joins a thread per slot (the same file). The kernel table holds the \
+scalar kernel only: the AVX2 and NEON kernels are not here, and the reason is \
+in docs/journal/22-workload-fft.md."""

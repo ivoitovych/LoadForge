@@ -162,6 +162,18 @@ inline std::array<std::size_t, kSampledBins> sampled_bins(std::uint64_t index) {
   return out;
 }
 
+/// X'_k of the specification: the direct sum with the table, in plain double loops.
+inline Complex direct_bin(const std::vector<double>& x, std::size_t k) {
+  double re = 0.0;
+  double im = 0.0;
+  for (std::size_t j = 0; j < kPoints; ++j) {
+    const Complex w = kTwiddles[(j * k) % kPoints];
+    re += x[2 * j] * w.re - x[2 * j + 1] * w.im;
+    im += x[2 * j] * w.im + x[2 * j + 1] * w.re;
+  }
+  return Complex{re, im};
+}
+
 /// The specification's check of `output` against `input` for a unit computed
 /// with `radix`: kSampledBins direct-DFT bins in increasing k, then Parseval.
 inline Verdict check_unit(std::uint32_t radix, std::uint64_t index, const Bytes& input,
@@ -188,14 +200,9 @@ inline Verdict check_unit(std::uint32_t radix, std::uint64_t index, const Bytes&
   std::size_t checks = 0;
   for (const std::size_t k : sampled_bins(index)) {
     ++checks;
-    double re = 0.0;
-    double im = 0.0;
-    for (std::size_t j = 0; j < kPoints; ++j) {
-      const Complex w = kTwiddles[(j * k) % kPoints];
-      re += x[2 * j] * w.re - x[2 * j + 1] * w.im;
-      im += x[2 * j] * w.im + x[2 * j + 1] * w.re;
-    }
-    const double residual = std::max(std::fabs(y[2 * k] - re), std::fabs(y[2 * k + 1] - im));
+    const Complex direct = direct_bin(x, k);
+    const double residual =
+        std::max(std::fabs(y[2 * k] - direct.re), std::fabs(y[2 * k + 1] - direct.im));
     if (!(residual <= bin_tolerance)) {
       return Verdict{Kind::kBoundedMismatch, checks, "dft-bin", k, residual, bin_tolerance};
     }
