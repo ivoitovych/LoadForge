@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/monte_carlo and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/monte_carlo"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+fixtures = ["oracle/monte_carlo/exact_sums.txt"]
+note     = """
+The independent oracle for Monte Carlo: a scalar replay of the four sampled \
+batches, each sum judged against 2^-38 of the replayed sum, the bound the \
+specification derives. Bounded, so no bit fields exist in what it reports. P1: \
+each sampled batch, the smallest-failing-batch rule from both sides (a later \
+replay with the smaller number, and one without), agreement, and the creation \
+refusals. P3: every chunk length and the default; keys 0, all ones and the \
+sign bit; sums of NaN, infinity, zero, negative zero and a subnormal; the \
+bound held and breached by one ulp on both sides. P4 is the subject: every bit \
+of a sampled sum flipped (caught from mantissa bit 15 up, derived from the \
+bound, and not below it), a sum scaled, a batch key corrupted before and after \
+compute(), and which units catch a given corrupted batch (exactly the four \
+that sample it in 64). T3: the replay against the exact sum of the same values \
+in integers, and against math.fsum (fixture). T5b: evidence of the wrong size \
+in six ways is NotChecked with nothing compared; no other NotChecked exists, \
+shown with keys at the ends of the domain. No P2: nothing here is fallible."""
