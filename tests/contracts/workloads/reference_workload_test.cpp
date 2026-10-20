@@ -231,6 +231,7 @@ TEST(WorkloadDefinition, NamesAreLowerCaseLettersDigitsAndUnderscoresFromALetter
   EXPECT_FALSE(workloads::is_valid_name("2fft"));
   EXPECT_FALSE(workloads::is_valid_name("_x"));
   EXPECT_FALSE(workloads::is_valid_name("Dense"));
+  EXPECT_FALSE(workloads::is_valid_name("{x")) << "just past 'z'";
   EXPECT_FALSE(workloads::is_valid_name("dense-linear"));
   EXPECT_FALSE(workloads::is_valid_name("a{"));
   EXPECT_FALSE(workloads::is_valid_name("a/"));
