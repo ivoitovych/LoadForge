@@ -1941,12 +1941,12 @@ whether the same failure reproduces on the base — if it does, the branch is a 
 
 Kept short and current; move an item to the relevant document once it is settled.
 
-- **Awaiting the owner:** one manual workflow run to establish the mutation-tool pin, which
-  is a hard prerequisite for the first workload milestone; branch protection on `main`
-  (required status checks, no required approvals — a solo maintainer would otherwise block
-  themselves); deletion of the merged branches. The credential this work runs under gets
-  **403 on workflow dispatch and on deleting a ref**, so all three are genuinely the
-  owner's rather than something to try harder at.
+- **Awaiting the owner:** branch protection on `main` (required status checks, no required
+  approvals — a solo maintainer would otherwise block themselves), and deletion of the
+  merged branches. The credential this work runs under gets **403 on deleting a ref and on
+  workflow dispatch**. The mutation-tool pin no longer waits: a push to a dedicated
+  discovery branch ran the bootstrap job on GitHub's runners without a dispatch, and the
+  pin is in `mutation.yml`.
 - **Answered (#22):** whether CI should hard-require a specific committer identity. It
   admits identities from an allowlist, `.github/commit-identities`, which holds the owner
   today; a contributor's first PR adds their own line. That keeps the repository open while
