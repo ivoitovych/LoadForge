@@ -1,6 +1,6 @@
 # Stream 07 — Numerics platform: the floating-point environment, the ISA probe, path selection
 
-**State:** not started  
+**State:** complete on branch `feature/numerics-platform` (2026-10-20 11:40 UTC); AArch64 paths await the ARM64 CI job  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier A — a bounded component built against a written contract  

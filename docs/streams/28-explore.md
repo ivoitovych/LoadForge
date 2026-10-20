@@ -1,6 +1,6 @@
 # Stream 28 — Explore: search, objectives, drift, confidence
 
-**State:** not started  
+**State:** complete — pending pull request  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 3  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

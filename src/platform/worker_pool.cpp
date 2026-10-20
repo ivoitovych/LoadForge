@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "platform/worker_pool.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <csignal>
 #include <cstddef>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -78,12 +80,9 @@ core::Result<WorkerDeath, SyscallError> WorkerPool::wait_for_next() {
     // interruptions, not on how long a supervisor may wait in total.
     interrupts = 0;
 
-    for (std::size_t slot = 0; slot < pids_.size(); ++slot) {
-      if (pids_[slot] != 0 && pids_[slot] == reaped.value().pid) {
-        pids_[slot] = 0;
-        --live_;
-        return WorkerDeath{slot, reaped.value().pid, ExitStatus{reaped.value().status}};
-      }
+    auto death = claim(reaped.value());
+    if (death.has_value()) {
+      return *death;
     }
     // Not one of ours. It has been reaped -- waitpid already did that and it
     // cannot be undone -- but it is not reported as a worker death. Looping
@@ -102,16 +101,27 @@ core::Result<std::optional<WorkerDeath>, SyscallError> WorkerPool::reap_next_non
     if (!terminated.has_value()) {
       return std::optional<WorkerDeath>{};
     }
-    const Reaped& child = *terminated;
-    for (std::size_t slot = 0; slot < pids_.size(); ++slot) {
-      if (pids_[slot] != 0 && pids_[slot] == child.pid) {
-        pids_[slot] = 0;
-        --live_;
-        return std::optional<WorkerDeath>{WorkerDeath{slot, child.pid, ExitStatus{child.status}}};
-      }
+    auto death = claim(*terminated);
+    if (death.has_value()) {
+      return death;
     }
     // A stranger, as in wait_for_next: reaped, never reported, ask again.
   }
+}
+
+std::optional<WorkerDeath> WorkerPool::claim(const Reaped& child) {
+  // A search rather than an indexed loop: the slot is where the pid was found,
+  // and there is no bound for an off-by-one to cross. A cleared slot (0) never
+  // matches, whatever pid the kernel hands back.
+  const auto found = std::find_if(pids_.begin(), pids_.end(),
+                                  [&child](pid_t pid) { return pid != 0 && pid == child.pid; });
+  if (found == pids_.end()) {
+    return std::nullopt;
+  }
+  *found = 0;
+  --live_;
+  const auto slot = static_cast<std::size_t>(std::distance(pids_.begin(), found));
+  return WorkerDeath{slot, child.pid, ExitStatus{child.status}};
 }
 
 core::Result<core::Ok, SyscallError> WorkerPool::signal_all(int signal) {

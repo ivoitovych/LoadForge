@@ -1,0 +1,35 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# LOADFORGE-REPO-HOOK
+#
+# Commit-time identity gate: the author and committer git is about to record
+# must be admitted in .github/commit-identities, and signing must be off.
+# It enforces earlier what tools/check-commit-identity.sh enforces in CI, where
+# the reasons are written down. Skippable with --no-verify; CI is not.
+#
+# An allowlist: nobody is named here, anyone not admitted is refused.
+set -uo pipefail
+
+top="$(git rev-parse --show-toplevel)" || exit 1
+ids="$top/.github/commit-identities"
+[ -r "$ids" ] || { echo "pre-commit: cannot read $ids." >&2; exit 1; }
+mapfile -t admitted < <(grep -vE '^\s*(#|$)' "$ids" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+[ "${#admitted[@]}" -gt 0 ] || { echo "pre-commit: $ids admits nobody." >&2; exit 1; }
+
+bad=0
+for role in AUTHOR COMMITTER; do
+  ident="$(git var "GIT_${role}_IDENT")" || { echo "pre-commit: git has no $role identity." >&2; exit 1; }
+  email="$(sed -n 's/.*<\(.*\)>.*/\1/p' <<< "$ident" | tr '[:upper:]' '[:lower:]')"
+  ok=1
+  for e in "${admitted[@]}"; do [ "$e" = "$email" ] && ok=0; done
+  if [ "$ok" -ne 0 ]; then
+    echo "pre-commit: $role <$email> is not in .github/commit-identities." >&2
+    bad=1
+  fi
+done
+
+if [ "$(git config --type=bool --get commit.gpgsign 2>/dev/null)" = "true" ]; then
+  echo "pre-commit: commit.gpgsign is on; commits here are unsigned." >&2
+  bad=1
+fi
+[ "$bad" -eq 0 ] || { echo "  Set user.name/user.email to an admitted identity and commit.gpgsign=false." >&2; exit 1; }

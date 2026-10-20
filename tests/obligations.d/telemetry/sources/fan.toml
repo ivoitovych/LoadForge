@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry/sources/fan and nothing else.
+
+[[module]]
+path             = "src/telemetry/sources/fan"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2"]
+fixtures         = ["sysfs/fan/absent"]
+fixture_builders = ["tests/unit/telemetry/sources/fan/fan_test.cpp"]
+provides         = ["SourceContract"]
+note             = """
+Fan speeds from hwmon (fanN_input, rpm). \
+\
+P1: every input of every chip is its own device series whose index encodes \
+the chip and the input; which fan it is, is the board's business and nothing \
+here claims to know. A stopped fan is a reading of 0 and an absent one is \
+not. \
+\
+P2: the same errnos as the thermal source reach it through the same \
+substituted seam, at the open and the read, at the probe and in the run, each \
+asserted to its state. \
+\
+P3: a speed of 0 and of 1000000 and one past it, a negative one; inputs 1 to \
+255 and not 256. \
+\
+P7: present, absent (the captured machine, sysfs/fan/absent), denied, \
+malformed, unreadable and vanished mid-run, each run through SourceContract. \
+Speeds are gauges, so there is no wrapped state. The present trees are BUILT \
+in the kernel's layout, because no machine reachable from the stream had a \
+fan input."""

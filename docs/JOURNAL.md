@@ -1846,6 +1846,107 @@ test at the boundary, or allowlisted with a written reason if it is equivalent, 
 follow-up changes per module (ROADMAP item 11b). The sweep merges first: it is weekly and
 gates no pull request, so a red sweep holds nothing up and names exactly what is left.
 
+*Platform, 2026-10-20 15:44 UTC.* All 23 killed by hand, none allowlisted. The five in
+`fork_process` and `reap_any_nonblocking` went as planned above: the decision on the pid
+is now `fork_result` and `reap_result`, pure functions tested at -1, 0 and a positive pid,
+and the seam methods are the bare call and an errno read. In the rest of `syscalls.cpp`,
+a return of 0 from `open`, `memfd_create` and `write` is a real success (descriptor 0 with
+standard input closed; a zero-byte write) and is now tested; `readlink` and a blocking
+`waitpid` never return 0, so they test for -1, which removes the boundary. The five mask
+mutants survived because the affinity tests restored the process's mask *through the
+conversion under test*: a conversion that kept only CPU 0 pinned the process there, after
+which the glibc cross-check saw one CPU both ways. The conversions are now public and held
+to `CPU_SET`/`CPU_ISSET` on all 1024 bits (nodes too: a `cpu_set_t` is the kernel bitmap
+type `mbind` reads), and the restore goes through glibc. `exec`'s reserve is killed by an
+empty argument list; `describe`'s reserve is gone; the clock's two are message arithmetic,
+now asserted exactly; `WorkerPool`'s two slot loops are one `std::find_if`, and `pid_at` is
+killed at slot 0 of an empty pool, where the mutant reads storage never allocated. The new
+tests met §1.22's trap twice: `Reaped`'s and `CpuMask`'s defaulted comparisons are now
+defaulted out of line in `syscalls.cpp`.
+
+*The controller and worker shards' 18 survivors* (2026-10-20 12:59 UTC) are all gone, and
+none is allowlisted. Most fell to a test at the boundary: a memory total equal to
+`limits.memory`, an allowance equal to the interval, a region of `kMaxWorkers` attached, a
+frame of the largest payload read back. The fake's clocks start at zero, where `now - last`
+and `now + last` agree, so both torn-slot tests (controller and worker) also run with the
+clock a day past zero. The beat count, the poll timeout and the teardown's wait count are now
+asserted. A reap after the last worker meets a scripted `ECHILD`, as from the kernel. A pipe
+end numbered 0 (what the kernel hands out when standard input is closed) is closed by the
+teardown, through the fake's new `number_pipes_from`. The rest were equivalent and are gone
+from the code. The teardown's `live_ > 0` guard decided nothing that the wait loop did not.
+`put_u32` is unrolled, and `slot_at`'s span takes the region's length. The seqlock writer's
+two stores now both derive from the odd value, so a wrong sign leaves the sequence unchanged,
+and every reader sees that. The torn reader reports the attempts it made, so 65 no longer
+passes for 64. Each kill was proved by hand: mutate, build, and see the named test fail under
+`--gtest_filter=-RealProcess*`.
+
+**The `topology`, `resources` and `config` survivors (ROADMAP item 11b).** All 15 are
+killed or removed; none is allowlisted. Seven were boundary mutants killed by tests at the
+boundary: id 65535 accepted (`cpu_topology.cpp:46`, `cache.cpp:72`; tests
+`TheLargestIdTheKernelCanAssignIsAccepted`, `TheLargestIdACacheAttributeHoldsIsAccepted`),
+two L1 caches of one CPU that do not nest (`cache.cpp:236`, `TwoCachesAtOneLevelNeedNotNestInEachOther`),
+a claim of an offline CPU while other CPUs are online (`numa.cpp:120`, which a one-CPU
+fixture cannot tell from a correct claim), the octal escape `\377` (`cgroup.cpp:57`, `:62`),
+and a configuration lying past the first 4 KiB read (`config.cpp:511`: the old padding was
+a trailing comment, so a truncated read parsed the same; the padding now comes first). Eight
+were equivalent as written, because the comparison sat after an inequality test or one
+element past the end of a view that always has a space or NUL there, and were refactored
+away: `ordered_before` is one tuple comparison (`cache.cpp:298`, `:301`, `:303`), and the
+digit scans (`cache.cpp:332`, `numa.cpp:46`), the escape length check (`cgroup.cpp:51`)
+and the separator search (`cgroup.cpp:188`) use `find_first_not_of`, `substr` and
+`std::find`, which cannot read past the end. Each boundary kill was proved by hand: apply
+the mutation, rebuild, run the module's tests, see the named test fail, revert.
+
+### 2.29 The sort and Monte Carlo specifications
+
+*2026-10-20 12:34 UTC.* The wave-2 prerequisite (ADR 0004: a workload's specification
+lands before its wave). Each header names its workload (`kName`), states every range as
+the generator produces it, pins which failure is named when several occur and what
+`blocks_compared` counts, and says what a version change means: the lessons wave 1's
+streams recorded against the first two specifications.
+
+**Sort — chosen:** the output carries a witness, each key's input position beside it (a
+keys region, then a u32 index region), and the order is on (key, index), so the sort is
+stable and the output a function of the input alone: `BitExact`, `kExact`. The oracle
+checks in three steps, the first failure deciding: the indices are a permutation (first
+out-of-range or repeated index named, no difference); every key equals the input key its
+index names (a `Difference` over the keys' region, its expected bytes known exactly); the
+pairs strictly increase (first break named, no difference). Linear, no sort, and one
+flipped key bit is reported as one flipped bit, because the index check runs first and an
+index flip can only read as an index fault. The decomposition is a chunk count, which
+cannot change the output, so the T6 tier can vary it as `BitExact` requires.
+*Rejected:* keys alone, checked by a multiset hash (probabilistic, no expected bits), by
+binary-search counting (O(n log n), a scratch array, still no expected bits), or by a
+second sort (verification.md §3 forbids it); keys generated so that their rank is
+computable (the check becomes a bucket placement, and the data stops being uniform 64-bit
+keys); no decomposition at all, as compression has (the T6 sweep over decompositions would
+have nothing to vary).
+
+**Monte Carlo — chosen:** the estimate of pi/4 as the mean of sqrt(1 - x^2): one
+multiplication, one subtraction and one square root, each correctly rounded and unfused,
+so every f_k is the same double on every path and in the oracle. The input is one Philox
+key per batch, so the samples are drawn inside `compute()` and the input-integrity bracket
+still covers what they are drawn from. The decomposition is the chunk length of the
+per-batch sum, within which the order is the ISA path's. The tolerance is a rounding
+bound, derived in full in the header: two sums of the same S non-negative terms differ by
+at most 2a/(1-2a) of either, a = (S-1)u, which is at most 2Su = 2^-38 whenever
+2S(S-1) <= 2^53 (a compile-time assertion). The tolerance is therefore an exact
+power-of-two scaling, and Sterbenz's lemma makes the residual exact wherever the verdict
+could turn, so the (1 ± epsilon) tests decide the exact comparison.
+*Rejected:* a statistical bound (the oracle replays the same samples, so a bound of a few
+standard deviations, about 28.6 per batch, would pass nearly any corruption and
+false-alarm at its own significance level); a transcendental in the integrand, or normal
+variates by Box-Muller (`log`, `cos`: not reproducible, determinism.md §3); FMA in the
+integrand (x86-64's baseline has no FMA instruction, so the scalar path's `std::fma` would
+be a library call; unfused, every path's f_k is identical); random numbers stored in the
+input (the unit becomes a memory stream, and Philox, the load the brief names, leaves
+`compute()`); a tolerance that depends on the chunk length (tighter, but one per
+decomposition, where the T6 comparison across decompositions needs one bound).
+
+**Left open:** the compression and dense-linear specifications carry no `kName` and say
+less about versions than these two. Bringing them level is a contract change of its own,
+between waves.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
