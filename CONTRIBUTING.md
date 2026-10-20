@@ -122,6 +122,11 @@ Signed-off-by: Your Name <your.email@example.com>
 This certifies that you wrote the contribution, or otherwise have the right to submit it
 under the project's licence. CI checks for it.
 
+In your first pull request, also add the email you commit with to
+`.github/commit-identities`. CI accepts commits only from identities listed there, so a
+new identity is admitted by a reviewed one-line change. Commits are unsigned, and carry no
+trailer but `Signed-off-by`: one author per commit, no co-authors.
+
 ## Licensing
 
 LoadForge is **GPL-3.0-or-later**. By contributing you agree your work is licensed the

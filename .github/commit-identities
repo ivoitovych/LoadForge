@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The identities that may author or commit to this repository, one email per
+# line. Read by tools/check-commit-identity.sh in the licensing workflow.
+#
+# Contributions are welcome. A contributor's first pull request adds their own
+# email here, which makes admitting a new identity a reviewed, one-line change
+# instead of something that happens by default.
+yaroslav.voytovych@gmail.com

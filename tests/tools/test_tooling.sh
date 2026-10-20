@@ -613,6 +613,81 @@ expect "a sign-off mentioned in prose does not count"        1 $? "MISSING Signe
 
 rm -rf "$dco"
 
+echo "check-commit-identity.sh"
+# Real repositories again: the gate reads commit objects, and the cases that
+# matter -- a GitHub-shaped merge, a signature -- are shapes of those objects.
+idr="$(mktemp -d)"; ids="$(mktemp)"
+git init -q "$idr"
+git -C "$idr" config commit.gpgsign false
+printf '# admitted\nowner@example.invalid\n\n' > "$ids"
+id_commit() { # name, email, message, [committer-email]
+  mktemp -p "$idr" f.XXXXXX >/dev/null; git -C "$idr" add -A
+  GIT_AUTHOR_NAME="$1" GIT_AUTHOR_EMAIL="$2" \
+  GIT_COMMITTER_NAME="$1" GIT_COMMITTER_EMAIL="${4:-$2}" \
+    git -C "$idr" commit -q --no-verify -m "$3"
+}
+idg() { "$ROOT/tools/check-commit-identity.sh" "${1:-HEAD}" "$idr" "${2:-$ids}" 2>&1; }
+
+id_commit Owner owner@example.invalid $'first\n\nSigned-off-by: Owner <owner@example.invalid>'
+root="$(git -C "$idr" rev-parse HEAD)"
+out="$(idg)"; expect "an admitted author and committer pass"          0 $? "0 problem(s)" "$out"
+
+id_commit OWNER OWNER@Example.Invalid "case differs"
+out="$(idg)"; expect "email comparison ignores case"                  0 $? "0 problem(s)" "$out"
+
+git -C "$idr" checkout -q -b stranger "$root"
+id_commit Someone someone@example.invalid "unadmitted author"
+out="$(idg)"; expect "an author not admitted FAILS"                   1 $? "author <someone@example.invalid>" "$out"
+
+git -C "$idr" checkout -q -B c2 "$root"
+id_commit Owner owner@example.invalid "unadmitted committer" other@example.invalid
+out="$(idg)"; expect "a committer not admitted FAILS"                 1 $? "committer <other@example.invalid>" "$out"
+
+git -C "$idr" checkout -q -B c3 "$root"
+id_commit Owner owner@example.invalid $'second author\n\nCo-authored-by: Someone <someone@example.invalid>'
+out="$(idg)"; expect "a co-author trailer FAILS without being named"  1 $? "trailer 'Co-authored-by'" "$out"
+
+git -C "$idr" checkout -q -B c4 "$root"
+id_commit Owner owner@example.invalid $'odd trailer\n\nAnything-Else: here\nSigned-off-by: Owner <owner@example.invalid>'
+out="$(idg)"; expect "any trailer but Signed-off-by FAILS"            1 $? "trailer 'Anything-Else'" "$out"
+
+# A signature, made by writing the header into a commit object directly: no key
+# is needed to show that the gate refuses the shape.
+signed="$(git -C "$idr" cat-file commit "$root" | sed '/^committer /a gpgsig -----BEGIN SSH SIGNATURE-----\n -----END SSH SIGNATURE-----' |
+          git -C "$idr" hash-object -t commit -w --stdin)"
+out="$(idg "$signed")"; expect "a signed commit FAILS"                1 $? "signed; commits here are unsigned" "$out"
+
+# GitHub's merge: GitHub commits it and signs it, the author is whoever merged,
+# and the PR title in the body can parse as a trailer. Only the author is judged.
+git -C "$idr" checkout -q -B side "$root"
+id_commit Owner owner@example.invalid "side work"
+git -C "$idr" checkout -q -B gh-main "$root"
+id_commit Owner owner@example.invalid "main work"
+GIT_AUTHOR_NAME="OWNER" GIT_AUTHOR_EMAIL="owner@example.invalid" \
+GIT_COMMITTER_NAME="GitHub" GIT_COMMITTER_EMAIL="noreply@github.com" \
+  git -C "$idr" merge -q --no-ff --no-verify -m $'Merge pull request #1 from side\n\nPlatform: a title that parses as a trailer' side
+merge="$(git -C "$idr" rev-parse HEAD)"
+merge_signed="$(git -C "$idr" cat-file commit "$merge" | sed '/^committer /a gpgsig -----BEGIN PGP SIGNATURE-----\n -----END PGP SIGNATURE-----' |
+                git -C "$idr" hash-object -t commit -w --stdin)"
+out="$(idg "$merge_signed")"; expect "GitHub's signed merge commit passes"      0 $? "0 problem(s)" "$out"
+
+git -C "$idr" checkout -q -B gh-bad "$root"
+id_commit Owner owner@example.invalid "pretends to be a merge" noreply@github.com
+out="$(idg)"; expect "a GitHub committer on a non-merge FAILS"        1 $? "committer <noreply@github.com>" "$out"
+
+git -C "$idr" checkout -q -B gh-stranger "$root"
+GIT_AUTHOR_NAME="Someone" GIT_AUTHOR_EMAIL="someone@example.invalid" \
+GIT_COMMITTER_NAME="GitHub" GIT_COMMITTER_EMAIL="noreply@github.com" \
+  git -C "$idr" merge -q --no-ff --no-verify -m "Merge pull request #2" side
+out="$(idg)"; expect "a GitHub merge by someone not admitted FAILS"   1 $? "author <someone@example.invalid>" "$out"
+
+out="$(idg does-not-exist)"; expect "an unresolvable ref FAILS"      1 $? "is not a commit" "$out"
+out="$(idg HEAD /nonexistent/identities)"; expect "a missing identities file FAILS" 1 $? "cannot read" "$out"
+printf '# nobody\n\n' > "$ids"
+out="$(idg "$root")"; expect "an identities file admitting nobody FAILS" 1 $? "admits nobody" "$out"
+
+rm -rf "$idr" "$ids"
+
 echo "check-fetch-centralization.sh"
 out="$("$ROOT/tools/check-fetch-centralization.sh" 2>&1)"
 expect "the real tree centralises every fetch" 0 $? "0 violation(s)" "$out"
