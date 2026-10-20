@@ -2,15 +2,40 @@
 # Ledger fragment (ADR 0004): this file declares src/controller/journal and nothing else.
 
 [[module]]
-path    = "src/controller/journal"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-The crash-journal contract (F16): today the header alone (ADR 0004). P1 here \
-is the fault and ending words and member-by-member equality. The journal \
-stream takes this row over with the format, the writer, the replay and a \
-file Storage, and owes what IMPLEMENTATION §3 lists -- P2 (every failure of \
-open, write and fsync, injected through its own file seam), P6 and T7 (a \
-controller really killed mid-run leaves a journal that replays), T10 -- and \
-runs JournalContract, whose every-byte cut and every-byte corruption already \
-run against a reference in tests/contracts/journal/."""
+path             = "src/controller/journal"
+classes          = ["P1", "P2", "P3", "P6"]
+tiers            = ["T1", "T2", "T8", "T10"]
+provides         = ["JournalContract"]
+note             = """
+The crash journal (F16): the record format (a length, a CRC-32 over the \
+length and the payload, the payload), the writer, the replay, and a Storage \
+over a real file opened O_APPEND and synced with fsync -- the file and its \
+directory, because a name is not durable until its directory entry is. \
+Ordinary file I/O sits behind a seam of its own (FileOps), not \
+platform::Syscalls. \
+\
+P1: the format is pure and the replay is a function of bytes; the pinned \
+bytes of a terminator record and of an entry record come from Python's zlib \
+and struct run on the documented layout (F21), not from this code. \
+P2: every failure of open (the file, the directory, the file to read), \
+write (alone, and after a short write that kept a prefix), fsync (the file \
+and the directory), read and close is injected through FakeFileOps, one test \
+per errno per call site, with EINTR retried to a bound and ENOSPC/EIO \
+reported and never retried; RealFileOps is exercised against the kernel for \
+the errors a process can provoke (ENOENT, EISDIR, ENOTDIR, EBADF, EINVAL). \
+P3: the boundaries -- a label of exactly kMaxLabelBytes and one past it, a \
+record length of 0, of kMaxPayloadBytes and one past it, a presence bit of \
+the reserved two, every payload length cut short, a terminator followed by \
+anything. \
+P6: a journal has a lifecycle -- open on empty storage, append, sync, close, \
+closed -- and the lifecycle of the run it records: a writer killed with \
+SIGKILL mid-append (T8, tests/integration) leaves a journal another process \
+replays with every synced entry in order and an abnormal ending; the \
+contract's every-byte cuts and corruptions (run over memory by \
+JournalContract and over a real file by file_journal_test.cpp) are the \
+machine dying between any two bytes. \
+\
+T10 (tests/soak): thousands of appends at the run's real five-second \
+spacing, synced each, with resident memory, descriptors and the file's size \
+checked against what was appended; LOADFORGE_SOAK_INTERVAL_MS=5000 makes the \
+test's own pace the real one for the nightly run."""
