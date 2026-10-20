@@ -172,6 +172,7 @@ struct Rig {
 
 inline std::vector<std::uint64_t> iterations(const verification::SliceReport& report) {
   std::vector<std::uint64_t> out;
+  out.reserve(report.records.size());
   for (const verification::ErrorRecord& record : report.records) {
     out.push_back(verification::provenance_of(record).iteration.value_or(~std::uint64_t{0}));
   }
