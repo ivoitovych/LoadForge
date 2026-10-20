@@ -219,9 +219,11 @@ TEST(SupervisionTest, AControllerKilledLeavesNoWorkerBehind) {
     // lands first is the scheduler's choice: an earlier version of this test
     // accepted only SIGKILL and failed in about one run in ten when the worker
     // left first, exiting 124, controller lost. What this test cannot show is
-    // that the death signal works for a worker that never looks at its pipe;
-    // that is the fake-worker tier's (ROADMAP item 8), with a worker that
-    // ignores its pipe and can only be ended by the signal.
+    // that the death signal works for a worker that never looks at its pipe:
+    // with the signal disarmed it still passes, every worker leaving on the
+    // hang-up. MisbehaviourCatalogue.AWorkerDeafToItsControlPipeIsEndedByThe-
+    // ParentDeathSignal (catalogue_test.cpp) is that test: its worker ignores
+    // the pipe and can only be ended by the signal.
     const bool killed_by_death_signal =
         WIFSIGNALED(worker_status) && WTERMSIG(worker_status) == SIGKILL;
     const bool left_on_hang_up = WIFEXITED(worker_status) && WEXITSTATUS(worker_status) == 124;

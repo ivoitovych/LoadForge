@@ -98,5 +98,8 @@ set_tests_properties(cli_stress_refuses_other_modes PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_stress_usage COMMAND loadforge stress)
 set_tests_properties(cli_stress_usage PROPERTIES WILL_FAIL TRUE)
 
+# The fake worker the supervision tier drives the controller against.
+add_subdirectory(support/fake_worker)
+
 # T7: the supervision tier, with really spawned, really killed children.
 add_subdirectory(supervision)
