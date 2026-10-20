@@ -291,9 +291,12 @@ TEST(EveryPath, EachOutcomeOfEachRungForEitherKindOfWrongResult) {
               EXPECT_EQ(report.answers.same_core, documented_answer(same));
               EXPECT_EQ(report.answers.other_core,
                         other_step ? documented_answer(other) : Answer::kUnknown);
-              const Answer single_expected =
-                  threads == 1 ? documented_answer(same)
-                               : (single_step ? documented_answer(single) : Answer::kUnknown);
+              Answer single_expected = Answer::kUnknown;
+              if (threads == 1) {
+                single_expected = documented_answer(same);
+              } else if (single_step) {
+                single_expected = documented_answer(single);
+              }
               EXPECT_EQ(report.answers.single_thread, single_expected);
 
               // The table and the confidence, and the one finding a re-run
