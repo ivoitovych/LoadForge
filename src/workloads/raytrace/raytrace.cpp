@@ -27,12 +27,13 @@ namespace {
 struct RowContext {
   const SceneStorage* scene;
   RowKernel kernel;
-  std::byte* records;
+  std::span<std::byte> records;
 };
 
 void trace_one_row(void* context, std::size_t row, std::size_t /*slot*/) noexcept {
   const auto& job = *static_cast<const RowContext*>(context);
-  const std::span<std::byte, kRowBytes> out(job.records + row * kRowBytes, kRowBytes);
+  const std::span<std::byte, kRowBytes> out =
+      job.records.subspan(row * kRowBytes, kRowBytes).first<kRowBytes>();
   job.kernel(*job.scene, static_cast<std::uint32_t>(row), out);
 }
 
@@ -80,7 +81,7 @@ class RaytraceWorkload final : public Workload {
     decode_scene(input.first<kInputBytes>(), scene);
     build_bvh(scene, kBoundMargin);
 
-    RowContext context{&scene, kernel_, output.data()};
+    RowContext context{&scene, kernel_, output};
     executor.run(kHeight, &trace_one_row, &context);
 
     const std::uint32_t edge = plan_.decomposition;
@@ -90,7 +91,6 @@ class RaytraceWorkload final : public Workload {
       std::memcpy(output.data() + tile_sum_offset(tile), &sum, sizeof(sum));
     }
   }
-
 
  private:
   Descriptor descriptor_;
@@ -117,16 +117,16 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
   const simd::KernelTable<RowKernel> table = row_kernels();
   const RowKernel kernel = simd::kernel_at(table, config.isa);
   if (kernel == nullptr) {
-    return refuse(WorkloadFault::kConfiguration,
-                  "no ray tracing kernel for the " + std::string(simd::describe(config.isa)) +
-                      " path in this build");
+    return refuse(WorkloadFault::kConfiguration, "no ray tracing kernel for the " +
+                                                     std::string(simd::describe(config.isa)) +
+                                                     " path in this build");
   }
   constexpr std::uint64_t kUnitBytes = kInputBytes + kOutputBytes;
   const std::uint64_t units = config.footprint_bytes / kUnitBytes;
   if (units == 0) {
-    return refuse(WorkloadFault::kFootprintTooSmall,
-                  "a unit takes " + std::to_string(kUnitBytes) + " bytes, the footprint is " +
-                      std::to_string(config.footprint_bytes));
+    return refuse(WorkloadFault::kFootprintTooSmall, "a unit takes " + std::to_string(kUnitBytes) +
+                                                         " bytes, the footprint is " +
+                                                         std::to_string(config.footprint_bytes));
   }
 
   Descriptor descriptor;

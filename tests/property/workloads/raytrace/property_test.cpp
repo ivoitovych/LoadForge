@@ -103,7 +103,8 @@ TEST(RaytraceProperties, ATileSumIsTheSumOfItsHitsAndNoLessThanTheirCountTimesTh
           hits += pixel_of(output, y * rt::kWidth + x).primitive != rt::kNoHit ? 1 : 0;
         }
       }
-      const double sum = double_at(std::span<const std::byte>(output).subspan(rt::kTileSumsOffset), tile);
+      const double sum =
+          double_at(std::span<const std::byte>(output).subspan(rt::kTileSumsOffset), tile);
       if (hits == 0) {
         EXPECT_EQ(std::bit_cast<std::uint64_t>(sum), 0U) << "tile " << tile << " edge " << edge;
       } else {
@@ -118,27 +119,28 @@ TEST(RaytraceProperties, TakingAPrimitiveOutOfSightChangesOnlyThePixelsItOwned) 
     Traced traced(path);
     const Bytes input = traced.input(5);
     const Bytes before = traced.image(input);
-    for (const std::size_t victim : {std::size_t{0}, std::size_t{57}, std::size_t{128}, std::size_t{200}, std::size_t{255}}) {
+    for (const std::size_t victim :
+         {std::size_t{0}, std::size_t{57}, std::size_t{128}, std::size_t{200}, std::size_t{255}}) {
       Bytes changed = input;
       if (victim < rt::kSpheres) {
         set_double(changed, victim * 4, 1.0e6);
       } else {
         for (std::size_t c = 0; c < 9; ++c) {
-          set_double(changed, rt::kSpheres * 4 + (victim - rt::kSpheres) * 9 + c, 1.0e6 + static_cast<double>(c));
+          set_double(changed, rt::kSpheres * 4 + (victim - rt::kSpheres) * 9 + c,
+                     1.0e6 + static_cast<double>(c));
         }
       }
       const Bytes after = traced.image(changed);
-      std::size_t owned = 0;
       for (std::size_t p = 0; p < rt::kPixels; ++p) {
         if (pixel_of(before, p).primitive == victim) {
-          ++owned;
           EXPECT_NE(pixel_of(after, p).primitive, victim);
         } else {
-          EXPECT_EQ(std::memcmp(before.data() + rt::pixel_offset(p), after.data() + rt::pixel_offset(p), 16), 0)
+          EXPECT_EQ(std::memcmp(before.data() + rt::pixel_offset(p),
+                                after.data() + rt::pixel_offset(p), 16),
+                    0)
               << simd::describe(path) << " victim " << victim << " pixel " << p;
         }
       }
-      (void)owned;
     }
   }
 }
@@ -165,8 +167,9 @@ TEST(RaytraceProperties, PermutingTheSpheresPermutesTheirIndicesAndNothingElse) 
       const Pixel now = pixel_of(after, p);
       EXPECT_EQ(std::bit_cast<std::uint64_t>(was.t), std::bit_cast<std::uint64_t>(now.t))
           << simd::describe(path) << " pixel " << p;
-      const std::uint32_t expected =
-          was.primitive < rt::kSpheres ? static_cast<std::uint32_t>(sigma.at(was.primitive)) : was.primitive;
+      const std::uint32_t expected = was.primitive < rt::kSpheres
+                                         ? static_cast<std::uint32_t>(sigma.at(was.primitive))
+                                         : was.primitive;
       EXPECT_EQ(now.primitive, expected) << simd::describe(path) << " pixel " << p;
     }
   }
@@ -179,9 +182,13 @@ TEST(RaytraceProperties, ACopyOfAPrimitiveAtAHigherIndexNeverWinsATie) {
     const Bytes before = traced.image(input);
     // Sphere 100 becomes a copy of sphere 5; triangle 90 a copy of triangle 3.
     Bytes copied = input;
-    std::memcpy(copied.data() + 100 * 32, input.data() + 5 * 32, 32);
-    const std::size_t triangles = rt::kSpheres * 32;
-    std::memcpy(copied.data() + triangles + 90 * 72, input.data() + triangles + 3 * 72, 72);
+    constexpr std::size_t kSphereBytes = 32;
+    constexpr std::size_t kTriangleBytes = 72;
+    std::memcpy(copied.data() + std::size_t{100} * kSphereBytes,
+                input.data() + std::size_t{5} * kSphereBytes, kSphereBytes);
+    const std::size_t triangles = rt::kSpheres * kSphereBytes;
+    std::memcpy(copied.data() + triangles + std::size_t{90} * kTriangleBytes,
+                input.data() + triangles + std::size_t{3} * kTriangleBytes, kTriangleBytes);
     const Bytes after = traced.image(copied);
     for (std::size_t p = 0; p < rt::kPixels; ++p) {
       const Pixel now = pixel_of(after, p);
@@ -189,7 +196,9 @@ TEST(RaytraceProperties, ACopyOfAPrimitiveAtAHigherIndexNeverWinsATie) {
       EXPECT_NE(now.primitive, rt::kSpheres + 90U) << simd::describe(path) << " pixel " << p;
       const Pixel was = pixel_of(before, p);
       if (was.primitive != 100U && was.primitive != rt::kSpheres + 90U) {
-        EXPECT_EQ(std::memcmp(before.data() + rt::pixel_offset(p), after.data() + rt::pixel_offset(p), 16), 0)
+        EXPECT_EQ(std::memcmp(before.data() + rt::pixel_offset(p),
+                              after.data() + rt::pixel_offset(p), 16),
+                  0)
             << simd::describe(path) << " pixel " << p;
       }
     }

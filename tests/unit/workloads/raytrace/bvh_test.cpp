@@ -41,6 +41,7 @@ bool inside(const rt::Node& outer, const rt::Node& inner) {
 
 /// The primitives under node `at`, in hierarchy order, with the leaves visited
 /// and the depth reached; checks the tree's own invariants on the way.
+// NOLINTNEXTLINE(misc-no-recursion): the tree is eight levels deep
 void walk(const rt::SceneStorage& scene, std::uint32_t at, std::size_t depth,
           std::vector<std::uint32_t>& primitives, std::size_t& leaves, std::size_t& deepest) {
   const rt::Node& node = scene.nodes.at(at);
@@ -149,7 +150,7 @@ TEST(RaytraceBvh, AllPrimitivesIdenticalLeavesTheOrderAsTheIndices) {
   // among themselves: the spheres' order must then be ascending.
   const auto scene = built(input);
   std::uint32_t previous_sphere = 0;
-  std::uint32_t previous_triangle = static_cast<std::uint32_t>(rt::kSpheres);
+  auto previous_triangle = static_cast<std::uint32_t>(rt::kSpheres);
   bool first_sphere = true;
   bool first_triangle = true;
   for (const std::uint32_t id : scene->order) {
@@ -166,7 +167,7 @@ TEST(RaytraceBvh, AllPrimitivesIdenticalLeavesTheOrderAsTheIndices) {
 }
 
 TEST(RaytraceBvh, NumbersThatAreNotNumbersBuildAnEmptyTreeOfTheSameShape) {
-  Bytes input(rt::kInputBytes, std::byte{0xFF});  // every double a NaN
+  const Bytes input(rt::kInputBytes, std::byte{0xFF});  // every double a NaN
   const auto scene = built(input);
   EXPECT_EQ(scene->node_count, 127U);
   const rt::Node& root = scene->nodes.at(0);
@@ -206,7 +207,8 @@ TEST(RaytraceBvh, TheWidestCentroidAxisSplitsTheRoot) {
       base.at(axis) = static_cast<double>(j) * 0.01 - 0.64;
       for (std::size_t v = 0; v < 3; ++v) {
         for (std::size_t c = 0; c < 3; ++c) {
-          set_double(input, rt::kSpheres * 4 + j * 9 + v * 3 + c, base.at(c) + (c == axis ? 0.001 * static_cast<double>(v) : 0.0));
+          set_double(input, rt::kSpheres * 4 + j * 9 + v * 3 + c,
+                     base.at(c) + (c == axis ? 0.001 * static_cast<double>(v) : 0.0));
         }
       }
     }
@@ -214,7 +216,10 @@ TEST(RaytraceBvh, TheWidestCentroidAxisSplitsTheRoot) {
     const rt::Node& root = scene->nodes.at(0);
     const rt::Node& left = scene->nodes.at(1);
     const rt::Node& right = scene->nodes.at(root.link);
-    const auto along = [axis](const rt::Vec3& v) { return axis == 0 ? v.x : (axis == 1 ? v.y : v.z); };
+    const auto along = [axis](const rt::Vec3& v) {
+      const std::array<double, 3> parts = {v.x, v.y, v.z};
+      return parts.at(axis);
+    };
     // Spheres and triangles interleave along the axis, so the halves overlap
     // by at most a primitive's width; their centres are what separate.
     EXPECT_LT(along(left.lo), along(right.lo)) << "axis " << axis;

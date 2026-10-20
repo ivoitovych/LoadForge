@@ -41,9 +41,9 @@ inline void set_double(std::span<std::byte> bytes, std::size_t slot, double valu
 
 [[nodiscard]] inline rt::Sphere sphere_at(std::span<const std::byte> input, std::size_t i) {
   const std::size_t first = i * rt::kSphereDoubles;
-  return rt::Sphere{rt::Vec3{double_at(input, first), double_at(input, first + 1),
-                             double_at(input, first + 2)},
-                    double_at(input, first + 3)};
+  return rt::Sphere{
+      rt::Vec3{double_at(input, first), double_at(input, first + 1), double_at(input, first + 2)},
+      double_at(input, first + 3)};
 }
 
 [[nodiscard]] inline rt::Triangle triangle_at(std::span<const std::byte> input, std::size_t j) {
@@ -158,7 +158,7 @@ struct Comparison {
     }
   }
   comparison.verdict = comparison.pixels.empty() && comparison.tiles.empty() ? Verdict::kAgreement
-                                                                           : Verdict::kMismatch;
+                                                                             : Verdict::kMismatch;
   return comparison;
 }
 

@@ -149,7 +149,7 @@ TEST(RaytraceOutputLayout, EveryByteIsWrittenAndEachRegionHoldsWhatTheSpecificat
       EXPECT_EQ(padding, 0U) << "pixel " << p;
       const double t = double_at(std::span<const std::byte>(record, 8), 0);
       if (primitive == rt::kNoHit) {
-        EXPECT_EQ(std::memcmp(record, &rt::kNoHitDistance, 8), 0) << "pixel " << p;
+        EXPECT_EQ(std::bit_cast<std::uint64_t>(t), rt::kNoHitDistanceBits) << "pixel " << p;
       } else {
         ++hits;
         EXPECT_LT(primitive, rt::kPrimitives);
@@ -158,11 +158,12 @@ TEST(RaytraceOutputLayout, EveryByteIsWrittenAndEachRegionHoldsWhatTheSpecificat
     }
     EXPECT_GT(hits, 0U);
     for (std::size_t k = 0; k < rt::kMaxTiles; ++k) {
-      const double sum = double_at(std::span<const std::byte>(zeros).subspan(rt::kTileSumsOffset), k);
+      const double sum =
+          double_at(std::span<const std::byte>(zeros).subspan(rt::kTileSumsOffset), k);
       if (k < rt::tile_count(edge)) {
         EXPECT_EQ(sum, tile_sum_of(zeros, edge, k)) << "tile " << k;
       } else {
-        const std::uint64_t bits = std::bit_cast<std::uint64_t>(sum);
+        const auto bits = std::bit_cast<std::uint64_t>(sum);
         EXPECT_EQ(bits, 0U) << "slot " << k << " beyond the tiles is zero bytes";
       }
     }

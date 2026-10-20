@@ -60,9 +60,7 @@ struct SerialMock {
 };
 
 struct PoolMock {
-  static std::unique_ptr<worker::Executor> make() {
-    return std::make_unique<rtt::PoolExecutor>(3);
-  }
+  static std::unique_ptr<worker::Executor> make() { return std::make_unique<rtt::PoolExecutor>(3); }
 };
 
 using ExecutorMocks = ::testing::Types<SerialMock, PoolMock>;

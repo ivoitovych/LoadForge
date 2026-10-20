@@ -110,9 +110,9 @@ TEST(RaytraceFaults, AHierarchyWithBoxesTooSmallIsCaughtAndOnlyEverMissesWhatIsT
     rt::build_bvh(*scene, -0.04);
     Bytes records(rt::kTileSumsOffset);
     for (std::uint32_t y = 0; y < rt::kHeight; ++y) {
-      simd::kernel_at(table, path)(*scene, y,
-                                   std::span<std::byte, rt::kRowBytes>(
-                                       records.data() + y * rt::kRowBytes, rt::kRowBytes));
+      simd::kernel_at(table, path)(
+          *scene, y,
+          std::span<std::byte, rt::kRowBytes>(records.data() + y * rt::kRowBytes, rt::kRowBytes));
     }
     std::size_t wrong = 0;
     for (std::size_t p = 0; p < rt::kPixels; ++p) {
@@ -148,7 +148,8 @@ TEST(RaytraceFaults, AFlippedBitIsNamedByTheItemThatHoldsIt) {
     EXPECT_TRUE(comparison.tiles.empty()) << "the stored sums were not touched: " << within;
   }
   // A tile's sum, and a slot beyond the tiles.
-  for (const std::size_t tile : {std::size_t{0}, std::size_t{15}, std::size_t{16}, std::size_t{63}}) {
+  for (const std::size_t tile :
+       {std::size_t{0}, std::size_t{15}, std::size_t{16}, std::size_t{63}}) {
     const Comparison comparison = flip(rt::tile_sum_offset(tile) + 5, 6);
     EXPECT_EQ(comparison.verdict, Verdict::kMismatch) << tile;
     EXPECT_TRUE(comparison.pixels.empty()) << tile;
@@ -184,12 +185,11 @@ TEST(RaytraceUnrunChecks, ABufferOfTheWrongSizeIsNotPerformedAndNeverAPass) {
   const Bytes short_output(output.begin(), output.end() - 1);
   Bytes long_output = output;
   long_output.push_back(std::byte{0});
-  for (const Comparison& comparison :
-       {compare_with_brute_force(short_input, output, kEdge),
-        compare_with_brute_force(long_input, output, kEdge),
-        compare_with_brute_force(unit.input, short_output, kEdge),
-        compare_with_brute_force(unit.input, long_output, kEdge),
-        compare_with_brute_force({}, {}, kEdge)}) {
+  for (const Comparison& comparison : {compare_with_brute_force(short_input, output, kEdge),
+                                       compare_with_brute_force(long_input, output, kEdge),
+                                       compare_with_brute_force(unit.input, short_output, kEdge),
+                                       compare_with_brute_force(unit.input, long_output, kEdge),
+                                       compare_with_brute_force({}, {}, kEdge)}) {
     EXPECT_EQ(comparison.verdict, Verdict::kNotPerformed);
     EXPECT_TRUE(comparison.pixels.empty());
     EXPECT_TRUE(comparison.tiles.empty());

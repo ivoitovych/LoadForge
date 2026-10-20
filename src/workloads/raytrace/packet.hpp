@@ -32,9 +32,7 @@ namespace loadforge::workloads::raytrace {
 /// lower index whatever order the hierarchy visits them in.
 [[nodiscard]] inline bool replaces(double t, std::uint32_t id, double best_t,
                                    std::uint32_t best_id) noexcept {
-  const bool hit = t < kNoHitDistance;
-  const bool nearer = std::tie(t, id) < std::tie(best_t, best_id);
-  return hit & nearer;
+  return t < kNoHitDistance && std::tie(t, id) < std::tie(best_t, best_id);
 }
 
 /// The record of one pixel: t, the primitive, four zero bytes.
@@ -92,6 +90,27 @@ template <typename Packet>
   }
 }
 
+/// The interval of t a ray has inside the boxes met so far: from the eye
+/// (t = 0) to infinity until an axis narrows it.
+struct TRange {
+  double t_near = 0.0;
+  double t_far = kNoHitDistance;
+};
+
+/// A ray's origin and the reciprocal of its direction along one axis.
+struct AxisRay {
+  double origin;
+  double inverse;
+};
+
+/// Narrows `range` to the ray's t inside the slab `box` of one axis.
+inline void narrow(TRange& range, const Interval& box, const AxisRay& ray) noexcept {
+  const double t0 = (box.lo - ray.origin) * ray.inverse;
+  const double t1 = (box.hi - ray.origin) * ray.inverse;
+  range.t_near = greater_of(range.t_near, lesser_of(t0, t1));
+  range.t_far = lesser_of(range.t_far, greater_of(t0, t1));
+}
+
 /// One packet, one lane at a time, with the specification's own functions.
 /// The reference every wide kernel is held to.
 class ScalarPacket {
@@ -130,8 +149,7 @@ class ScalarPacket {
 
   void write(std::span<std::byte> out) const noexcept {
     for (std::size_t lane = 0; lane < kLanes; ++lane) {
-      write_record(out.subspan(lane * kPixelBytes, kPixelBytes), best_.at(lane),
-                   best_id_.at(lane));
+      write_record(out.subspan(lane * kPixelBytes, kPixelBytes), best_.at(lane), best_id_.at(lane));
     }
   }
 
@@ -141,20 +159,11 @@ class ScalarPacket {
   /// `t_near <= best` fail for a NaN, so a box that is not a box is skipped.
   [[nodiscard]] static bool lane_reaches(const LaneRay& lane, const Node& node,
                                          double best_t) noexcept {
-    double t_near = 0.0;
-    double t_far = kNoHitDistance;
-    const auto slab = [&t_near, &t_far](double lo, double hi, double origin, double inverse) {
-      const double t0 = (lo - origin) * inverse;
-      const double t1 = (hi - origin) * inverse;
-      t_near = greater_of(t_near, lesser_of(t0, t1));
-      t_far = lesser_of(t_far, greater_of(t0, t1));
-    };
-    slab(node.lo.x, node.hi.x, lane.ray.origin.x, lane.inverse.x);
-    slab(node.lo.y, node.hi.y, lane.ray.origin.y, lane.inverse.y);
-    slab(node.lo.z, node.hi.z, lane.ray.origin.z, lane.inverse.z);
-    const bool within = t_near <= t_far;
-    const bool before = t_near <= best_t;
-    return within & before;
+    TRange range;
+    narrow(range, Interval{node.lo.x, node.hi.x}, AxisRay{lane.ray.origin.x, lane.inverse.x});
+    narrow(range, Interval{node.lo.y, node.hi.y}, AxisRay{lane.ray.origin.y, lane.inverse.y});
+    narrow(range, Interval{node.lo.z, node.hi.z}, AxisRay{lane.ray.origin.z, lane.inverse.z});
+    return range.t_near <= range.t_far && range.t_near <= best_t;
   }
 
   std::array<LaneRay, kLanes> lanes_{};

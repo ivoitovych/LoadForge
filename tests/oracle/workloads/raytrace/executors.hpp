@@ -103,8 +103,7 @@ class DroppingExecutor final : public worker::Executor {
   return config;
 }
 
-[[nodiscard]] inline Bytes generate_unit(const workloads::Workload& workload,
-                                         std::uint64_t index) {
+[[nodiscard]] inline Bytes generate_unit(const workloads::Workload& workload, std::uint64_t index) {
   Bytes input(workload.plan().input_bytes);
   workload.generate(index, input);
   return input;

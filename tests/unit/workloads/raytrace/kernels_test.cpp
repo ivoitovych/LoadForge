@@ -4,8 +4,11 @@
 // way, which is brute force's way, on generated scenes and on scenes made to
 // reach each branch of the intersection arithmetic and the tie rule.
 
+#include "workloads/raytrace/kernels.hpp"
+
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -17,7 +20,6 @@
 
 #include "oracle/workloads/raytrace/executors.hpp"
 #include "workloads/raytrace/generator.hpp"
-#include "workloads/raytrace/kernels.hpp"
 #include "workloads/raytrace/packet.hpp"
 #include "workloads/raytrace/scene.hpp"
 
@@ -38,8 +40,8 @@ Bytes parked_input() {
   }
   for (std::size_t j = 0; j < rt::kTriangles; ++j) {
     const std::size_t first = rt::kSpheres * 4 + j * 9;
-    const std::array<double, 9> far = {kFar, kFar, -kFar,        kFar + 1, kFar, -kFar,
-                                       kFar,        kFar + 1, -kFar};
+    const std::array<double, 9> far = {kFar,  kFar, -kFar,    kFar + 1, kFar,
+                                       -kFar, kFar, kFar + 1, -kFar};
     for (std::size_t c = 0; c < 9; ++c) {
       set_double(input, first + c, far.at(c));
     }
@@ -108,8 +110,8 @@ std::uint32_t primitive_at(const Bytes& records, std::uint32_t x, std::uint32_t 
 }
 
 double t_at(const Bytes& records, std::uint32_t x, std::uint32_t y) {
-  return double_at(std::span<const std::byte>(records).subspan(rt::pixel_offset(y * rt::kWidth + x)),
-                   0);
+  return double_at(
+      std::span<const std::byte>(records).subspan(rt::pixel_offset(y * rt::kWidth + x)), 0);
 }
 
 TEST(RaytraceKernels, TheTableHoldsTheScalarKernelAndTheArchitecturesWideOne) {
@@ -126,6 +128,19 @@ TEST(RaytraceKernels, TheTableHoldsTheScalarKernelAndTheArchitecturesWideOne) {
   EXPECT_EQ(table.avx2, nullptr);
   EXPECT_NE(table.neon, nullptr);
 #endif
+}
+
+TEST(RaytraceKernels, EveryPathTheBuildHasIsRunnableOnThisMachine) {
+  // A path the machine cannot execute is a path no test of this suite ran, and
+  // the coverage gate would show the hole only later: fail rather than skip.
+  const auto table = workloads::raytrace::row_kernels();
+  const std::vector<simd::IsaPath> runnable = runnable_paths();
+  for (const simd::IsaPath path : {simd::IsaPath::kScalar, simd::IsaPath::kAvx2,
+                                   simd::IsaPath::kAvx512, simd::IsaPath::kNeon}) {
+    const bool built = simd::kernel_at(table, path) != nullptr;
+    const bool runs = std::ranges::find(runnable, path) != runnable.end();
+    EXPECT_EQ(runs, built) << simd::describe(path);
+  }
 }
 
 TEST(RaytraceKernels, GeneratedScenesMatchBruteForce) {

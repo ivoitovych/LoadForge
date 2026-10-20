@@ -77,9 +77,8 @@ TEST(RaytraceDeterminism, TheOutputIsWhatAnIndependentModelOfTheSpecificationPro
       const auto workload = make(path, line.edge, line.seed);
       const Bytes input = generate_unit(*workload, line.unit);
       const Bytes output = compute_unit(*workload, line.unit, input, serial);
-      EXPECT_EQ(fnv1a64(output), line.digest)
-          << simd::describe(path) << " seed " << line.seed << " unit " << line.unit << " edge "
-          << line.edge;
+      EXPECT_EQ(fnv1a64(output), line.digest) << simd::describe(path) << " seed " << line.seed
+                                              << " unit " << line.unit << " edge " << line.edge;
     }
   }
 }
@@ -128,8 +127,9 @@ TEST(RaytraceDeterminism, RunsRepeatAndWhatWasInTheBuffersBeforeDoesNotMatter) {
   const Bytes input = generate_unit(*workload, 2);
   const Bytes first = compute_unit(*workload, 2, input, pool, std::byte{0x00});
   for (int run = 0; run < 12; ++run) {
-    EXPECT_EQ(compute_unit(*workload, 2, input, pool, run % 2 == 0 ? std::byte{0xFF} : std::byte{0x5A}),
-              first)
+    EXPECT_EQ(
+        compute_unit(*workload, 2, input, pool, run % 2 == 0 ? std::byte{0xFF} : std::byte{0x5A}),
+        first)
         << "run " << run;
   }
 }

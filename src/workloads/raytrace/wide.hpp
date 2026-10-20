@@ -25,7 +25,6 @@
 //     `!(x >= 0)` forms are.
 
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -45,11 +44,18 @@ static_assert(sizeof(V) / sizeof(double) == kLanes);
 
 LOADFORGE_WIDE_INLINE V splat(double value) noexcept { return V{value, value, value, value}; }
 
-LOADFORGE_WIDE_INLINE M bits_of(V value) noexcept { return std::bit_cast<M>(value); }
+// The builtin, not std::bit_cast: that is an ordinary function, and a function
+// that takes a 32-byte vector by value is called with the registers its own
+// target says, which differ between the baseline and AVX2 (the ABI note this
+// target's -Wno-psabi silences is that difference). Everything that touches a
+// vector here is always inlined into the one function that has chosen the
+// target, so no vector crosses a call.
+LOADFORGE_WIDE_INLINE M bits_of(V value) noexcept { return __builtin_bit_cast(M, value); }
+LOADFORGE_WIDE_INLINE V value_of(M bits) noexcept { return __builtin_bit_cast(V, bits); }
 
-/// `lhs` where the mask is set, `rhs` where it is not.
-LOADFORGE_WIDE_INLINE V select(M mask, V lhs, V rhs) noexcept {
-  return std::bit_cast<V>((mask & bits_of(lhs)) | (~mask & bits_of(rhs)));
+/// `when_set` in the lanes where the mask is set, `otherwise` in the rest.
+LOADFORGE_WIDE_INLINE V select(M mask, V when_set, V otherwise) noexcept {
+  return value_of((mask & bits_of(when_set)) | (~mask & bits_of(otherwise)));
 }
 
 LOADFORGE_WIDE_INLINE V lesser(V lhs, V rhs) noexcept { return select(rhs < lhs, rhs, lhs); }
@@ -60,7 +66,7 @@ LOADFORGE_WIDE_INLINE V root(V value) noexcept {
 }
 
 LOADFORGE_WIDE_INLINE V absolute(V value) noexcept {
-  return std::bit_cast<V>(bits_of(value) & (M{} + 0x7FFFFFFFFFFFFFFFLL));
+  return value_of(bits_of(value) & (M{} + 0x7FFFFFFFFFFFFFFFLL));
 }
 
 struct V3 {
@@ -84,10 +90,16 @@ LOADFORGE_WIDE_INLINE V3 cross(const V3& lhs, const V3& rhs) noexcept {
             lhs.x * rhs.y - lhs.y * rhs.x};
 }
 
+/// The four rays of a packet: where each starts and where it goes.
+struct VRay {
+  V3 origin;
+  V3 direction;
+};
+
 /// ray_sphere() in every lane.
-LOADFORGE_WIDE_INLINE V ray_sphere(const V3& origin, const V3& direction,
-                                   const Sphere& sphere) noexcept {
-  const V3 oc = sub(origin, splat3(sphere.centre));
+LOADFORGE_WIDE_INLINE V ray_sphere(const VRay& rays, const Sphere& sphere) noexcept {
+  const V3& direction = rays.direction;
+  const V3 oc = sub(rays.origin, splat3(sphere.centre));
   const V a = dot(direction, direction);
   const V hb = dot(oc, direction);
   const V cc = dot(oc, oc) - splat(sphere.radius) * splat(sphere.radius);
@@ -100,8 +112,8 @@ LOADFORGE_WIDE_INLINE V ray_sphere(const V3& origin, const V3& direction,
 }
 
 /// ray_triangle() in every lane (Moller-Trumbore).
-LOADFORGE_WIDE_INLINE V ray_triangle(const V3& origin, const V3& direction,
-                                     const Triangle& triangle) noexcept {
+LOADFORGE_WIDE_INLINE V ray_triangle(const VRay& rays, const Triangle& triangle) noexcept {
+  const V3& direction = rays.direction;
   const V3 e1 = splat3(Vec3{triangle.v1.x - triangle.v0.x, triangle.v1.y - triangle.v0.y,
                             triangle.v1.z - triangle.v0.z});
   const V3 e2 = splat3(Vec3{triangle.v2.x - triangle.v0.x, triangle.v2.y - triangle.v0.y,
@@ -111,7 +123,7 @@ LOADFORGE_WIDE_INLINE V ray_triangle(const V3& origin, const V3& direction,
   const M usable = absolute(det) > splat(0.0);
   // 1 / det for the lanes that have one; no lane divides by zero.
   const V inv = splat(1.0) / select(usable, det, splat(1.0));
-  const V3 s = sub(origin, splat3(triangle.v0));
+  const V3 s = sub(rays.origin, splat3(triangle.v0));
   const V u = dot(s, p) * inv;
   const M inside_u = (u >= splat(0.0)) & (u <= splat(1.0));
   const V3 q = cross(s, e1);
@@ -122,52 +134,58 @@ LOADFORGE_WIDE_INLINE V ray_triangle(const V3& origin, const V3& direction,
   return select(hit, t, splat(kNoHitDistance));
 }
 
+/// The interval of t each lane has inside the boxes met so far.
+struct VRange {
+  V t_near;
+  V t_far;
+};
+
+/// A packet's origins and reciprocal directions along one axis.
+struct VAxis {
+  V origin;
+  V inverse;
+};
+
+/// narrow() of packet.hpp in every lane: `range` cut to the slab of one axis.
+LOADFORGE_WIDE_INLINE void narrow(VRange& range, const Interval& box, const VAxis& rays) noexcept {
+  const V t0 = (splat(box.lo) - rays.origin) * rays.inverse;
+  const V t1 = (splat(box.hi) - rays.origin) * rays.inverse;
+  range.t_near = greater(range.t_near, lesser(t0, t1));
+  range.t_far = lesser(range.t_far, greater(t0, t1));
+}
+
 class Packet {
  public:
   [[gnu::always_inline]] Packet(std::uint32_t x0, std::uint32_t y) noexcept {
-    std::array<LaneRay, kLanes> rays{};
+    rays_.origin = splat3(kEye);
     for (std::uint32_t lane = 0; lane < kLanes; ++lane) {
-      rays.at(lane) = lane_ray(x0 + lane, y);
+      const LaneRay ray = lane_ray(x0 + lane, y);
+      rays_.direction.x[lane] = ray.ray.direction.x;
+      rays_.direction.y[lane] = ray.ray.direction.y;
+      rays_.direction.z[lane] = ray.ray.direction.z;
+      inverse_.x[lane] = ray.inverse.x;
+      inverse_.y[lane] = ray.inverse.y;
+      inverse_.z[lane] = ray.inverse.z;
     }
-    origin_ = splat3(rays.at(0).ray.origin);
-    direction_ = V3{V{rays.at(0).ray.direction.x, rays.at(1).ray.direction.x,
-                      rays.at(2).ray.direction.x, rays.at(3).ray.direction.x},
-                    V{rays.at(0).ray.direction.y, rays.at(1).ray.direction.y,
-                      rays.at(2).ray.direction.y, rays.at(3).ray.direction.y},
-                    V{rays.at(0).ray.direction.z, rays.at(1).ray.direction.z,
-                      rays.at(2).ray.direction.z, rays.at(3).ray.direction.z}};
-    inverse_ = V3{V{rays.at(0).inverse.x, rays.at(1).inverse.x, rays.at(2).inverse.x,
-                    rays.at(3).inverse.x},
-                  V{rays.at(0).inverse.y, rays.at(1).inverse.y, rays.at(2).inverse.y,
-                    rays.at(3).inverse.y},
-                  V{rays.at(0).inverse.z, rays.at(1).inverse.z, rays.at(2).inverse.z,
-                    rays.at(3).inverse.z}};
     best_t_ = splat(kNoHitDistance);
     best_id_ = M{} + static_cast<std::int64_t>(kNoHit);
   }
 
-  [[gnu::always_inline]] [[nodiscard]] inline bool reaches(const Node& node) const noexcept {
-    V t_near = splat(0.0);
-    V t_far = splat(kNoHitDistance);
-    const auto slab = [&t_near, &t_far](double lo, double hi, V origin, V inverse) {
-      const V t0 = (splat(lo) - origin) * inverse;
-      const V t1 = (splat(hi) - origin) * inverse;
-      t_near = greater(t_near, lesser(t0, t1));
-      t_far = lesser(t_far, greater(t0, t1));
-    };
-    slab(node.lo.x, node.hi.x, origin_.x, inverse_.x);
-    slab(node.lo.y, node.hi.y, origin_.y, inverse_.y);
-    slab(node.lo.z, node.hi.z, origin_.z, inverse_.z);
-    const M met = (t_near <= t_far) & (t_near <= best_t_);
+  [[gnu::always_inline]] [[nodiscard]] bool reaches(const Node& node) const noexcept {
+    VRange range{splat(0.0), splat(kNoHitDistance)};
+    narrow(range, Interval{node.lo.x, node.hi.x}, VAxis{rays_.origin.x, inverse_.x});
+    narrow(range, Interval{node.lo.y, node.hi.y}, VAxis{rays_.origin.y, inverse_.y});
+    narrow(range, Interval{node.lo.z, node.hi.z}, VAxis{rays_.origin.z, inverse_.z});
+    const M met = (range.t_near <= range.t_far) & (range.t_near <= best_t_);
     // Any lane set: the lanes of a mask are all ones or all zeros.
     return (met[0] | met[1] | met[2] | met[3]) != 0;
   }
 
-  [[gnu::always_inline]] inline void leaf(const SceneStorage& scene, const Node& node) noexcept {
+  [[gnu::always_inline]] void leaf(const SceneStorage& scene, const Node& node) noexcept {
     for (std::uint32_t slot = node.link; slot < node.link + node.count; ++slot) {
       const std::uint32_t id = scene.order.at(slot);
-      const V t = id < kSpheres ? ray_sphere(origin_, direction_, scene.spheres.at(id))
-                                : ray_triangle(origin_, direction_, scene.triangles.at(id - kSpheres));
+      const V t = id < kSpheres ? ray_sphere(rays_, scene.spheres.at(id))
+                                : ray_triangle(rays_, scene.triangles.at(id - kSpheres));
       const M id_lanes = M{} + static_cast<std::int64_t>(id);
       const M hit = t < splat(kNoHitDistance);
       const M nearer = (t < best_t_) | ((t == best_t_) & (id_lanes < best_id_));
@@ -177,7 +195,7 @@ class Packet {
     }
   }
 
-  [[gnu::always_inline]] inline void write(std::span<std::byte> out) const noexcept {
+  [[gnu::always_inline]] void write(std::span<std::byte> out) const noexcept {
     for (std::size_t lane = 0; lane < kLanes; ++lane) {
       write_record(out.subspan(lane * kPixelBytes, kPixelBytes), best_t_[lane],
                    static_cast<std::uint32_t>(best_id_[lane]));
@@ -185,8 +203,7 @@ class Packet {
   }
 
  private:
-  V3 origin_{};
-  V3 direction_{};
+  VRay rays_{};
   V3 inverse_{};
   V best_t_{};
   M best_id_{};

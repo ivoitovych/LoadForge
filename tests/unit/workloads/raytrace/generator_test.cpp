@@ -4,6 +4,8 @@
 // u64_of(block_at(seed, index, e)), decoded by spec.hpp's helpers, in the
 // order the specification lays the draws out.
 
+#include "workloads/raytrace/generator.hpp"
+
 #include <gtest/gtest.h>
 
 #include <array>
@@ -15,7 +17,6 @@
 
 #include "oracle/workloads/raytrace/reference.hpp"
 #include "primitives/rng/philox.hpp"
-#include "workloads/raytrace/generator.hpp"
 #include "workloads/raytrace/scene.hpp"
 
 namespace loadforge::tests::raytrace {
@@ -46,7 +47,8 @@ TEST(RaytraceGenerator, SpheresAreTheirFourDrawsDecoded) {
 TEST(RaytraceGenerator, TrianglesAreABasePlusThreeOffsetsEachFromItsOwnDraws) {
   const std::uint64_t seed = 0x1234;
   const Bytes input = generated(seed, 9);
-  for (const std::size_t j : {std::size_t{0}, std::size_t{1}, std::size_t{100}, rt::kTriangles - 1}) {
+  for (const std::size_t j :
+       {std::size_t{0}, std::size_t{1}, std::size_t{100}, rt::kTriangles - 1}) {
     const std::size_t first = rt::kSphereDraws + 12 * j;
     const std::array<double, 3> base = {rt::position_xy(draw(seed, 9, first)),
                                         rt::position_xy(draw(seed, 9, first + 1)),

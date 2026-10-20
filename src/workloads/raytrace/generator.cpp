@@ -57,15 +57,16 @@ void generate_scene(std::uint64_t seed, std::uint64_t index,
 void decode_scene(std::span<const std::byte, kInputBytes> input, SceneStorage& scene) noexcept {
   for (std::size_t i = 0; i < kSpheres; ++i) {
     const std::size_t first = i * kSphereDoubles;
-    scene.spheres.at(i) = Sphere{Vec3{get(input, first), get(input, first + 1), get(input, first + 2)},
-                                 get(input, first + 3)};
+    scene.spheres.at(i) =
+        Sphere{Vec3{get(input, first), get(input, first + 1), get(input, first + 2)},
+               get(input, first + 3)};
   }
   for (std::size_t j = 0; j < kTriangles; ++j) {
     const std::size_t first = kTriangleDoublesAt + j * kTriangleDoubles;
-    scene.triangles.at(j) = Triangle{
-        Vec3{get(input, first), get(input, first + 1), get(input, first + 2)},
-        Vec3{get(input, first + 3), get(input, first + 4), get(input, first + 5)},
-        Vec3{get(input, first + 6), get(input, first + 7), get(input, first + 8)}};
+    scene.triangles.at(j) =
+        Triangle{Vec3{get(input, first), get(input, first + 1), get(input, first + 2)},
+                 Vec3{get(input, first + 3), get(input, first + 4), get(input, first + 5)},
+                 Vec3{get(input, first + 6), get(input, first + 7), get(input, first + 8)}};
   }
 }
 
