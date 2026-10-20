@@ -97,8 +97,9 @@ inline constexpr std::size_t kControllerSlot = 0;
 /// which is the EOWNERDEAD rule with nothing to recover, because no reader
 /// ever needed the writer to finish.
 ///
-/// The synchronisation argument, in full, is in the tests (P5), where it can
-/// be checked against a run under TSan.
+/// The synchronisation argument, in full, is in the tests (P5), next to the
+/// test of its consequence. It is checked by reading it: TSan finds races, not
+/// a missing fence, and x86 hides the one this design needs.
 ///
 /// HOW IT CROSSES EXEC
 /// -------------------
@@ -189,6 +190,17 @@ enum class Liveness : std::uint8_t { kNeverBeat, kFresh, kStale };
 /// worker; a counter that went backwards is treated as no progress, because
 /// a writer whose counter runs backwards is not one to credit.
 [[nodiscard]] bool progressed(const Heartbeat& earlier, const Heartbeat& later) noexcept;
+
+/// The seqlock reader's verdict on one sample: the sequence read before the
+/// fields and the one read after. Accepted only when the first was even, no
+/// write in progress, and the second is the same, no write began meanwhile.
+///
+/// A function of its own so that each outcome is a test rather than a race.
+/// The third outcome, even before and changed after, happens in observe() only
+/// when a writer lands between two loads, and a concurrency test meets that by
+/// luck or not at all; coverage that depends on luck is a gate that passes or
+/// fails by the run.
+[[nodiscard]] bool sample_is_consistent(std::uint64_t before, std::uint64_t after) noexcept;
 
 }  // namespace loadforge::ipc
 
