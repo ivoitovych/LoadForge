@@ -191,6 +191,19 @@ class Syscalls {
   /// way to see that it already happened.
   [[nodiscard]] virtual pid_t parent_pid() = 0;
 
+  /// setsid(2): makes this process the leader of a new session, and of a new
+  /// process group whose id is its pid. Set in the child, after fork, so that
+  /// everything a worker starts shares a group the supervisor can signal as
+  /// one -- kill(-pid) -- after the worker itself is gone.
+  ///
+  /// Returns nothing, because where it is called it cannot fail: setsid
+  /// refuses only a process that already leads a process group, and the child
+  /// of a fork never does (its group is its parent's, whose leader is another
+  /// process). A failure arm here would be a branch no test could take
+  /// (IMPLEMENTATION §2.6, rung 3). Called anywhere else, it may be refused,
+  /// silently; nothing above the seam does that.
+  virtual void start_session() = 0;
+
   /// waitpid(-1, &status, 0) -- reap whichever child terminated first.
   ///
   /// Returns the pid AND the raw status word together, because they are only
@@ -329,6 +342,7 @@ class RealSyscalls final : public Syscalls {
                                   const std::vector<std::string>& argv) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> set_parent_death_signal(int signal) override;
   [[nodiscard]] pid_t parent_pid() override;
+  void start_session() override;
   [[nodiscard]] core::Result<Reaped, SyscallError> wait_any() override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> send_signal(pid_t pid, int signal) override;
   [[nodiscard]] core::Result<TimeSpec, SyscallError> read_clock(int clock_id) override;

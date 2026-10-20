@@ -291,6 +291,20 @@ TEST_F(RealSyscallsTest, AnInvalidDeathSignalIsRejectedByTheKernel) {
   EXPECT_EQ(armed.error().call, "prctl");
 }
 
+TEST_F(RealSyscallsTest, StartingASessionIsRefusedSilentlyToAGroupLeader) {
+  // start_session has no answer by contract: in a fresh child it cannot fail.
+  // In this process it is made to be refused rather than to succeed, because
+  // success would detach the test from its terminal for the rest of the
+  // suite: leading a group of its own first (harmless, and already true when a
+  // shell started it) is exactly the one condition setsid refuses. The
+  // session is unchanged, which is what a silent refusal must leave.
+  ASSERT_TRUE(::setpgid(0, 0) == 0 || ::getpgid(0) == ::getpid());
+  const pid_t session = ::getsid(0);
+  syscalls.start_session();
+  EXPECT_EQ(::getsid(0), session);
+  EXPECT_EQ(::getpgid(0), ::getpid());
+}
+
 TEST_F(RealSyscallsTest, ParentPidMatchesGetppid) {
   EXPECT_EQ(syscalls.parent_pid(), ::getppid());
   EXPECT_GT(syscalls.parent_pid(), 0);

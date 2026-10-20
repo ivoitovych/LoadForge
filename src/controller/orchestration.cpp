@@ -143,6 +143,7 @@ class Run {
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
   [[nodiscard]] core::Result<RunReport, ControllerError> finish();
   void close_channel(Tracked& worker);
+  void kill_group(Tracked& worker);
   void teardown();
   [[nodiscard]] core::Result<std::int64_t, ControllerError> elapsed_now();
 
@@ -476,6 +477,7 @@ core::Result<core::Ok, ControllerError> Run::reap(std::int64_t elapsed_ns) {
     worker.evidence.status = dead->status;
     worker.reaped = true;
     --live_;
+    kill_group(worker);
     (void)syscalls_->close(worker.control.write_fd);
     worker.control.write_fd = -1;
     reporter_->event(elapsed_ns, "worker " + std::to_string(worker.slot) + " (pid " +
@@ -483,6 +485,27 @@ core::Result<core::Ok, ControllerError> Run::reap(std::int64_t elapsed_ns) {
                                      "): " + worker.evidence.status.describe());
   }
   return core::Ok{};
+}
+
+void Run::kill_group(Tracked& worker) {
+  // The worker led a process group of its own (WorkerLauncher::become_worker),
+  // and anything it forked is still in it: a grandchild with no death signal,
+  // since the kernel clears that across fork, holding a core and the record
+  // pipe for as long as nobody kills it. Now that the worker is gone, nothing
+  // in its group has a reason to run. ESRCH -- an empty group -- is the usual
+  // answer and says nothing; a kill that found someone is recorded, because a
+  // worker that left processes behind is part of what it did.
+  //
+  // Straight after the reap, for the pid's sake: the kernel does not reuse a
+  // pid that is still some group's id, so while anything of the worker's is
+  // left the number names that group and nothing else. Once nothing is left,
+  // reuse needs the pid allocator to wrap all the way round in between.
+  auto killed = syscalls_->send_signal(-worker.pid, SIGKILL);
+  if (killed.has_value()) {
+    worker.notes.emplace_back("process group: killed what the worker left running");
+  } else if (killed.error().number != ESRCH) {
+    worker.notes.push_back("process group: " + describe(killed.error()));
+  }
 }
 
 core::Result<core::Ok, ControllerError> Run::drain_after_death() {
@@ -567,6 +590,16 @@ void Run::teardown() {
   // The silent release, for every way out. Live workers are killed and reaped
   // so a failed run leaves none behind; descriptors and the region follow.
   if (spawned_ && live_ > 0) {
+    // Each unreaped worker's group first, while its pid still pins the group's
+    // number (see kill_group), then the workers themselves, for any that died
+    // or failed before leading a group. A worker whose pid was never recorded
+    // -- the spawn failed after the fork -- is skipped: -0 is not its group but
+    // this process's own, and the kill would end the controller.
+    for (const Tracked& worker : workers_) {
+      if (!worker.reaped && worker.pid > 0) {
+        (void)syscalls_->send_signal(-worker.pid, SIGKILL);
+      }
+    }
     (void)pool_.signal_all(SIGKILL);
     while (live_ > 0) {
       auto reaped = pool_.wait_for_next();
