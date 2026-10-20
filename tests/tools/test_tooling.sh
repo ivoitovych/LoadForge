@@ -1014,6 +1014,44 @@ else
   echo "  FAIL  cmake is not installed, so the fragment glob is untested"; fail=$((fail + 1))
 fi
 
+# Merge commits built with plumbing, so that every field is the test's to set.
+# mk_merge <repo> <parent1> <parent2> <author-email> <committer-email> <message> [extra]
+#   tree = the clean automatic merge of the parents, plus one new file when a
+#   seventh argument is given (content neither parent has), or parent1's own
+#   tree when it is "ours" (a merge that discards what the other side did).
+mk_merge() {
+  local repo="$1" p1="$2" p2="$3" tree idx
+  tree="$(git -C "$repo" merge-tree --write-tree "$p1" "$p2" | head -1)"
+  case "${7-}" in
+    "") ;;
+    ours) tree="$(git -C "$repo" rev-parse "$p1^{tree}")" ;;
+    *)  idx="$(mktemp -u)"
+        GIT_INDEX_FILE="$idx" git -C "$repo" read-tree "$tree"
+        GIT_INDEX_FILE="$idx" git -C "$repo" update-index --add --cacheinfo \
+          "100644,$(echo smuggled | git -C "$repo" hash-object -w --stdin),$7"
+        tree="$(GIT_INDEX_FILE="$idx" git -C "$repo" write-tree)"; rm -f "$idx" ;;
+  esac
+  GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL="$4" GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL="$5" \
+    git -C "$repo" commit-tree "$tree" -p "$p1" -p "$p2" -m "$6"
+}
+# Two diverged commits in a repository, printed as "p1 p2".
+mk_fork() { # repo, author-email
+  local repo="$1" root a b
+  root="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" checkout -q -B fork-a "$root"
+  echo a > "$repo/fa.txt"; git -C "$repo" add -A
+  GIT_AUTHOR_EMAIL="$2" GIT_COMMITTER_EMAIL="$2" git -C "$repo" commit -q --no-verify -m "a" -m "Signed-off-by: A <$2>"
+  a="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" checkout -q -B fork-b "$root"
+  echo b > "$repo/fb.txt"; git -C "$repo" add -A
+  GIT_AUTHOR_EMAIL="$2" GIT_COMMITTER_EMAIL="$2" git -C "$repo" commit -q --no-verify -m "b" -m "Signed-off-by: A <$2>"
+  b="$(git -C "$repo" rev-parse HEAD)"
+  echo "$a $b"
+}
+GH=noreply@github.com
+MSG_FORGED=$'Merge pull request #9\n\nCo-authored-by: Someone <s@example.invalid>'
+OWNER_SOB=$'\n\nSigned-off-by: Owner <owner@example.invalid>'
+
 echo "check-dco.sh"
 # Real git repositories, because the bug this gate had was entirely about what
 # actions/checkout leaves in the working tree on a pull_request event -- which no
@@ -1052,7 +1090,8 @@ expect "an unsigned commit FAILS"                            1 $? "MISSING Signe
 # Walking base..HEAD from there flagged GitHub's own commit, so the gate failed
 # every pull request no matter how carefully its commits were signed.
 git -C "$dco" checkout -q -b pr-merge "$base"
-git -C "$dco" merge -q --no-ff --no-verify -m "Merge feature into main" feature 2>/dev/null
+GIT_COMMITTER_NAME=GitHub GIT_COMMITTER_EMAIL=noreply@github.com \
+  git -C "$dco" merge -q --no-ff --no-verify -m "Merge feature into main" feature 2>/dev/null
 merge_head="$(git -C "$dco" rev-parse HEAD)"
 git -C "$dco" log -1 --format='%(trailers:key=Signed-off-by)' "$merge_head" | grep -q . \
   && echo "  (fixture problem: the merge commit is signed, which defeats this test)"
@@ -1070,7 +1109,8 @@ fi
 git -C "$dco" checkout -q -B feature "$base"
 dco_commit "signed work only"
 git -C "$dco" checkout -q -B pr-merge "$base"
-git -C "$dco" merge -q --no-ff --no-verify -m "Merge feature into main" feature 2>/dev/null
+GIT_COMMITTER_NAME=GitHub GIT_COMMITTER_EMAIL=noreply@github.com \
+  git -C "$dco" merge -q --no-ff --no-verify -m "Merge feature into main" feature 2>/dev/null
 merge_head="$(git -C "$dco" rev-parse HEAD)"
 out="$("$ROOT/tools/check-dco.sh" "$base" "$merge_head" "$dco" 2>&1)"
 expect "a signed series behind a merge commit passes"        0 $? "0 unsigned" "$out"
@@ -1090,6 +1130,31 @@ but has no trailer block because this line follows it."
 out="$("$ROOT/tools/check-dco.sh" "$base" "$(git -C "$dco" rev-parse HEAD)" "$dco" 2>&1)"
 expect "a sign-off mentioned in prose does not count"        1 $? "MISSING Signed-off-by" "$out"
 
+# A merge is exempt only when it is GitHub's clean merge: two parents, GitHub
+# as committer, and a tree equal to the automatic merge of the parents.
+git -C "$dco" checkout -q -B fork-base "$base"
+read -r fa fb < <(mk_fork "$dco" contributor@example.invalid)
+forged="$(mk_merge "$dco" "$fa" "$fb" contributor@example.invalid $GH "$MSG_FORGED" smuggled.txt)"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$forged" "$dco" 2>&1)"
+expect "a forged GitHub merge that adds content FAILS"       1 $? "MISSING Signed-off-by: .*Merge pull request" "$out"
+genuine="$(mk_merge "$dco" "$fa" "$fb" contributor@example.invalid $GH "Merge pull request #9")"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$genuine" "$dco" 2>&1)"
+expect "a genuine clean GitHub merge passes"                 0 $? "0 unsigned" "$out"
+ours="$(mk_merge "$dco" "$fa" "$fb" contributor@example.invalid $GH "Merge pull request #9" ours)"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$ours" "$dco" 2>&1)"
+expect "a GitHub merge that is not the clean merge FAILS"    1 $? "MISSING Signed-off-by" "$out"
+human="$(mk_merge "$dco" "$fa" "$fb" contributor@example.invalid contributor@example.invalid $'Merge main\n\nSigned-off-by: C <contributor@example.invalid>')"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$human" "$dco" 2>&1)"
+expect "a human merge with a sign-off passes"                0 $? "0 unsigned" "$out"
+human_unsigned="$(mk_merge "$dco" "$fa" "$fb" contributor@example.invalid contributor@example.invalid "Merge main")"
+out="$("$ROOT/tools/check-dco.sh" "$base" "$human_unsigned" "$dco" 2>&1)"
+expect "a human merge without a sign-off FAILS"              1 $? "MISSING Signed-off-by: .*Merge main" "$out"
+git -C "$dco" checkout -q -B other-sob "$base"
+echo o > "$dco/file.txt"; git -C "$dco" add -A
+git -C "$dco" commit -q -m "other" -m "Signed-off-by: Other <other@example.invalid>"
+out="$("$ROOT/tools/check-dco.sh" "$base" HEAD "$dco" 2>&1)"
+expect "a sign-off with another email FAILS"                 1 $? "MISSING Signed-off-by" "$out"
+
 rm -rf "$dco"
 
 echo "check-commit-identity.sh"
@@ -1097,13 +1162,16 @@ echo "check-commit-identity.sh"
 # matter -- a GitHub-shaped merge, a signature -- are shapes of those objects.
 idr="$(mktemp -d)"; ids="$(mktemp)"
 git init -q "$idr"
+git -C "$idr" config user.name "Identity Test"
 git -C "$idr" config commit.gpgsign false
 printf '# admitted\nowner@example.invalid\n\n' > "$ids"
-id_commit() { # name, email, message, [committer-email]
+id_commit() { # name, email, message, [committer-email]; signs off as the author unless the message has a sign-off
+  local msg="$3"
+  grep -q '^Signed-off-by:' <<< "$msg" || msg+=$'\n\n'"Signed-off-by: $1 <$2>"
   mktemp -p "$idr" f.XXXXXX >/dev/null; git -C "$idr" add -A
   GIT_AUTHOR_NAME="$1" GIT_AUTHOR_EMAIL="$2" \
   GIT_COMMITTER_NAME="$1" GIT_COMMITTER_EMAIL="${4:-$2}" \
-    git -C "$idr" commit -q --no-verify -m "$3"
+    git -C "$idr" commit -q --no-verify -m "$msg"
 }
 idg() { "$ROOT/tools/check-commit-identity.sh" "${1:-HEAD}" "$idr" "${2:-$ids}" 2>&1; }
 
@@ -1123,12 +1191,16 @@ id_commit Owner owner@example.invalid "unadmitted committer" other@example.inval
 out="$(idg)"; expect "a committer not admitted FAILS"                 1 $? "committer <other@example.invalid>" "$out"
 
 git -C "$idr" checkout -q -B c3 "$root"
-id_commit Owner owner@example.invalid $'second author\n\nCo-authored-by: Someone <someone@example.invalid>'
+id_commit Owner owner@example.invalid $'second author\n\nCo-authored-by: Someone <someone@example.invalid>\nSigned-off-by: Owner <owner@example.invalid>'
 out="$(idg)"; expect "a co-author trailer FAILS without being named"  1 $? "trailer 'Co-authored-by'" "$out"
 
 git -C "$idr" checkout -q -B c4 "$root"
 id_commit Owner owner@example.invalid $'odd trailer\n\nAnything-Else: here\nSigned-off-by: Owner <owner@example.invalid>'
 out="$(idg)"; expect "any trailer but Signed-off-by FAILS"            1 $? "trailer 'Anything-Else'" "$out"
+
+git -C "$idr" checkout -q -B c4b "$root"
+id_commit Owner owner@example.invalid $'buried co-author\n\nCo-authored-by: Someone <someone@example.invalid>\n\nprose after it\n\nSigned-off-by: Owner <owner@example.invalid>'
+out="$(idg)"; expect "a co-author line outside the trailers FAILS"   1 $? "a 'Co-authored-by:' line" "$out"
 
 # A signature, made by writing the header into a commit object directly: no key
 # is needed to show that the gate refuses the shape.
@@ -1159,6 +1231,48 @@ GIT_AUTHOR_NAME="Someone" GIT_AUTHOR_EMAIL="someone@example.invalid" \
 GIT_COMMITTER_NAME="GitHub" GIT_COMMITTER_EMAIL="noreply@github.com" \
   git -C "$idr" merge -q --no-ff --no-verify -m "Merge pull request #2" side
 out="$(idg)"; expect "a GitHub merge by someone not admitted FAILS"   1 $? "author <someone@example.invalid>" "$out"
+
+# The merge exemption rests on the tree, not on forgeable fields.
+git -C "$idr" checkout -q -B fork-root "$root"
+read -r fa fb < <(mk_fork "$idr" owner@example.invalid)
+forged="$(mk_merge "$idr" "$fa" "$fb" owner@example.invalid $GH "$MSG_FORGED" smuggled.txt)"
+out="$(idg "$forged")"; expect "a forged GitHub merge that adds content FAILS"     1 $? "trailer 'Co-authored-by'" "$out"
+expect "  ... and for want of a sign-off"                            1 1 "no Signed-off-by for <owner@example.invalid>" "$out"
+genuine="$(mk_merge "$idr" "$fa" "$fb" owner@example.invalid $GH "Merge pull request #9")"
+out="$(idg "$genuine")"; expect "a genuine clean GitHub merge with no trailers passes" 0 $? "0 problem(s)" "$out"
+ours="$(mk_merge "$idr" "$fa" "$fb" owner@example.invalid $GH "Merge pull request #9" ours)"
+out="$(idg "$ours")"; expect "a GitHub merge that is not the clean merge FAILS"   1 $? "no Signed-off-by" "$out"
+unadmitted="$(mk_merge "$idr" "$fa" "$fb" owner@example.invalid other@example.invalid "Merge x$OWNER_SOB" extra.txt)"
+out="$(idg "$unadmitted")"; expect "a merge with an unadmitted committer and content FAILS" 1 $? "committer <other@example.invalid>" "$out"
+unadmitted_clean="$(mk_merge "$idr" "$fa" "$fb" owner@example.invalid other@example.invalid "Merge x$OWNER_SOB")"
+out="$(idg "$unadmitted_clean")"; expect "a clean merge by an unadmitted non-GitHub committer FAILS" 1 $? "committer <other@example.invalid>" "$out"
+human="$(mk_merge "$idr" "$fa" "$fb" owner@example.invalid owner@example.invalid "Merge main$OWNER_SOB")"
+out="$(idg "$human")"; expect "a human merge with a sign-off passes"               0 $? "0 problem(s)" "$out"
+human_unsigned="$(mk_merge "$idr" "$fa" "$fb" owner@example.invalid owner@example.invalid "Merge main")"
+out="$(idg "$human_unsigned")"; expect "a human merge without a sign-off FAILS"    1 $? "no Signed-off-by" "$out"
+forged_author="$(mk_merge "$idr" "$fa" "$fb" someone@example.invalid $GH "Merge pull request #9")"
+out="$(idg "$forged_author")"; expect "a clean GitHub merge still needs an admitted author" 1 $? "author <someone@example.invalid>" "$out"
+
+git -C "$idr" checkout -q -B sob "$root"
+id_commit Owner owner@example.invalid "signed by another" ; git -C "$idr" reset -q --soft HEAD~1
+GIT_AUTHOR_EMAIL=owner@example.invalid GIT_COMMITTER_EMAIL=owner@example.invalid \
+  git -C "$idr" commit -q --no-verify -m "other sob" -m "Signed-off-by: Other <other@example.invalid>"
+out="$(idg)"; expect "a sign-off with another email FAILS"                         1 $? "no Signed-off-by for <owner@example.invalid>" "$out"
+git -C "$idr" reset -q --hard "$root"; echo q >> "$idr/q"; git -C "$idr" add -A
+GIT_AUTHOR_EMAIL=owner@example.invalid GIT_COMMITTER_EMAIL=owner@example.invalid \
+  git -C "$idr" commit -q --no-verify -m "none"
+out="$(idg)"; expect "a missing sign-off FAILS"                                    1 $? "no Signed-off-by" "$out"
+
+bl="$(mktemp)"; echo "$(git -C "$idr" rev-parse HEAD) a note" > "$bl"
+out="$("$ROOT/tools/check-commit-identity.sh" HEAD "$idr" "$ids" "" "$bl" 2>&1)"
+expect "a listed pre-DCO commit is excused its sign-off only" 0 $? "0 problem(s)" "$out"
+git -C "$idr" checkout -q -B bl-bad "$root"
+GIT_AUTHOR_EMAIL=someone@example.invalid GIT_COMMITTER_EMAIL=owner@example.invalid \
+  git -C "$idr" commit -q --no-verify --allow-empty -m "unsigned and unadmitted"
+echo "$(git -C "$idr" rev-parse HEAD)" > "$bl"
+out="$("$ROOT/tools/check-commit-identity.sh" HEAD "$idr" "$ids" "" "$bl" 2>&1)"
+expect "...but its author is still judged"                    1 $? "author <someone@example.invalid>" "$out"
+rm -f "$bl"
 
 out="$(idg does-not-exist)"; expect "an unresolvable ref FAILS"      1 $? "is not a commit" "$out"
 out="$(idg HEAD /nonexistent/identities)"; expect "a missing identities file FAILS" 1 $? "cannot read" "$out"

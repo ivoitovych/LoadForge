@@ -1,6 +1,6 @@
 # Stream 06 — Workload: dense linear algebra, and the first vector kernels
 
-**State:** not started  
+**State:** complete on `feature/workload-dense-linear`, 2026-10-20 11:45 UTC; awaiting its pull request  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

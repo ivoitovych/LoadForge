@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry/sources/thermal and nothing else.
+
+[[module]]
+path             = "src/telemetry/sources/thermal"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2"]
+fixtures         = ["sysfs/thermal/absent"]
+fixture_builders = [
+  "tests/unit/telemetry/sources/thermal/thermal_test.cpp",
+  "tests/unit/telemetry/sources/thermal/hwmon_tree.hpp",
+]
+provides         = ["SourceContract"]
+note             = """
+Temperatures from hwmon and the thermal zones (PLAN F3: identification, not \
+permission), and the two pieces the fan and frequency sources share with it: \
+Channel (one integer attribute read as a gauge, with the remedy for each way \
+it fails) and the hwmon chip discovery. \
+\
+P1: a sensor is named by what its driver says it is (coretemp's Package id N \
+and Core N, k10temp's Tdie) and every other input is thermal.sensor with its \
+chip as the provider, never guessed; two inputs claiming one series are both \
+reported. \
+\
+P2: every errno a read can fail with reaches the source through the \
+substituted seam (tests/unit/telemetry/sources/thermal/memfs.hpp), at the \
+open and at the read, at the probe and in the run: ENOENT, ENODEV and ENXIO, \
+EACCES and EPERM, EIO, EISDIR, ENOTDIR and an EINTR that outlasts the retry \
+bound, each asserted to the state it must give. \
+\
+P3: the bounds of a temperature (absolute zero and one thousand degrees, each \
+side of each), the numbering of inputs (temp1 to temp255, not 256), of chips \
+(hwmon0 to hwmon63, not 64) and of zones, a label's number at 2^32 - 1 and \
+2^32. \
+\
+P7 is the module's subject, and it has no wrapped state: temperatures are \
+gauges. Present, absent (the captured machine, sysfs/thermal/absent), denied, \
+malformed, unreadable, and vanished mid-run (the file removed after it was \
+read, then put back) each have a test and each run the SourceContract suite. \
+No machine reachable from the stream had a sensor, so the present trees are \
+BUILT in the kernel's documented layout and are not claimed to be captures."""

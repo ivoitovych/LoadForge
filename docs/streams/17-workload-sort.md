@@ -1,6 +1,6 @@
 # Stream 17 — Workload: sort
 
-**State:** not started  
+**State:** complete (pushed on feature/workload-sort; pull request opened by the manager)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier A — a bounded component built against a written contract  

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/residual and nothing else.
+
+[[module]]
+path    = "src/verification/residual"
+classes = ["P1", "P3", "P4"]
+tiers   = ["T1", "T3", "T5", "T5b"]
+note    = """
+Derived tolerances (verification.md §5): the oracle's dot product and sum, \
+gamma_k, and the tolerance for |computed - reference| with its derivation \
+written in full in residual.hpp -- Higham's gamma_n bound with gradual \
+underflow, the oracle's own magnitude sum, the rounding of the residual, and \
+the rounding of the tolerance's own evaluation, each covered. \
+\
+P1: each refusal of the domain, the round-up loop, the comparison's two \
+outcomes. P3 is the module's subject: a magnitude of zero (the tolerance is \
+then the underflow term alone, exactly, and still positive), -0, the \
+smallest subnormal, 2^1000 accepted and one step past it refused, NaN and \
+both infinities refused, depth 2^26 accepted and one more refused; subnormal \
+inputs that stay exact and products that underflow to zero (covered only by \
+the underflow term, which a test shows the floor alone would not); NaN and \
+infinite results and an overflowing difference never within; the comparison \
+held at the bound and one step below, breached one step above, and breached \
+at (1 + eps) and held at (1 - eps) for eps machine epsilon, 2^-20 and 1/16 \
+(M2b exit criterion 3). The tolerance is checked against bound (3) of the \
+header in long double over 10 models and 2,008 magnitudes: never below, and \
+no more than 24 u above (18 u seen). \
+\
+P4: a measured result is within or breached, or no tolerance exists. T3 \
+checks the derivation's premise and conclusion against 128-bit exact \
+arithmetic on the specification's own inputs, for 43 evaluation orders \
+(forward, reverse, pairwise, every panel depth with 1, 2, 4 and 8 lanes, \
+plain and fused) and for cancelling sums. T5 flips every bit of correct \
+results: sign and exponent always caught, and the comparison sharp -- every \
+flip that moved the value by more than the bound plus the honest residual \
+caught, every one that moved it by less than the bound minus it not. T5b: a \
+NaN, an infinity, an overflowing product, a magnitude past 2^1000 and too \
+many terms each give the Underivable arm, and the record that becomes is \
+VerificationNotPerformed. Tests: tests/unit, tests/oracle and \
+tests/fault_injection under verification/residual.\
+"""

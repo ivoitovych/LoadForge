@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The project's checks, less one: this is the directory ISA intrinsics belong
+# in (simd/dispatch.hpp), so portability-simd-intrinsics, which exists to keep
+# them out of portable code, has nothing to say here. Everything else is the
+# root configuration, inherited.
+InheritParentConfig: true
+Checks: -portability-simd-intrinsics
