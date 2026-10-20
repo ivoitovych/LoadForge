@@ -16,7 +16,7 @@
 file(GLOB_RECURSE contract_tests CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cpp")
 loadforge_test_suite(loadforge_contract_tests
   SOURCES ${contract_tests}
-  LINK loadforge_topology)
+  LINK loadforge_topology loadforge_controller)
 
 # Every contract header compiles on its own, under the product's warning set:
 # one translation unit per header in headers/, each including its header and
