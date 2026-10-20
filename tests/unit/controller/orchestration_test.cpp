@@ -203,6 +203,8 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   };
   auto result = rig.run();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(rig.syscalls.signals_ignored(), std::vector<int>{SIGPIPE})
+      << "a stop byte to a worker that just died must be EPIPE, not signal 13";
   const RunReport& report = result.value();
   EXPECT_FALSE(report.worker_exit_code.has_value());
   ASSERT_EQ(report.workers.size(), 2U);
@@ -603,6 +605,15 @@ TEST(ControllerTest, RefusesBeforeSpawningWhenTheConfigurationCannotBeRun) {
 }
 
 TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehind) {
+  {
+    Rig rig;
+    rig.syscalls.fail_ignore_signal(EINVAL);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "signals");
+    EXPECT_TRUE(rig.reporter.plans.empty()) << "refused before the run was announced";
+    EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  }
   {
     Rig rig;
     rig.syscalls.fail_create_memory_file(ENOMEM);

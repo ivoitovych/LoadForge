@@ -164,6 +164,18 @@ class Run {
 };
 
 core::Result<core::Ok, ControllerError> Run::prepare() {
+  // The controller writes to pipes whose readers can die at any moment: a
+  // worker that exits between one tick's reap and the next tick's stop byte
+  // has closed the read end of its control pipe. With SIGPIPE at its default,
+  // that write kills the controller by signal 13 before write(2) can return
+  // EPIPE -- the one answer request_stop already tolerates -- and the whole
+  // run ends unreported. Ignored, the write reports EPIPE and the worker's
+  // death is reported like any other. First, before anything is created, so
+  // that a refusal leaves nothing to tear down. Workers inherit SIG_IGN across
+  // exec; they set it themselves regardless.
+  if (auto ignored = syscalls_->ignore_signal(SIGPIPE); !ignored.has_value()) {
+    return error_at("signals", describe(ignored.error()));
+  }
   if (auto memory = check_memory(*config_, options_->budget); !memory.has_value()) {
     return error_at("memory", memory.error());
   }
