@@ -99,6 +99,44 @@ struct Readiness {
   [[nodiscard]] friend bool operator==(const Readiness&, const Readiness&) = default;
 };
 
+/// A hardware or software counter to open with perf_event_open(2): which PMU
+/// (`type`), which event on it (`config`), and what to count.
+///
+/// `pid` and `cpu` are the syscall's own pair: pid 0 with cpu -1 counts the
+/// calling process on whichever CPU it runs, pid -1 with a cpu counts every
+/// process on that CPU (privileged). `user_only` sets exclude_kernel and
+/// exclude_hv, which is what lets an unprivileged process count itself at
+/// perf_event_paranoid 2; a PMU that counts the whole package (the power PMU)
+/// refuses them with EINVAL, which is why they are a choice and not a default.
+/// `inherit` makes children forked after the open count into the same
+/// descriptor. The event is opened disabled, close-on-exec, with total time
+/// enabled and running in its read format, so a multiplexed counter can be
+/// scaled (perf_event_open(2), PERF_FORMAT_TOTAL_TIME_*).
+struct PerfEventSpec {
+  std::uint32_t type = 0;
+  std::uint64_t config = 0;
+  pid_t pid = 0;
+  int cpu = -1;
+  bool user_only = false;
+  bool inherit = false;
+
+  [[nodiscard]] friend bool operator==(const PerfEventSpec&, const PerfEventSpec&) = default;
+};
+
+/// What read(2) on a counter returns with the read format above: the count,
+/// and for how long the event existed and ran. They differ when the kernel
+/// time-shared the PMU between more events than it has counters.
+struct PerfCount {
+  std::uint64_t value = 0;
+  std::uint64_t time_enabled = 0;  ///< Nanoseconds since the event was enabled.
+  std::uint64_t time_running = 0;  ///< Nanoseconds it was on a counter.
+
+  [[nodiscard]] friend bool operator==(const PerfCount&, const PerfCount&) = default;
+};
+
+/// The three ioctl(2) requests a counter needs, as perf_event_open(2) names them.
+enum class PerfAction : std::uint8_t { kReset, kEnable, kDisable };
+
 /// The seam. Every system call the platform layer issues goes through here.
 ///
 /// WHY THIS INTERFACE EXISTS, AND WHY IT IS EXACTLY THIS NARROW
@@ -323,6 +361,22 @@ class Syscalls {
   /// is told otherwise has lost track of them.
   [[nodiscard]] virtual core::Result<std::optional<Reaped>, SyscallError>
   reap_any_nonblocking() = 0;
+
+  /// perf_event_open(2) with group -1 and PERF_FLAG_FD_CLOEXEC. The failures
+  /// the man page documents are E2BIG, EACCES, EBADF, EBUSY, EFAULT, EINVAL,
+  /// EINTR, EMFILE, ENODEV, ENOENT, ENOSPC, ENOSYS, EOPNOTSUPP, EOVERFLOW,
+  /// EPERM and ESRCH; what each means for a source is decided above the seam.
+  [[nodiscard]] virtual core::Result<int, SyscallError> open_perf_event(
+      const PerfEventSpec& spec) = 0;
+
+  /// ioctl(2) PERF_EVENT_IOC_RESET, _ENABLE or _DISABLE on a counter.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> control_perf_event(
+      int fd, PerfAction action) = 0;
+
+  /// read(2) of a counter: its count and its two times. A counter is read as a
+  /// whole or not at all, so a short read is an error here (EIO), unlike
+  /// read() above where it is normal.
+  [[nodiscard]] virtual core::Result<PerfCount, SyscallError> read_perf_count(int fd) = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -372,6 +426,10 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] core::Result<core::Ok, SyscallError> ignore_signal(int signal) override;
   [[nodiscard]] pid_t process_id() override;
   [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_any_nonblocking() override;
+  [[nodiscard]] core::Result<int, SyscallError> open_perf_event(const PerfEventSpec& spec) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> control_perf_event(
+      int fd, PerfAction action) override;
+  [[nodiscard]] core::Result<PerfCount, SyscallError> read_perf_count(int fd) override;
 };
 
 }  // namespace loadforge::platform
