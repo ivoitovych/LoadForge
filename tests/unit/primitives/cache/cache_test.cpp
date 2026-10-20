@@ -50,8 +50,8 @@ using topology::CacheType;
 // --- geometry -----------------------------------------------------------------
 
 TEST(CacheGeometry, ReadsSizeAndLineOfTheLevel) {
-  const std::vector<topology::Cache> caches = {
-      make_cache(1, CacheType::kData, 32768, 64), make_cache(2, CacheType::kUnified, 1048576, 128)};
+  const std::vector<topology::Cache> caches = {make_cache(1, CacheType::kData, 32768, 64),
+                                               make_cache(2, CacheType::kUnified, 1048576, 128)};
   const auto l2 = geometry_for_level(caches, 2);
   ASSERT_TRUE(l2.has_value());
   EXPECT_EQ(l2.value().cache_bytes, 1048576U);
@@ -80,7 +80,8 @@ TEST(CacheGeometry, AnAbsentLevelIsAnAnswer) {
 }
 
 TEST(CacheGeometry, AnUnpublishedSizeIsRefusedNotGuessed) {
-  const std::vector<topology::Cache> caches = {make_cache(2, CacheType::kUnified, std::nullopt, 64)};
+  const std::vector<topology::Cache> caches = {
+      make_cache(2, CacheType::kUnified, std::nullopt, 64)};
   EXPECT_EQ(geometry_for_level(caches, 2).error(), GeometryError::kSizeUnknown);
 }
 
@@ -159,7 +160,8 @@ TEST(CacheConfig, TheBoundariesAreAccepted) {
 // --- the chase ----------------------------------------------------------------
 
 /// The layout the header defines, read back: node i's successor.
-std::vector<std::uint32_t> successors(const Config& config, const std::vector<std::uint32_t>& scratch) {
+std::vector<std::uint32_t> successors(const Config& config,
+                                      const std::vector<std::uint32_t>& scratch) {
   const std::uint64_t stride = config.line_bytes / 4;
   std::vector<std::uint32_t> next(config.nodes);
   for (std::uint64_t node = 0; node < config.nodes; ++node) {
@@ -218,8 +220,8 @@ TEST(CacheChase, OnlyTheFirstWordOfEachNodeIsTouched) {
 TEST(CacheChase, TheDigestIsWhereTheChaseEndsAndMatchesTheOracle) {
   for (const std::uint64_t line : {4ULL, 16ULL, 64ULL, 128ULL}) {
     for (const std::uint64_t steps : {0ULL, 1ULL, 2ULL, 6ULL, 7ULL, 14ULL, 100ULL}) {
-      const Config config{.seed = 77, .nodes = 7, .line_bytes = static_cast<std::uint32_t>(line),
-                          .steps = steps};
+      const Config config{
+          .seed = 77, .nodes = 7, .line_bytes = static_cast<std::uint32_t>(line), .steps = steps};
       std::vector<std::uint32_t> scratch(scratch_words(config).value());
       const std::vector<std::uint32_t> order = visit_order(config, 3);
       EXPECT_EQ(unit_digest(config, 3, scratch), order[steps % config.nodes])
@@ -229,7 +231,7 @@ TEST(CacheChase, TheDigestIsWhereTheChaseEndsAndMatchesTheOracle) {
 }
 
 TEST(CacheChase, WholeLapsReturnToTheStart) {
-  const Config config{.seed = 9, .nodes = 13, .line_bytes = 64, .steps = 13 * 11};
+  const Config config{.seed = 9, .nodes = 13, .line_bytes = 64, .steps = std::uint64_t{13} * 11};
   std::vector<std::uint32_t> scratch(scratch_words(config).value());
   EXPECT_EQ(unit_digest(config, 0, scratch), 0U);
 }
@@ -264,7 +266,7 @@ TEST(CacheRun, RefusesScratchSmallerThanEverySlotNeeds) {
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error(), ConfigError::kScratchTooSmall);
   EXPECT_EQ(partials, std::vector<std::uint64_t>(4, 0xAAAA));
-  scratch.resize(3 * 160);
+  scratch.resize(std::size_t{3} * 160);
   EXPECT_TRUE(run(executor, config, scratch, partials).has_value()) << "exactly enough is enough";
 }
 

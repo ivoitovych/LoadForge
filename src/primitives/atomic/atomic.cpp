@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 
 #include "primitives/rng/philox.hpp"
 
@@ -32,6 +33,7 @@ void shared_unit(void* context, std::size_t index, std::size_t /*slot*/) noexcep
 }
 
 template <std::memory_order Order>
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the signature is Executor::Task's.
 void sharded_unit(void* context, std::size_t index, std::size_t slot) noexcept {
   auto& run = *static_cast<ContendContext*>(context);
   std::atomic<std::uint64_t>& counter = run.storage[slot * run.stride];
@@ -74,11 +76,15 @@ constexpr std::array<worker::Executor::Task, 2> kHandoffTasks = {
     handoff_unit<std::memory_order_release, std::memory_order_acquire>,
     handoff_unit<std::memory_order_seq_cst, std::memory_order_seq_cst>};
 
+bool line_is_valid(std::uint32_t line_bytes) noexcept {
+  return line_bytes != 0 && line_bytes % kCounterBytes == 0 && line_bytes <= kMaxLineBytes;
+}
+
 }  // namespace
 
 core::Result<std::uint64_t, ConfigError> storage_elements(std::uint32_t line_bytes,
                                                           std::size_t slots) noexcept {
-  if (line_bytes == 0 || line_bytes % kCounterBytes != 0 || line_bytes > kMaxLineBytes) {
+  if (!line_is_valid(line_bytes)) {
     return ConfigError::kLineBytesInvalid;
   }
   return std::uint64_t{slots} * (line_bytes / kCounterBytes);
@@ -86,10 +92,10 @@ core::Result<std::uint64_t, ConfigError> storage_elements(std::uint32_t line_byt
 
 core::Result<std::span<std::atomic<std::uint64_t>>, ConfigError> aligned_storage(
     std::span<std::atomic<std::uint64_t>> storage, std::uint32_t line_bytes) noexcept {
-  if (line_bytes == 0 || line_bytes % kCounterBytes != 0 || line_bytes > kMaxLineBytes) {
+  if (!line_is_valid(line_bytes)) {
     return ConfigError::kLineBytesInvalid;
   }
-  const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
+  const auto address = std::bit_cast<std::uintptr_t>(storage.data());
   const std::uintptr_t gap = (line_bytes - address % line_bytes) % line_bytes;
   const std::size_t skip = std::min<std::size_t>(gap / kCounterBytes, storage.size());
   return storage.subspan(skip);
@@ -104,14 +110,13 @@ core::Result<Outcome, ConfigError> contend(worker::Executor& executor, const Con
                                            std::span<std::atomic<std::uint64_t>> storage,
                                            std::span<std::uint64_t> partials) noexcept {
   const std::size_t slots = executor.threads();
-  const core::Result<std::uint64_t, ConfigError> needed = storage_elements(config.line_bytes, slots);
-  if (!needed.has_value()) {
-    return needed.error();
+  if (!line_is_valid(config.line_bytes)) {
+    return ConfigError::kLineBytesInvalid;
   }
-  if (storage.size() < needed.value()) {
+  if (storage.size() < std::uint64_t{slots} * (config.line_bytes / kCounterBytes)) {
     return ConfigError::kStorageTooSmall;
   }
-  if (reinterpret_cast<std::uintptr_t>(storage.data()) % config.line_bytes != 0) {
+  if (std::bit_cast<std::uintptr_t>(storage.data()) % config.line_bytes != 0) {
     return ConfigError::kStorageMisaligned;
   }
   const std::uint64_t stride = config.line_bytes / kCounterBytes;
@@ -119,8 +124,8 @@ core::Result<Outcome, ConfigError> contend(worker::Executor& executor, const Con
     storage[slot * stride].store(0, std::memory_order_relaxed);
   }
   ContendContext context{storage, partials, config.increments_per_unit, stride};
-  const std::size_t task = static_cast<std::size_t>(config.mode) * 2 +
-                           static_cast<std::size_t>(config.ordering);
+  const std::size_t task =
+      static_cast<std::size_t>(config.mode) * 2 + static_cast<std::size_t>(config.ordering);
   executor.run(partials.size(), kContendTasks.at(task), &context);
   Outcome outcome;
   for (std::size_t slot = 0; slot < slots; ++slot) {
@@ -160,10 +165,10 @@ HandoffOutcome handoff(worker::Executor& executor, Ordering ordering, std::uint6
   return outcome;
 }
 
-// Bitwise & on the comparisons: no short-circuit, so no branch for a test to miss.
-bool Outcome::operator==(const Outcome& other) const noexcept {
-  return ((total) == (other.total)) &
-         ((ticket_sum) == (other.ticket_sum));
+// No short-circuit and no boolean arithmetic: the fields differ in some bit or none,
+// so there is no branch for a test to miss.
+[[nodiscard]] bool operator==(const Outcome& left, const Outcome& right) noexcept {
+  return ((left.total ^ right.total) | (left.ticket_sum ^ right.ticket_sum)) == 0;
 }
 
 }  // namespace loadforge::primitives::atomic

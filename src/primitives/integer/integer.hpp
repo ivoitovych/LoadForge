@@ -28,8 +28,7 @@
 
 namespace loadforge::primitives::integer {
 
-inline constexpr workloads::DeterminismClass kDeterminism =
-    workloads::DeterminismClass::kBitExact;
+inline constexpr workloads::DeterminismClass kDeterminism = workloads::DeterminismClass::kBitExact;
 
 /// Lanes advanced together in each unit.
 inline constexpr std::size_t kLanes = 4;

@@ -34,8 +34,7 @@
 
 namespace loadforge::primitives::memory {
 
-inline constexpr workloads::DeterminismClass kDeterminism =
-    workloads::DeterminismClass::kBitExact;
+inline constexpr workloads::DeterminismClass kDeterminism = workloads::DeterminismClass::kBitExact;
 
 inline constexpr std::uint64_t kWordBytes = 8;
 
@@ -52,8 +51,7 @@ enum class ConfigError : std::uint8_t {
 };
 
 /// 64-bit words of scratch one running unit needs: a source and a destination.
-[[nodiscard]] core::Result<std::uint64_t, ConfigError> scratch_words(
-    const Config& config) noexcept;
+[[nodiscard]] core::Result<std::uint64_t, ConfigError> scratch_words(const Config& config) noexcept;
 
 /// The digest of one unit, using `scratch` (at least scratch_words(config)
 /// words). Precondition: the configuration is valid and the scratch large enough.
@@ -63,10 +61,9 @@ enum class ConfigError : std::uint8_t {
 /// Runs partials.size() units, each in its slot's share of `scratch`
 /// (executor.threads() shares of scratch_words(config) words), writing unit i's
 /// digest to partials[i], and returns their wrapping sum in index order.
-[[nodiscard]] core::Result<std::uint64_t, ConfigError> run(worker::Executor& executor,
-                                                           const Config& config,
-                                                           std::span<std::uint64_t> scratch,
-                                                           std::span<std::uint64_t> partials) noexcept;
+[[nodiscard]] core::Result<std::uint64_t, ConfigError> run(
+    worker::Executor& executor, const Config& config, std::span<std::uint64_t> scratch,
+    std::span<std::uint64_t> partials) noexcept;
 
 }  // namespace loadforge::primitives::memory
 

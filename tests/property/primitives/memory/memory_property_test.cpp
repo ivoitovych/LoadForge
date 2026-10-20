@@ -21,7 +21,9 @@ constexpr std::uint64_t kCases = 120;
 
 Config case_config(std::uint64_t index) {
   const rng::Block draw = rng::block_at(0x3E30, 1, index);
-  return Config{.seed = rng::u64_of(draw), .bytes = 8 * (draw[2] % 130), .passes = draw[3] % 9};
+  return Config{.seed = rng::u64_of(draw),
+                .bytes = std::uint64_t{8} * (draw[2] % 130),
+                .passes = draw[3] % 9};
 }
 
 TEST(MemoryProperties, ByteMultiplesOfEightAreExactlyTheAcceptedSizes) {

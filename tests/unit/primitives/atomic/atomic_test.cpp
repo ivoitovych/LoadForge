@@ -96,7 +96,8 @@ TEST(AtomicTickets, LargeTotalsWrapModuloTwoToTheSixtyFour) {
   // 2^33 * (2^33 - 1) / 2 = 2^32 * (2^33 - 1), which exceeds 2^64: wraps to
   // 2^32 * (2^33 - 1) mod 2^64 = 2^65 - 2^32 mod 2^64 = 2^64 - 2^32.
   EXPECT_EQ(expected_ticket_sum(std::uint64_t{1} << 33U), ~std::uint64_t{0} - (two32 - 1));
-  EXPECT_EQ(expected_ticket_sum(~std::uint64_t{0}), (~std::uint64_t{0}) * ((~std::uint64_t{0} - 1) / 2))
+  EXPECT_EQ(expected_ticket_sum(~std::uint64_t{0}),
+            (~std::uint64_t{0}) * ((~std::uint64_t{0} - 1) / 2))
       << "an odd total halves the other factor";
 }
 
@@ -105,7 +106,7 @@ TEST(AtomicTickets, LargeTotalsWrapModuloTwoToTheSixtyFour) {
 TEST(AtomicContend, EachRefusalIsNamedAndRunsNothing) {
   ThreadedExecutor executor(3);
   std::vector<std::uint64_t> partials(4, 0xAAAA);
-  Storage storage(3, kLine);
+  const Storage storage(3, kLine);
 
   const auto bad_line = contend(executor, Config{.line_bytes = 12}, storage.counters, partials);
   EXPECT_EQ(bad_line.error(), ConfigError::kLineBytesInvalid);
@@ -114,9 +115,8 @@ TEST(AtomicContend, EachRefusalIsNamedAndRunsNothing) {
                              storage.counters.first(3 * 8 - 1), partials);  // one counter short
   EXPECT_EQ(small.error(), ConfigError::kStorageTooSmall);
 
-  const auto misaligned =
-      contend(executor, Config{.increments_per_unit = 5, .line_bytes = kLine},
-              storage.counters.subspan(1, 3 * 8), partials);
+  const auto misaligned = contend(executor, Config{.increments_per_unit = 5, .line_bytes = kLine},
+                                  storage.counters.subspan(1, std::size_t{3} * 8), partials);
   EXPECT_EQ(misaligned.error(), ConfigError::kStorageMisaligned);
 
   EXPECT_EQ(partials, std::vector<std::uint64_t>(4, 0xAAAA)) << "no unit ran";
@@ -125,15 +125,15 @@ TEST(AtomicContend, EachRefusalIsNamedAndRunsNothing) {
 TEST(AtomicContend, ExactlyEnoughStorageIsEnough) {
   ThreadedExecutor executor(3);
   std::vector<std::uint64_t> partials(2);
-  Storage storage(3, kLine);
+  const Storage storage(3, kLine);
   EXPECT_TRUE(contend(executor, Config{.increments_per_unit = 1, .line_bytes = kLine},
-                      storage.counters.first(3 * 8), partials)
+                      storage.counters.first(std::size_t{3} * 8), partials)
                   .has_value());
 }
 
 TEST(AtomicContend, NoUnitsOrNoIncrementsIsAnEmptyOutcome) {
   SerialExecutor executor;
-  Storage storage(1, kLine);
+  const Storage storage(1, kLine);
   std::vector<std::uint64_t> none;
   EXPECT_EQ(contend(executor, Config{.increments_per_unit = 99, .line_bytes = kLine},
                     storage.counters, none)
@@ -151,13 +151,13 @@ TEST(AtomicContend, EveryModeAndOrderingLosesNoIncrementAtAnyThreadCount) {
     for (const Ordering ordering : {Ordering::kWeakest, Ordering::kSeqCst}) {
       for (const std::size_t threads : {1U, 2U, 3U, 7U}) {
         ThreadedExecutor executor(threads);
-        Storage storage(threads, kLine);
+        const Storage storage(threads, kLine);
         std::vector<std::uint64_t> partials(11);
-        const Config config{.mode = mode, .ordering = ordering, .increments_per_unit = 2000,
-                            .line_bytes = kLine};
+        const Config config{
+            .mode = mode, .ordering = ordering, .increments_per_unit = 2000, .line_bytes = kLine};
         const auto outcome = contend(executor, config, storage.counters, partials);
         ASSERT_TRUE(outcome.has_value());
-        const std::uint64_t total = 11 * 2000;
+        const std::uint64_t total = std::uint64_t{11} * 2000;
         EXPECT_EQ(outcome.value().total, total)
             << "mode " << static_cast<int>(mode) << " ordering " << static_cast<int>(ordering)
             << " threads " << threads;
@@ -192,7 +192,7 @@ TEST(AtomicContend, ShardedUsesOneCounterPerSlotAndTouchesNothingBetween) {
 
 TEST(AtomicContend, ASecondRunStartsFromZero) {
   ThreadedExecutor executor(2);
-  Storage storage(2, kLine);
+  const Storage storage(2, kLine);
   std::vector<std::uint64_t> partials(4);
   const Config config{.increments_per_unit = 300, .line_bytes = kLine};
   const auto first = contend(executor, config, storage.counters, partials);

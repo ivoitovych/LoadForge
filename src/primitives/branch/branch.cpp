@@ -63,11 +63,11 @@ core::Result<Tally, ConfigError> run(worker::Executor& executor, const Config& c
   return total;
 }
 
-// Bitwise & on the comparisons: no short-circuit, so no branch for a test to miss.
-bool Tally::operator==(const Tally& other) const noexcept {
-  return ((taken) == (other.taken)) &
-         ((below) == (other.below)) &
-         ((above) == (other.above));
+// No short-circuit and no boolean arithmetic: the fields differ in some bit or none,
+// so there is no branch for a test to miss.
+[[nodiscard]] bool operator==(const Tally& left, const Tally& right) noexcept {
+  return ((left.taken ^ right.taken) | (left.below ^ right.below) | (left.above ^ right.above)) ==
+         0;
 }
 
 }  // namespace loadforge::primitives::branch

@@ -78,12 +78,13 @@ TEST(IntegerPrimitive, OneStepIsOneMultiplyAndAdd) {
   for (std::uint64_t lane = 0; lane < 4; ++lane) {
     lanes[lane] = rng::u64_of(rng::block_at(7, 5, lane)) * kMultiplier + kIncrement;
   }
-  EXPECT_EQ(unit_digest(config, 5), lanes[0] ^ std::rotl(lanes[1], 16) ^ std::rotl(lanes[2], 32) ^
-                                        std::rotl(lanes[3], 48));
+  EXPECT_EQ(unit_digest(config, 5),
+            lanes[0] ^ std::rotl(lanes[1], 16) ^ std::rotl(lanes[2], 32) ^ std::rotl(lanes[3], 48));
 }
 
 TEST(IntegerPrimitive, MatchesTheJumpAheadOracleAtManyLengths) {
-  for (const std::uint64_t steps : {0ULL, 1ULL, 2ULL, 3ULL, 63ULL, 64ULL, 65ULL, 1000ULL, 4097ULL}) {
+  for (const std::uint64_t steps :
+       {0ULL, 1ULL, 2ULL, 3ULL, 63ULL, 64ULL, 65ULL, 1000ULL, 4097ULL}) {
     for (const std::uint64_t unit : {0ULL, 1ULL, 0xFFFFFFFFULL, 0x100000000ULL}) {
       const Config config{.seed = 0x0123456789ABCDEFULL, .steps = steps};
       EXPECT_EQ(unit_digest(config, unit), oracle_digest(config, unit))

@@ -32,8 +32,8 @@ TEST(AtomicProperties, TotalAndTicketSumAreExactForAnyShape) {
                         .increments_per_unit = draw[3] % 500,
                         .line_bytes = line};
     ThreadedExecutor executor(threads);
-    std::vector<std::atomic<std::uint64_t>> backing(
-        storage_elements(line, threads).value() + line / 8);
+    std::vector<std::atomic<std::uint64_t>> backing(storage_elements(line, threads).value() +
+                                                    line / 8);
     const auto storage = aligned_storage(backing, line).value();
     std::vector<std::uint64_t> partials(units);
     const auto outcome = contend(executor, config, storage, partials);
@@ -55,7 +55,7 @@ TEST(AtomicProperties, EveryTicketIsDrawnOnceWhoeverDrawsIt) {
   std::vector<std::uint64_t> partials(16);
   for (int repeat = 0; repeat < 20; ++repeat) {
     const auto outcome = contend(executor, config, storage, partials);
-    EXPECT_EQ(outcome.value().ticket_sum, expected_ticket_sum(16 * 1500));
+    EXPECT_EQ(outcome.value().ticket_sum, expected_ticket_sum(std::uint64_t{16} * 1500));
   }
 }
 

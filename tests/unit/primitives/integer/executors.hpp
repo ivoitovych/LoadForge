@@ -54,9 +54,7 @@ struct SerialSubject {
 };
 
 struct ThreadedSubject {
-  static std::unique_ptr<worker::Executor> make() {
-    return std::make_unique<ThreadedExecutor>(3);
-  }
+  static std::unique_ptr<worker::Executor> make() { return std::make_unique<ThreadedExecutor>(3); }
 };
 
 }  // namespace loadforge::primitives::integer::mocks

@@ -37,8 +37,7 @@
 
 namespace loadforge::primitives::branch {
 
-inline constexpr workloads::DeterminismClass kDeterminism =
-    workloads::DeterminismClass::kBitExact;
+inline constexpr workloads::DeterminismClass kDeterminism = workloads::DeterminismClass::kBitExact;
 
 struct Config {
   std::uint64_t seed = 0;
@@ -54,9 +53,9 @@ struct Tally {
   std::uint64_t below = 0;
   std::uint64_t above = 0;
 
-  /// Defined in branch.cpp, not defaulted here: one definition, so coverage
-  /// is not split across translation units (JOURNAL §1.22).
-  [[nodiscard]] bool operator==(const Tally& other) const noexcept;
+  /// Defined in branch.cpp, not defaulted here: one definition, so coverage is not
+  /// split across translation units (JOURNAL §1.22).
+  friend bool operator==(const Tally& left, const Tally& right) noexcept;
 };
 
 enum class ConfigError : std::uint8_t {
@@ -75,8 +74,7 @@ enum class ConfigError : std::uint8_t {
 /// Runs partials.size() units, each in its slot's share of `scratch`
 /// (executor.threads() shares of config.elements values), writing unit i's
 /// tally to partials[i], and returns the combination in index order.
-[[nodiscard]] core::Result<Tally, ConfigError> run(worker::Executor& executor,
-                                                   const Config& config,
+[[nodiscard]] core::Result<Tally, ConfigError> run(worker::Executor& executor, const Config& config,
                                                    std::span<std::uint64_t> scratch,
                                                    std::span<Tally> partials) noexcept;
 

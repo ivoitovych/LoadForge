@@ -37,8 +37,7 @@
 
 namespace loadforge::primitives::cache {
 
-inline constexpr workloads::DeterminismClass kDeterminism =
-    workloads::DeterminismClass::kBitExact;
+inline constexpr workloads::DeterminismClass kDeterminism = workloads::DeterminismClass::kBitExact;
 
 /// Fewest nodes in a cycle worth chasing.
 inline constexpr std::uint64_t kMinNodes = 2;
@@ -87,8 +86,7 @@ enum class ConfigError : std::uint8_t {
 
 /// 32-bit words of scratch one running unit needs, or why the configuration is
 /// refused. `line_bytes / 4` words per node, `nodes` nodes.
-[[nodiscard]] core::Result<std::uint64_t, ConfigError> scratch_words(
-    const Config& config) noexcept;
+[[nodiscard]] core::Result<std::uint64_t, ConfigError> scratch_words(const Config& config) noexcept;
 
 /// The digest of one unit, using `scratch` (at least scratch_words(config)
 /// words) for its nodes. Precondition: config is valid and scratch is large
@@ -100,10 +98,9 @@ enum class ConfigError : std::uint8_t {
 /// returns their wrapping sum in index order. `scratch` is split into
 /// executor.threads() slots of scratch_words(config) words, a unit using its
 /// slot's. A refused configuration runs nothing.
-[[nodiscard]] core::Result<std::uint64_t, ConfigError> run(worker::Executor& executor,
-                                                           const Config& config,
-                                                           std::span<std::uint32_t> scratch,
-                                                           std::span<std::uint64_t> partials) noexcept;
+[[nodiscard]] core::Result<std::uint64_t, ConfigError> run(
+    worker::Executor& executor, const Config& config, std::span<std::uint32_t> scratch,
+    std::span<std::uint64_t> partials) noexcept;
 
 }  // namespace loadforge::primitives::cache
 

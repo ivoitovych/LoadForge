@@ -113,7 +113,7 @@ TEST(MemoryPrimitive, RefusesBadConfigurationAndSmallScratchWithoutRunning) {
   ASSERT_FALSE(few.has_value());
   EXPECT_EQ(few.error(), ConfigError::kScratchTooSmall);
   EXPECT_EQ(partials, std::vector<std::uint64_t>(4, 0xAAAA));
-  small.resize(3 * 16);
+  small.resize(std::size_t{3} * 16);
   EXPECT_TRUE(run(executor, config, small, partials).has_value()) << "exactly enough is enough";
 }
 

@@ -31,14 +31,14 @@ double unit_value(const Config& config, std::uint64_t unit) noexcept {
     const rng::Block block = rng::block_at(config.seed, unit, element);
     const double x = rng::unit_interval(pair_bits(block[0], block[1]));
     const double y = rng::unit_interval(pair_bits(block[2], block[3]));
-    double& lane = acc[element % kAccumulators];
+    double& lane = acc.at(element % kAccumulators);
     lane = std::fma(x, y, lane);
   }
-  return ((acc[0] + acc[1]) + (acc[2] + acc[3])) + ((acc[4] + acc[5]) + (acc[6] + acc[7]));
+  return ((acc.at(0) + acc.at(1)) + (acc.at(2) + acc.at(3))) +
+         ((acc.at(4) + acc.at(5)) + (acc.at(6) + acc.at(7)));
 }
 
-double run(worker::Executor& executor, const Config& config,
-           std::span<double> partials) noexcept {
+double run(worker::Executor& executor, const Config& config, std::span<double> partials) noexcept {
   RunContext context{&config, partials};
   executor.run(partials.size(), run_unit, &context);
   double total = 0.0;

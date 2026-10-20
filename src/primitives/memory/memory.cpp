@@ -19,6 +19,7 @@ struct RunContext {
   std::span<std::uint64_t> partials;
 };
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the signature is Executor::Task's.
 void run_unit(void* context, std::size_t index, std::size_t slot) noexcept {
   auto& run_context = *static_cast<RunContext*>(context);
   const std::span<std::uint64_t> mine =
@@ -26,13 +27,15 @@ void run_unit(void* context, std::size_t index, std::size_t slot) noexcept {
   run_context.partials[index] = unit_digest(*run_context.config, index, mine);
 }
 
+std::uint64_t words_of(const Config& config) noexcept { return 2 * (config.bytes / kWordBytes); }
+
 }  // namespace
 
 core::Result<std::uint64_t, ConfigError> scratch_words(const Config& config) noexcept {
   if (config.bytes % kWordBytes != 0) {
     return ConfigError::kBytesNotWholeWords;
   }
-  return 2 * (config.bytes / kWordBytes);
+  return words_of(config);
 }
 
 std::uint64_t unit_digest(const Config& config, std::uint64_t unit,
@@ -56,11 +59,10 @@ std::uint64_t unit_digest(const Config& config, std::uint64_t unit,
 core::Result<std::uint64_t, ConfigError> run(worker::Executor& executor, const Config& config,
                                              std::span<std::uint64_t> scratch,
                                              std::span<std::uint64_t> partials) noexcept {
-  const core::Result<std::uint64_t, ConfigError> words = scratch_words(config);
-  if (!words.has_value()) {
-    return words.error();
+  if (config.bytes % kWordBytes != 0) {
+    return ConfigError::kBytesNotWholeWords;
   }
-  const std::uint64_t per_slot = words.value();
+  const std::uint64_t per_slot = words_of(config);
   if (per_slot != 0 && scratch.size() / per_slot < executor.threads()) {
     return ConfigError::kScratchTooSmall;
   }

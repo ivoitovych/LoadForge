@@ -24,14 +24,15 @@ void run_unit(void* context, std::size_t index, std::size_t /*slot*/) noexcept {
 std::uint64_t unit_digest(const Config& config, std::uint64_t unit) noexcept {
   std::array<std::uint64_t, kLanes> lanes{};
   for (std::size_t lane = 0; lane < kLanes; ++lane) {
-    lanes[lane] = rng::u64_of(rng::block_at(config.seed, unit, lane));
+    lanes.at(lane) = rng::u64_of(rng::block_at(config.seed, unit, lane));
   }
   for (std::uint64_t step = 0; step < config.steps; ++step) {
     for (std::uint64_t& lane : lanes) {
       lane = lane * kMultiplier + kIncrement;
     }
   }
-  return lanes[0] ^ std::rotl(lanes[1], 16) ^ std::rotl(lanes[2], 32) ^ std::rotl(lanes[3], 48);
+  return lanes.at(0) ^ std::rotl(lanes.at(1), 16) ^ std::rotl(lanes.at(2), 32) ^
+         std::rotl(lanes.at(3), 48);
 }
 
 std::uint64_t run(worker::Executor& executor, const Config& config,

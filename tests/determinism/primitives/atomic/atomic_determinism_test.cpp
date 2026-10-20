@@ -32,8 +32,8 @@ Outcome outcome_at(std::size_t threads, const Config& config, std::size_t units)
 TEST(AtomicDeterminism, TotalsAreByteIdenticalAcrossThreadCountsModesAndOrderings) {
   for (const Mode mode : {Mode::kShared, Mode::kSharded}) {
     for (const Ordering ordering : {Ordering::kWeakest, Ordering::kSeqCst}) {
-      const Config config{.mode = mode, .ordering = ordering, .increments_per_unit = 1237,
-                          .line_bytes = 64};
+      const Config config{
+          .mode = mode, .ordering = ordering, .increments_per_unit = 1237, .line_bytes = 64};
       const Outcome one = outcome_at(1, config, 23);
       for (const std::size_t threads : {2U, 3U, 4U, 7U}) {
         EXPECT_EQ(outcome_at(threads, config, 23), one)

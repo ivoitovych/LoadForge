@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "primitives/cache/cache.hpp"
 
+#include <optional>
 #include <utility>
 
 #include "primitives/rng/philox.hpp"
@@ -17,6 +18,7 @@ struct RunContext {
   std::span<std::uint64_t> partials;
 };
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the signature is Executor::Task's.
 void run_unit(void* context, std::size_t index, std::size_t slot) noexcept {
   auto& run_context = *static_cast<RunContext*>(context);
   const std::span<std::uint32_t> mine =
@@ -24,10 +26,28 @@ void run_unit(void* context, std::size_t index, std::size_t slot) noexcept {
   run_context.partials[index] = unit_digest(*run_context.config, index, mine);
 }
 
+std::optional<ConfigError> refusal_of(const Config& config) noexcept {
+  if (config.nodes < kMinNodes) {
+    return ConfigError::kTooFewNodes;
+  }
+  if (config.nodes > kMaxNodes) {
+    return ConfigError::kTooManyNodes;
+  }
+  if (config.line_bytes == 0 || config.line_bytes % kBytesPerWord != 0 ||
+      config.line_bytes > kMaxLineBytes) {
+    return ConfigError::kLineBytesInvalid;
+  }
+  return std::nullopt;
+}
+
+std::uint64_t words_of(const Config& config) noexcept {
+  return config.nodes * (config.line_bytes / kBytesPerWord);
+}
+
 }  // namespace
 
-core::Result<Geometry, GeometryError> geometry_for_level(
-    const std::vector<topology::Cache>& caches, std::uint32_t level) noexcept {
+core::Result<Geometry, GeometryError> geometry_for_level(const std::vector<topology::Cache>& caches,
+                                                         std::uint32_t level) noexcept {
   for (const topology::Cache& candidate : caches) {
     if (candidate.kind.level != level || candidate.kind.type == topology::CacheType::kInstruction) {
       continue;
@@ -49,17 +69,10 @@ std::uint64_t nodes_in(const Geometry& geometry, std::uint32_t percent) noexcept
 }
 
 core::Result<std::uint64_t, ConfigError> scratch_words(const Config& config) noexcept {
-  if (config.nodes < kMinNodes) {
-    return ConfigError::kTooFewNodes;
+  if (const std::optional<ConfigError> refusal = refusal_of(config)) {
+    return *refusal;
   }
-  if (config.nodes > kMaxNodes) {
-    return ConfigError::kTooManyNodes;
-  }
-  if (config.line_bytes == 0 || config.line_bytes % kBytesPerWord != 0 ||
-      config.line_bytes > kMaxLineBytes) {
-    return ConfigError::kLineBytesInvalid;
-  }
-  return config.nodes * (config.line_bytes / kBytesPerWord);
+  return words_of(config);
 }
 
 std::uint64_t unit_digest(const Config& config, std::uint64_t unit,
@@ -82,14 +95,14 @@ std::uint64_t unit_digest(const Config& config, std::uint64_t unit,
 core::Result<std::uint64_t, ConfigError> run(worker::Executor& executor, const Config& config,
                                              std::span<std::uint32_t> scratch,
                                              std::span<std::uint64_t> partials) noexcept {
-  const core::Result<std::uint64_t, ConfigError> words = scratch_words(config);
-  if (!words.has_value()) {
-    return words.error();
+  if (const std::optional<ConfigError> refusal = refusal_of(config)) {
+    return *refusal;
   }
-  if (scratch.size() / words.value() < executor.threads()) {
+  const std::uint64_t words = words_of(config);
+  if (scratch.size() / words < executor.threads()) {
     return ConfigError::kScratchTooSmall;
   }
-  RunContext context{&config, scratch, words.value(), partials};
+  RunContext context{&config, scratch, words, partials};
   executor.run(partials.size(), run_unit, &context);
   std::uint64_t total = 0;
   for (const std::uint64_t partial : partials) {

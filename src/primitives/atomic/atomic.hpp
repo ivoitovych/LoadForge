@@ -85,8 +85,7 @@
 
 namespace loadforge::primitives::atomic {
 
-inline constexpr workloads::DeterminismClass kDeterminism =
-    workloads::DeterminismClass::kBitExact;
+inline constexpr workloads::DeterminismClass kDeterminism = workloads::DeterminismClass::kBitExact;
 
 /// Largest line size accepted; real lines are 32 to 256 bytes.
 inline constexpr std::uint32_t kMaxLineBytes = 4096;
@@ -114,8 +113,8 @@ enum class ConfigError : std::uint8_t {
 };
 
 /// Counters (64-bit atomics) of storage needed for `slots` slots: one line each.
-[[nodiscard]] core::Result<std::uint64_t, ConfigError> storage_elements(
-    std::uint32_t line_bytes, std::size_t slots) noexcept;
+[[nodiscard]] core::Result<std::uint64_t, ConfigError> storage_elements(std::uint32_t line_bytes,
+                                                                        std::size_t slots) noexcept;
 
 /// The part of `storage` that starts on a `line_bytes` boundary: the leading
 /// counters before the first boundary are dropped. Allocate
@@ -130,9 +129,9 @@ struct Outcome {
   /// 0 .. total-1 is total * (total - 1) / 2; zero for kSharded.
   std::uint64_t ticket_sum = 0;
 
-  /// Defined in atomic.cpp, not defaulted here: one definition, so coverage
-  /// is not split across translation units (JOURNAL §1.22).
-  [[nodiscard]] bool operator==(const Outcome& other) const noexcept;
+  /// Defined in atomic.cpp, not defaulted here: one definition, so coverage is not
+  /// split across translation units (JOURNAL §1.22).
+  friend bool operator==(const Outcome& left, const Outcome& right) noexcept;
 };
 
 /// The ticket sum a correct kShared run of `total` increments gives, modulo
@@ -143,8 +142,8 @@ struct Outcome {
 /// line-aligned and hold storage_elements(line_bytes, executor.threads())
 /// counters; partials[i] receives the sum of the tickets unit i drew.
 [[nodiscard]] core::Result<Outcome, ConfigError> contend(
-    worker::Executor& executor, const Config& config,
-    std::span<std::atomic<std::uint64_t>> storage, std::span<std::uint64_t> partials) noexcept;
+    worker::Executor& executor, const Config& config, std::span<std::atomic<std::uint64_t>> storage,
+    std::span<std::uint64_t> partials) noexcept;
 
 /// One unit's publication slot. The payload is deliberately NOT atomic: it is
 /// the data the flag's ordering protects.

@@ -59,10 +59,13 @@ TEST(BranchPrimitive, IsDeclaredBitExact) {
 }
 
 TEST(BranchPrimitive, MatchesTheFilterAndReduceOracle) {
-  for (const std::uint64_t elements : {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{2}, std::uint64_t{100}, std::uint64_t{1001}}) {
-    for (const std::uint64_t threshold : {std::uint64_t{0}, std::uint64_t{1}, kMid, ~std::uint64_t{0}}) {
+  for (const std::uint64_t elements : {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{2},
+                                       std::uint64_t{100}, std::uint64_t{1001}}) {
+    for (const std::uint64_t threshold :
+         {std::uint64_t{0}, std::uint64_t{1}, kMid, ~std::uint64_t{0}}) {
       for (const bool sorted : {false, true}) {
-        const Config config{.seed = 0xB4A, .elements = elements, .threshold = threshold, .sorted = sorted};
+        const Config config{
+            .seed = 0xB4A, .elements = elements, .threshold = threshold, .sorted = sorted};
         std::vector<std::uint64_t> scratch(elements);
         EXPECT_EQ(unit_tally(config, 2, scratch), oracle(config, 2))
             << elements << " elements, threshold " << threshold << ", sorted " << sorted;
@@ -96,9 +99,9 @@ TEST(BranchPrimitive, AValueEqualToTheThresholdIsNotTaken) {
   config.threshold = values[7];
   std::vector<std::uint64_t> scratch(50);
   const Tally tally = unit_tally(config, 0, scratch);
-  EXPECT_EQ(tally.taken, static_cast<std::uint64_t>(std::count_if(values.begin(), values.end(), [&](std::uint64_t v) {
-              return v < values[7];
-            })));
+  EXPECT_EQ(tally.taken,
+            static_cast<std::uint64_t>(std::count_if(
+                values.begin(), values.end(), [&](std::uint64_t v) { return v < values[7]; })));
 }
 
 TEST(BranchPrimitive, SortingChangesTheOrderTheBranchSeesAndNothingElse) {
@@ -135,7 +138,8 @@ TEST(BranchPrimitive, RefusesScratchSmallerThanEverySlotNeeds) {
 TEST(BranchPrimitive, NoElementsNeedsNoScratch) {
   SerialExecutor executor;
   std::vector<Tally> partials(3, Tally{9, 9, 9});
-  const auto result = run(executor, Config{.seed = 1, .elements = 0, .threshold = kMid}, {}, partials);
+  const auto result =
+      run(executor, Config{.seed = 1, .elements = 0, .threshold = kMid}, {}, partials);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value(), Tally{});
   EXPECT_EQ(partials, std::vector<Tally>(3, Tally{}));
@@ -144,7 +148,7 @@ TEST(BranchPrimitive, NoElementsNeedsNoScratch) {
 TEST(BranchPrimitive, RunCombinesEachUnitsOracleTally) {
   ThreadedExecutor executor(3);
   const Config config{.seed = 21, .elements = 321, .threshold = kMid, .sorted = false};
-  std::vector<std::uint64_t> scratch(3 * 321);
+  std::vector<std::uint64_t> scratch(std::size_t{3} * 321);
   std::vector<Tally> partials(9);
   const auto total = run(executor, config, scratch, partials);
   ASSERT_TRUE(total.has_value());

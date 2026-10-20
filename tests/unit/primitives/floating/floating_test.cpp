@@ -94,7 +94,8 @@ TEST(FloatingPrimitive, OneElementIsTheRoundedProduct) {
 
 TEST(FloatingPrimitive, MatchesTheLaneReplayBitForBit) {
   // Lengths either side of every multiple of the accumulator count.
-  for (const std::uint64_t elements : {1ULL, 7ULL, 8ULL, 9ULL, 15ULL, 16ULL, 17ULL, 100ULL, 1000ULL}) {
+  for (const std::uint64_t elements :
+       {1ULL, 7ULL, 8ULL, 9ULL, 15ULL, 16ULL, 17ULL, 100ULL, 1000ULL}) {
     const Config config{.seed = 0xFEEDFACE, .elements = elements};
     for (const std::uint64_t unit : {0ULL, 5ULL, 1ULL << 33U}) {
       EXPECT_EQ(std::bit_cast<std::uint64_t>(unit_value(config, unit)),
