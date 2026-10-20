@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 
 #include "verification/checksum/compare.hpp"
 #include "verification/checksum/crc64.hpp"
@@ -81,18 +82,16 @@ std::optional<ErrorRecord> to_record(const SealCheck& check, const Subject& subj
     return std::nullopt;
   }
   if (check.outcome == SealOutcome::kNotSealed) {
-    return VerificationNotPerformed{
-        subject.provenance, subject.check,
-        "no checksum was sealed when the bytes were generated, so there is nothing to check "
-        "them against",
-        0};
+    return not_performed(subject,
+                         "no checksum was sealed when the bytes were generated, so there is "
+                         "nothing to check them against");
   }
   if (check.outcome == SealOutcome::kNothingCompared) {
-    return VerificationNotPerformed{subject.provenance, subject.check,
-                                    "there were no bytes to check against the checksum sealed "
-                                    "at their generation (" +
-                                        words(*check.sealed) + ")",
-                                    0};
+    std::string why =
+        "there were no bytes to check against the checksum sealed at their generation (";
+    why += words(*check.sealed);
+    why += ")";
+    return not_performed(subject, std::move(why));
   }
   ExactBitCorruption record;
   record.provenance = subject.provenance;

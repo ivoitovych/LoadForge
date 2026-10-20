@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 
 #include "verification/record.hpp"
 
@@ -82,13 +83,23 @@ Comparison compare_exact(std::span<const std::byte> expected, std::span<const st
   return comparison;
 }
 
+// One allocation per statement: an aggregate built from several allocating
+// members in one expression leaves a cleanup block whose branches no test can
+// enter (journal §1.13).
+VerificationNotPerformed not_performed(const Subject& subject, std::string why) {
+  VerificationNotPerformed record;
+  record.provenance = subject.provenance;
+  record.what = subject.check;
+  record.why = std::move(why);
+  return record;
+}
+
 std::optional<ErrorRecord> to_record(const Comparison& comparison, const Subject& subject) {
   if (comparison.outcome == ComparisonOutcome::kMatch) {
     return std::nullopt;
   }
   if (comparison.outcome == ComparisonOutcome::kNothingCompared) {
-    return VerificationNotPerformed{subject.provenance, subject.check,
-                                    "there were no bytes to compare: both sides were empty", 0};
+    return not_performed(subject, "there were no bytes to compare: both sides were empty");
   }
   ExactBitCorruption record;
   record.provenance = subject.provenance;

@@ -84,6 +84,11 @@ struct Subject {
 /// the longest detail this module appends has been added.
 inline constexpr std::size_t kMaxCheckBytes = kMaxTextBytes - 256;
 
+/// The record of a check about `subject` that could not be made: what was to
+/// be checked is the subject's check, why it could not be is `why`, and no
+/// block was compared.
+[[nodiscard]] VerificationNotPerformed not_performed(const Subject& subject, std::string why);
+
 /// The record a comparison calls for, or nothing for kMatch:
 ///   kMismatch        ExactBitCorruption carrying the Difference.
 ///   kLengthMismatch  ExactBitCorruption with no difference, its check naming
