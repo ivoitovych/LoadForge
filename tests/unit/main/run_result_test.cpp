@@ -80,8 +80,27 @@ TEST(PhaseWindowsTest, EachPhaseEndsOneNanosecondPastTheNextMarkAndTheLastPastTh
   const Sampled run;
   const auto windows = phase_windows(run.timeline, 5 * kSecond);
   ASSERT_EQ(windows.size(), 2U);
-  EXPECT_EQ(windows[0], (PhaseWindow{"run", {1 * kSecond, (3 * kSecond) + 1}}));
-  EXPECT_EQ(windows[1], (PhaseWindow{"stop", {3 * kSecond, (5 * kSecond) + 1}}));
+  EXPECT_EQ(windows[0].label, "run");
+  EXPECT_EQ(windows[0].window, (statistics::Window{1 * kSecond, (3 * kSecond) + 1}));
+  EXPECT_EQ(windows[1].label, "stop");
+  EXPECT_EQ(windows[1].window, (statistics::Window{3 * kSecond, (5 * kSecond) + 1}));
+}
+
+TEST(PhaseWindowsTest, ALongLabelIsKeptWholeInTheWindowAndInTheDelta) {
+  mocks::MockTimeline timeline;
+  const mocks::MockSummarizer summarizer;
+  const std::string label = "settle-and-soak-at-the-thermal-limit";
+  const auto series =
+      timeline.add_series(edac("edac.corrected", telemetry::Scope::kMachine, 0)).value();
+  count(timeline, series, 1 * kSecond, 1);
+  count(timeline, series, 2 * kSecond, 3);
+  ASSERT_TRUE(timeline.mark_phase({1 * kSecond, label}).has_value());
+  const auto windows = phase_windows(timeline, 2 * kSecond);
+  ASSERT_EQ(windows.size(), 1U);
+  EXPECT_EQ(windows[0].label, label);
+  const auto deltas = counter_by_phase(timeline, summarizer, "edac.corrected", 2 * kSecond);
+  ASSERT_EQ(deltas.size(), 1U);
+  EXPECT_EQ(deltas[0].phase, label);
 }
 
 TEST(PhaseWindowsTest, ATimelineWithNoMarkHasNoPhase) {
@@ -334,7 +353,7 @@ TEST(SummaryTextTest, ItStatesTheVerdictTheObserverAndWhatEachDeathLeftBehind) {
 TEST(SummaryTextTest, ARunWithoutTelemetrySaysSoAndOneWithoutEdacSaysNothingOfIt) {
   const mocks::MockTimeline timeline;
   const mocks::MockSummarizer summarizer;
-  controller::RunReport report;
+  const controller::RunReport report;
   results::RunResult result;
   result.verdict = results::Verdict::kClean;
   const std::string text = summary_text(result, report, timeline, summarizer, {});
@@ -348,7 +367,7 @@ TEST(SummaryTextTest, AnOverheadThatCouldNotBeComputedIsLeftOutAndAFaultIsStated
   report.sampling.enabled = true;
   report.sampling.interval_ns = kSecond;
   report.sampling.fault = "sampling stopped: capacity reached (full)";
-  results::RunResult result;
+  const results::RunResult result;
   const std::string text = summary_text(result, report, timeline, summarizer, {});
   EXPECT_NE(
       text.find("0 round(s) every 1.000 s, 0 point(s) over 0 series; sampling took 0.000 s\n"),

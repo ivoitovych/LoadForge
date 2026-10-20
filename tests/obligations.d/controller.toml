@@ -5,6 +5,7 @@
 path    = "src/controller"
 classes = ["P1", "P2", "P3", "P6"]
 tiers   = ["T1", "T2", "T7"]
+consumes = ["SamplerContract", "TimelineContract"]
 note    = """
 The supervisor. P6 is its whole subject: the topology snapshot the stress \
 command takes before the run and the plan carries before the first fork \
@@ -62,4 +63,15 @@ companion runs wherever a count can be read: a SIGKILL from outside, the \
 same record consulted, stays kKilled and says the count did not move. The \
 kernel's side alone -- a child really OOM-killed moves its cgroup's count by \
 one, and a kill -9 moves it by none -- is the reader's T8, in \
-tests/unit/resources."""
+tests/unit/resources. \
+\
+Since M3 the loop also samples telemetry (RunOptions::sampler): a round \
+before the first fork, one every sample interval, one at the deadline on the \
+boundary of the phase it ends (the phase marks "run" and "stop"), and one \
+after the last reap; the cost of the rounds is measured and every reap is \
+timed on the timeline's clock. A round the timeline refuses ends sampling \
+and is reported, never the run (P2, injected through the controller's own \
+mocks of the sampler and the timeline, which the providers' suites are run \
+against: contract_mocks_test.cpp). P6: tests/supervision/telemetry_death_test.cpp \
+kills a real worker mid-run and finds the telemetry from before its death in \
+the result (M3 exit criterion 2)."""

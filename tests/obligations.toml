@@ -140,12 +140,6 @@ tiers   = ["T1"]
 note    = "The console voice: banner, timed event lines, summary. Pure formatting, compared line for line."
 
 [[module]]
-path    = "src/main"
-classes = ["P1", "P3"]
-tiers   = ["T1", "T8"]
-note    = "CLI dispatch and the selftest digest. T8 runs the real binary, so main() is covered rather than excluded."
-
-[[module]]
 path             = "src/platform"
 classes          = ["P1", "P2", "P3", "P6", "P7"]
 tiers            = ["T1", "T2", "T8"]

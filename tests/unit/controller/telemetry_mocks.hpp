@@ -345,7 +345,7 @@ class MockSummarizer final : public statistics::Summarizer {
     for (const double value : values) {
       sum += value;
     }
-    const double n = static_cast<double>(values.size());
+    const auto n = static_cast<double>(values.size());
     gauge.mean = sum / n;
     gauge.first = values.front();
     gauge.last = values.back();

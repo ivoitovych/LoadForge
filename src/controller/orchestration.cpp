@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -53,6 +54,17 @@ bool all_clean(const RunReport& report) noexcept {
 
 std::string describe(const ControllerError& error) { return error.stage + ": " + error.detail; }
 
+bool operator==(const Reap& lhs, const Reap& rhs) noexcept {
+  return std::tie(lhs.slot, lhs.at_ns) == std::tie(rhs.slot, rhs.at_ns);
+}
+
+bool operator==(const SamplingReport& lhs, const SamplingReport& rhs) noexcept {
+  return std::tie(lhs.enabled, lhs.interval_ns, lhs.rounds, lhs.points, lhs.cost_ns,
+                  lhs.first_round_ns, lhs.last_round_ns, lhs.reaps, lhs.fault) ==
+         std::tie(rhs.enabled, rhs.interval_ns, rhs.rounds, rhs.points, rhs.cost_ns,
+                  rhs.first_round_ns, rhs.last_round_ns, rhs.reaps, rhs.fault);
+}
+
 namespace {
 
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
@@ -60,6 +72,18 @@ constexpr std::uint32_t kControllerPhase = 1;
 /// How many drains a channel is given after its worker is dead before the
 /// controller concludes that something else holds the write end open.
 constexpr int kMaxDrainsAfterDeath = 1024;
+
+/// What a refused round or phase says: the fault's words, and the timeline's
+/// own detail in brackets when it gave one.
+std::string describe_refusal(const telemetry::TimelineError& error) {
+  std::string text{telemetry::describe(error.fault)};
+  if (!error.detail.empty()) {
+    text += " (";
+    text += error.detail;
+    text += ')';
+  }
+  return text;
+}
 
 ControllerError error_at(std::string_view stage, std::string detail) {
   return ControllerError{std::string{stage}, std::move(detail)};
@@ -647,9 +671,7 @@ void Run::take_round(std::int64_t now_ns, bool force) {
     sampling_.cost_ns += std::max<std::int64_t>(0, after.value().running_ns - now_ns);
   }
   if (!answer.has_value()) {
-    telemetry_fault("sampling stopped: " + std::string{telemetry::describe(answer.error().fault)} +
-                        (answer.error().detail.empty() ? "" : " (" + answer.error().detail + ")"),
-                    now_ns);
+    telemetry_fault("sampling stopped: " + describe_refusal(answer.error()), now_ns);
     sampling_live_ = false;
     return;
   }

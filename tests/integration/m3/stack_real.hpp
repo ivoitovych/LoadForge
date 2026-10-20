@@ -28,7 +28,7 @@ class RealStack {
   void round() {
     const auto now = clock_.now();
     ASSERT_TRUE(now.has_value());
-    const auto answer = rig_->sampler->round(now.value().running_ns);
+    const auto answer = rig_->sampler().round(now.value().running_ns);
     ASSERT_TRUE(answer.has_value()) << answer.error().detail;
     if (rounds_ == 0) {
       first_ = now.value().running_ns;
@@ -38,10 +38,10 @@ class RealStack {
   }
 
   [[nodiscard]] const telemetry::CapabilityReport& capabilities() const {
-    return rig_->capabilities;
+    return rig_->capabilities();
   }
   [[nodiscard]] statistics::LoadSignature signature() const {
-    const auto taken = summarizer_.summarize(rig_->timeline, cli::run_window(sampling()));
+    const auto taken = summarizer_.summarize(rig_->timeline(), cli::run_window(sampling()));
     EXPECT_TRUE(taken.has_value());
     return taken.value();
   }
@@ -54,8 +54,8 @@ class RealStack {
     cli::ResultInputs inputs;
     inputs.config = &config;
     inputs.report = &report;
-    inputs.capabilities = rig_->capabilities;
-    inputs.timeline = &rig_->timeline;
+    inputs.capabilities = rig_->capabilities();
+    inputs.timeline = &rig_->timeline();
     inputs.summarizer = &summarizer_;
     auto assembled = cli::assemble_result(inputs);
     EXPECT_TRUE(assembled.has_value());

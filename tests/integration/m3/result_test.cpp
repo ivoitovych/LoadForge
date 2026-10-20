@@ -132,10 +132,10 @@ TEST(PhaseTest, EveryAdvanceOfACounterBelongsToExactlyOnePhase) {
     stack.machine.set("/sys/devices/system/edac/mc/mc1/ce_count", mc1);
     stack.round();
   };
-  ASSERT_TRUE(stack.rig->timeline.mark_phase({stack.now, "run"}).has_value());
+  ASSERT_TRUE(stack.rig->timeline().mark_phase({stack.now, "run"}).has_value());
   errors("0", "0");
   errors("1", "0");
-  ASSERT_TRUE(stack.rig->timeline.mark_phase({stack.now, "stop"}).has_value());
+  ASSERT_TRUE(stack.rig->timeline().mark_phase({stack.now, "stop"}).has_value());
   errors("4", "2");  // on the boundary: the advance since the last reading is the run's
   errors("5", "2");
   const std::int64_t last = stack.now - kSecond;

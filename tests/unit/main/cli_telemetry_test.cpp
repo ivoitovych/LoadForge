@@ -207,16 +207,30 @@ TEST_F(StressTelemetry, AResultThatCannotBeComputedIsReportedAndNothingIsWritten
 }
 
 TEST_F(StressTelemetry, WhatTheRegistersSayReachesTheFingerprint) {
-  options.host = HostFacts{std::nullopt, simd::IsaPath::kAvx2};
+  options.host = HostFacts{fpenv::FpState{}, simd::IsaPath::kAvx2};
   EXPECT_EQ(run(), 3);
   EXPECT_NE(sink.stored[0].second.find("\"isa_path\": \"avx2\""), std::string::npos)
       << sink.stored[0].second;
+  EXPECT_EQ(sink.stored[0].second.find("\"fp_environment\": null"), std::string::npos)
+      << "and so do the registers";
 }
 
 TEST_F(StressTelemetry, TheFingerprintFieldsTheMachineWouldNotGiveAreNamedOnTheConsole) {
   run();
   EXPECT_NE(out.str().find("fingerprint: cpufreq_governor not recorded: "), std::string::npos)
       << out.str();
+}
+
+TEST(ExitCodeTest, AFaultIsFiveWhateverTheWorkersDidAndOtherwiseTheWorkersDecide) {
+  for (const bool clean : {true, false}) {
+    EXPECT_EQ(exit_code_for(results::Verdict::kFindings, clean), 5);
+    EXPECT_EQ(exit_code_for(results::Verdict::kCorrectedErrors, clean), 5)
+        << "corrected errors are not a clean run (F13)";
+  }
+  EXPECT_EQ(exit_code_for(results::Verdict::kClean, true), 0);
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, true), 0);
+  EXPECT_EQ(exit_code_for(results::Verdict::kClean, false), 3);
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, false), 3);
 }
 
 TEST(HostFactsTest, TheRegistersAndTheSelectedPathOfThisMachineAreRead) {

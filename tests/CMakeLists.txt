@@ -11,6 +11,7 @@ add_executable(loadforge_unit_tests
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
   unit/main/result_files_test.cpp
+  unit/main/telemetry_rig_test.cpp
   unit/main/cli_telemetry_test.cpp
   unit/main/run_result_test.cpp
   unit/main/contract_mocks_test.cpp

@@ -38,6 +38,7 @@
 #include "support/fake_syscalls.hpp"
 #include "topology/cpu_topology.hpp"
 #include "topology/snapshot.hpp"
+#include "unit/controller/telemetry_mocks.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -1422,13 +1423,66 @@ TEST(ControllerTest, ReportValuesCompareFieldByField) {
   s.worker_exit_code = 120;
   EXPECT_NE(r, s);
   s = r;
+  s.sampling.rounds = 1;
+  EXPECT_NE(r, s);
+  s = r;
   s.workers.clear();
   EXPECT_NE(r, s);
   EXPECT_FALSE(all_clean(s)) << "no workers is not all clean";
 
+  // What the sampler did: every field is in the comparison.
+  const SamplingReport quiet;
+  SamplingReport taken = quiet;
+  EXPECT_EQ(quiet, taken);
+  taken.enabled = true;
+  EXPECT_NE(quiet, taken);
+  taken = quiet;
+  taken.interval_ns = 1;
+  EXPECT_NE(quiet, taken);
+  taken = quiet;
+  taken.rounds = 1;
+  EXPECT_NE(quiet, taken);
+  taken = quiet;
+  taken.points = 1;
+  EXPECT_NE(quiet, taken);
+  taken = quiet;
+  taken.cost_ns = 1;
+  EXPECT_NE(quiet, taken);
+  taken = quiet;
+  taken.first_round_ns = 1;
+  EXPECT_NE(quiet, taken);
+  taken = quiet;
+  taken.last_round_ns = 1;
+  EXPECT_NE(quiet, taken);
+  taken = quiet;
+  taken.reaps.push_back(Reap{});
+  EXPECT_NE(quiet, taken);
+  taken = quiet;
+  taken.fault = "x";
+  EXPECT_NE(quiet, taken);
+  const Reap first;
+  Reap second = first;
+  EXPECT_EQ(first, second);
+  second.slot = 1;
+  EXPECT_NE(first, second);
+  second = first;
+  second.at_ns = 1;
+  EXPECT_NE(first, second);
+
   const RunOptions o;
   RunOptions p = o;
   EXPECT_EQ(o, p);
+  mocks::MockTimeline timeline;
+  mocks::MockSampler sampler({}, timeline);
+  p.sampler = &sampler;
+  EXPECT_NE(o, p);
+  p = o;
+  p.timeline = &timeline;
+  EXPECT_NE(o, p);
+  p = o;
+  p.sample_interval_ns = 1;
+  EXPECT_NE(o, p);
+  p = o;
   p.executable = "x";
   EXPECT_NE(o, p);
   p = o;

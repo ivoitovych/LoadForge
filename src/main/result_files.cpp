@@ -2,7 +2,6 @@
 #include "main/result_files.hpp"
 
 #include <cerrno>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -15,7 +14,10 @@ namespace loadforge::cli {
 
 namespace {
 constexpr std::string_view kKnownFormats = "json, csv";
-}
+
+/// errno in words, thread-safely: strerror is not.
+std::string os_error() { return std::error_code(errno, std::generic_category()).message(); }
+}  // namespace
 
 core::Result<core::Ok, std::string> FileResultSink::prepare(const std::string& directory) {
   std::error_code ignored;
@@ -27,25 +29,26 @@ core::Result<core::Ok, std::string> FileResultSink::prepare(const std::string& d
   {
     std::ofstream file(probe, std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
-      return "cannot create a file in " + directory + ": " + std::strerror(errno);
+      return "cannot create a file in " + directory + ": " + os_error();
     }
   }
   std::filesystem::remove(probe, ignored);
   return core::Ok{};
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): (where, what) is the shape of a write.
 core::Result<core::Ok, std::string> FileResultSink::store(const std::string& path,
                                                           const std::string& bytes) {
   const std::string partial = path + ".partial";
   {
     std::ofstream file(partial, std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
-      return "cannot create " + partial + ": " + std::strerror(errno);
+      return "cannot create " + partial + ": " + os_error();
     }
     file << bytes;
     file.flush();
     if (!file.good()) {
-      return "cannot write " + partial + ": " + std::strerror(errno);
+      return "cannot write " + partial + ": " + os_error();
     }
   }
   std::error_code renamed;
@@ -101,9 +104,15 @@ core::Result<std::vector<std::string>, std::string> write_results(
     }
     std::ostringstream bytes;
     if (auto written = writer->write(result, bytes); !written.has_value()) {
-      return "the " + format + " rendering failed: " + written.error().detail;
+      std::string refusal = "the ";
+      refusal += format;
+      refusal += " rendering failed: ";
+      refusal += written.error().detail;
+      return refusal;
     }
-    const std::string path = directory + "/run." + format;
+    std::string path = directory;
+    path += "/run.";
+    path += format;
     if (auto stored = sink.store(path, bytes.str()); !stored.has_value()) {
       return stored.error();
     }

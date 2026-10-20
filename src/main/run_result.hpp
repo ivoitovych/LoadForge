@@ -52,8 +52,6 @@ struct ResultInputs {
 struct PhaseWindow {
   std::string label;
   statistics::Window window;
-
-  [[nodiscard]] friend bool operator==(const PhaseWindow&, const PhaseWindow&) = default;
 };
 [[nodiscard]] std::vector<PhaseWindow> phase_windows(const telemetry::TimelineView& timeline,
                                                      std::int64_t end_ns);

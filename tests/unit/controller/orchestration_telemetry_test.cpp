@@ -182,7 +182,9 @@ TEST(OrchestrationTelemetryTest, ARunWithoutASamplerSamplesNothingAndRecordsNoRe
   run.options.sampler = nullptr;
   auto result = run.go();
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result.value().sampling, SamplingReport{});
+  EXPECT_FALSE(result.value().sampling.enabled);
+  EXPECT_EQ(result.value().sampling.rounds, 0U);
+  EXPECT_TRUE(result.value().sampling.reaps.empty());
   EXPECT_TRUE(run.sampler.rounds_asked.empty());
   EXPECT_TRUE(run.timeline.phases().empty()) << "no sampler, no phases";
 }

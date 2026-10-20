@@ -49,12 +49,12 @@ statistics::Window run_window(const controller::SamplingReport& sampling) noexce
 std::vector<PhaseWindow> phase_windows(const telemetry::TimelineView& timeline,
                                        std::int64_t end_ns) {
   const std::span<const telemetry::PhaseMark> marks = timeline.phases();
-  std::vector<PhaseWindow> windows;
-  windows.reserve(marks.size());
+  std::vector<PhaseWindow> windows(marks.size());
   for (std::size_t at = 0; at < marks.size(); ++at) {
     const bool last = at + 1 == marks.size();
     const std::int64_t end = last ? end_ns : marks[at + 1].start_ns;
-    windows.push_back(PhaseWindow{marks[at].label, {marks[at].start_ns, end + kWindowEndMargin}});
+    windows[at].label = marks[at].label;
+    windows[at].window = {marks[at].start_ns, end + kWindowEndMargin};
   }
   return windows;
 }
@@ -71,7 +71,11 @@ std::vector<PhaseDelta> counter_by_phase(const telemetry::TimelineView& timeline
     for (const statistics::MetricSummary& summary : signature.value().metrics) {
       const auto* counter = std::get_if<statistics::CounterSummary>(&summary.value);
       if (summary.metric.name == name && counter != nullptr && counter->delta > 0) {
-        deltas.push_back(PhaseDelta{phase.label, series_name(summary.metric), counter->delta});
+        PhaseDelta delta;
+        delta.phase = phase.label;
+        delta.metric = series_name(summary.metric);
+        delta.delta = counter->delta;
+        deltas.push_back(std::move(delta));
       }
     }
   }
@@ -130,13 +134,13 @@ std::string summary_text(const results::RunResult& result, const controller::Run
          << " into the telemetry; the timeline holds " << points_until(timeline, reap.at_ns)
          << " point(s) up to then\n";
   }
-  bool edac = false;
+  std::size_t edac_series = 0;
   for (std::size_t series = 0; series < timeline.series_count(); ++series) {
     const std::string& name = timeline.metric(static_cast<telemetry::SeriesId>(series)).name;
-    edac = edac || name == results::kCorrectedErrorsMetric ||
-           name == results::kUncorrectedErrorsMetric;
+    edac_series += static_cast<std::size_t>(name == results::kCorrectedErrorsMetric) +
+                   static_cast<std::size_t>(name == results::kUncorrectedErrorsMetric);
   }
-  if (edac) {
+  if (edac_series > 0) {
     std::vector<PhaseDelta> deltas;
     for (const std::string_view name :
          {results::kCorrectedErrorsMetric, results::kUncorrectedErrorsMetric}) {
@@ -186,9 +190,12 @@ core::Result<results::RunResult, std::string> assemble_result(const ResultInputs
   }
   result.observers.sample_interval_ns = report.sampling.interval_ns;
   if (report.sampling.enabled && report.elapsed_ns > 0) {
-    result.observers.controller_overhead = std::clamp(
-        static_cast<double>(report.sampling.cost_ns) / static_cast<double>(report.elapsed_ns), 0.0,
-        1.0);
+    // Wall time spent in rounds over the run's: an upper bound on the share of
+    // one CPU the observer took, since a round that waits on a file is not
+    // running.
+    const auto spent = static_cast<double>(report.sampling.cost_ns);
+    const auto elapsed = static_cast<double>(report.elapsed_ns);
+    result.observers.controller_overhead = std::clamp(spent / elapsed, 0.0, 1.0);
   }
   results::seal(result);
   return result;

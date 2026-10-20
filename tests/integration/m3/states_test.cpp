@@ -208,27 +208,10 @@ TEST_P(SourceStates, DeniedIsDeniedWithItsRemedyAndTheRestOfTheSourceIsRead) {
   EXPECT_FALSE(status->unavailable->remediation.empty());
   stack.rounds(2);
   const auto signature = stack.signature();
-  EXPECT_EQ(Stack::find(signature, row.metric, row.scope_index == 0 ? 0 : 1) == nullptr ||
-                Stack::find(signature, row.metric)->metric.scope_index != row.scope_index,
-            true)
-      << "no summary for the metric that could not be read";
-}
-
-TEST_P(SourceStates, MalformedIsMalformedAndNamesItsFile) {
-  const Row& row = GetParam();
-  if (row.path.empty()) {
-    GTEST_SKIP() << "a performance counter has no text to be malformed";
+  for (const statistics::MetricSummary& summary : signature.metrics) {
+    EXPECT_FALSE(summary.metric.name == row.metric && summary.metric.scope_index == row.scope_index)
+        << "a summary for the metric that could not be read";
   }
-  Stack stack;
-  stack.machine.install_everything();
-  stack.machine.set(row.path, row.malformed);
-  stack.start();
-  const auto* status = status_of(stack.capabilities(), row);
-  ASSERT_NE(status, nullptr);
-  ASSERT_TRUE(status->unavailable.has_value());
-  EXPECT_EQ(status->unavailable->kind, Availability::kMalformed);
-  EXPECT_FALSE(status->unavailable->remediation.empty());
-  EXPECT_FALSE(status->unavailable->detail.empty());
 }
 
 TEST_P(SourceStates, DisappearingMidRunIsRecordedAsVanishedAndNotAsZero) {
@@ -281,6 +264,24 @@ TEST_P(SourceStates, DisappearingMidRunIsRecordedAsVanishedAndNotAsZero) {
   }
 }
 
+// The metrics read from a file, which a performance counter is not: only a file
+// has text to be malformed.
+class FileStates : public SourceStates {};
+
+TEST_P(FileStates, MalformedIsMalformedAndNamesItsFile) {
+  const Row& row = GetParam();
+  Stack stack;
+  stack.machine.install_everything();
+  stack.machine.set(row.path, row.malformed);
+  stack.start();
+  const auto* status = status_of(stack.capabilities(), row);
+  ASSERT_NE(status, nullptr);
+  ASSERT_TRUE(status->unavailable.has_value());
+  EXPECT_EQ(status->unavailable->kind, Availability::kMalformed);
+  EXPECT_FALSE(status->unavailable->remediation.empty());
+  EXPECT_FALSE(status->unavailable->detail.empty());
+}
+
 class CounterWraps : public SourceStates {};
 
 TEST_P(CounterWraps, AWrapBetweenTwoReadingsIsTheAdvanceAndNotAStepBack) {
@@ -302,6 +303,24 @@ TEST_P(CounterWraps, AWrapBetweenTwoReadingsIsTheAdvanceAndNotAStepBack) {
   EXPECT_DOUBLE_EQ(*counter->rate_per_second, static_cast<double>(row.wrap_advance));
 }
 
+// The performance counters are 64 bits wide and declare no modulus, so a wrap is the
+// unsigned difference. Not a file, so it is not a row.
+TEST(PerfCounterWraps, AWrapAtTwoToTheSixtyFourIsTheAdvanceAndNotAStepBack) {
+  Stack stack;
+  stack.machine.install_everything();
+  stack.machine.syscalls().script_perf_reads(
+      kPerfHardware, PERF_COUNT_HW_CPU_CYCLES,
+      {{platform::PerfCount{~std::uint64_t{0} - 9, 1000, 1000}, 0},
+       {platform::PerfCount{5, 1000, 1000}, 0}});
+  stack.start();
+  stack.rounds(2);
+  const auto signature = stack.signature();
+  const auto* cycles =
+      std::get_if<statistics::CounterSummary>(&Stack::find(signature, "counters.cycles")->value);
+  ASSERT_NE(cycles, nullptr);
+  EXPECT_EQ(cycles->delta, 15U);
+}
+
 std::vector<Row> wrapping_rows() {
   std::vector<Row> out;
   for (Row& row : rows()) {
@@ -313,6 +332,17 @@ std::vector<Row> wrapping_rows() {
 }
 
 INSTANTIATE_TEST_SUITE_P(Metrics, SourceStates, ::testing::ValuesIn(rows()), label);
+std::vector<Row> file_rows() {
+  std::vector<Row> out;
+  for (Row& row : rows()) {
+    if (!row.path.empty()) {
+      out.push_back(std::move(row));
+    }
+  }
+  return out;
+}
+
+INSTANTIATE_TEST_SUITE_P(Files, FileStates, ::testing::ValuesIn(file_rows()), label);
 INSTANTIATE_TEST_SUITE_P(Counters, CounterWraps, ::testing::ValuesIn(wrapping_rows()), label);
 
 }  // namespace

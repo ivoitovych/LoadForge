@@ -9,10 +9,10 @@
 // workers, one of them killed from outside while the other completes.
 
 #include <gtest/gtest.h>
-#include <signal.h>
 #include <unistd.h>
 
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -103,8 +103,8 @@ TEST(TelemetrySupervisionTest, AWorkerKilledMidRunLeavesTheTelemetryBeforeItsDea
   options.interval_ns = 20 * kMs;
   options.stale_after_ns = 2000 * kMs;
   options.grace = Grace{500 * kMs, 500 * kMs};
-  options.sampler = rig.value()->sampler.get();
-  options.timeline = &rig.value()->timeline;
+  options.sampler = &rig.value()->sampler();
+  options.timeline = &rig.value()->timeline();
   options.sample_interval_ns = 50 * kMs;
 
   KillingReporter reporter(std::chrono::milliseconds{700});
@@ -130,7 +130,7 @@ TEST(TelemetrySupervisionTest, AWorkerKilledMidRunLeavesTheTelemetryBeforeItsDea
   EXPECT_LT(death->at_ns, sampling.last_round_ns) << "sampling went on after the death";
 
   // What the timeline held when the worker died.
-  const telemetry::TimelineView& timeline = rig.value()->timeline;
+  const telemetry::TimelineView& timeline = rig.value()->timeline();
   ASSERT_GT(timeline.series_count(), 0U);
   std::size_t before = 0;
   std::size_t after = 0;
@@ -152,7 +152,7 @@ TEST(TelemetrySupervisionTest, AWorkerKilledMidRunLeavesTheTelemetryBeforeItsDea
   inputs.fingerprint = results::read_fingerprint(
                            machine, "", results::FingerprintContext{results::this_build(), {}, {}})
                            .fingerprint;
-  inputs.capabilities = rig.value()->capabilities;
+  inputs.capabilities = rig.value()->capabilities();
   inputs.timeline = &timeline;
   inputs.summarizer = &summarizer;
   const auto result = cli::assemble_result(inputs);

@@ -48,7 +48,7 @@ class Stack {
   /// One round at the current time, then a second later.
   void round() {
     ASSERT_NE(rig, nullptr);
-    const auto answer = rig->sampler->round(now);
+    const auto answer = rig->sampler().round(now);
     ASSERT_TRUE(answer.has_value()) << answer.error().detail;
     last_ = now;
     ++rounds_;
@@ -61,15 +61,15 @@ class Stack {
     }
   }
 
-  [[nodiscard]] const telemetry::TimelineView& timeline() const { return rig->timeline; }
+  [[nodiscard]] const telemetry::TimelineView& timeline() const { return rig->timeline(); }
   [[nodiscard]] const telemetry::CapabilityReport& capabilities() const {
-    return rig->capabilities;
+    return rig->capabilities();
   }
 
   /// The whole run's signature, as the command line takes it.
   [[nodiscard]] statistics::LoadSignature signature() const {
-    controller::SamplingReport sampling = sampling_report();
-    const auto taken = summarizer.summarize(rig->timeline, cli::run_window(sampling));
+    const controller::SamplingReport sampling = sampling_report();
+    const auto taken = summarizer.summarize(rig->timeline(), cli::run_window(sampling));
     EXPECT_TRUE(taken.has_value());
     return taken.value();
   }
@@ -98,8 +98,8 @@ class Stack {
     cli::ResultInputs inputs;
     inputs.config = &config;
     inputs.report = &report;
-    inputs.capabilities = rig->capabilities;
-    inputs.timeline = &rig->timeline;
+    inputs.capabilities = rig->capabilities();
+    inputs.timeline = &rig->timeline();
     inputs.summarizer = &summarizer;
     auto assembled = cli::assemble_result(inputs);
     EXPECT_TRUE(assembled.has_value());

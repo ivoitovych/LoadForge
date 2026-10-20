@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/results/result.hpp"
 #include "core/result.hpp"
 #include "core/version.hpp"
 #include "main/result_files.hpp"
@@ -90,6 +91,12 @@ struct StressArgs {
 
 [[nodiscard]] core::Result<StressArgs, std::string> parse_stress_args(
     std::span<const std::string_view> args);
+
+/// The exit code of a run that ended and whose result was computed: 5 when the
+/// verdict is a fault (findings, or hardware errors counted), whatever the
+/// workers did; else 3 when a worker did not complete; else 0. A tool whose
+/// purpose is to find faults must not exit 0 on one.
+[[nodiscard]] int exit_code_for(results::Verdict verdict, bool workers_clean) noexcept;
 
 /// The stress command: loads the configuration, refuses a mode this build
 /// does not run, resolves the worker executable from `self_link` (always

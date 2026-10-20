@@ -44,13 +44,19 @@ struct MachineRoots {
 [[nodiscard]] std::vector<std::unique_ptr<telemetry::Source>> make_sources(
     platform::Syscalls& syscalls, platform::FileSystem& filesystem, const MachineRoots& roots);
 
+/// What decides how many points a run's timeline needs.
+struct RunShape {
+  std::int64_t run_ns = 0;       ///< How long the run can take, grace included.
+  std::int64_t interval_ns = 0;  ///< The sample interval.
+  std::size_t series = 0;        ///< At most how many series.
+};
+
 /// How many points a run's timeline is built to hold: `seconds` of the run
 /// and a margin for the start and the stop, sampled every `interval_ns`, over
 /// at most `series` series. A bound and not a reservation: nothing is
 /// allocated until a point arrives, and a run that outgrows it stops sampling
 /// and says so (the timeline refuses, never drops).
-[[nodiscard]] std::size_t timeline_capacity(std::int64_t run_ns, std::int64_t interval_ns,
-                                            std::size_t series) noexcept;
+[[nodiscard]] std::size_t timeline_capacity(const RunShape& shape) noexcept;
 
 /// The most series a machine's sources can plausibly register: a fixed number
 /// for the machine-wide metrics, and a few per online CPU.
@@ -63,11 +69,27 @@ using SourceFactory = std::vector<std::unique_ptr<telemetry::Source>> (*)(platfo
                                                                           const MachineRoots&);
 
 /// The sampler, its timeline, and what the probe found.
-struct Rig {
-  explicit Rig(std::size_t capacity) : timeline(capacity) {}
-  telemetry::BoundedTimeline timeline;
-  std::unique_ptr<telemetry::Sampler> sampler;
-  telemetry::CapabilityReport capabilities;
+class Rig {
+ public:
+  explicit Rig(std::size_t capacity) : timeline_(capacity) {}
+
+  /// Makes the sampler over `sources` and probes it: the capability report is
+  /// kept, and the series are on the timeline. The refusal is the timeline's.
+  [[nodiscard]] core::Result<core::Ok, telemetry::TimelineError> start(
+      std::vector<std::unique_ptr<telemetry::Source>> sources);
+
+  [[nodiscard]] telemetry::BoundedTimeline& timeline() noexcept { return timeline_; }
+  [[nodiscard]] const telemetry::BoundedTimeline& timeline() const noexcept { return timeline_; }
+  /// Defined once start() has succeeded.
+  [[nodiscard]] telemetry::Sampler& sampler() noexcept { return *sampler_; }
+  [[nodiscard]] const telemetry::CapabilityReport& capabilities() const noexcept {
+    return capabilities_;
+  }
+
+ private:
+  telemetry::BoundedTimeline timeline_;
+  std::unique_ptr<telemetry::Sampler> sampler_;
+  telemetry::CapabilityReport capabilities_;
 };
 
 /// Builds the sources over `roots`, the timeline for `capacity` points and the

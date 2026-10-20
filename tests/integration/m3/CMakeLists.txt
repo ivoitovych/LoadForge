@@ -4,7 +4,7 @@
 # read one contract differently are caught.
 loadforge_test_suite(loadforge_integration_m3_tests
   SOURCES full_signature_test.cpp states_test.cpp result_test.cpp real_kernel_test.cpp
-          binary_test.cpp
+          binary_test.cpp containment_test.cpp
   LINK loadforge_cli)
 # The shipped binary, run for real (binary_test.cpp).
 target_compile_definitions(loadforge_integration_m3_tests PRIVATE

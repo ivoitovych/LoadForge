@@ -40,6 +40,7 @@ constexpr int kConfigRefused = 1;  ///< Also: a run that could not start.
 constexpr int kUsageError = 2;
 constexpr int kRunNotClean = 3;   ///< The run ended and at least one worker did not complete.
 constexpr int kOutputFailed = 4;  ///< The run ended and a result file could not be written.
+constexpr int kFaultsFound = 5;   ///< The run ended and found a fault: see exit_code_for.
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
 
 void print_usage(std::ostream& out) {
@@ -57,7 +58,8 @@ void print_usage(std::ostream& out) {
       << "\n"
       << "Exit codes: 0 clean; 1 refused (configuration, or the run could not start);\n"
       << "2 usage; 3 the run ended with a worker that did not complete; 4 a result file\n"
-      << "could not be written.\n"
+      << "could not be written; 5 the run found a fault (a wrong result, or an error the\n"
+      << "hardware reported, corrected or not).\n"
       << "See docs/PLAN.md for what lands when.\n";
 }
 
@@ -72,56 +74,76 @@ HostFacts read_host_facts() {
   return HostFacts{control.read(), path};
 }
 
-core::Result<StressArgs, std::string> parse_stress_args(std::span<const std::string_view> args) {
-  StressArgs parsed;
-  std::optional<std::string> config_path;
-  std::optional<std::string_view> formats;
-  std::optional<std::string> output_dir;
+namespace {
+
+/// Where each flag's value goes, once. A flag given twice, or without a value,
+/// is the caller's mistake and is said.
+struct StressFlags {
+  std::optional<std::string_view> config;
+  std::optional<std::string_view> output;
+  std::optional<std::string_view> output_dir;
   std::optional<std::string_view> interval;
-  for (std::size_t at = 0; at < args.size(); at += 2) {
-    const std::string_view flag = args[at];
-    std::optional<std::string>* text_slot = nullptr;
-    std::optional<std::string_view>* view_slot = nullptr;
+
+  [[nodiscard]] std::optional<std::string_view>* slot(std::string_view flag) {
     if (flag == "--config") {
-      text_slot = &config_path;
-    } else if (flag == "--output-dir") {
-      text_slot = &output_dir;
-    } else if (flag == "--output") {
-      view_slot = &formats;
-    } else if (flag == "--sample-interval") {
-      view_slot = &interval;
-    } else {
-      return "stress does not take " + std::string{flag};
+      return &config;
+    }
+    if (flag == "--output") {
+      return &output;
+    }
+    if (flag == "--output-dir") {
+      return &output_dir;
+    }
+    if (flag == "--sample-interval") {
+      return &interval;
+    }
+    return nullptr;
+  }
+};
+
+core::Result<StressFlags, std::string> read_stress_flags(std::span<const std::string_view> args) {
+  StressFlags flags;
+  for (std::size_t at = 0; at < args.size(); at += 2) {
+    std::optional<std::string_view>* slot = flags.slot(args[at]);
+    if (slot == nullptr) {
+      return "stress does not take " + std::string{args[at]};
     }
     if (at + 1 == args.size()) {
-      return std::string{flag} + " takes a value";
+      return std::string{args[at]} + " takes a value";
     }
-    const bool repeated = text_slot != nullptr ? text_slot->has_value() : view_slot->has_value();
-    if (repeated) {
-      return std::string{flag} + " is given twice";
+    if (slot->has_value()) {
+      return std::string{args[at]} + " is given twice";
     }
-    if (text_slot != nullptr) {
-      *text_slot = std::string{args[at + 1]};
-    } else {
-      *view_slot = args[at + 1];
-    }
+    *slot = args[at + 1];
   }
-  if (!config_path.has_value()) {
+  return flags;
+}
+
+}  // namespace
+
+core::Result<StressArgs, std::string> parse_stress_args(std::span<const std::string_view> args) {
+  auto read = read_stress_flags(args);
+  if (!read.has_value()) {
+    return read.error();
+  }
+  const StressFlags& flags = read.value();
+  if (!flags.config.has_value()) {
     return std::string{"stress needs --config FILE"};
   }
-  parsed.config_path = *config_path;
-  if (output_dir.has_value()) {
-    parsed.options.output_dir = *output_dir;
+  StressArgs parsed;
+  parsed.config_path = std::string{*flags.config};
+  if (flags.output_dir.has_value()) {
+    parsed.options.output_dir = std::string{*flags.output_dir};
   }
-  if (formats.has_value()) {
-    auto list = parse_formats(*formats);
+  if (flags.output.has_value()) {
+    auto list = parse_formats(*flags.output);
     if (!list.has_value()) {
       return list.error();
     }
     parsed.options.formats = std::move(list).value();
   }
-  if (interval.has_value()) {
-    auto duration = core::parse_duration(*interval);
+  if (flags.interval.has_value()) {
+    auto duration = core::parse_duration(*flags.interval);
     if (!duration.has_value()) {
       return "--sample-interval: " + std::string{core::describe(duration.error())};
     }
@@ -131,6 +153,13 @@ core::Result<StressArgs, std::string> parse_stress_args(std::span<const std::str
     parsed.options.sample_interval_ns = duration.value().count() * kNanosecondsPerMillisecond;
   }
   return parsed;
+}
+
+int exit_code_for(results::Verdict verdict, bool workers_clean) noexcept {
+  if (verdict == results::Verdict::kFindings || verdict == results::Verdict::kCorrectedErrors) {
+    return kFaultsFound;
+  }
+  return workers_clean ? kOk : kRunNotClean;
 }
 
 int stress(std::string_view path, const std::string& self_link, std::string_view sysfs_root,
@@ -206,22 +235,22 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     const std::int64_t run_ns = (config.run.duration.count() * kNanosecondsPerMillisecond) +
                                 options.grace.stop_ns + options.grace.kill_ns +
                                 options.stale_after_ns;
-    auto made = make_rig(syscalls, machine, stress_options.roots,
-                         timeline_capacity(run_ns, options.sample_interval_ns,
-                                           series_bound(snapshot.cpus.logical_cpu_count())),
-                         stress_options.sources);
+    const RunShape shape{run_ns, options.sample_interval_ns,
+                         series_bound(snapshot.cpus.logical_cpu_count())};
+    const std::size_t capacity = timeline_capacity(shape);
+    auto made = make_rig(syscalls, machine, stress_options.roots, capacity, stress_options.sources);
     if (!made.has_value()) {
       err << "loadforge: cannot set up telemetry: " << telemetry::describe(made.error().fault)
           << ": " << made.error().detail << "\n";
       return kConfigRefused;
     }
     rig = std::move(made).value();
-    options.sampler = rig->sampler.get();
-    options.timeline = &rig->timeline;
-    out << telemetry::render_capabilities(rig->capabilities);
+    options.sampler = &rig->sampler();
+    options.timeline = &rig->timeline();
+    out << telemetry::render_capabilities(rig->capabilities());
   }
   const telemetry::BoundedTimeline no_timeline(0);
-  const telemetry::BoundedTimeline& timeline = rig != nullptr ? rig->timeline : no_timeline;
+  const telemetry::BoundedTimeline& timeline = rig != nullptr ? rig->timeline() : no_timeline;
 
   reporters::ConsoleReporter reporter(out);
   controller::Controller supervisor(syscalls, reporter);
@@ -238,21 +267,23 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   if (child_code.has_value()) {
     return *child_code;  // This process is a worker that could not exec.
   }
-  const int clean = controller::all_clean(report.value()) ? kOk : kRunNotClean;
+  const bool workers_clean = controller::all_clean(report.value());
 
   const HostFacts host = stress_options.host.has_value() ? *stress_options.host : read_host_facts();
   const statistics::CompensatedSummarizer real_summarizer;
   const statistics::Summarizer& summarizer =
       stress_options.summarizer != nullptr ? *stress_options.summarizer : real_summarizer;
-  auto reading = results::read_fingerprint(
-      machine, "",
-      results::FingerprintContext{results::this_build(), host.fp_environment, host.isa_path});
+  results::FingerprintContext context;
+  context.build = results::this_build();
+  context.fp_environment = host.fp_environment;
+  context.isa_path = host.isa_path;
+  auto reading = results::read_fingerprint(machine, "", context);
   ResultInputs inputs;
   inputs.config = &config;
   inputs.report = &report.value();
   inputs.fingerprint = reading.fingerprint;
   if (rig != nullptr) {
-    inputs.capabilities = rig->capabilities;
+    inputs.capabilities = rig->capabilities();
   }
   inputs.timeline = &timeline;
   inputs.summarizer = &summarizer;
@@ -262,8 +293,9 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     return kOutputFailed;
   }
   out << summary_text(result.value(), report.value(), timeline, summarizer, reading.gaps);
+  const int code = exit_code_for(result.value().verdict, workers_clean);
   if (stress_options.formats.empty()) {
-    return clean;
+    return code;
   }
   auto written =
       write_results(result.value(), stress_options.formats, stress_options.output_dir, sink);
@@ -274,7 +306,7 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   for (const std::string& file : written.value()) {
     out << "result written: " << file << "\n";
   }
-  return clean;
+  return code;
 }
 
 namespace {

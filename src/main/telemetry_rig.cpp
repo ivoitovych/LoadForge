@@ -23,7 +23,13 @@ constexpr std::size_t kSeriesPerCpu = 8;
 }  // namespace
 
 MachineRoots roots_under(const std::string& directory) {
-  return MachineRoots{directory, directory + "/sys", directory + "/proc"};
+  MachineRoots roots;
+  roots.prefix = directory;
+  roots.sysfs = directory;
+  roots.sysfs += "/sys";
+  roots.procfs = directory;
+  roots.procfs += "/proc";
+  return roots;
 }
 
 std::vector<std::unique_ptr<telemetry::Source>> make_sources(platform::Syscalls& syscalls,
@@ -45,25 +51,32 @@ std::size_t series_bound(std::size_t cpus) noexcept {
   return kMachineSeries + (kSeriesPerCpu * cpus);
 }
 
-std::size_t timeline_capacity(std::int64_t run_ns, std::int64_t interval_ns,
-                              std::size_t series) noexcept {
-  const std::int64_t step = std::max<std::int64_t>(interval_ns, 1);
-  const std::int64_t rounds = (std::max<std::int64_t>(run_ns, 0) / step) + kMarginRounds;
+std::size_t timeline_capacity(const RunShape& shape) noexcept {
+  const std::int64_t step = std::max<std::int64_t>(shape.interval_ns, 1);
+  const std::int64_t rounds = (std::max<std::int64_t>(shape.run_ns, 0) / step) + kMarginRounds;
   // run_capacity takes seconds and hertz; rounds are the product of the two,
   // so ask for `rounds` seconds at one round a second.
-  return telemetry::run_capacity(static_cast<std::size_t>(rounds), 1, series);
+  return telemetry::run_capacity(static_cast<std::size_t>(rounds), 1, shape.series);
+}
+
+core::Result<core::Ok, telemetry::TimelineError> Rig::start(
+    std::vector<std::unique_ptr<telemetry::Source>> sources) {
+  sampler_ = telemetry::make_sampler(std::move(sources), timeline_);
+  auto report = sampler_->probe();
+  if (!report.has_value()) {
+    return report.error();
+  }
+  capabilities_ = std::move(report).value();
+  return core::Ok{};
 }
 
 core::Result<std::unique_ptr<Rig>, telemetry::TimelineError> make_rig(
     platform::Syscalls& syscalls, platform::FileSystem& filesystem, const MachineRoots& roots,
     std::size_t capacity, SourceFactory sources_for) {
   auto rig = std::make_unique<Rig>(capacity);
-  rig->sampler = telemetry::make_sampler(sources_for(syscalls, filesystem, roots), rig->timeline);
-  auto report = rig->sampler->probe();
-  if (!report.has_value()) {
-    return report.error();
+  if (auto started = rig->start(sources_for(syscalls, filesystem, roots)); !started.has_value()) {
+    return started.error();
   }
-  rig->capabilities = std::move(report).value();
   return rig;
 }
 

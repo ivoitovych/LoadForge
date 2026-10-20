@@ -8,10 +8,10 @@
 // of what is there and a remedy for what is not, on any machine.
 
 #include <gtest/gtest.h>
-#include <time.h>
 
 #include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <string>
 #include <thread>
 #include <variant>

@@ -13,6 +13,10 @@
 //   powercap and EDAC                modelled on Documentation/power/powercap/
 //                                    powercap.rst and Documentation/ABI/testing/
 //                                    sysfs-devices-edac.
+// LOADFORGE P7 FIXTURE BUILDER: this file builds, in the kernel's layout, the
+// trees whose six states (present, absent, denied, malformed, vanishing,
+// wrapping) states_test.cpp then drives.
+//
 // The real-kernel half of the tier (real_kernel_test.cpp) runs the same stack
 // on the real /sys and /proc.
 

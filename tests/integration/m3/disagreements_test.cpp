@@ -149,7 +149,7 @@ TEST(Disagreement, Statistics_SignatureHpp_PhasesTakenAtTheirMarksSumToTheRun) {
   };
   count("0");  // 1 s
   count("1");  // 2 s
-  ASSERT_TRUE(stack.rig->timeline.mark_phase({stack.now, "stop"}).has_value());
+  ASSERT_TRUE(stack.rig->timeline().mark_phase({stack.now, "stop"}).has_value());
   count("4");  // 3 s, the mark: +3 since the last reading
   count("5");  // 4 s
   const std::int64_t last = stack.now - kSecond;

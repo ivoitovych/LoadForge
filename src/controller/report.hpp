@@ -58,7 +58,10 @@ struct Reap {
   std::size_t slot = 0;
   std::int64_t at_ns = 0;
 
-  [[nodiscard]] friend bool operator==(const Reap&, const Reap&) = default;
+  /// Defined once, in orchestration.cpp: a defaulted comparison in a header is
+  /// counted once per translation unit that uses it, and the gate reads the
+  /// copies the linker discarded as uncovered (docs/JOURNAL.md §1.22).
+  friend bool operator==(const Reap& lhs, const Reap& rhs) noexcept;
 };
 
 /// What the sampler did during the run (PLAN F17: the observer is measured).
@@ -87,7 +90,7 @@ struct SamplingReport {
   std::vector<Reap> reaps;
   std::optional<std::string> fault;
 
-  [[nodiscard]] friend bool operator==(const SamplingReport&, const SamplingReport&) = default;
+  friend bool operator==(const SamplingReport& lhs, const SamplingReport& rhs) noexcept;
 };
 
 struct RunReport {
