@@ -42,7 +42,10 @@ struct Heartbeat {
 ///   kTorn            a reader could not get a consistent sample within the
 ///                    retry bound: the writer is mid-update and not finishing,
 ///                    which is what a worker that died inside publish() looks
-///                    like. Reported, never spun on.
+///                    like -- and, for as long as the scheduler keeps it off
+///                    its core, one that was merely descheduled there. Reported,
+///                    never spun on; a caller judges it over the staleness
+///                    allowance, never from one read.
 enum class RegionFault : std::uint8_t {
   kSyscall,
   kMagic,

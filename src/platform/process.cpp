@@ -41,6 +41,16 @@ WorkerStartupFailure WorkerLauncher::become_worker(pid_t supervisor_pid,
     return WorkerStartupFailure::kParentDiedBeforeArming;
   }
 
+  // A process group of its own, so that whatever this worker starts can be
+  // killed with it. The death signal does not survive a fork: a grandchild
+  // the worker leaves behind would otherwise outlive it, unsupervised, holding
+  // a core and every descriptor it inherited. The supervisor signals the group
+  // once the worker is reaped. A session rather than only a group, so the
+  // worker has no controlling terminal and no job control can stop it for
+  // writing its diagnostics to one. After the race check: an orphan is about
+  // to exit, and owes nobody a group.
+  syscalls_->start_session();
+
   // Hand over exactly the descriptors this worker needs. Done after the race
   // check, so an orphan does not go on to prepare for an exec it will not make.
   for (const int fd : inherited_fds) {

@@ -236,7 +236,10 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
           "spawned 2 worker(s): pids 1001 1002", "deadline reached: stop requested",
           "worker 0 (pid 1001): exited with code 0", "worker 1 (pid 1002): exited with code 0"}));
   EXPECT_EQ(rig.reporter.elapsed, (std::vector<std::int64_t>{0, 50 * kMs, 50 * kMs, 50 * kMs}));
-  EXPECT_TRUE(rig.syscalls.signals_sent().empty()) << "nobody needed a signal";
+  // Nobody needed a signal. Each worker's process group was swept as it was
+  // reaped, and was empty, so the sweep left no note.
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{{-kFirstPid, SIGKILL}, {-kSecondPid, SIGKILL}}));
   EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
   ASSERT_EQ(rig.reporter.plans.size(), 1U);
   EXPECT_EQ(rig.reporter.plans[0].workers, 2U);
@@ -311,7 +314,9 @@ TEST(ControllerTest, AWorkerWhoseBeatGoesStaleIsTerminatedThenKilledAndTimedOut)
             (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGTERM},
                                                 {kSecondPid, SIGTERM},
                                                 {kFirstPid, SIGKILL},
-                                                {kSecondPid, SIGKILL}}));
+                                                {kSecondPid, SIGKILL},
+                                                {-kFirstPid, SIGKILL},
+                                                {-kSecondPid, SIGKILL}}));
   EXPECT_EQ(rig.reporter.events[1], "worker 0: sent signal 15 (heartbeat stale)");
   EXPECT_EQ(rig.reporter.elapsed[1], 40 * kMs);
   EXPECT_EQ(rig.reporter.elapsed[3], 60 * kMs);
@@ -361,7 +366,37 @@ TEST(ControllerTest, AWorkerThatDiedInsideAPublishIsTreatedAsStale) {
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kFault)
       << "SIGTERM was sent, but what killed it was the fault";
-  EXPECT_EQ(rig.reporter.elapsed[1], 10 * kMs) << "unreadable on the first tick";
+  // Unreadable from the start, and stale once that has lasted longer than the
+  // 100 ms allowance: the tick at 110 ms, not the first one.
+  EXPECT_EQ(rig.reporter.elapsed[1], 110 * kMs) << "unreadable past the allowance";
+}
+
+TEST(ControllerTest, ASlotUnreadableForLessThanTheAllowanceIsNotADeath) {
+  // A worker descheduled between the two halves of a publish leaves its slot
+  // unreadable for as long as the scheduler likes. The first version called
+  // one torn read a death, and under TSan with every core busy it SIGTERMed a
+  // healthy worker in a 600 ms run. Torn from the start of a 50 ms run with a
+  // 100 ms allowance, worker 0 is never signalled, and completes.
+  Rig rig;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, 10 * kMs, 3);
+      rig.beat(1, 1, 10'000 * kMs);
+    } else if (starts_with(line, "deadline")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(result.value().workers[0].stop, "stop requested");
+  for (const auto& [pid, signal] : rig.syscalls.signals_sent()) {
+    EXPECT_LT(pid, 0) << "only the group sweeps; signal " << signal << " to " << pid;
+  }
 }
 
 TEST(ControllerTest, AStopRequestIgnoredIsEscalatedAndOneWorkerHonoursTheTerm) {
@@ -390,8 +425,11 @@ TEST(ControllerTest, AStopRequestIgnoredIsEscalatedAndOneWorkerHonoursTheTerm) {
   EXPECT_EQ(rig.reporter.events[1], "deadline reached: stop requested");
   EXPECT_EQ(rig.reporter.elapsed[1], 30 * kMs);
   EXPECT_EQ(rig.syscalls.signals_sent(),
-            (std::vector<std::pair<pid_t, int>>{
-                {kFirstPid, SIGTERM}, {kSecondPid, SIGTERM}, {kSecondPid, SIGKILL}}));
+            (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGTERM},
+                                                {kSecondPid, SIGTERM},
+                                                {-kFirstPid, SIGKILL},
+                                                {kSecondPid, SIGKILL},
+                                                {-kSecondPid, SIGKILL}}));
 }
 
 TEST(ControllerTest, AFaultIsReportedWithTheRecordsThatArrivedBeforeIt) {
@@ -424,6 +462,87 @@ TEST(ControllerTest, AFaultIsReportedWithTheRecordsThatArrivedBeforeIt) {
                           {"started: slot 0 pid 1001", "error: about to crash"}}));
   EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kCompleted);
   EXPECT_EQ(clean_count(result.value()), 1U);
+}
+
+TEST(ControllerTest, WhatAWorkerLeftRunningInItsGroupIsKilledAndRecorded) {
+  // The catalogue's "fork a grandchild, then die": worker 1's group still has
+  // a member when it is reaped, so the sweep kills it and says so; worker 0's
+  // group is empty and its record is untouched. The real processes are the
+  // supervision tier's (tests/supervision/catalogue_test.cpp).
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.syscalls.group_left_running(kSecondPid);
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.deliver(1, ipc::RecordType::kError, "forked and left");
+      rig.worker_exits(1, 1 << 8);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].records, (std::vector<std::string>{"finished: done"}));
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kWorkerError);
+  EXPECT_EQ(result.value().workers[1].records,
+            (std::vector<std::string>{"error: forked and left",
+                                      "process group: killed what the worker left running"}))
+      << "the sweep is recorded when the worker is reaped, after what it sent";
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{{-kFirstPid, SIGKILL}, {-kSecondPid, SIGKILL}}));
+}
+
+TEST(ControllerTest, AGroupThatCannotBeKilledIsRecordedAndTheRunGoesOn) {
+  // Any refusal but ESRCH means something may still be running that the
+  // controller could not stop: a fact about the worker, not a failure of the
+  // run, so it goes in the worker's record.
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.syscalls.fail_signal_for(-kFirstPid, EPERM);
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_EQ(result.value().workers[0].records.size(), 2U);
+  EXPECT_EQ(result.value().workers[0].records[0], "finished: done");
+  EXPECT_EQ(result.value().workers[0].records[1].substr(0, 15), "process group: ");
+  EXPECT_NE(result.value().workers[0].records[1].find("kill"), std::string::npos)
+      << result.value().workers[0].records[1];
+  EXPECT_EQ(result.value().workers[1].records, (std::vector<std::string>{"finished: done"}));
+}
+
+TEST(ControllerTest, ATeardownSweepsOnlyTheGroupsOfWorkersNotYetReaped) {
+  // Worker 0 is reaped (and its group swept) on the first tick; the second
+  // tick's poll fails. The teardown sweeps worker 1's group, whose pid still
+  // pins it, and not worker 0's again, whose number may since belong to
+  // somebody else.
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+    } else if (starts_with(line, "worker 0 (pid 1001)")) {
+      rig.syscalls.fail_poll(EINVAL);
+    }
+  };
+  rig.syscalls.script_waits({{Reaped{kSecondPid, SIGKILL}, 0}});
+  auto result = rig.run();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().stage, "record channel");
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{
+                {-kFirstPid, SIGKILL}, {-kSecondPid, SIGKILL}, {kSecondPid, SIGKILL}}));
+  EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
 }
 
 TEST(ControllerTest, ACorruptFrameAndATruncatedStreamAreEachReportedAsSuch) {
@@ -747,8 +866,12 @@ TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehin
     auto result = rig.run();
     ASSERT_FALSE(result.has_value()) << fd;
     EXPECT_EQ(result.error().stage, "spawn");
+    // Worker 0's group, then both workers. Worker 1's pid was never recorded
+    // (the spawn failed on worker 0's close), so its "group" is not swept:
+    // kill(-0) would be this process's own group.
     EXPECT_EQ(rig.syscalls.signals_sent(),
-              (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGKILL}, {kSecondPid, SIGKILL}}))
+              (std::vector<std::pair<pid_t, int>>{
+                  {-kFirstPid, SIGKILL}, {kFirstPid, SIGKILL}, {kSecondPid, SIGKILL}}))
         << "both workers were running and were killed on the way out";
     EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
   }

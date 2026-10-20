@@ -591,6 +591,60 @@ Probed for the record channel, then pinned by the real-kernel tests:
   `config.cpp`, so there is one record and it is the one that runs. Other defaulted
   comparisons in headers have not shown this; when one does, this is the move.
 
+### 1.23 What the misbehaviour catalogue showed about the kernel, and about the old tests
+
+Established while building the fake worker (§2.19) and its T7 tests:
+
+- **The parent-death signal does not survive a fork.** The kernel clears it in the child of
+  every `fork`, so a worker's grandchild has none. The grandchild test
+  (`GrandchildrenOfDeadWorkersAreKilledWithThem`) failed against the controller as it was:
+  both grandchildren were still spinning ten seconds after their workers were reaped, and
+  nothing in the design would ever have ended them. The fix is §2.20; with the controller's
+  group sweep switched off again, the test fails again the same way.
+- **The old controller-killed test could not see the death signal at all.** With the launcher
+  temporarily arming signal 0 instead of `SIGKILL`, `AControllerKilledLeavesNoWorkerBehind`
+  still passed (every worker left on the hang-up, exit 124), while the new deaf-worker test
+  failed with both workers alive past its bound. The new test is the only one that would
+  notice the signal gone.
+- **`kill(-0, …)` is `kill(0, …)`: the caller's own process group.** The first version of the
+  teardown sweep signalled `-pid` for every unreaped worker, and a spawn that fails after
+  the fork leaves later workers with pid 0 recorded. The unit test's exact list of signals
+  showed `(0, 9)`. Against the kernel that is `SIGKILL` to the controller's own group, the
+  user's shell job included. The sweep now skips a pid it never recorded, and the test that
+  found it pins it.
+- **`/proc` says when a child is ready, so a test need not guess.** `/proc/<pid>/cmdline`
+  is the test binary's argv until the worker execs and the worker's afterwards, and the
+  launcher arms the death signal before the exec, so a `--worker` in it means armed.
+  `/proc/<pid>/status`'s `SigIgn` mask shows a disposition the moment it is set, which is
+  how the ignored-`SIGTERM` test holds the run until the escalation cannot find the signal
+  still at its default.
+- **A sanitizer's handler can be bypassed below its interceptors.** §1.7's rule (a fault
+  signal raised under ASan or TSan becomes an exit code) would make the fault rows test the
+  sanitizer. The fake worker resets the disposition with the raw `rt_sigaction` system call
+  (the kernel's `struct sigaction` is handler, flags, restorer, mask, all zero for
+  `SIG_DFL`, with an 8-byte kernel sigset) and sends the signal with a raw `tgkill`, so the
+  status word says `SIGSEGV` on every preset. It also sets `RLIMIT_CORE` to 0 and itself
+  undumpable, and the test matches `killed by signal 11` as a prefix, because whether a
+  core was written is the machine's business.
+- **Under a subreaper, the controller reaps strangers.** The test process takes the orphaned
+  grandchildren as subreaper, and the controller's own `waitpid(-1)` can meet one first and
+  skip it as not a worker. The first version of the test waited its whole bound for each
+  grandchild it could no longer reap; `ECHILD` is an ending too.
+- **An instrumented test executable reports its template instantiations as `src/` lines.**
+  The fake worker uses `core::Result` over its own types; compiled with `--coverage`, those
+  instantiations of `src/core/result.hpp` entered the report, and the error constructor and
+  `error()` of each showed as never executed: 99.8% of lines over code no test of `src/` is
+  meant to reach. The fake is now linked with the coverage runtime, which the instrumented
+  libraries it links need, and not compiled with instrumentation itself.
+- **A seqlock reader's retry bound is microseconds; a descheduled writer is milliseconds.**
+  Under TSan with four suites running on four cores, the real-binary test
+  `TwoWorkersCompleteForTheConfiguredDuration` saw a worker `SIGTERM`ed as stale 619 ms into
+  a run whose allowance was 2000 ms. By elimination the only path that could do that was a
+  slot the controller could not read: a worker taken off its core between the odd and the
+  even store of a publish tears every one of the reader's 64 retries, and the controller
+  called one torn read a death. The worker side had the same flaw for the controller's slot,
+  leaving with 124. Ten full TSan runs under the same load pass since §2.22.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -1020,7 +1074,7 @@ appears.
 EOWNERDEAD rule, discharged by construction: there is no protected state to make consistent
 because no reader ever depended on the writer finishing. The ledger's obligation for
 process-shared locks will record this module as holding none, and the gate for that lands
-with the supervision increment.
+with the supervision increment. (It landed with the fake worker: §2.21.)
 
 **The header is validated on attach (F18).** Magic, version, slot count and slot size each
 have their own fault and their own message naming found and expected. A worker that mapped
@@ -1122,7 +1176,8 @@ controller's own beat is judged against the allowance each tick; a controller th
 beat is given the allowance and then treated as stale, because a controller publishes its
 first beat before it spawns anyone. A controller slot that cannot be read — a controller
 that died inside `publish` — is its own reason, not an error, because the worker's answer
-is the same: leave.
+is the same: leave. (Once it has stayed unreadable for longer than the allowance, since
+§2.22: one torn read is also what a controller descheduled mid-publish looks like.)
 
 **Four exit codes, none colliding with the launcher's.** 0 completed; 119 setup failed
 (could not attach, report, or be placed; or the loop itself failed); 124 controller lost
@@ -1163,7 +1218,8 @@ there are none, and the rule is written down for the milestone that adds them).
 hang); fresh by timestamp but no progress for the allowance (the spin — "working slowly" and
 "not progressing" are the catalogue's required distinction); and a slot that cannot be read
 (a worker that died inside `publish`, which will not beat again). All three send `SIGTERM`
-with `stale_when_signalled` set, and the escalation ladder takes it from there.
+with `stale_when_signalled` set, and the escalation ladder takes it from there. (The third
+was corrected by §2.22: unreadable for longer than the allowance, not unreadable once.)
 
 **The ladder is a pure function of time.** `escalation_due(step, since, now, grace)` says
 which signal is due; `step_after(signal)` says where that leaves the worker. The request
@@ -1184,7 +1240,8 @@ by its name.
 **A channel held open after the worker died is truncated, not waited for.** The final drain
 gives each still-open channel one stop grace per attempt and a bounded number of attempts;
 something a worker started that inherited the write end — the "fork a grandchild" row —
-cannot hold the run hostage.
+cannot hold the run hostage. (And since §2.20 that something is killed with the worker's
+process group as soon as the worker is reaped.)
 
 **The child of a failed exec returns rather than `_exit`s.** `WorkerLauncher`'s comment
 promised `_exit` glue in `main`; the glue would be a line no measured process can run
@@ -1199,6 +1256,133 @@ with a fork that yields the child and an exec that fails.
 against a budget when one is known and reported *not enforced* when none can be read;
 temperature reported not enforced until telemetry. Exit 0 clean, 1 refused or could not
 start, 2 usage, 3 the run ended with a worker that did not complete.
+
+### 2.19 The fake worker: a second reading of the worker contract, chosen by the environment
+
+IMPLEMENTATION §4 asks for a worker that misbehaves on demand, as a separate executable and
+never a switch on `loadforge`. `tests/support/fake_worker` is that executable, and three
+choices in it had real alternatives.
+
+**The misbehaviour is selected by an environment variable,** `LOADFORGE_FAKE_WORKER`, a list
+of `SLOT=NAME` entries with `*` for every other slot. The controller builds the worker's argv
+and a test cannot add to it, while the environment passes through the controller's fork and
+the worker's exec untouched. *Rejected:* an argv flag (the controller would need a way to
+pass it, which is a test hook in the shipped binary, the very thing this exists to avoid);
+one executable per misbehaviour (fifteen binaries, and no way to run two different
+misbehaviours in one run, which N ≥ 2 wants); a configuration file named by the environment
+(the same channel with a file to manage). An unreadable selector is refused with the
+bad-arguments code, so a typo is a startup failure, never a different test.
+
+**It reads the contract itself.** It parses the argv from `worker/entry.hpp`'s description
+rather than calling `parse_args`, writes its own exit codes from the documented table, and
+runs its own loop rather than `NullWorkload` (ADR 0003: two readings of one contract are two
+chances to notice it is ambiguous). It does share the IPC library, which is the protocol's
+provider rather than the worker's behaviour, and that library is now its own target,
+`loadforge_ipc`: the fake links it and not `loadforge_worker`, so reaching for the real loop
+is a link error rather than a review comment.
+
+**Its tests do not race.** The supervision tests failed by scheduler luck twice (§4.11 and
+the controller-killed test), so these are built so that no outcome depends on which of two
+events lands first. The companion workers *outlast* the misbehaving one: they finish once
+the controller has reaped every other worker they saw beat, and the run's deadline is thirty
+seconds away and never comes into it, so a hang is a timeout and never a stop at a deadline
+that happened to land first. A misbehaving worker begins with a *prelude* that waits for two
+of the controller's beats after its own: the controller beats and then judges every worker
+in the same tick, so two beats later it has read the worker's progress, and a fault test can
+assert the timeline without hoping the controller looked in time. Where the controller must
+not act before the worker is ready, the test asks the kernel (§1.23). *Rejected:* wide time
+margins, which pass until the build gets slower, which is when they are needed. Each T7 test
+passed 30 runs in 30.
+
+### 2.20 Each worker leads its own session, and the controller kills its group when it is reaped
+
+The catalogue row "fork a grandchild, then die" requires that no orphan be left holding a
+core, and nothing did that (§1.23): the death signal is cleared across fork, and the
+controller knew only its workers' pids.
+
+**Chosen:** the launcher starts a session for each worker after the orphan-race check and
+before exec (`setsid`, through a new seam call, `start_session`), so a worker leads a process
+group whose id is its pid and everything it forks stays in it. When the controller reaps a
+worker it sends `SIGKILL` to the group. `ESRCH`, an empty group, is the usual answer and says
+nothing; a kill that found someone is recorded on the worker (`process group: killed what
+the worker left running`), and any other refusal is recorded with its error, because a
+worker that left processes behind is part of what it did. The teardown of a failed run
+sweeps the groups of workers not yet reaped, never of one already reaped, and never of a
+worker whose pid was not recorded (§1.23).
+
+*Why straight after the reap:* the group id is the worker's pid, and the kernel does not
+reuse a pid that is still some group's id, so while anything of the worker's remains the
+number names that group and nothing else. Once nothing remains the kill can only meet a
+reused number if the pid allocator wraps all the way round in between.
+
+*Why a session and not only a group:* a process group of its own in the controller's
+session is a background job, and with the terminal's `tostop` set a worker writing its
+diagnostics to the terminal would be stopped by `SIGTTOU` and then timed out, reported for
+the wrong reason. A session has no controlling terminal and no job control.
+
+*Why `start_session` returns nothing:* `setsid` refuses only a process that already leads a
+group, and the child of a fork never does. A failure arm would be a branch no test could take
+(IMPLEMENTATION §2.6, rung 3). Its line is run in the test process, where `setsid` is made to
+be refused (the process first leads a group of its own), and a real child shows the effect.
+
+*Rejected:* `setpgid` alone (the `tostop` problem above); making the controller a subreaper
+and reading `/proc/self/task/*/children` to find what to kill (more seam, more parsing, and a
+process-wide setting with effects on everything else the controller reaps); cgroups (not
+delegated everywhere this runs, and M1 has no cgroup code); leaving it, which the catalogue
+forbids.
+
+*Consequences:* `Ctrl-C` now reaches only the controller, and the workers end by hang-up or
+death signal rather than by `SIGINT` alongside it; `Ctrl-Z` stops only the controller, and
+the workers leave after the staleness allowance with 124, which the exit-code table already
+describes. *A gap, recorded rather than closed:* when the controller itself is killed, nobody
+is left to sweep, and a grandchild survives its worker; the real worker forks nothing, so this
+waits for a workload that does (§6).
+
+### 2.21 The two gates M1 added, and what each refuses
+
+**No test hook in the shipped binary** (`tools/check-no-test-hooks.sh`). It reads the
+binary's symbol table with `nm`, demangled, and refuses anything in `loadforge::fake_worker::`
+or `loadforge::testing::` (the fake worker and the test fakes), anything in GoogleTest's
+`testing::` (a test framework in a release binary is a test hook by definition), and the
+string `LOADFORGE_FAKE_WORKER` anywhere in the file, since a binary that reads the selector can
+be told to misbehave whatever its symbols are called. F20 shapes the rest: a missing, empty or
+unreadable file fails; a stripped binary fails, so the gate runs before any strip, never after;
+and a symbol table with no `loadforge::` symbol fails, because that is not a binary the gate
+can vouch for. It runs on the static artifact in the release workflow, on every CI matrix
+entry, and in `ctest` on the build's own binaries, where the fake worker must be refused by
+name. Its tooling tests compile real binaries and refuse each kind of hook; no compiler is a
+failure, not a skip. *Rejected:* checking the build system's install rules, which says what
+the build meant rather than what the artifact holds.
+
+**An `EOWNERDEAD` robustness test per process-shared lock** (`check-test-obligations.py`).
+Every file in `src/` that names a lock primitive must be named by a declared lock in its
+module's ledger row, and every declared lock must name a test under `tests/supervision/`
+carrying `LOADFORGE EOWNERDEAD TEST: <name>` (the whole name, so one test cannot be stretched
+over two locks), in a module that declares P5. The primitives are matched in the raw text,
+comments included: a comment that names one is refused too, which costs an author a
+rephrasing, where a comment-stripping bug could have waved a real lock through. A lock built
+by hand from atomics in shared memory has no name to match; the design's answer is to have
+none (§2.15), and review's is to notice one. Today there are none, and the gate prints so on
+every run rather than printing nothing.
+
+### 2.22 One torn read is not a death: a slot is unreadable once it stays so past the allowance
+
+§2.15 made a torn sample the `EOWNERDEAD` of a design with no lock: a writer that died
+mid-publish leaves its sequence odd, and readers report it rather than wait. The controller
+and the worker then each took one torn read as that death, and §1.23 shows what that costs:
+a writer that is merely descheduled between its two stores looks the same for as long as the
+scheduler keeps it off the core, and a healthy worker was killed for it.
+
+**Chosen:** each side remembers when the slot last gave a consistent sample, and a slot that
+cannot be read is stale (the controller's view of a worker) or unreadable (the worker's view
+of the controller) only once nothing could be read from it for longer than the staleness
+allowance. A writer that really died inside `publish` stays odd for ever and is caught one
+allowance later than before, which is the bound every other way of going quiet already has.
+
+*Rejected:* more retries, or a sleep between them, in `observe` (any bound shorter than a
+scheduling delay is wrong sometimes, and one long enough would make every reader wait on a
+dead writer, the thing the seqlock exists to avoid); treating torn as fresh (a writer that
+died mid-publish would then never be stale at all).
 
 ---
 
@@ -1660,13 +1844,20 @@ Kept short and current; move an item to the relevant document once it is settled
   the other completes, and the controller itself is killed and every orphan is found dead
   by the parent-death signal. The review of 2026-10-19 then found that it did not ignore
   `SIGPIPE` (R-02): on `main`, the real-binary stress test died by signal 13 in 2 runs of
-  12, the shared fake having modelled the write as a plain `EPIPE` (ADR 0003). Still to
-  come, in order:
-  the fake-worker executable with the T7 misbehaviour catalogue and the two new gates
-  (no test-hook symbol in the shipped binary; a lock obligation per module in the ledger);
-  OOM classification from the kernel's own record (`/proc/vmstat oom_kill` or the cgroup's
-  `memory.events`) and the memory-budget reader. The M1 exit criteria in IMPLEMENTATION.md
-  §4 are the checklist.
+  12, the shared fake having modelled the write as a plain `EPIPE` (ADR 0003). The
+  fake-worker executable followed (§1.23, §2.19–§2.22): every reachable row of the T7
+  misbehaviour catalogue, workers leading their own sessions so a dead worker's grandchildren
+  are killed with it, and the two new gates (no test-hook symbol in the shipped binary; an
+  `EOWNERDEAD` robustness test per process-shared lock, of which there are none). Under
+  load it also found that both sides called one torn heartbeat read a death (§2.22). Still to
+  come: OOM classification from the kernel's own record (`/proc/vmstat oom_kill` or the
+  cgroup's `memory.events`) and the memory-budget reader. The M1 exit criteria in
+  IMPLEMENTATION.md §4 are the checklist.
+- **A known gap, from §2.20:** when the controller itself is `SIGKILL`ed, a grandchild of a
+  worker survives: the death signal is cleared across fork and nobody is left to sweep the
+  group. The real worker forks nothing, so nothing is exposed today; the first workload that
+  forks must close it (a worker that kills its own group on the way out, or the grandchild
+  arming its own death signal), and its T7 test is the deaf-worker test with a grandchild.
 - **Resolved — a flake, with its fix:**
   `RealWaitStatus.RealStopAndContinueAreDistinguishedFromTermination` failed once under
   the coverage build and once under ASan, in different sessions, while passing 30/30 in
