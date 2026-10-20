@@ -143,6 +143,14 @@ TEST(RaytraceKernels, EveryPathTheBuildHasIsRunnableOnThisMachine) {
   }
 }
 
+TEST(RaytraceKernels, APathThatIsNotOneOfTheFourHasNoKernel) {
+  // kernel_at is instantiated for RowKernel here and in the factory; the
+  // coverage gate measures each instantiation, so this one's fall-through is
+  // taken by a value no IsaPath has.
+  const auto table = workloads::raytrace::row_kernels();
+  EXPECT_EQ(simd::kernel_at(table, static_cast<simd::IsaPath>(200)), nullptr);
+}
+
 TEST(RaytraceKernels, GeneratedScenesMatchBruteForce) {
   for (std::uint64_t unit = 0; unit < 4; ++unit) {
     Bytes input(rt::kInputBytes);
