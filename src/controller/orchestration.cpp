@@ -26,6 +26,8 @@
 #include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
 #include "platform/worker_pool.hpp"
+#include "resources/oom_kill_record.hpp"
+#include "topology/snapshot.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -142,6 +144,7 @@ class Run {
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain(Tracked& worker);
   [[nodiscard]] core::Result<core::Ok, ControllerError> reap(std::int64_t elapsed_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
+  void attribute_oom_kills();
   [[nodiscard]] core::Result<RunReport, ControllerError> finish();
   void close_channel(Tracked& worker);
   void kill_group(Tracked& worker);
@@ -160,6 +163,10 @@ class Run {
   platform::TimePoint started_;
   std::int64_t duration_ns_ = 0;
   std::uint64_t beats_ = 0;
+  /// The OOM-kill count before the first fork, when a record is consulted.
+  /// Read in prepare whenever there is a record, so the initial words are
+  /// never a reading anyone sees.
+  core::Result<std::uint64_t, std::string> oom_before_{std::string{"not read"}};
   std::size_t live_ = 0;
   bool stop_requested_ = false;
   bool spawned_ = false;
@@ -189,6 +196,12 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
   }
   if (workers_.empty()) {
     return error_at("config", "no workload is enabled");
+  }
+  // Before the first fork, so that every kill of a worker comes after it. A
+  // count that cannot be read is not a reason to refuse the run: it is kept,
+  // and said, if a worker's death ever needs it.
+  if (options_->oom_record != nullptr) {
+    oom_before_ = options_->oom_record->kills();
   }
   duration_ns_ = config_->run.duration.count() * kNanosecondsPerMillisecond;
 
@@ -568,10 +581,36 @@ core::Result<core::Ok, ControllerError> Run::drain_after_death() {
   return core::Ok{};
 }
 
+void Run::attribute_oom_kills() {
+  // Every worker is reaped by now, so the deaths and the count are complete:
+  // the window judge_oom_kills needs. The count is read again only when a
+  // death needs it.
+  if (options_->oom_record == nullptr) {
+    return;
+  }
+  std::vector<Tracked*> candidates;
+  for (Tracked& worker : workers_) {
+    if (oom_candidate(worker.evidence)) {
+      candidates.push_back(&worker);
+    }
+  }
+  if (candidates.empty()) {
+    return;
+  }
+  const auto after = options_->oom_record->kills();
+  const OomFinding finding =
+      judge_oom_kills(oom_before_, after, candidates.size(), options_->oom_record->scope());
+  for (Tracked* worker : candidates) {
+    worker->evidence.oom_kill_recorded = finding.attributed;
+    worker->notes.push_back(finding.note);
+  }
+}
+
 core::Result<RunReport, ControllerError> Run::finish() {
   if (auto drained = drain_after_death(); !drained.has_value()) {
     return drained.error();
   }
+  attribute_oom_kills();
   auto elapsed_ns = elapsed_now();
   if (!elapsed_ns.has_value()) {
     return elapsed_ns.error();
@@ -641,7 +680,12 @@ core::Result<RunReport, ControllerError> Run::execute() {
   plan.duration = config_->run.duration;
   plan.workers = workers_.size();
   plan.executable = options_->executable;
-  plan.limits = limit_statuses(*config_, options_->budget);
+  plan.limits = limit_statuses(*config_, options_->budget, options_->budget_unread);
+  if (options_->topology != nullptr) {
+    plan.topology = topology::describe(*options_->topology);
+  } else {
+    plan.topology = "no snapshot offered";
+  }
   reporter_->run_starting(plan);
 
   auto spawned = spawn();

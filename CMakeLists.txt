@@ -88,6 +88,7 @@ add_library(loadforge_topology STATIC
   src/topology/cpu_topology.cpp
   src/topology/cache.cpp
   src/topology/numa.cpp
+  src/topology/snapshot.cpp
 )
 target_link_libraries(loadforge_topology PUBLIC loadforge_platform)
 loadforge_set_warnings(loadforge_topology)
@@ -98,15 +99,17 @@ loadforge_enable_coverage(loadforge_topology)
 # ---- controller -------------------------------------------------------------
 # The supervisor: spawns the workers, judges their beats and their records,
 # stops them at the deadline and classifies what became of each. Depends on
-# worker (the IPC and the argv it execs workers with) and config; the console
-# reporter is the one voice it has at M1.
+# worker (the IPC and the argv it execs workers with) and config, and on the
+# OOM-kill record's contract in resources (src/resources/CMakeLists.txt, below
+# by glob: a link names a target, so it may precede the definition); the
+# console reporter is the one voice it has at M1.
 add_library(loadforge_controller STATIC
   src/controller/supervision.cpp
   src/controller/safety.cpp
   src/controller/orchestration.cpp
   src/reporters/console.cpp
 )
-target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config)
+target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config loadforge_resources)
 loadforge_set_warnings(loadforge_controller)
 loadforge_set_fp_contract(loadforge_controller)
 loadforge_enable_sanitizers(loadforge_controller)
@@ -114,7 +117,7 @@ loadforge_enable_coverage(loadforge_controller)
 
 # ---- cli --------------------------------------------------------------------
 add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp)
-target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller)
+target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller loadforge_resources)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)
@@ -174,10 +177,10 @@ if(LOADFORGE_STATIC)
 endif()
 
 # ---- components built in parallel streams ------------------------------------
-# Every component from M2a on owns a CMakeLists.txt in its own directory under
-# src/ and is found here by glob, so no stream edits this file to add itself
-# (cmake/Components.cmake, ADR 0004). The modules above predate the mechanism
-# and stay listed explicitly.
+# Every component since ADR 0004 -- src/resources the first, then each from M2a
+# on -- owns a CMakeLists.txt in its own directory under src/ and is found here
+# by glob, so no stream edits this file to add itself (cmake/Components.cmake).
+# The modules above predate the mechanism and stay listed explicitly.
 loadforge_add_fragments("${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 # ---- tests ------------------------------------------------------------------

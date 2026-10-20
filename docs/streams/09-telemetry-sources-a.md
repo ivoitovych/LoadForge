@@ -61,6 +61,7 @@ Directories (each `tests/*/...` entry means the directory of that name under eve
 ## Notes
 
 - Read through `platform::FileSystem` and `topology::Source`, whose availability classification you reuse; a mode-000 file arrives readable from git and as root, so `kDenied` is built in the fake (JOURNAL §2.7).
+- `src/resources` already reads `MemAvailable` from `/proc/meminfo` for the memory budget (JOURNAL §2.23). The memory source samples more of the file, repeatedly; reuse that module's public parsing where it fits, or say in your journal fragment why it does not.
 
 ## How your work joins the build without touching a shared file (ADR 0004)
 

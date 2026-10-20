@@ -58,6 +58,25 @@ the caller-driven sampler, the framed control pipe, the three contracts that car
 definitions, the glob over a list, one ledger fragment per module, and the thirty-four
 streams in six waves.
 
+Taken when `main` (#30 to #33) was merged into this branch, and recorded here rather than
+in the ADR because they apply its rules rather than change them:
+
+- **`src/resources` is the first build fragment.** It arrived on `main` as one more block
+  in the top-level `CMakeLists.txt`; it is new since ADR 0004, so it moved to
+  `src/resources/CMakeLists.txt` and `loadforge_component()`. The controller links it from
+  the top-level file before the glob defines it, which CMake allows: a link names a target
+  and is resolved when the build is generated. The topology snapshot is a file added to an
+  existing module, and stays in that module's explicit list.
+- **Its tests join `loadforge_unit_tests` from their fragment** with `target_sources()`
+  instead of building a suite of their own, because that binary is the only one the
+  mutation gate runs, and M1 is complete only when the first sweep finds `src/resources`
+  clean with the rest. Stream 11 extends the gate to every executable; the fragment may
+  then become a suite. `cli_stress_enforces_memory`, the reader's test through the real
+  binary, moved with them.
+- **Four ledger rows moved to fragments**: `src/resources`, which `main` added, and
+  `src/controller`, `src/worker` and `src/topology`, whose rows `main` edited — the moment
+  ADR 0004 says a row moves. The move is checked to parse to the same entries.
+
 ## Contract questions
 
 None yet; this is where streams record theirs.

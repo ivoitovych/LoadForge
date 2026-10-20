@@ -645,6 +645,73 @@ Established while building the fake worker (§2.19) and its T7 tests:
   called one torn read a death. The worker side had the same flaw for the controller's slot,
   leaving with 124. Ten full TSan runs under the same load pass since §2.22.
 
+### 1.24 Memory limits and OOM kills: what the kernel counts, where, and what a fresh cgroup says
+
+Probed on the container this was written in, a hybrid machine (kernel 6.18, root), before
+the budget reader and the OOM classification were designed; `errno` on its own line. The
+memory controller is on v1 at `/sys/fs/cgroup/memory`; the unified hierarchy is mounted
+beside it at `/sys/fs/cgroup/unified` with no memory files at all; this process's cgroup
+carries a 13.36 GiB limit, below the machine's 15.6 GiB of MemAvailable, so here the cgroup
+is the ceiling (PLAN F7's container case, on a real machine).
+
+- **A memcg OOM kill reaches the parent as a plain SIGKILL** (status `0x9`). A child moved
+  into a fresh v1 cgroup limited to 16 MiB, with `memory.swappiness` 0, that touched 256 MiB
+  was killed with nothing in its status to say why. The status alone cannot tell the OOM
+  killer from `kill -9`; `ExitStatus::killed_by_sigkill`'s comment was right.
+- **The v1 count is the victim's own cgroup's, and only its.** That cgroup's
+  `memory.oom_control` went from `oom_kill 0` to `oom_kill 1`; its parent's stayed at 0. So
+  the count to read is the cgroup the workers are in -- the controller's own, since a child
+  is born into its parent's -- not an ancestor. (On v2, `memory.events` also counts
+  descendants, per cgroup-v2.rst; no v2 host was available to measure it.)
+- **`/proc/vmstat`'s `oom_kill` rose by one too.** The machine-wide count includes a
+  cgroup's own OOM kills, so it moves for every OOM kill of every process on the machine.
+- **`kill -9` moves neither count.** Asserted on every run by
+  `RecordRealTest.ThisMachinesCountIsReadAndASigkillThatIsNotAnOomKillDoesNotMoveIt`, and the
+  real OOM kill above by `AChildReallyOomKilledInAV1CgroupMovesThatCgroupsCountByOne`, which
+  skips, saying why, where no v1 memory cgroup can be made.
+- **A fresh v1 child of a limited cgroup reads the unlimited sentinel** in its own
+  `memory.limit_in_bytes` -- `9223372036854771712`, LONG_MAX rounded down to a 4 KiB page --
+  while its `memory.stat` reads `hierarchical_memory_limit 14343688192`, the parent's limit,
+  which is the one that binds. The leaf's own file is the wrong answer; the kernel's
+  hierarchical figure is the right one. A write of 12345 reads back 12288 (rounded down to a
+  page); a write of -1 reads back the sentinel. The sentinel differs with the page size,
+  which is why the reader treats everything within 256 KiB of LONG_MAX as "no limit".
+- **Read in `mm/oom_kill.c`, not measured:** `__oom_kill_process` counts the kill
+  (`count_vm_event(OOM_KILL)`, then the memcg event) before it sends the SIGKILL, and has done
+  since both counts arrived in 4.13. So a reading taken after a reap includes that reap's
+  kill -- and can include a kill whose victim has not been reaped yet, which is the race the
+  attribution rule in §2.23 is shaped around.
+
+### 1.25 A test can put a whole run under a memory limit by moving itself
+
+Established while writing the OOM row of the misbehaviour catalogue (§2.24), on the same
+hybrid machine as §1.24 (v1 memory controller, root):
+
+- **A process moved into a fresh v1 cgroup takes its future children with it and nothing
+  else.** The test writes its own pid to a new child cgroup's `cgroup.procs`; the workers
+  the controller then forks are born there, and `/proc/self/cgroup` names the new cgroup,
+  so a `CgroupOomKillRecord` made afterwards reads that cgroup's `memory.oom_control` --
+  the same way `loadforge stress` opens its record. Memory charged before the move stays
+  charged where it was (`memory.move_charge_at_immigrate` is 0 by default), so the move
+  brings no history into the limit. Moving back and removing the directory leaves the
+  original cgroup as it was; `rmdir` succeeds once the last dead child is released.
+- **Inside a memory cgroup the OOM killer still chooses by the whole process, not by its
+  charge.** Read in `mm/oom_kill.c`, not measured: `oom_badness` scores a candidate by its
+  RSS, swap entries and page tables -- all of its memory, wherever charged -- plus
+  `oom_score_adj` times the cgroup's limit in pages over 1000. So a test process with a
+  large RSS charged elsewhere could in principle outscore the worker that crossed the
+  limit. The allocating fake worker raises its own `oom_score_adj` to 1000 first (no
+  privilege is needed to raise it), which adds the whole limit to its score and makes
+  the choice certain rather than likely.
+- **The count moves by exactly one.** Three fake workers under 256 MiB -- one allocating,
+  one dying by SIGSEGV, one completing -- moved the new cgroup's count from 0 to 1 on
+  every run: 30 of 30 alone, and 30 of 30 with the whole supervision tier repeated under
+  `ctest -j4`.
+- **CI's runner user cannot do any of this.** The hosted runners are cgroup v2, and the
+  test steps run as an unprivileged user in a cgroup it does not own, so `mkdir` is
+  refused with `EACCES`. The test skips there and quotes the refusal; CI runs it a second
+  time as root, where a skip is turned into a failure (§2.24).
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -1384,6 +1451,240 @@ scheduling delay is wrong sometimes, and one long enough would make every reader
 dead writer, the thing the seqlock exists to avoid); treating torn as fresh (a writer that
 died mid-publish would then never be stale at all).
 
+### 2.23 The memory budget, and an OOM kill told from the kernel's own record
+
+M1 exit criterion 3: OOM-kill is classified distinctly from a fault, asserted, not logged.
+Two pieces, one module: `src/resources` reads what the kernel lets this process use and
+what it records when that runs out; the controller consults the second through a contract.
+
+**Where the reader lives.** Platform-level knowledge, read through the seam -- but every
+source is classified with topology's capability model (`Source`, `Availability`), and
+`platform` may not depend on `topology` (topology reads through platform). So it is its own
+module above topology, with its own ledger row. Moving `Source` down into `platform` was
+the alternative; it drags `CpuList` with it and is a refactor of two shipped modules for
+the sake of a third.
+
+**Finding the cgroup: `/proc/self/cgroup` and `/proc/self/mountinfo`.** The obvious reader
+joins the membership path to `/sys/fs/cgroup/memory` (v1) or `/sys/fs/cgroup` (v2). It is
+right on a host and silently wrong in a v1 container without a cgroup namespace, which
+names its cgroup `/docker/<id>` while the runtime mounts exactly that directory at
+`/sys/fs/cgroup/memory`: the joined path does not exist, ENOENT reads as "no limit", and the
+run is sized against the host inside a container with a wall much nearer. The mount's root
+is in mountinfo and nowhere else, so mountinfo is read, its escapes undone, and the cgroup
+taken relative to the first mount of its hierarchy whose root contains it by whole path
+components. The directory is then probed (`cgroup.controllers` on v2, `memory.limit_in_bytes`
+on v1): two files agreeing on a directory that is not there is a contradiction, never an
+absent limit. A v1 hierarchy listing `memory` wins over the unified line, because on a
+hybrid machine the unified hierarchy has no memory files.
+
+**The limit that binds.** v1: `hierarchical_memory_limit` from the cgroup's `memory.stat`,
+the kernel's own minimum over the cgroup and every ancestor -- including ancestors above a
+container's mount root that no walk from inside could see (§1.24 shows the leaf's own file
+is wrong). v2 publishes no effective figure, so the reader walks from the cgroup to its
+mount and takes the lowest `memory.max`; a level with no `memory.max` (the root, or a cgroup
+whose parent does not enable the controller) sets no limit there. *Rejected:* the leaf's
+file alone (wrong whenever a parent sets the limit, which is how systemd slices and
+container runtimes both do it); walking on v1 too (misses invisible ancestors, and the
+kernel already did the walk); v2's `memory.high` (a throttle, not a wall: nothing is killed
+at it); subtracting usage (usage counts page cache the kernel reclaims before killing
+anything, so limit minus usage understates; the kernel offers no per-cgroup MemAvailable,
+and F7's headroom belongs in the config as a stated number, §2.14).
+
+**What is a reading and what is a failure.** Absent means "no limit here" in exactly three
+places: no `/proc/self/cgroup` (no cgroups), no memory hierarchy in it, a v2 level with no
+`memory.max`. Everything else that cannot be read -- denied, malformed, unreadable, a
+hierarchy not mounted where this process can see it, a cgroup outside every mount of it --
+is a failure with its source and reason, and the budget is then absent: `stress` runs with
+memory reported NOT ENFORCED and the reason in the banner (the §2.18 rule, now with the
+reader's words attached). MemAvailable missing (kernels before 3.14) is not estimated from
+MemFree: an estimate is exactly the number F7 says not to use. The `Key: value kB` parsing
+is still not shared with `numa.cpp`'s, though this is the second caller §2.11 waited for:
+what the two share is the digits and the " kB", and sharing that would put a /proc parser
+in topology's public surface or a sysfs one in this module's; the digits now go through one
+strict `parse_decimal` here.
+
+**OOM evidence: the cgroup's count, read before the first fork and after the last reap.**
+Options, and why each was taken or not:
+
+- *`/proc/vmstat` `oom_kill`* -- rejected. It counts every OOM kill on the machine (§1.24),
+  so a rise while a worker died of SIGKILL is a coincidence on any shared machine, reported
+  as a finding.
+- *The controller's own memory cgroup's count* (`memory.events` on v2, `memory.oom_control`
+  on v1) -- **chosen.** The workers are born into that cgroup, the kernel counts a victim
+  of the machine-wide OOM killer there as well as one of the cgroup's own limit, and it is
+  the narrowest record the kernel keeps. Absent before 4.13, and then said.
+- *The kernel log* (`Killed process <pid>`) -- rejected. It names the pid, which is
+  everything the counts lack, but `/dev/kmsg` is restricted on most distributions
+  (`dmesg_restrict`, CAP_SYSLOG), the line's wording has changed between kernels, and the
+  ring is rate-limited and overwritten under exactly the memory pressure that produced the
+  line. Parsing a log is not reading a record.
+- *A cgroup per worker* -- deferred, and recorded as the route to exact attribution: each
+  worker's own count would name its own death. It needs write access to the hierarchy
+  (delegation or root), and on v2 the controller would first have to move itself into a
+  leaf of its own (no internal processes), which is a change to how a run is started, not
+  to how a death is read.
+- *`waitid`'s `siginfo`* -- no information: the waiter learns CLD_KILLED and the signal,
+  never who sent it.
+
+**Attribution: the whole run, all or none.** A count says how many, not which. When the
+count rose over the run by at least as many as there are workers dead of a SIGKILL the
+controller did not send, each is `kOomKilled`; when it rose by fewer, none is, and each
+report says how many were counted for how many deaths. Two deaths and one counted kill mean
+one OOM kill and one `kill -9`, and choosing between them would be the fabrication
+`exit_status.hpp` warns against. *Rejected:* a window per death. The kernel counts a kill
+before its victim can be reaped (§1.24), so a worker killed with `kill -9` and reaped in the
+tick between another worker's OOM kill and that worker's reap takes the other's count, and
+the two verdicts swap -- wrong about the run's own workers, not merely about a stranger. The
+whole-run window cannot swap them; what it cannot exclude is a process outside the run but
+in the same cgroup being OOM-killed while a worker died of somebody's SIGKILL, and the
+report names the cgroup so a reader can judge how crowded it was. A count that went down,
+or could not be read at either end, attributes nothing and says why. The record explains
+SIGKILL and nothing else: a fault stays a fault, the controller's own SIGKILL stays the
+controller's, and a SIGTERM from outside stays a kill.
+
+**The contract and its consumer.** `resources/oom_kill_record.hpp` is the contract
+(ADR 0003): a scope and a count, with the semantics a consumer may rely on written on it
+(cumulative, never decreasing while the scope exists, counted before the victim can be
+reaped, not per pid). The controller takes one through `RunOptions::oom_record` --
+non-owning, and null meaning none is consulted -- rather than through its constructor, so
+every existing caller still compiles and a run that consults nothing is a valid run whose
+SIGKILLs are kills. Its tests drive the loop against a fake of its own; the reader's tests
+drive the reader against trees and the kernel; the cross-execution of one against the
+other waits for the contracts-first step (ROADMAP 12a). `cli::run_stress` reads both the
+budget and the record through the seam it is given, so its signature did not change and
+its tests feed the readers from the fake's read script.
+
+### 2.24 The OOM row: a cgroup the test makes and moves itself into
+
+M1 exit criteria 2 and 3 end to end need a real fake worker really OOM-killed under a
+limit that the controller's OOM record reads, and the record is opened before the first
+fork on the cgroup the workers will be born into: the controller's own.
+
+**Chosen:** the test makes a memory cgroup, limits it to 256 MiB with swap off, moves
+*itself* into it, and only then makes the record and runs the controller in-process
+(`MisbehaviourCatalogue.AWorkerOomKilledUnderALimitIsOomKilledAndNotAFaultOrAKill`). On
+v1 the cgroup is a child of the test's own (§1.24: v1 allows children of a cgroup that
+holds processes, and the count is the victim's own cgroup's). On v2 the "no internal
+processes" rule forbids that, so it is a sibling under the parent that already enables
+memory for the test's cgroup, and failing that a child of the hierarchy's root, which the
+rule exempts and root may write. A guard moves the test back and removes the cgroup
+however the test ends. Where none of it can be done the test skips and quotes the
+kernel's refusal for each place it tried; it never passes without the kill.
+
+*Rejected:*
+
+- *Fork a child that moves itself and runs the controller.* GoogleTest assertions in a
+  forked child never reach the runner, so every check would need a protocol back to the
+  parent; moving the test process and moving it back costs one guard.
+- *Move only the workers, after the fork.* There is no moment to do it without a hook in
+  the controller -- the test-hook-in-shipped-code the fake worker exists to avoid (§2.19)
+  -- and a worker moved after its exec ran unlimited for a while.
+- *Lower the limit of the test's own cgroup.* It limits everything else there too (the
+  shell, `ctest`, parallel tests), and a test that died with it lowered would leave it so.
+- *A cgroup per worker.* The exact-attribution design deferred in §2.23; a change to how a
+  run starts, not a test of how a death is read.
+
+*Making the victim certain:* the allocator raises its own `oom_score_adj` to 1000 before
+it touches anything (§1.25), so whichever process charged the page that crossed the limit,
+the kernel kills the allocator and not the controller or a companion. It also stops at
+1 GiB and says so, so a run where no limit binds fails as a worker error rather than
+taking the machine's memory.
+
+*In CI:* the hosted runners are v2 and the tests run as an unprivileged user, so under
+`ctest` the test skips. The `ci` workflow therefore runs it once more on every matrix
+entry under `sudo`, with `LOADFORGE_REQUIRE_OOM_LIMIT` set, which turns a skip into a
+failure, and checks that the filter matched one test. That makes exit criterion 3 a CI
+fact rather than one true only on a developer's root shell. *Recorded, not hidden:* the
+v2 branch of the guard has not run on a v2 host before that CI step's first run, because
+none was available; the step fails loudly if it is wrong.
+
+*The companion:* `ASigkillFromOutsideIsAKillWhenTheRecordCountedNone` runs the same record
+against a worker killed by `kill -9` from the test. It needs no limit, only a count to
+read, so it runs under `ctest` wherever the machine keeps one, CI included.
+
+### 2.25 The topology snapshot before the fork: taken by the command, carried by the controller
+
+Found by the M1 exit review: the state machine's first transition, START to RUNNING, is
+labelled "topology snapshot taken (before fork)", PLAN §4.1 says the controller discovers
+topology once before it forks, and the module ledger said the rule was the controller's to
+honour. Nothing did: `loadforge stress` forked its workers without describing the machine
+at all.
+
+**Chosen:** `topology::take_snapshot` takes CPUs, caches and NUMA together, whole or not at
+all, the first half to refuse being the answer. The stress command takes it from `/sys`
+after resolving the worker executable and before the run, and refuses the run (exit 1,
+the reason in discovery's words) when `/sys` will not describe the machine: the snapshot
+is the frame every later report is attributed against, and a run on a machine described
+wrongly would attribute everything wrongly. `run_stress` takes it by reference, so no run
+reaches the controller without one; `RunOptions::topology` carries it, non-owning, and the
+plan describes it in one line, which the console prints in the banner, before the spawn.
+
+*Rejected:*
+
+- *The controller discovers it in `prepare`.* Every one of the controller's unit tests runs
+  over the system-call fake, whose reads are one script for every file; discovery inside
+  the loop would have made each of them script a `/sys`. The budget and the OOM record are
+  read by the command and handed in for the same reason (§2.23), and the snapshot follows
+  that precedent. The controller still holds it before it forks, which is the rule.
+- *A required field the controller refuses without.* The same cost to the controller's
+  tests, and the requirement is already a reference in `run_stress`, the one caller that
+  starts real runs. A run with no snapshot offered says so in its plan.
+- *Run on with "topology unknown", as with an unreadable memory budget.* The budget is a
+  limit, and NOT ENFORCED is a true statement about a run that can still be meaningful.
+  An undescribed machine is a run whose every later attribution has no frame.
+- *CPUs only.* PLAN §4.1's snapshot is the machine's topology, caches and NUMA included,
+  and each half is already discovered against the CPUs; a partial snapshot would be a
+  description nobody could tell was partial.
+
+At M1 nothing reads the snapshot but the banner; telemetry attribution, placement and the
+run fingerprint arrive from M3 and read it from there.
+
+### 2.26 "Exit just before the deadline stop", tested without the race
+
+Found by the M1 exit review: the catalogue row added for review finding R-02 had no T7
+test. Its evidence was the controller's unit test over the fake, which models a write to a
+pipe with no reader as `EPIPE` (the reading ADR 0003 records as the one that hid the bug),
+and the real-binary stress test, which died by signal 13 in 2 runs of 12 before the fix and
+so shows the fix only statistically.
+
+**Chosen:** a fake-worker misbehaviour, `close-control`, that closes its end of the control
+pipe at once and works on. The controller closed its own copy of the read end at spawn, so
+at the deadline the stop byte goes to a pipe with no reader at all, on every run. The worker
+finishes by itself three controller beats after its duration -- the third beat begins after
+the tick that requested the stop has finished -- inside a stop grace long enough that no
+escalation comes into it. With the controller's `ignore_signal(SIGPIPE)` changed to another
+signal, the test process dies by signal 13 (status 141) in that test, every time.
+
+*Rejected:* a worker that really exits just before the deadline. Whether the stop byte then
+meets a closed pipe depends on whether the controller reaped the worker in the tick before
+the deadline's, which is the scheduler's choice: the race §2.19 forbids in these tests.
+
+### 2.27 A record pipe with no reader is the controller lost, not the worker's setup failure
+
+Found by the M1 exit review, repeating the supervision tier 30 times under `ctest -j4`:
+`SupervisionTest.AControllerKilledLeavesNoWorkerBehind` failed once with a worker that
+exited 119, "record channel: write(fd 11): Broken pipe". The controller had been killed
+before that worker sent its started record, the write met a pipe with no reader, and §2.17's
+rule ("could not report" is a setup failure) called it the worker's own failure. The test
+accepted the death signal and 124, the two ways out it knew of.
+
+**Chosen:** the worker classifies an unsent record by its errno. `EPIPE` means nothing holds
+the read end any more: the controller is gone (or stopped reading, which it does only after
+a frame fault, when its own verdict on the channel takes precedence anyway), which is what
+124 already means -- "hung up, stale or unreadable". Any other refusal, and a frame the
+writer would not encode, stays 119. Both records the worker sends on its own account, the
+started and the finished, follow the rule. `WorkerRunTest.ARecordPipeWithNoReaderIsTheController
+LostNotASetupFailure` forces both; the setup-failure cases now use `EIO`.
+
+*Rejected:* widening the supervision test to accept 119. It would also have accepted a
+worker that failed its setup for any other reason, which that test exists to tell apart
+from a worker ended by its controller's death; and it would have left the exit code saying
+the worker failed when the kernel said its controller had gone.
+
+*Consequence for the controller:* none while it runs. It holds every record pipe's read end
+until it has reaped that worker or found a bad frame on it, so a live controller never
+causes the EPIPE; a 124 from a worker it reaps is `kControllerLostReported` as before.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
@@ -1801,12 +2102,12 @@ whether the same failure reproduces on the base — if it does, the branch is a 
 
 Kept short and current; move an item to the relevant document once it is settled.
 
-- **Awaiting the owner:** one manual workflow run to establish the mutation-tool pin, which
-  is a hard prerequisite for the first workload milestone; branch protection on `main`
-  (required status checks, no required approvals — a solo maintainer would otherwise block
-  themselves); deletion of the merged branches. The credential this work runs under gets
-  **403 on workflow dispatch and on deleting a ref**, so all three are genuinely the
-  owner's rather than something to try harder at.
+- **Awaiting the owner:** branch protection on `main` (required status checks, no required
+  approvals — a solo maintainer would otherwise block themselves), and deletion of the
+  merged branches. The credential this work runs under gets **403 on deleting a ref and on
+  workflow dispatch**. The mutation-tool pin no longer waits: a push to a dedicated
+  discovery branch ran the bootstrap job on GitHub's runners without a dispatch, and the
+  pin is in `mutation.yml`.
 - **Answered (#22):** whether CI should hard-require a specific committer identity. It
   admits identities from an allowlist, `.github/commit-identities`, which holds the owner
   today; a contributor's first PR adds their own line. That keeps the repository open while
@@ -1849,15 +2150,24 @@ Kept short and current; move an item to the relevant document once it is settled
   misbehaviour catalogue, workers leading their own sessions so a dead worker's grandchildren
   are killed with it, and the two new gates (no test-hook symbol in the shipped binary; an
   `EOWNERDEAD` robustness test per process-shared lock, of which there are none). Under
-  load it also found that both sides called one torn heartbeat read a death (§2.22). Still to
-  come: OOM classification from the kernel's own record (`/proc/vmstat oom_kill` or the
-  cgroup's `memory.events`) and the memory-budget reader. The M1 exit criteria in
-  IMPLEMENTATION.md §4 are the checklist.
+  load it also found that both sides called one torn heartbeat read a death (§2.22). The
+  memory-budget reader and OOM classification from the kernel's own record followed
+  (§1.24, §2.23): `src/resources`, the cgroup's OOM-kill count consulted before the first
+  fork and after the last reap, `kOomKilled` only when the count accounts for every
+  SIGKILL the controller did not send. The M1 exit review followed
+  (`reviews/m1-exit-review-2026-10-20-0444-UTC.md`): the OOM row end to end (§1.25, §2.24),
+  the topology snapshot before the fork (§2.25), the stop-byte row without its race (§2.26),
+  and `EPIPE` on a record pipe as the controller lost (§2.27). Every M1 exit criterion is
+  met; the milestone waits only on the first mutation sweep over `src/`.
 - **A known gap, from §2.20:** when the controller itself is `SIGKILL`ed, a grandchild of a
   worker survives: the death signal is cleared across fork and nobody is left to sweep the
   group. The real worker forks nothing, so nothing is exposed today; the first workload that
   forks must close it (a worker that kills its own group on the way out, or the grandchild
   arming its own death signal), and its T7 test is the deaf-worker test with a grandchild.
+- **Deferred, from §2.23:** exact OOM attribution needs a cgroup per worker; the count of a
+  shared cgroup attributes all or none. And `/proc/meminfo`'s and `nodeN/meminfo`'s
+  `Key: value kB` parsing stays in two places, deliberately, until a third caller shows what
+  is really common.
 - **Resolved — a flake, with its fix:**
   `RealWaitStatus.RealStopAndContinueAreDistinguishedFromTermination` failed once under
   the coverage build and once under ASan, in different sessions, while passing 30/30 in

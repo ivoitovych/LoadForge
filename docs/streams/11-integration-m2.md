@@ -6,7 +6,7 @@
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  
 **Milestone:** M2a, M2b (exits)  
 **Branch:** `feature/integration-m2`  
-**Depends on:** streams 01-10 merged; roadmap item 11 (Mull pinned) before M2a exit criterion 6
+**Depends on:** streams 01-10 merged; M1 complete (roadmap item 10: its first mutation sweep clean) before M2a exit criterion 6
 
 This brief is self-contained: it is everything you need to know to build this stream without asking anyone. The repository's documents are the background, and where they and this brief disagree, write the disagreement in your journal fragment and follow the repository.
 
@@ -61,8 +61,8 @@ Directories (each `tests/*/...` entry means the directory of that name under eve
 No other stream in this wave edits them.
 
 - The top-level `CMakeLists.txt` (the existing modules' targets, the link lines of `loadforge_cli`, `LOADFORGE_MILESTONE`) and `tests/CMakeLists.txt` (the existing unit and CLI tests).
-- The rows of `tests/obligations.toml` for `src/main`, `src/controller` and `src/worker`, which move to fragments in your first commit.
-- `.github/workflows/mutation.yml` and `tools/mutation-gate.py`: the gate runs every test executable, not only `loadforge_unit_tests` (M2a exit criterion 6).
+- The ledger fragments `tests/obligations.d/controller.toml` and `tests/obligations.d/worker.toml`, and the row of `tests/obligations.toml` for `src/main`, which moves to a fragment in your first commit.
+- `.github/workflows/mutation.yml` and `tools/mutation-gate.py`: the gate runs every test executable, not only `loadforge_unit_tests` (M2a exit criterion 6). Until it does, `tests/unit/resources/CMakeLists.txt` adds its tests to that binary; once it does, that fragment may build a suite of its own.
 - `tests/tools/test_tooling.sh` for any gate you change.
 
 ## Exit criteria

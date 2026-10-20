@@ -2,10 +2,13 @@
 #ifndef LOADFORGE_CONTROLLER_SUPERVISION_HPP
 #define LOADFORGE_CONTROLLER_SUPERVISION_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
+#include "core/result.hpp"
 #include "platform/exit_status.hpp"
 
 namespace loadforge::controller {
@@ -27,10 +30,13 @@ namespace loadforge::controller {
 ///                           was not gone, and the fault is the controller's.
 ///   kFault                  killed by a fault signal: SIGSEGV, SIGBUS,
 ///                           SIGABRT, SIGILL, SIGFPE, SIGTRAP.
-///   kKilled                 killed by a signal the controller did not send.
-///                           SIGKILL from the OOM killer looks exactly like
-///                           this; the kernel's own record, when it is read,
-///                           upgrades it to a distinct classification.
+///   kKilled                 killed by a signal the controller did not send,
+///                           with nothing to say who sent it. A SIGKILL from
+///                           the OOM killer looks exactly like this until the
+///                           kernel's own record says otherwise.
+///   kOomKilled              killed by a SIGKILL the controller did not send,
+///                           and the kernel's OOM-kill count accounts for it:
+///                           the memory a run asked for, not the hardware.
 ///   kStoppedByController    killed by the signal the controller sent after
 ///                           asking nicely at the deadline.
 ///   kTimedOut               killed by the controller because its heartbeat
@@ -48,6 +54,7 @@ enum class WorkerFate : std::uint8_t {
   kControllerLostReported,
   kFault,
   kKilled,
+  kOomKilled,
   kStoppedByController,
   kTimedOut,
   kChannelCorrupt,
@@ -74,6 +81,9 @@ struct Evidence {
   bool finished_seen = false;         ///< Its finished record arrived.
   bool channel_corrupt = false;       ///< A frame failed to verify.
   bool channel_truncated = false;     ///< The stream ended inside a frame.
+  /// The kernel's OOM-kill count covers this worker's death. Set only for an
+  /// oom_candidate, and only by judge_oom_kills's verdict.
+  bool oom_kill_recorded = false;
 
   [[nodiscard]] friend bool operator==(const Evidence&, const Evidence&) = default;
 };
@@ -81,6 +91,47 @@ struct Evidence {
 /// The classification. Pure, so the table is tested directly: every row of
 /// the misbehaviour catalogue is one Evidence and one expected fate.
 [[nodiscard]] WorkerFate classify(const Evidence& evidence) noexcept;
+
+/// Whether a worker died the way the OOM killer kills: by a SIGKILL the
+/// controller did not send, on a channel that did not go corrupt. The only
+/// deaths the kernel's OOM-kill count can explain; every other fate already
+/// has its cause.
+[[nodiscard]] bool oom_candidate(const Evidence& evidence) noexcept;
+
+/// What the kernel's OOM-kill count says about the run's oom_candidates, and
+/// the line each candidate's report carries either way.
+struct OomFinding {
+  bool attributed = false;
+  std::string note;
+};
+
+/// Judges the count read before the first fork and after the last reap,
+/// against how many workers are candidates (at least one).
+///
+/// THE RULE, AND WHY IT IS THIS ONE
+/// --------------------------------
+/// The count says how many processes in the cgroup the OOM killer killed, and
+/// not which. So the candidates are attributed together or not at all: all
+/// of them when the count rose by at least as many, none when it rose by
+/// fewer. Two workers dead of SIGKILL and one OOM kill counted means one was
+/// the OOM killer and one was somebody's `kill -9`, and nothing in the record
+/// says which; calling both OOM kills, or picking one, would report an
+/// inference as a finding.
+///
+/// The window is the whole run and not each death, because the kernel counts
+/// a kill when it chooses the victim and the victim can be reaped a tick
+/// later: a worker killed with `kill -9` and reaped in the tick between
+/// another worker's OOM kill and that worker's reap would otherwise take the
+/// other's count and swap the two verdicts. Over the whole run the count and
+/// the deaths are complete.
+///
+/// What no count can rule out is a process outside the run but inside the
+/// cgroup being OOM-killed while a worker died of somebody's SIGKILL; the
+/// narrower the cgroup, the smaller that window. A count that went down, or
+/// that could not be read at either end, attributes nothing.
+[[nodiscard]] OomFinding judge_oom_kills(const core::Result<std::uint64_t, std::string>& before,
+                                         const core::Result<std::uint64_t, std::string>& after,
+                                         std::size_t candidates, std::string_view scope);
 
 }  // namespace loadforge::controller
 

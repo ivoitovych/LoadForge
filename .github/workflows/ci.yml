@@ -35,6 +35,20 @@ jobs:
         run: cmake --build --preset debug
       - name: Test
         run: ctest --preset debug
+      - name: The OOM row of the misbehaviour catalogue, as root
+        # M1 exit criteria 2 and 3 end to end: a fake worker really OOM-killed
+        # under a memory limit and reported kOomKilled. The test makes a memory
+        # cgroup and moves itself into it, which the runner user may not do, so
+        # under ctest above it skips and says why. As root it can, and the
+        # variable turns a skip into a failure; the grep refuses a filter that
+        # matched nothing, which GoogleTest would report as a pass.
+        run: |
+          out=$(sudo env LOADFORGE_REQUIRE_OOM_LIMIT=1 \
+            build/debug/tests/supervision/loadforge_supervision_tests \
+            --gtest_filter='MisbehaviourCatalogue.AWorkerOomKilledUnderALimitIsOomKilledAndNotAFaultOrAKill' 2>&1) \
+            || { printf '%s\n' "$out"; exit 1; }
+          printf '%s\n' "$out"
+          grep -qx '\[  PASSED  \] 1 test\.' <<<"$out"
       - name: The shipped binary links nothing but the C and C++ runtime
         # docs/PLAN.md §5 promised this check "lands at M0" and it did not. It
         # runs on every matrix entry rather than once, because linkage is a

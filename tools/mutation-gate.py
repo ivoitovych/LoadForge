@@ -45,9 +45,11 @@ the two is a failure of the gate, not a pass (docs/PLAN.md F20).
 import argparse
 import json
 import pathlib
+import posixpath
 import re
 import subprocess
 import sys
+import urllib.parse
 
 # All four shapes below are taken from Mull 0.34.0's
 # rust/mull-reporters/src/ide_reporter.rs, not from a guess at its output.
@@ -240,6 +242,50 @@ def reconcile_ide(report: dict) -> None:
         )
 
 
+def file_uri_path(uri: str) -> str:
+    """The filesystem path a file: URI names, or a refusal.
+
+    A file URI's host is the machine it lives on, and only "this one" is
+    meaningful here: empty, "localhost", or "." -- the last being what Mull
+    writes. Anything else names a file this gate cannot read the way the
+    report means it.
+    """
+    parsed = urllib.parse.urlparse(uri)
+    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost", "."):
+        raise GateFailure(
+            f"the SARIF report locates files relative to {uri!r}, which is not a local "
+            "file URI; its paths cannot be read without guessing."
+        )
+    return urllib.parse.unquote(parsed.path)
+
+
+def sarif_path(artifact: dict, run: dict) -> str:
+    """Resolve an artifactLocation to a filesystem path, as SARIF 2.1.0 says.
+
+    A uri with a scheme is absolute. A relative uri is resolved against the
+    base its uriBaseId names in run.originalUriBaseIds; one with no
+    uriBaseId is taken as written. Mull 0.34.2 writes every location as the
+    file's absolute path without its leading slash, relative to a base of
+    "file://./", whose path is "/": resolved by the rule, that is the
+    absolute path the IDE report prints. Captured from a real run in
+    tests/tools/fixtures/mull/real-0.34.2. A base this gate cannot resolve is
+    refused rather than ignored, because ignoring it is how a path that names
+    the wrong file gets compared and found to match nothing.
+    """
+    uri = artifact["uri"]
+    if urllib.parse.urlparse(uri).scheme:
+        return file_uri_path(uri)
+    base_id = artifact.get("uriBaseId")
+    if base_id is None:
+        return uri
+    base = ((run.get("originalUriBaseIds") or {}).get(base_id) or {}).get("uri")
+    if base is None:
+        raise GateFailure(
+            f"a SARIF location is relative to {base_id!r}, which the report never defines."
+        )
+    return posixpath.join(file_uri_path(base), uri)
+
+
 def parse_sarif(text: str, root: pathlib.Path) -> dict:
     """Parse the SARIF rendering of the same run.
 
@@ -275,12 +321,13 @@ def parse_sarif(text: str, root: pathlib.Path) -> dict:
                 "it cannot be matched against the IDE report."
             )
         physical = locations[0].get("physicalLocation") or {}
-        uri = (physical.get("artifactLocation") or {}).get("uri")
+        artifact = physical.get("artifactLocation") or {}
         region = physical.get("region") or {}
-        if uri is None or "startLine" not in region or "startColumn" not in region:
+        if "uri" not in artifact or "startLine" not in region or "startColumn" not in region:
             raise GateFailure("a SARIF result is missing its file, line or column.")
+        path = sarif_path(artifact, runs[0])
         by_level[level].append(
-            f"{relative(uri, root)}:{region['startLine']}:{region['startColumn']}:{mutator}"
+            f"{relative(path, root)}:{region['startLine']}:{region['startColumn']}:{mutator}"
         )
     return {"Survived": by_level["warning"], "Not Covered": by_level["note"]}
 

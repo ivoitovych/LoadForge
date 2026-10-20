@@ -24,6 +24,7 @@ add_executable(loadforge_unit_tests
   unit/topology/cpu_topology_test.cpp
   unit/topology/cache_test.cpp
   unit/topology/numa_test.cpp
+  unit/topology/snapshot_test.cpp
   unit/worker/ipc/heartbeat_test.cpp
   unit/worker/ipc/record_test.cpp
   unit/worker/scheduler_test.cpp
@@ -92,6 +93,12 @@ add_test(NAME cli_stress_runs
          COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress.toml")
 set_tests_properties(cli_stress_runs PROPERTIES
                      PASS_REGULAR_EXPRESSION "2 of 2 worker\\(s\\) completed")
+# The topology snapshot through the real binary on the real machine: taken
+# before the first fork and printed in the banner, which precedes the spawn.
+add_test(NAME cli_stress_describes_the_machine
+         COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress.toml")
+set_tests_properties(cli_stress_describes_the_machine PROPERTIES
+                     PASS_REGULAR_EXPRESSION "\n  topology: [0-9]+ logical CPU\\(s\\) on [0-9]+ core\\(s\\) in [0-9]+ package\\(s\\); [^\n]*\n  limit duration")
 add_test(NAME cli_stress_refuses_other_modes
          COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/benchmark-mode.toml")
 set_tests_properties(cli_stress_refuses_other_modes PROPERTIES WILL_FAIL TRUE)

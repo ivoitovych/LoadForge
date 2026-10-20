@@ -42,7 +42,7 @@ Directories (each `tests/*/...` entry means the directory of that name under eve
 ## Exit criteria
 
 1. IsolatorContract passes.
-2. Choosing the other core is a pure function of the topology snapshot, tested on symmetric, SMT, heterogeneous and single-core layouts.
+2. Choosing the other core is a pure function of the topology snapshot (`topology::Snapshot`, `src/topology/snapshot.hpp`), tested on symmetric, SMT, heterogeneous and single-core layouts.
 3. 100% line, branch and function; ledger fragment current.
 
 ## How your work joins the build without touching a shared file (ADR 0004)

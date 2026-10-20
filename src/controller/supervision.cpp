@@ -2,8 +2,13 @@
 #include "controller/supervision.hpp"
 
 #include <csignal>
+#include <cstddef>
+#include <cstdint>
+#include <string>
 #include <string_view>
+#include <utility>
 
+#include "core/result.hpp"
 #include "platform/exit_status.hpp"
 
 namespace loadforge::controller {
@@ -22,6 +27,8 @@ std::string_view describe(WorkerFate fate) noexcept {
       return "fault";
     case WorkerFate::kKilled:
       return "killed";
+    case WorkerFate::kOomKilled:
+      return "killed by the OOM killer";
     case WorkerFate::kStoppedByController:
       return "stopped by the controller";
     case WorkerFate::kTimedOut:
@@ -77,8 +84,16 @@ WorkerFate classify_signal(const Evidence& evidence) noexcept {
   if (is_fault_signal(signal)) {
     return WorkerFate::kFault;
   }
+  // The OOM killer sends SIGKILL and nothing else, so the kernel's record
+  // can explain no other signal: a SIGTERM from outside stays a kill however
+  // the count moved.
+  if (signal == SIGKILL && evidence.oom_kill_recorded) {
+    return WorkerFate::kOomKilled;
+  }
   return WorkerFate::kKilled;
 }
+
+constexpr std::string_view kNotAttributed = "not attributed to the OOM killer: ";
 
 }  // namespace
 
@@ -102,6 +117,58 @@ WorkerFate classify(const Evidence& evidence) noexcept {
   // Stopped, continued, or a word the decoder could not classify: none is a
   // termination, and a classifier that cannot classify says so (F20).
   return WorkerFate::kUnrecognised;
+}
+
+bool oom_candidate(const Evidence& evidence) noexcept {
+  if (evidence.channel_corrupt ||
+      evidence.status.termination() != platform::Termination::kSignalled) {
+    return false;
+  }
+  return evidence.status.signal() == SIGKILL && evidence.signal_sent != SIGKILL;
+}
+
+OomFinding judge_oom_kills(const core::Result<std::uint64_t, std::string>& before,
+                           const core::Result<std::uint64_t, std::string>& after,
+                           std::size_t candidates, std::string_view scope) {
+  // One allocating step per statement throughout: a message built as one
+  // expression inside the aggregate would leave cleanup edges no test can
+  // take (journal §1.13).
+  std::string note{kNotAttributed};
+  if (!before.has_value()) {
+    note += "the OOM-kill count could not be read before the run: ";
+    note += before.error();
+    return OomFinding{false, std::move(note)};
+  }
+  if (!after.has_value()) {
+    note += "the OOM-kill count could not be read after the run: ";
+    note += after.error();
+    return OomFinding{false, std::move(note)};
+  }
+  const std::uint64_t first = before.value();
+  const std::uint64_t last = after.value();
+  note += scope;
+  if (last < first) {
+    note += " went from " + std::to_string(first) + " to " + std::to_string(last);
+    note += ", so it is not the count that was read before the run";
+    return OomFinding{false, std::move(note)};
+  }
+  const std::uint64_t counted = last - first;
+  if (counted == 0) {
+    note += " counted no OOM kill during the run";
+    return OomFinding{false, std::move(note)};
+  }
+  if (counted < candidates) {
+    note += " counted " + std::to_string(counted) + " OOM kill(s) during the run for ";
+    note += std::to_string(candidates) + " workers killed by a SIGKILL the controller did not ";
+    note += "send, and a count does not say which";
+    return OomFinding{false, std::move(note)};
+  }
+  std::string found = "OOM kill: ";
+  found += scope;
+  found += " counted " + std::to_string(counted) + " during the run, one or more for each of the ";
+  found +=
+      std::to_string(candidates) + " worker(s) killed by a SIGKILL the controller did not send";
+  return OomFinding{true, std::move(found)};
 }
 
 }  // namespace loadforge::controller

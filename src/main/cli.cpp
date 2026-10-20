@@ -10,10 +10,16 @@
 #include "controller/orchestration.hpp"
 #include "core/duration.hpp"
 #include "main/selftest.hpp"
+#include "platform/fs.hpp"
 #include "platform/process.hpp"
 #include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
 #include "reporters/console.hpp"
+#include "resources/cgroup.hpp"
+#include "resources/cgroup_oom_record.hpp"
+#include "resources/memory_budget.hpp"
+#include "topology/cpu_topology.hpp"
+#include "topology/snapshot.hpp"
 #include "worker/entry.hpp"
 
 namespace loadforge::cli {
@@ -40,8 +46,8 @@ void print_usage(std::ostream& out) {
 
 }  // namespace
 
-int stress(std::string_view path, const std::string& self_link, std::ostream& out,
-           std::ostream& err) {
+int stress(std::string_view path, const std::string& self_link, std::string_view sysfs_root,
+           std::ostream& out, std::ostream& err) {
   const auto loaded = config::load(std::string{path});
   if (!loaded.has_value()) {
     err << "loadforge: " << config::describe(loaded.error()) << "\n";
@@ -61,13 +67,38 @@ int stress(std::string_view path, const std::string& self_link, std::ostream& ou
         << describe(executable.error()) << "\n";
     return kConfigRefused;
   }
-  return run_stress(syscalls, config, executable.value(), out, err);
+  // The machine, described once and before any worker exists (docs/PLAN.md
+  // §4.1): the frame every later report is attributed against. A machine
+  // whose /sys contradicts itself is refused here rather than run on and
+  // described wrongly.
+  platform::FileSystem sysfs(syscalls);
+  auto machine = topology::take_snapshot(sysfs, sysfs_root);
+  if (!machine.has_value()) {
+    err << "loadforge: cannot describe this machine before starting workers: "
+        << topology::describe(machine.error()) << "\n";
+    return kConfigRefused;
+  }
+  return run_stress(syscalls, config, executable.value(), machine.value(), out, err);
 }
 
 int run_stress(platform::Syscalls& syscalls, const config::Config& config,
-               const std::string& executable, std::ostream& out, std::ostream& err) {
+               const std::string& executable, const topology::Snapshot& snapshot, std::ostream& out,
+               std::ostream& err) {
   controller::RunOptions options;
   options.executable = executable;
+  options.topology = &snapshot;
+  // What the machine offers and what the kernel will say about an OOM kill,
+  // both read through the same seam the run uses: the running machine's
+  // files on the real one.
+  platform::FileSystem machine(syscalls);
+  auto budget = resources::read_memory_budget(machine, resources::kMachineRoot);
+  if (budget.has_value()) {
+    options.budget = budget.value();
+  } else {
+    options.budget_unread = topology::describe(budget.error());
+  }
+  resources::CgroupOomKillRecord oom_record(machine, resources::kMachineRoot);
+  options.oom_record = &oom_record;
   reporters::ConsoleReporter reporter(out);
   controller::Controller supervisor(syscalls, reporter);
   // Flushed before the controller forks, so a child that fails to exec and
@@ -152,7 +183,7 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
       err << "loadforge: stress takes exactly --config FILE\n";
       return kUsageError;
     }
-    return stress(args[2], "/proc/self/exe", out, err);
+    return stress(args[2], "/proc/self/exe", topology::kDefaultSysfsRoot, out, err);
   }
   if (args.size() > 1) {
     err << "loadforge: expected a single argument, got " << args.size() << "\n";

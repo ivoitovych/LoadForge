@@ -11,6 +11,8 @@
 #include "controller/safety.hpp"
 #include "core/result.hpp"
 #include "platform/syscalls.hpp"
+#include "resources/oom_kill_record.hpp"
+#include "topology/snapshot.hpp"
 
 namespace loadforge::controller {
 
@@ -20,7 +22,24 @@ struct RunOptions {
   std::int64_t interval_ns = 100'000'000;       ///< Heartbeat and poll interval.
   std::int64_t stale_after_ns = 2'000'000'000;  ///< A beat older than this is a hang.
   Grace grace{1'000'000'000, 1'000'000'000};
-  std::optional<config::MemoryBudget> budget;  ///< None until the reader lands.
+  /// What the machine offers, for check_memory and the banner. None when it
+  /// could not be read, and then `budget_unread` says why, in the reader's
+  /// own words, so the banner's NOT ENFORCED carries its reason.
+  std::optional<config::MemoryBudget> budget;
+  std::string budget_unread;
+  /// The kernel's OOM-kill count for the workers' cgroup, read before the
+  /// first fork and, when a worker died of a SIGKILL the controller did not
+  /// send, after the last reap (judge_oom_kills has the rule). Null when none
+  /// is consulted: such a death is then reported as a kill, which is the fact.
+  /// Not owned; it must outlive the run.
+  resources::OomKillRecord* oom_record = nullptr;
+  /// The machine, described once before the first fork (docs/PLAN.md §4.1;
+  /// the transition out of START in IMPLEMENTATION §4 M1). The caller takes
+  /// it, as it reads the budget and opens the record, so that it exists
+  /// before the controller can fork; `loadforge stress` refuses to start
+  /// without one. Null when none is offered, which the plan then says. Not
+  /// owned; it must outlive the run.
+  const topology::Snapshot* topology = nullptr;
 
   [[nodiscard]] friend bool operator==(const RunOptions&, const RunOptions&) = default;
 };

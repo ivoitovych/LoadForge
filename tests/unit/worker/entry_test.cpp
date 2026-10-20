@@ -339,10 +339,10 @@ TEST(WorkerRunTest, SetupFailuresExitWithTheirOwnCodeAndSayWhich) {
   }
   {
     Rig rig;
-    ASSERT_TRUE(rig.syscalls.close(rig.records.read_fd).has_value());  // Nobody listening.
+    rig.syscalls.script_writes({{0, EIO}});  // The started record cannot be sent.
     EXPECT_EQ(rig.run(rig.args()), static_cast<int>(WorkerExit::kSetupFailed));
     EXPECT_EQ(rig.err.str(),
-              "loadforge --worker: record channel: write(fd 201): Broken pipe (errno 32)\n");
+              "loadforge --worker: record channel: write(fd 201): Input/output error (errno 5)\n");
     EXPECT_EQ(rig.syscalls.write_count(), 1) << "the error is not sent down a dead channel";
   }
   {
@@ -385,8 +385,31 @@ TEST(WorkerRunTest, SetupFailuresExitWithTheirOwnCodeAndSayWhich) {
   }
   {
     Rig rig;
-    rig.syscalls.script_writes({{4096, 0}, {0, EPIPE}});  // Started goes; finished does not.
+    rig.syscalls.script_writes({{4096, 0}, {0, EIO}});  // Started goes; finished does not.
     EXPECT_EQ(rig.run(rig.args()), static_cast<int>(WorkerExit::kSetupFailed));
+    EXPECT_EQ(rig.err.str(),
+              "loadforge --worker: record channel: write(fd 201): Input/output error (errno 5)\n");
+    EXPECT_EQ(rig.syscalls.write_count(), 2);
+  }
+}
+
+TEST(WorkerRunTest, ARecordPipeWithNoReaderIsTheControllerLostNotASetupFailure) {
+  // EPIPE is the one refusal that says whose fault it is: nothing holds the
+  // read end, so the controller is gone. The controller-killed supervision
+  // test met it for real, a controller killed before a worker's started
+  // record, and the worker called it its own setup failure (119).
+  {
+    Rig rig;
+    ASSERT_TRUE(rig.syscalls.close(rig.records.read_fd).has_value());  // Nobody listening.
+    EXPECT_EQ(rig.run(rig.args()), static_cast<int>(WorkerExit::kControllerLost));
+    EXPECT_EQ(rig.err.str(),
+              "loadforge --worker: record channel: write(fd 201): Broken pipe (errno 32)\n");
+    EXPECT_EQ(rig.syscalls.write_count(), 1) << "the error is not sent down a dead channel";
+  }
+  {
+    Rig rig;
+    rig.syscalls.script_writes({{4096, 0}, {0, EPIPE}});  // Started goes; finished does not.
+    EXPECT_EQ(rig.run(rig.args()), static_cast<int>(WorkerExit::kControllerLost));
     EXPECT_EQ(rig.err.str(),
               "loadforge --worker: record channel: write(fd 201): Broken pipe (errno 32)\n");
     EXPECT_EQ(rig.syscalls.write_count(), 2);

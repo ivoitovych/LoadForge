@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <climits>
 #include <csignal>
 #include <cstddef>
@@ -272,6 +273,17 @@ int give_up(std::ostream& err, std::optional<ipc::RecordWriter>& records, const 
   return static_cast<int>(code);
 }
 
+/// How a worker leaves when its record channel will not take a frame. EPIPE
+/// says who is at fault: the read end has no holder left, so the controller
+/// is gone, which is a controller lost as the exit-code table describes a
+/// hang-up -- the controller-killed test met it when the controller died
+/// before a worker's started record. Any other refusal is the worker's own
+/// failure to report. A frame the writer would not encode carries no errno
+/// (SyscallError's number is 0) and is the worker's failure too.
+WorkerExit exit_for_unsent(const ipc::ChannelError& error) noexcept {
+  return error.cause.number == EPIPE ? WorkerExit::kControllerLost : WorkerExit::kSetupFailed;
+}
+
 }  // namespace
 
 int run(platform::Syscalls& syscalls, std::span<const std::string_view> args, std::ostream& err) {
@@ -301,7 +313,7 @@ int run(platform::Syscalls& syscalls, std::span<const std::string_view> args, st
     // The channel itself is down, so the error record would not arrive either.
     records.reset();
     return give_up(err, records, "record channel: " + describe(sent.error()),
-                   WorkerExit::kSetupFailed);
+                   exit_for_unsent(sent.error()));
   }
 
   if (!worker.cpus.empty()) {
@@ -332,7 +344,7 @@ int run(platform::Syscalls& syscalls, std::span<const std::string_view> args, st
   if (auto sent = records->send(ipc::RecordType::kFinished, bytes_of(summary)); !sent.has_value()) {
     records.reset();
     return give_up(err, records, "record channel: " + describe(sent.error()),
-                   WorkerExit::kSetupFailed);
+                   exit_for_unsent(sent.error()));
   }
   return static_cast<int>(WorkerExit::kCompleted);
 }

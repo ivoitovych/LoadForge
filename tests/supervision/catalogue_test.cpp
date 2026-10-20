@@ -22,18 +22,25 @@
 //     death signal armed), the test waits for the kernel to say so through
 //     /proc before it lets the run go on.
 //
-// Two rows are not here. "Allocate until OOM-killed" belongs to the OOM
-// classification, which reads the kernel's own record and lands separately;
-// the fake has the 'allocate' misbehaviour ready for it. "Die holding a
-// process-shared lock" has nothing to hold: the design has no process-shared
-// lock (docs/PLAN.md §4.6), and tools/check-test-obligations.py makes that a
-// checked fact rather than a remembered one.
+// "Allocate until OOM-killed" needs a memory limit the controller's OOM
+// record reads, which the test makes: a memory cgroup of its own, with this
+// process moved into it so the workers are born there and the record finds
+// it. Where the machine will not let it (cgroup v2 without delegation and not
+// root, among others) that test skips and quotes the kernel's refusal; the
+// companion test, a SIGKILL from outside judged against the same kind of
+// record, runs wherever a count can be read at all.
+//
+// One row is not here. "Die holding a process-shared lock" has nothing to
+// hold: the design has no process-shared lock (docs/PLAN.md §4.6), and
+// tools/check-test-obligations.py makes that a checked fact rather than a
+// remembered one.
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -58,7 +65,12 @@
 #include "controller/report.hpp"
 #include "controller/supervision.hpp"
 #include "core/duration.hpp"
+#include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
+#include "resources/cgroup.hpp"
+#include "resources/cgroup_oom_record.hpp"
+#include "topology/cpu_topology.hpp"
+#include "topology/source.hpp"
 
 namespace loadforge::controller {
 namespace {
@@ -369,6 +381,36 @@ TEST(MisbehaviourCatalogue, ARecordPipeClosedEarlyIsTruncatedEvidenceDespiteExit
   EXPECT_FALSE(all_clean(report));
 }
 
+// --- The stop byte to a pipe nobody reads: EPIPE, never death by SIGPIPE -----
+
+TEST(MisbehaviourCatalogue, AStopByteToAPipeNobodyReadsIsEpipeAndNotDeathBySigpipe) {
+  // The row "exit just before the deadline stop", made deterministic: worker 1
+  // closes its end of the control pipe at once, so when the deadline comes the
+  // controller writes its stop byte to a pipe with no reader at all. With
+  // SIGPIPE at its default that write kills the controller -- this test
+  // process -- by signal 13 (review R-02); ignored, it is EPIPE, which the
+  // stop request tolerates. Worker 1 finishes on its own three controller
+  // ticks after its duration, well inside a stop grace long enough that no
+  // escalation comes into it; worker 0 completes as the protocol says.
+  const Selector selector{"0=complete,1=close-control"};
+  Recorder recorder;
+  RunOptions options = fake_options(2000);
+  options.grace = Grace{5000 * kMs, 5000 * kMs};
+  const RunReport report = run_fake(workloads(2, 300), options, recorder);
+  ASSERT_EQ(report.workers.size(), 2U);
+  EXPECT_TRUE(recorder.when("deadline reached: stop requested").has_value());
+  for (const WorkerReport& worker : report.workers) {
+    expect_completed(worker);
+    EXPECT_EQ(worker.termination, "exited with code 0");
+  }
+  // Worker 1 was alive when the deadline came, so the byte was written to
+  // its pipe. Worker 0 may have finished its own duration and been reaped
+  // first, which is why only worker 1's step is asserted.
+  EXPECT_EQ(report.workers[1].stop, "stop requested");
+  EXPECT_FALSE(recorder.when("worker 1: sent signal 15").has_value());
+  EXPECT_TRUE(all_clean(report));
+}
+
 // --- A truncated record: rejected, because a partial record is not one ------
 
 TEST(MisbehaviourCatalogue, ATruncatedRecordIsRejectedAndTheEvidenceIsTruncated) {
@@ -486,6 +528,290 @@ TEST(MisbehaviourCatalogue, GrandchildrenOfDeadWorkersAreKilledWithThem) {
   }
   EXPECT_FALSE(has_record(report.workers[0], "process group: "));
   ASSERT_EQ(::prctl(PR_SET_CHILD_SUBREAPER, 0), 0);
+}
+
+// --- Allocate until OOM-killed: told from a fault by the kernel's record ----
+
+/// Writes `value` to a cgroup control file. Nothing when the kernel took it;
+/// otherwise the file and what the kernel said, for a skip to quote.
+std::optional<std::string> write_control(const std::string& path, std::string_view value) {
+  const int fd = ::open(path.c_str(), O_WRONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return path + ": " + std::strerror(errno);
+  }
+  const ssize_t written = ::write(fd, value.data(), value.size());
+  const int error = errno;
+  ::close(fd);
+  if (written < 0) {
+    return path + ": " + std::strerror(error);
+  }
+  if (written != static_cast<ssize_t>(value.size())) {
+    return path + ": a short write";
+  }
+  return std::nullopt;
+}
+
+/// SwapTotal from /proc/meminfo, in kB; nothing when it cannot be read.
+std::optional<std::uint64_t> swap_total_kb() {
+  std::ifstream meminfo{"/proc/meminfo"};
+  std::string line;
+  while (std::getline(meminfo, line)) {
+    if (starts_with(line, "SwapTotal:")) {
+      return std::stoull(line.substr(10));
+    }
+  }
+  return std::nullopt;
+}
+
+/// Set where the OOM row must run rather than skip: CI's root step.
+constexpr const char* kRequireLimit = "LOADFORGE_REQUIRE_OOM_LIMIT";
+
+/// A memory cgroup made for one test, with this process moved into it, so the
+/// workers the controller forks are born there and the controller's OOM-kill
+/// record, located from /proc/self/cgroup when it is made, reads its count.
+/// Undone on destruction: this process goes home and the cgroup is removed.
+///
+/// WHERE IT IS MADE
+/// ----------------
+/// v1 lets a cgroup that holds processes have children, so the new one is a
+/// child of this process's own; its limit binds, and its count is its own
+/// (docs/JOURNAL.md §1.24). v2 does not ("no internal processes": a cgroup
+/// holding processes cannot enable the memory controller for children), so
+/// the new one is a SIBLING, under the parent that already enables memory for
+/// this process's cgroup. Either needs write access to the hierarchy: root, or
+/// a delegated v2 subtree. Without it the kernel refuses, and `unavailable`
+/// carries its words for the skip.
+class LimitedCgroup {
+ public:
+  explicit LimitedCgroup(std::uint64_t limit_bytes) {
+    platform::RealSyscalls syscalls;
+    platform::FileSystem filesystem(syscalls);
+    auto located = resources::locate_memory_cgroup(filesystem, resources::kMachineRoot);
+    if (!located.has_value()) {
+      unavailable_ =
+          "this process's memory cgroup cannot be located: " + topology::describe(located.error());
+      return;
+    }
+    if (!located.value().has_value()) {
+      unavailable_ = "this process is in no memory cgroup, so nothing can limit a worker";
+      return;
+    }
+    const resources::MemoryCgroup& own = *located.value();
+    version_ = own.version;
+    home_ = resources::directory_of(own);
+    const std::string kind{resources::describe(version_)};
+    // Where to try, in order. v1: this process's own cgroup. v2: its parent,
+    // which already enables memory for it, and then the hierarchy's root,
+    // which the no-internal-processes rule exempts and which root may write
+    // where the parent is not delegated.
+    std::vector<std::string> parents;
+    if (version_ == resources::CgroupVersion::kV1) {
+      parents.push_back(home_);
+    } else if (!own.relative.empty()) {
+      parents.push_back(home_.substr(0, home_.rfind('/')));
+      if (parents.back() != own.mount) {
+        parents.push_back(own.mount);
+      }
+    }
+    if (parents.empty()) {
+      unavailable_ = kind + ": this process is in the root of the hierarchy it can see (" + home_ +
+                     "), which holds processes and so cannot give a child the memory "
+                     "controller, and has no parent to make a sibling under";
+      return;
+    }
+    std::string refusals;
+    for (const std::string& parent : parents) {
+      const std::optional<std::string> refused = make_under(parent, limit_bytes);
+      if (!refused.has_value()) {
+        break;
+      }
+      refusals += (refusals.empty() ? "" : "; ") + *refused;
+    }
+    if (!made_) {
+      unavailable_ =
+          kind + ": " + refusals + " (this needs root, or a delegated cgroup v2 subtree)";
+      return;
+    }
+    if (auto refused = write_control(directory_ + "/cgroup.procs", std::to_string(::getpid()))) {
+      unavailable_ = kind + ": cannot move this process into the cgroup: " + *refused;
+      return;
+    }
+    moved_ = true;
+  }
+
+  ~LimitedCgroup() {
+    if (moved_) {
+      if (auto refused = write_control(home_ + "/cgroup.procs", std::to_string(::getpid()))) {
+        ADD_FAILURE() << "could not move this process back to " << home_ << ": " << *refused;
+      }
+    }
+    if (made_) {
+      // The cgroup empties as its last dead process is released.
+      bool removed = false;
+      for (int attempt = 0; attempt < 200 && !removed; ++attempt) {
+        removed = ::rmdir(directory_.c_str()) == 0;
+        if (!removed) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+      }
+      EXPECT_TRUE(removed) << "could not remove " << directory_ << ": " << std::strerror(errno);
+    }
+  }
+
+  LimitedCgroup(const LimitedCgroup&) = delete;
+  LimitedCgroup& operator=(const LimitedCgroup&) = delete;
+  LimitedCgroup(LimitedCgroup&&) = delete;
+  LimitedCgroup& operator=(LimitedCgroup&&) = delete;
+
+  /// Why it could not be made, in the kernel's words; empty when it was.
+  [[nodiscard]] const std::string& unavailable() const { return unavailable_; }
+  [[nodiscard]] const std::string& directory() const { return directory_; }
+  [[nodiscard]] resources::CgroupVersion version() const { return version_; }
+
+ private:
+  /// A cgroup under `parent`, limited and kept off swap. Nothing when it was
+  /// made (and directory_ names it); otherwise why not, with nothing left.
+  std::optional<std::string> make_under(const std::string& parent, std::uint64_t limit_bytes) {
+    const bool v1 = version_ == resources::CgroupVersion::kV1;
+    const std::string directory = parent + "/loadforge-oom-" + std::to_string(::getpid());
+    if (::mkdir(directory.c_str(), 0755) != 0) {
+      return "cannot make " + directory + ": " + std::strerror(errno);
+    }
+    const std::string limit_file = directory + (v1 ? "/memory.limit_in_bytes" : "/memory.max");
+    if (auto refused = write_control(limit_file, std::to_string(limit_bytes))) {
+      (void)::rmdir(directory.c_str());
+      return "cannot set the memory limit: " + *refused;
+    }
+    // Off swap, or the allocator would be swapped out rather than killed.
+    // Where the file cannot be written, a machine with no swap is still fine.
+    const std::string swap_file = directory + (v1 ? "/memory.swappiness" : "/memory.swap.max");
+    if (auto refused = write_control(swap_file, "0")) {
+      const std::optional<std::uint64_t> swap = swap_total_kb();
+      if (!swap.has_value() || *swap != 0) {
+        (void)::rmdir(directory.c_str());
+        return "cannot keep the cgroup off swap on a machine with swap: " + *refused;
+      }
+    }
+    directory_ = directory;
+    made_ = true;
+    return std::nullopt;
+  }
+
+  resources::CgroupVersion version_ = resources::CgroupVersion::kV2;
+  std::string home_;
+  std::string directory_;
+  bool made_ = false;
+  bool moved_ = false;
+  std::string unavailable_;
+};
+
+TEST(MisbehaviourCatalogue, AWorkerOomKilledUnderALimitIsOomKilledAndNotAFaultOrAKill) {
+  // M1 exit criteria 2 and 3, end to end. Three fake workers in a cgroup
+  // limited to 256 MiB: worker 1 allocates until the kernel's OOM killer ends
+  // it, worker 2 dies by SIGSEGV, worker 0 outlasts both. All three deaths
+  // are real, the record is the real cgroup's real count, and the controller
+  // must tell the two deaths apart: the SIGKILL nobody in the run sent is the
+  // OOM killer's, because the count moved by one for it; the SIGSEGV is a
+  // fault, however the count moved.
+  //
+  // Nothing here races: the allocator raises its own oom_score_adj to 1000
+  // first, so whichever process charged the page that crossed the limit, the
+  // kernel's choice is the allocator; the companion and the controller stay
+  // far below it.
+  constexpr std::uint64_t kLimitBytes = std::uint64_t{256} << 20U;
+  const LimitedCgroup cgroup{kLimitBytes};
+  if (!cgroup.unavailable().empty()) {
+    // CI runs this test a second time as root, where a skip would be a
+    // regression rather than a fact about the machine, and says so.
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    if (std::getenv(kRequireLimit) != nullptr) {
+      FAIL() << kRequireLimit << " is set and the workers cannot be put under a memory limit: "
+             << cgroup.unavailable();
+    }
+    GTEST_SKIP() << "cannot put the workers under a memory limit: " << cgroup.unavailable();
+  }
+  platform::RealSyscalls syscalls;
+  platform::FileSystem filesystem(syscalls);
+  // Made now, from inside the cgroup, as `loadforge stress` makes it: located
+  // from /proc/self/cgroup, so it must be the new cgroup's count.
+  resources::CgroupOomKillRecord record(filesystem, resources::kMachineRoot);
+  ASSERT_EQ(record.scope(),
+            cgroup.directory() + "/" + std::string{resources::oom_count_file(cgroup.version())});
+  auto before = record.read();
+  // NOLINTNEXTLINE(concurrency-mt-unsafe)
+  if (!before.has_value() && before.error().availability == topology::Availability::kAbsent &&
+      std::getenv(kRequireLimit) == nullptr) {
+    GTEST_SKIP() << "this kernel keeps no OOM-kill count: " << topology::describe(before.error());
+  }
+  ASSERT_TRUE(before.has_value()) << topology::describe(before.error());
+  ASSERT_EQ(before.value(), 0U) << "a cgroup made for this test has killed nothing yet";
+
+  const Selector selector{"*=outlast,1=allocate,2=segv"};
+  Recorder recorder;
+  RunOptions options = fake_options(2000);
+  options.oom_record = &record;
+  const RunReport report = run_fake(workloads(3, kNeverMs), options, recorder);
+  ASSERT_EQ(report.workers.size(), 3U);
+  expect_completed(report.workers[0]);
+  EXPECT_FALSE(has_record(report.workers[0], "OOM kill: ")) << records_of(report.workers[0]);
+
+  const WorkerReport& oom = report.workers[1];
+  EXPECT_EQ(oom.fate, WorkerFate::kOomKilled) << describe(oom.fate) << records_of(oom);
+  EXPECT_EQ(oom.termination, "killed by signal 9");
+  EXPECT_EQ(oom.stop, "running") << "the controller asked nothing of it";
+  EXPECT_TRUE(has_record(oom, "started: slot 1")) << records_of(oom);
+  EXPECT_GE(oom.progress, 1U);
+  EXPECT_FALSE(has_record(oom, "finished: "));
+  EXPECT_FALSE(has_record(oom, "error: ")) << "it was killed, not refused" << records_of(oom);
+  EXPECT_TRUE(has_record(oom, "OOM kill: " + record.scope() +
+                                  " counted 1 during the run, one or more for each of the 1 "
+                                  "worker(s) killed by a SIGKILL the controller did not send"))
+      << records_of(oom);
+
+  const WorkerReport& faulted = report.workers[2];
+  EXPECT_EQ(faulted.fate, WorkerFate::kFault) << describe(faulted.fate) << records_of(faulted);
+  EXPECT_TRUE(starts_with(faulted.termination, "killed by signal " + std::to_string(SIGSEGV)))
+      << faulted.termination;
+  EXPECT_FALSE(has_record(faulted, "OOM kill: ")) << records_of(faulted);
+  EXPECT_EQ(clean_count(report), 1U);
+
+  // The kernel's own word for it, read again after the run: one kill.
+  auto after = record.read();
+  ASSERT_TRUE(after.has_value()) << topology::describe(after.error());
+  EXPECT_EQ(after.value(), 1U);
+}
+
+TEST(MisbehaviourCatalogue, ASigkillFromOutsideIsAKillWhenTheRecordCountedNone) {
+  // The other half of telling them apart: the same record consulted, a
+  // SIGKILL nobody in the run sent, and no OOM kill counted for it. It must
+  // stay a kill, and its report must say the count was looked at. This needs
+  // no limit, only a count to read, so it runs wherever the machine keeps one.
+  platform::RealSyscalls syscalls;
+  platform::FileSystem filesystem(syscalls);
+  resources::CgroupOomKillRecord record(filesystem, resources::kMachineRoot);
+  if (auto count = record.read(); !count.has_value()) {
+    GTEST_SKIP() << "no OOM-kill count to consult on this machine: "
+                 << topology::describe(count.error());
+  }
+  const Selector selector{"1=deaf"};
+  Recorder recorder;
+  recorder.on_spawned = [](const std::vector<pid_t>& pids) {
+    ASSERT_EQ(pids.size(), 2U);
+    ASSERT_TRUE(wait_until([pid = pids[1]] { return has_execd(pid); }))
+        << "worker " << pids[1] << " never exec'd";
+    ASSERT_EQ(::kill(pids[1], SIGKILL), 0);
+  };
+  RunOptions options = fake_options(2000);
+  options.oom_record = &record;
+  const RunReport report = run_fake(workloads(2, 600), options, recorder);
+  ASSERT_EQ(report.workers.size(), 2U);
+  expect_completed(report.workers[0]);
+  const WorkerReport& killed = report.workers[1];
+  EXPECT_EQ(killed.fate, WorkerFate::kKilled) << describe(killed.fate) << records_of(killed);
+  EXPECT_EQ(killed.termination, "killed by signal 9");
+  EXPECT_TRUE(has_record(killed, "not attributed to the OOM killer: " + record.scope() +
+                                     " counted no OOM kill during the run"))
+      << records_of(killed);
 }
 
 // --- The controller killed: only the parent-death signal is left ------------

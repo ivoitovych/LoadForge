@@ -30,19 +30,19 @@ work continues.
 | 1 | Land the controller: `controller/`, `reporters/console`, `loadforge stress`, `tests/supervision/` | IMPLEMENTATION §10 | done, #23 |
 | 2 | Comprehensive review, reaction plan, ADR 0002, this roadmap | `reviews/` | done, #21 |
 | 3 | Seqlock writer: release fence after the odd store; correct the P5 argument | review R-01 | done, #24 |
-| 4 | Controller ignores SIGPIPE through the seam; test and catalogue row | review R-02 | done, this PR |
-| 5 | Kill the surviving drain-bound mutant with an exact assertion | review R-06 | done, this PR |
-| 6 | Hygiene batch: linkage, torn-slot wording, drain bound by wall time, slot layout asserts, fixture references | review R-03..R-05, R-24, R-29 | |
+| 4 | Controller ignores SIGPIPE through the seam; test and catalogue row | review R-02 | done, #28 |
+| 5 | Kill the surviving drain-bound mutant with an exact assertion | review R-06 | done, #28 |
+| 6 | Hygiene batch: linkage, torn-slot wording, drain bound by wall time, slot layout asserts, fixture references | review R-03..R-05, R-24, R-29 | done, #27 and #28 |
 | 7 | Documentation reconciliation in one commit | review R-08..R-13, R-19, R-21, R-25, R-27, R-33 | done, #26 |
-| 8 | Fake-worker executable with the misbehaviour catalogue, including a worker that ignores its control pipe (the only real test that the parent-death signal ends a worker); gate: no test-hook symbol in the shipped binary; gate: lock obligations in the ledger | IMPLEMENTATION §10 | |
-| 9 | Memory-budget reader (`MemAvailable`, cgroup v1 and v2) and OOM classified from the kernel's record | IMPLEMENTATION §10, journal §1.18 | |
-| 10 | M1 exit: every criterion in IMPLEMENTATION §4 met and marked | IMPLEMENTATION §4 | |
+| 8 | Fake-worker executable with the misbehaviour catalogue, including a worker that ignores its control pipe (the only real test that the parent-death signal ends a worker); gate: no test-hook symbol in the shipped binary; gate: lock obligations in the ledger | IMPLEMENTATION §10 | done, #29 |
+| 9 | Memory-budget reader (`MemAvailable`, cgroup v1 and v2) and OOM classified from the kernel's record | IMPLEMENTATION §10, journal §1.18 | done, #30 |
+| 10 | M1 exit: every criterion in IMPLEMENTATION §4 met and marked | IMPLEMENTATION §4 | done, #33, pending the mutation verdict: M1 is complete when the first sweep over `src/` reports zero unexplained survivors |
 
 ## Next — prerequisite for M2a
 
 | # | Item | Source | State |
 |---|------|--------|-------|
-| 11 | Pin a Mull release by verified SHA-256 and run the mutation gate end to end in CI; schedule it weekly on `main` | IMPLEMENTATION §4 M0, review R-31 | |
+| 11 | Pin a Mull release by verified SHA-256 and run the mutation gate end to end in CI; schedule it weekly on `main` | IMPLEMENTATION §4 M0, review R-31 | done, #32; the first full sweep over `src/` reports on its first scheduled run |
 | 12 | clang-tidy over tests and tools, or the scope documented; trust-chain linter versions pinned | review R-07, R-32 | |
 | 12a | Contracts first: the workload, verifier and telemetry-source contracts, each with the provider's own tests and the cross-execution harness that runs them against consumers' mocks. M2a to M4 then proceed as parallel streams, one component each | ADR 0003, ADR 0004 | done, this PR: twenty-one contract headers, their suites and references, the fragment mechanism, the stream plan below |
 
@@ -73,7 +73,8 @@ change (ADR 0004, "Changing a contract"):
 - before wave 2: the specification headers for sort and Monte Carlo
   (`src/workloads/<name>/spec.hpp`), and any contract corrections wave 1's streams
   recorded under "Contract questions";
-- before M2a can exit (stream 11): item 11 above, the Mull pin;
+- before M2a can exit (stream 11): M1 complete, which waits only on the first mutation
+  sweep (item 10); the Mull pin, item 11, is in (#32);
 - before wave 3: the specification headers for FFT, stencil, sparse, graph and
   particles;
 - before wave 4: the specification headers for ray tracing and adaptive mesh;
@@ -100,7 +101,7 @@ change (ADR 0004, "Changing a contract"):
 
 | # | Stream | Milestone | Tier | Depends on |
 |---|---|---|---|---|
-| 11 | [Integration: compression and dense linear algebra end to end](streams/11-integration-m2.md) | M2a, M2b (exits) | B | streams 01-10 merged; roadmap item 11 (Mull pinned) before M2a exit criterion 6 |
+| 11 | [Integration: compression and dense linear algebra end to end](streams/11-integration-m2.md) | M2a, M2b (exits) | B | streams 01-10 merged; M1 complete (roadmap item 10: its first mutation sweep clean) before M2a exit criterion 6 |
 | 12 | [Results, the fingerprint, and the JSON and CSV reporters](streams/12-results-and-reporters.md) | M3 | A | contracts |
 | 13 | [Telemetry sources: power, performance counters, EDAC](streams/13-telemetry-sources-b.md) | M3 | A | contracts |
 | 14 | [The timeline and the sampler](streams/14-telemetry-pipeline.md) | M3 | A | contracts |
