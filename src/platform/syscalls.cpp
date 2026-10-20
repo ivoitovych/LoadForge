@@ -33,6 +33,9 @@ std::string describe_fd(int fd) { return "fd " + std::to_string(fd); }
 
 }  // namespace
 
+bool operator==(const Reaped&, const Reaped&) = default;
+bool operator==(const CpuMask&, const CpuMask&) = default;
+
 // Every function below is a translation and nothing else. There is no decision
 // here to test, which is the point: docs/PLAN.md §4.3 keeps the layer that
 // cannot be driven from a fixture as close to zero logic as possible, and puts

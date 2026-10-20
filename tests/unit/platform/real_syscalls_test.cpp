@@ -1173,6 +1173,21 @@ TEST_F(RealSyscallsTest, MappingOrHandingOverADescriptorThatIsNotOpenIsEBADF) {
   EXPECT_EQ(handed.error().call, "fcntl");
 }
 
+TEST(SeamValuesTest, AReapAndACpuMaskCompareFieldByField) {
+  const Reaped reaped{4321, 9 << 8};
+  EXPECT_EQ(reaped, (Reaped{4321, 9 << 8}));
+  EXPECT_NE(reaped, (Reaped{4322, 9 << 8})) << "another child";
+  EXPECT_NE(reaped, (Reaped{4321, 8 << 8})) << "the same child, another status";
+
+  CpuMask some;
+  some.cpus.set(1);
+  CpuMask other;
+  other.cpus.set(2);
+  EXPECT_EQ(some, some);
+  EXPECT_NE(some, other);
+  EXPECT_NE(some, CpuMask{});
+}
+
 TEST(SeamValuesTest, PipeEndsAndReadinessCompareFieldByField) {
   const PipeEnds ends{3, 4};
   EXPECT_EQ(ends, (PipeEnds{3, 4}));

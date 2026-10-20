@@ -28,8 +28,16 @@ struct Reaped {
   pid_t pid = 0;
   int status = 0;  ///< Raw; decode with ExitStatus, which keeps the raw value.
 
-  [[nodiscard]] friend bool operator==(const Reaped&, const Reaped&) = default;
+  /// Defaulted out of line, in syscalls.cpp, so there is one definition and so
+  /// one coverage record: a comparison defaulted here is copied into every
+  /// unit that uses it, the linker keeps one copy, and the others are reported
+  /// at zero (journal §1.22). This one and CpuMask's showed it.
+  friend bool operator==(const Reaped&, const Reaped&);
 };
+
+/// The declaration the attribute can appertain to: a friend declaration that
+/// is not a definition cannot carry one.
+[[nodiscard]] bool operator==(const Reaped&, const Reaped&);
 
 /// What fork(2)'s return value means: a negative pid is the failure `number`
 /// names; anything else is the answer -- 0 in the child, the child's pid in the
@@ -82,8 +90,11 @@ inline constexpr std::size_t kAffinityMaskBits = 1024;
 struct CpuMask {
   std::bitset<kAffinityMaskBits> cpus;
 
-  [[nodiscard]] friend bool operator==(const CpuMask&, const CpuMask&) = default;
+  /// Defaulted out of line, for the reason Reaped's comparison is.
+  friend bool operator==(const CpuMask&, const CpuMask&);
 };
+
+[[nodiscard]] bool operator==(const CpuMask&, const CpuMask&);
 
 /// Width of a NUMA node mask. No Linux kernel numbers a node past 1023
 /// (CONFIG_NODES_SHIFT is at most 10), so a mask this wide names every node any
