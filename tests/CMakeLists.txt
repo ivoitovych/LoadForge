@@ -117,3 +117,12 @@ set_tests_properties(release_gate_refuses_the_fake_worker PROPERTIES
 
 # T7: the supervision tier, with really spawned, really killed children.
 add_subdirectory(supervision)
+
+# Every other CMakeLists.txt under tests/ is a component's test fragment --
+# tests/<tier>/<component>/CMakeLists.txt -- and the contracts' own suites in
+# tests/contracts/. Found by glob, so no stream edits this file to add its
+# tests (cmake/Components.cmake, ADR 0004). The two subdirectories above are
+# added explicitly; fixtures and the gates' own tests are never build fragments.
+loadforge_add_fragments("${CMAKE_CURRENT_SOURCE_DIR}"
+  EXCLUDE supervision/CMakeLists.txt support/fake_worker/CMakeLists.txt
+  EXCLUDE_TREES fixtures tools)

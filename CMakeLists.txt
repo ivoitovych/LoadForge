@@ -39,6 +39,7 @@ include(FloatingPoint)
 include(Sanitizers)
 include(Coverage)
 include(Dependencies)
+include(Components)
 
 # ---- core -------------------------------------------------------------------
 add_library(loadforge_core STATIC
@@ -171,6 +172,13 @@ loadforge_enable_coverage(loadforge)
 if(LOADFORGE_STATIC)
   target_link_options(loadforge PRIVATE -static)
 endif()
+
+# ---- components built in parallel streams ------------------------------------
+# Every component from M2a on owns a CMakeLists.txt in its own directory under
+# src/ and is found here by glob, so no stream edits this file to add itself
+# (cmake/Components.cmake, ADR 0004). The modules above predate the mechanism
+# and stay listed explicitly.
+loadforge_add_fragments("${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 # ---- tests ------------------------------------------------------------------
 if(LOADFORGE_BUILD_TESTS)

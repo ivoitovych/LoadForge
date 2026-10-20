@@ -52,6 +52,29 @@
 # There are none today, by design: the one piece of state workers and the
 # controller share is the heartbeat region, single-writer seqlock slots with no
 # lock to die holding (docs/JOURNAL.md §2.15). The gate says so on every run.
+#
+# ONE FRAGMENT PER MODULE (ADR 0004)
+#
+# This file holds the modules that existed before the parallel streams. Every
+# module added since has its row in a file of its own,
+# tests/obligations.d/<path below src>.toml, holding exactly that one module --
+# so components built in parallel never edit the same ledger file. The gate
+# reads both, refuses a fragment that declares any module but the one it is
+# named after, refuses a module declared in two places, and refuses any file in
+# tests/obligations.d/ that is not a .toml fragment. A row here moves into its
+# fragment the first time its module's owner edits it.
+#
+# CONTRACTS, PROVIDED AND CONSUMED (ADR 0003, ADR 0004)
+#
+#   provides = ["WorkloadContract"]     the module implements the contract
+#   consumes = ["ExecutorContract"]     the module mocks it, as it reads it
+#
+# Each name is a provider-side suite declared under tests/contracts/ with
+# TYPED_TEST_SUITE_P(<name>). For either field the module's own tests -- under
+# tests/<tier>/<path below src>/ -- must instantiate that suite: against the
+# implementation for a provider, against the module's own mock for a consumer.
+# That instantiation is the cross-execution ADR 0003 requires, and the gate
+# refuses a declaration without it.
 
 [[module]]
 path    = "src/core"
