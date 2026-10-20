@@ -14,12 +14,6 @@
 // not own. They are the same lane-structured loop, compiled for the path's
 // instruction set -- the lane count fixes the bits whether or not the
 // compiler turns the lanes into vector registers.
-#if defined(__x86_64__) && !defined(LOADFORGE_SIMD_SCALAR)
-#define LOADFORGE_MONTE_CARLO_AVX2 1
-#elif defined(__aarch64__) && !defined(LOADFORGE_SIMD_SCALAR)
-#define LOADFORGE_MONTE_CARLO_NEON 1
-#endif
-
 namespace loadforge::workloads::monte_carlo {
 
 namespace {
@@ -44,8 +38,10 @@ template <typename Path>
       lane.at((2 * pair + 1) % kLanes) += sample_value(odd);
     }
   }
-  double total = lane[0];
-  for (std::size_t index = 1; index < kLanes; ++index) {
+  // From +0.0, so every lane count enters the loop at least once: the first
+  // addition is exact (the lanes hold positive sums), the order is lane 0, 1, ...
+  double total = 0.0;
+  for (std::size_t index = 0; index < kLanes; ++index) {
     total += lane.at(index);
   }
   return total;
@@ -59,7 +55,7 @@ double scalar_chunk(std::uint64_t key, std::uint64_t first, std::uint32_t length
   return lane_sum<ScalarPath>(key, first, length);
 }
 
-#if defined(LOADFORGE_MONTE_CARLO_AVX2)
+#if defined(__x86_64__) && !defined(LOADFORGE_SIMD_SCALAR)
 
 struct Avx2Path {
   static constexpr std::size_t kLanes = 4;
@@ -70,7 +66,7 @@ struct Avx2Path {
   return lane_sum<Avx2Path>(key, first, length);
 }
 
-#elif defined(LOADFORGE_MONTE_CARLO_NEON)
+#elif defined(__aarch64__) && !defined(LOADFORGE_SIMD_SCALAR)
 
 struct NeonPath {
   static constexpr std::size_t kLanes = 2;
@@ -87,9 +83,9 @@ double neon_chunk(std::uint64_t key, std::uint64_t first, std::uint32_t length) 
 simd::KernelTable<ChunkKernel> chunk_kernels() noexcept {
   simd::KernelTable<ChunkKernel> table;
   table.scalar = &scalar_chunk;
-#if defined(LOADFORGE_MONTE_CARLO_AVX2)
+#if defined(__x86_64__) && !defined(LOADFORGE_SIMD_SCALAR)
   table.avx2 = &avx2_chunk;
-#elif defined(LOADFORGE_MONTE_CARLO_NEON)
+#elif defined(__aarch64__) && !defined(LOADFORGE_SIMD_SCALAR)
   table.neon = &neon_chunk;
 #endif
   return table;
