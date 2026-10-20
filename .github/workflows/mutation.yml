@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 name: mutation
 on:
-  # NOT scheduled yet -- deliberately. See "Status" below.
+  # Weekly on main, with the pinned release below. Not on every pull request:
+  # a full mutation run takes far longer than the rest of CI together, and the
+  # gate it enforces is about the tests' strength, which changes slowly.
+  schedule:
+    - cron: '17 3 * * 1'
   workflow_dispatch:
     inputs:
       discover_pin:
@@ -12,11 +16,19 @@ on:
         description: 'LLVM version Mull is built against (must match the compiler used to build)'
         default: '18'
       mull_deb_url:
-        description: 'URL of the Mull .deb to install'
+        description: 'Override: URL of another Mull .deb (default: the pin below)'
         required: false
       mull_deb_sha256:
-        description: 'SHA-256 of that .deb (required; the job refuses to run without it)'
+        description: 'SHA-256 of that .deb (required with an override URL)'
         required: false
+
+env:
+  # The pinned Mull release. Reported by the bootstrap job below from GitHub's
+  # runners on 2026-10-20: apt's signed index and the downloaded file agreed on
+  # this SHA-256. Trust on first use, as the bootstrap job explains; every run
+  # since verifies the download against it and fails on any change.
+  MULL_DEB_URL: https://dl.cloudsmith.io/public/mull-project/mull-stable/deb/ubuntu/pool/noble/main/M/Mu/mull-18_0.34.2/Mull-18-0.34.2-LLVM-18.1.3-ubuntu-amd64-24.04.deb
+  MULL_DEB_SHA256: e6a1abece45104479ef4afca41438b49bb7214d359aa359eaa3f236f363b33b3
 
 jobs:
   discover:
@@ -48,8 +60,12 @@ jobs:
           curl -1sLf 'https://dl.cloudsmith.io/public/mull-project/mull-stable/setup.deb.sh' \
             | sudo -E bash
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --download-only "mull-${{ inputs.llvm_version }}"
-          deb=$(find /var/cache/apt/archives -name "mull-${{ inputs.llvm_version }}_*.deb" | head -n 1)
+          # apt-get download saves the .deb in the working directory as the
+          # runner user; a find over apt's own cache trips on its root-only
+          # partial/ directory and, under pipefail, fails the job.
+          apt-get download --print-uris "mull-${{ inputs.llvm_version }}"
+          apt-get download "mull-${{ inputs.llvm_version }}"
+          deb=$(find . -maxdepth 1 -name "mull-${{ inputs.llvm_version }}_*.deb" | head -n 1)
           [ -n "$deb" ] || { echo "no .deb was downloaded"; exit 1; }
           echo "### Candidate Mull pin" >> "$GITHUB_STEP_SUMMARY"
           {
@@ -82,30 +98,29 @@ jobs:
     # the real binary runs first, against a program with a known-surviving
     # mutant, and the gate is not trusted on this repository until it has.
     #
-    # STATUS: armed but not yet on a schedule. Enabling it nightly requires a
-    # Mull release pinned by verified SHA-256, which has not been established
-    # yet. Rather than ship an unverified pin -- or the '|| true' this replaced,
-    # which let any number of survivors pass -- the job runs on demand with the
-    # URL and checksum supplied explicitly, and refuses to run without them.
+    # STATUS: pinned (see env above) and scheduled weekly. A dispatch may name
+    # another release, but only together with its own checksum.
     name: zero unexplained surviving mutants
     if: '!inputs.discover_pin'
     runs-on: ubuntu-24.04
     steps:
-      - name: Refuse to run without a verified pin
+      - name: An overriding URL comes with its own checksum
+        # The pin is used unless a dispatch supplies both. A URL alone would be
+        # checked against the pinned checksum and fail, which is correct but
+        # says less than this does.
         run: |
-          [ -n "${{ inputs.mull_deb_url }}" ] && [ -n "${{ inputs.mull_deb_sha256 }}" ] && exit 0
-          echo "This job installs code that runs in CI with the workflow token, so it takes"
-          echo "the .deb URL and its SHA-256 and verifies the download against it."
-          echo "Run this workflow with discover_pin to obtain a candidate pair."
-          exit 1
+          if [ -n "${{ inputs.mull_deb_url }}" ] && [ -z "${{ inputs.mull_deb_sha256 }}" ]; then
+            echo "mull_deb_url was given without mull_deb_sha256; refusing." >&2
+            exit 1
+          fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install Mull (checksum required)
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build clang-18 llvm-18
-          curl -fsSL --retry 3 "${{ inputs.mull_deb_url }}" -o /tmp/mull.deb
-          echo "${{ inputs.mull_deb_sha256 }}  /tmp/mull.deb" | sha256sum --check --strict
+          curl -fsSL --retry 3 "${{ inputs.mull_deb_url || env.MULL_DEB_URL }}" -o /tmp/mull.deb
+          echo "${{ inputs.mull_deb_sha256 || env.MULL_DEB_SHA256 }}  /tmp/mull.deb" | sha256sum --check --strict
           sudo dpkg -i /tmp/mull.deb
           mull-runner-18 --version
       - env: { CC: clang-18, CXX: clang++-18 }

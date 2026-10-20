@@ -1,0 +1,9 @@
+[info] Killed mutants (1/2):
+/tmp/tmp.TsJpoi7A3p/subject.cpp:2:13: warning: Killed: Replaced >= with < [cxx_ge_to_lt]
+  return (n >= 10) ? 1 : 0;
+            ^
+[info] Survived mutants (1/2):
+/tmp/tmp.TsJpoi7A3p/subject.cpp:2:13: warning: Survived: Replaced >= with > [cxx_ge_to_gt]
+  return (n >= 10) ? 1 : 0;
+            ^
+[info] Mutation score: 50%

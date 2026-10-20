@@ -307,13 +307,11 @@ verified-static release artifact; the 26.04 canary; the mutation gate; `core/` a
 `main/`. 68 unit tests, 56 trust-chain tooling tests, 100% line and branch, zero
 exclusions, CI green on {x86-64, ARM64} × {GCC 13, Clang 18}.
 
-**Two M0 items remain open and are carried, not closed:**
+**One M0 item remains open and is carried, not closed** (the other, the mutation gate,
+closed on 2026-10-20: Mull 0.34.2 is pinned by SHA-256, the gate's end-to-end test passes
+against the real tool, and the job runs weekly on `main`):
 
-1. **The mutation gate is specified, not demonstrated** — Mull is unpinned and its
-   end-to-end test has never run (F21). This is a **prerequisite for M2a**, not for M1:
-   from M2a the mutation gate becomes the primary quality signal on verification code, and
-   an unexercised gate cannot hold that role.
-2. **`main` is unprotected** — no required status checks; every gate above is bypassable
+1. **`main` is unprotected** — no required status checks; every gate above is bypassable
    by a direct push. Requires owner action in GitHub settings.
 
 ### M1 — Core framework and supervision
@@ -712,7 +710,7 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 | **Q5** | Privilege policy — never escalate, ship a `setcap` helper, or opt-in privileged mode | M3 telemetry | Never escalate; report reduced capability with a remediation hint, document how to grant access |
 | **Q11** | Is Ubuntu 24.04 the declared minimum for the dynamically-linked build | M7 packaging | Yes, with the static artifact covering everything older |
 | — | Branch protection on `main` | Nothing technically; everything in terms of trust | Require the CI checks and a pull request |
-| — | Mull release pinned by verified SHA-256 | **M2a** | Owner or a network-capable environment must supply it |
+| ~~—~~ | Mull release pinned by verified SHA-256 | — | **Done** 2026-10-20: 0.34.2, reported by the bootstrap job from GitHub's runners |
 
 ---
 
@@ -761,5 +759,5 @@ no such lock (PLAN §4.6), and the ledger gate checks that on every run.
 The next concrete actions, after the review fixes queued in the roadmap: that T7 OOM test,
 and the M1 exit review of every criterion in §4.
 
-Outside the repository, and still owner-only: **branch protection on `main`**, and a
-**Mull release pinned by verified SHA-256** — the latter a hard prerequisite for M2a.
+Outside the repository, and still owner-only: **branch protection on `main`**. The Mull
+pin, the other hard prerequisite for M2a, is in place (`mutation.yml`).

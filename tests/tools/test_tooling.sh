@@ -89,6 +89,26 @@ expect "unparseable SARIF FAILS"                               1 $? "does not pa
 gate missing-sarif allow-empty.txt
 expect "a missing SARIF rendering FAILS"                       1 $? "does not exist" "$GATE_OUT"
 
+# Captured from a real Mull 0.34.2 run on GitHub's runners, byte for byte (F21).
+# Its SARIF writes each location as the absolute path minus its leading slash,
+# relative to a base of file://./, and the hand-written fixtures above never
+# showed that shape: the first real run of the gate disagreed with itself.
+real_gate() { # fixture-dir, allowlist-file
+  GATE_OUT="$(python3 "$GATE" --report-dir "$FIX/mull/$1" --allowlist "$2" \
+              --root /tmp/tmp.TsJpoi7A3p 2>&1)"; GATE_RC=$?; return $GATE_RC
+}
+real_gate real-0.34.2 "$FIX/allow-empty.txt"
+expect "real 0.34.2 reports agree once SARIF paths are resolved" 1 $? "UNEXPLAINED SURVIVOR: subject.cpp:2:13:cxx_ge_to_gt" "$GATE_OUT"
+real_allow="$(mktemp)"
+printf '# Reviewed for the test.\nsubject.cpp:2:13:cxx_ge_to_gt\n' > "$real_allow"
+real_gate real-0.34.2 "$real_allow"
+expect "the resolved key is the one an allowlist names"          0 $? "1 allowed" "$GATE_OUT"
+rm -f "$real_allow"
+real_gate sarif-undefined-base "$FIX/allow-empty.txt"
+expect "a location relative to an undefined base FAILS"          1 $? "never defines" "$GATE_OUT"
+real_gate sarif-remote-base "$FIX/allow-empty.txt"
+expect "a base that is not a local file FAILS"                   1 $? "not a local file URI" "$GATE_OUT"
+
 # A mutant on an unexecuted line contradicts the 100% coverage gate, measured by
 # a different mechanism. Never allowlistable.
 gate not-covered allow-empty.txt

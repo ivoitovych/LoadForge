@@ -24,19 +24,19 @@ work continues.
 | 1 | Land the controller: `controller/`, `reporters/console`, `loadforge stress`, `tests/supervision/` | IMPLEMENTATION §10 | done, #23 |
 | 2 | Comprehensive review, reaction plan, ADR 0002, this roadmap | `reviews/` | done, #21 |
 | 3 | Seqlock writer: release fence after the odd store; correct the P5 argument | review R-01 | done, #24 |
-| 4 | Controller ignores SIGPIPE through the seam; test and catalogue row | review R-02 | done, this PR |
-| 5 | Kill the surviving drain-bound mutant with an exact assertion | review R-06 | done, this PR |
-| 6 | Hygiene batch: linkage, torn-slot wording, drain bound by wall time, slot layout asserts, fixture references | review R-03..R-05, R-24, R-29 | |
+| 4 | Controller ignores SIGPIPE through the seam; test and catalogue row | review R-02 | done, #28 |
+| 5 | Kill the surviving drain-bound mutant with an exact assertion | review R-06 | done, #28 |
+| 6 | Hygiene batch: linkage, torn-slot wording, drain bound by wall time, slot layout asserts, fixture references | review R-03..R-05, R-24, R-29 | done, #27 and #28 |
 | 7 | Documentation reconciliation in one commit | review R-08..R-13, R-19, R-21, R-25, R-27, R-33 | done, #26 |
-| 8 | Fake-worker executable with the misbehaviour catalogue, including a worker that ignores its control pipe (the only real test that the parent-death signal ends a worker); gate: no test-hook symbol in the shipped binary; gate: lock obligations in the ledger | IMPLEMENTATION §10 | |
-| 9 | Memory-budget reader (`MemAvailable`, cgroup v1 and v2) and OOM classified from the kernel's record | IMPLEMENTATION §10, journal §1.18 | |
+| 8 | Fake-worker executable with the misbehaviour catalogue, including a worker that ignores its control pipe (the only real test that the parent-death signal ends a worker); gate: no test-hook symbol in the shipped binary; gate: lock obligations in the ledger | IMPLEMENTATION §10 | done, #29 |
+| 9 | Memory-budget reader (`MemAvailable`, cgroup v1 and v2) and OOM classified from the kernel's record | IMPLEMENTATION §10, journal §1.18 | done, #30 |
 | 10 | M1 exit: every criterion in IMPLEMENTATION §4 met and marked | IMPLEMENTATION §4 | |
 
 ## Next — prerequisite for M2a
 
 | # | Item | Source | State |
 |---|------|--------|-------|
-| 11 | Pin a Mull release by verified SHA-256 and run the mutation gate end to end in CI; schedule it weekly on `main` | IMPLEMENTATION §4 M0, review R-31 | |
+| 11 | Pin a Mull release by verified SHA-256 and run the mutation gate end to end in CI; schedule it weekly on `main` | IMPLEMENTATION §4 M0, review R-31 | done, this PR; the first full sweep over `src/` reports on its first scheduled run |
 | 12 | clang-tidy over tests and tools, or the scope documented; trust-chain linter versions pinned | review R-07, R-32 | |
 | 12a | Contracts first: the workload, verifier and telemetry-source contracts, each with the provider's own tests and the cross-execution harness that runs them against consumers' mocks. M2a to M4 then proceed as parallel streams, one component each | ADR 0003 | |
 

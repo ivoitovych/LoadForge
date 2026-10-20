@@ -30,8 +30,8 @@ into the released executable.
     Licence  : BSD-3-Clause  -- GPL-compatible
 
   mull
-    Role     : mutation testing (CI only, on demand -- not yet scheduled,
-               pending a release pinned by verified SHA-256)
+    Role     : mutation testing (CI only: 0.34.2 for LLVM 18, pinned by
+               verified SHA-256, weekly on main and on demand)
     Licence  : Apache-2.0  -- GPL-compatible
 
 One component is vendored under third_party/: toml++, below.

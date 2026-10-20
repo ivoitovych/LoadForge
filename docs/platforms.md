@@ -110,7 +110,7 @@ built against.
 | GoogleTest + GMock | Pinned revision, system fallback, `BUILD_TESTS=OFF` path | BSD-3-Clause | **No** — test only |
 | toml++ | Vendored, pinned, header-only | MIT | Yes — vendored, not a third-party *dependency* |
 | gcovr | CI-installed | BSD | No |
-| mull | CI-installed, run on demand (`workflow_dispatch`) until a release is pinned by SHA-256 | Apache-2.0 | No — Ubuntu AArch64 packages exist, so the ARM64 leg is covered |
+| mull | CI-installed: 0.34.2 for LLVM 18, pinned by SHA-256, weekly on `main` and on demand | Apache-2.0 | No — Ubuntu AArch64 packages exist, so the ARM64 leg is covered |
 
 All GPL-compatible (§5.1). Third-party **runtime** dependencies remain zero.
 
