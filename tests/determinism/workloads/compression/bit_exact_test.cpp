@@ -76,7 +76,7 @@ TEST(CompressionBitExact, AtOneTwoThreeFourAndSevenThreadsAndAcrossRepeatedRuns)
     for (const std::size_t threads : {1U, 2U, 3U, 4U, 7U}) {
       testing::ThreadedExecutor executor(threads);
       for (int run = 0; run < 5; ++run) {
-        const std::byte fill = static_cast<std::byte>(0x3B * (run + 1));
+        const auto fill = static_cast<std::byte>(0x3B * (run + 1));
         EXPECT_EQ(computed(*workload, index, input, executor, fill), reference)
             << "unit " << index << ", " << threads << " threads, run " << run;
       }

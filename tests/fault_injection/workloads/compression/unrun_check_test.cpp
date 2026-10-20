@@ -79,7 +79,7 @@ TEST(CompressionNotChecked, AnOutputThatWouldAgreeButForOneExtraZeroIsStillNotCh
 
 TEST(CompressionNotChecked, AnOutputThatWouldMismatchButIsShortIsNotAMismatch) {
   const Bytes input = good_input();
-  Bytes output(output_bytes_for(kInputBytes) - 1, std::byte{0xFF});
+  const Bytes output(output_bytes_for(kInputBytes) - 1, std::byte{0xFF});
   expect_not_checked(input, output);
 }
 
