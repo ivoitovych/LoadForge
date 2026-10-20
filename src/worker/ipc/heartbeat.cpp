@@ -274,10 +274,25 @@ core::Result<core::Ok, RegionError> HeartbeatRegion::publish(std::size_t slot,
   Slot* const cell = slot_at(slots_, slot);
   const std::atomic_ref<std::uint64_t> sequence{cell->sequence};
   // Seqlock writer. The sequence goes odd before the fields change and even
-  // after, each transition released so a reader that acquires the even value
-  // sees every field that preceded it, and one that sees odd knows to retry.
+  // after. The two transitions need different orderings, and a release store
+  // gives only one of them.
+  //
+  // Going even must not be seen before the fields: a release store orders
+  // every earlier write before it, which is exactly that.
+  //
+  // Going odd must not be seen AFTER the fields, and a release store does not
+  // promise that: it orders what came before it, not what follows, so the
+  // field stores below may become visible first. On x86 they never do, because
+  // stores are not reordered with each other; on arm64 they may, and a reader
+  // would then read new fields between two loads of the old even value and
+  // accept a sample that is half one beat and half the next. The release
+  // fence after the odd store is what forbids it: if a reader's field load
+  // sees a store made after this fence, the reader's acquire fence
+  // synchronises with this one, and its second sequence load sees at least
+  // the odd value, so the sample is retried.
   const std::uint64_t start = sequence.load(std::memory_order_relaxed);
-  sequence.store(start + 1, std::memory_order_release);
+  sequence.store(start + 1, std::memory_order_relaxed);
+  std::atomic_thread_fence(std::memory_order_release);
   std::atomic_ref<std::int64_t>{cell->timestamp_ns}.store(beat.timestamp_ns,
                                                           std::memory_order_relaxed);
   std::atomic_ref<std::uint64_t>{cell->progress}.store(beat.progress, std::memory_order_relaxed);
@@ -312,11 +327,15 @@ core::Result<std::optional<Heartbeat>, RegionError> HeartbeatRegion::observe(
     beat.pid = std::atomic_ref<std::uint32_t>{cell->pid}.load(std::memory_order_relaxed);
     std::atomic_thread_fence(std::memory_order_acquire);
     const std::uint64_t after = sequence.load(std::memory_order_relaxed);
-    if ((before & 1U) == 0 && before == after) {
+    if (sample_is_consistent(before, after)) {
       return std::optional<Heartbeat>{beat};
     }
   }
   return layout_error(RegionFault::kTorn, count_detail("retries", kMaxTornRetries, 0));
+}
+
+bool sample_is_consistent(std::uint64_t before, std::uint64_t after) noexcept {
+  return (before & 1U) == 0 && before == after;
 }
 
 }  // namespace loadforge::ipc

@@ -134,6 +134,13 @@ TEST(HeartbeatWordsTest, ProgressMustStrictlyAdvance) {
   EXPECT_FALSE(progressed(beat_number(5), beat_number(4))) << "backwards is not credited";
 }
 
+TEST(HeartbeatWordsTest, ASampleIsAcceptedOnlyBetweenTwoEqualEvenSequences) {
+  EXPECT_TRUE(sample_is_consistent(4, 4)) << "at rest before and after";
+  EXPECT_FALSE(sample_is_consistent(5, 5)) << "a write in progress throughout";
+  EXPECT_FALSE(sample_is_consistent(4, 5)) << "a write began during the read";
+  EXPECT_FALSE(sample_is_consistent(4, 6)) << "a write began and finished during the read";
+}
+
 // --- create and attach against the fake (T2) ---------------------------------
 
 class HeartbeatRegionTest : public ::testing::Test {
@@ -369,18 +376,30 @@ TEST_F(HeartbeatRegionTest, MovingTransfersOwnershipSoTheRegionIsReleasedOnce) {
 // --- the protocol (P5) ----------------------------------------------------------
 //
 // SYNCHRONISATION ARGUMENT. One writer, one slot, any readers. The writer
-// stores sequence s+1 (release), then the fields, then s+2 (release). A reader
-// loads the sequence (acquire), the fields, issues an acquire fence, and loads
-// the sequence again. If the first load was even and equals the second, every
-// field load happened between two sequence stores of the same resting value:
-// the acquire on the first load orders the field loads after the writer's
-// release of s (so they see at least the fields of beat s/2), and the fence
-// before the second load orders them before any store the writer released
-// afterwards (so if the writer began s+1 in between, the second load sees it
-// and the sample is retried). A sample is therefore always the fields of ONE
-// publish. The test checks exactly that: every field of every observed beat
-// derives from the same number. Under TSan the atomic_refs are also what make
-// the concurrent access race-free by the language's definition.
+// stores sequence s+1, issues a release fence, stores the fields, then stores
+// s+2 with release. A reader loads the sequence (acquire), the fields, issues
+// an acquire fence, and loads the sequence again, and accepts only an even
+// value that did not change.
+//
+// No newer field is missed: the first load acquiring s synchronises with the
+// release store of s, so every field load sees at least the fields of the
+// publish that ended at s.
+//
+// No newer field is accepted: if any field load sees a store from a later
+// publish, that store follows the writer's release fence, so the reader's
+// acquire fence synchronises with the writer's fence, and the second sequence
+// load sees s+1 or later. The sample is then retried.
+//
+// The second half is why the writer needs the FENCE and not merely a release
+// store of s+1. A release store orders the writes before it; it does not keep
+// the field stores after it from becoming visible first. The first version of
+// this code had only the release store, and its argument here claimed the
+// second half anyway. x86 never reorders two stores, so no test on x86 could
+// show the gap, and neither can this one; TSan checks for races, not for which
+// fence a seqlock needs. The argument above is the evidence; the test checks
+// its consequence where the hardware lets it be seen: every field of every
+// observed beat derives from the same number. Under TSan the atomic_refs are
+// also what make the concurrent access race-free by the language's definition.
 
 TEST_F(HeartbeatRegionTest, AConcurrentReaderNeverObservesATornBeat) {
   HeartbeatRegion region = make(syscalls, 1);
