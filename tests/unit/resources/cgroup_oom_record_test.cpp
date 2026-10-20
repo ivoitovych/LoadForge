@@ -213,7 +213,7 @@ TEST(RecordDeniedTest, ADeniedCountIsDeniedAndNamed) {
 
 // --- the real kernel (T8) ----------------------------------------------------------------
 
-TEST(RecordRealTest, ThisMachinesCountIsReadAndASigkillThatIsNotAnOomKillDoesNotMoveIt) {
+TEST(RealProcessOomRecord, ThisMachinesCountIsReadAndASigkillThatIsNotAnOomKillDoesNotMoveIt) {
   platform::RealSyscalls syscalls;
   platform::FileSystem filesystem(syscalls);
   CgroupOomKillRecord record(filesystem, kMachineRoot);
@@ -253,7 +253,7 @@ bool control(const std::string& path, const std::string& value) {
   return out.good();
 }
 
-TEST(RecordRealTest, AChildReallyOomKilledInAV1CgroupMovesThatCgroupsCountByOne) {
+TEST(RealProcessOomRecord, AChildReallyOomKilledInAV1CgroupMovesThatCgroupsCountByOne) {
   // The kernel's record against the kernel's act. A v1 memory cgroup is made
   // under this process's own, limited to 16 MiB with swapping off; a child is
   // moved into it before it allocates, and allocates until the OOM killer

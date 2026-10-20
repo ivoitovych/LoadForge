@@ -432,7 +432,7 @@ TEST(RealWorker, ResolvesThisTestBinarysOwnPath) {
       << "resolved to " << resolved.value();
 }
 
-TEST(RealWorker, ForksAndExecsARealBinaryThatExitsCleanly) {
+TEST(RealProcessWorker, ForksAndExecsARealBinaryThatExitsCleanly) {
   RealSyscalls syscalls;
   WorkerLauncher launcher{syscalls, "/bin/true"};
   const pid_t supervisor = ::getpid();
@@ -453,7 +453,7 @@ TEST(RealWorker, ForksAndExecsARealBinaryThatExitsCleanly) {
   EXPECT_TRUE(status.is_success()) << status.describe();
 }
 
-TEST(RealWorker, AFailedExecReachesTheSupervisorAsItsDistinguishedCode) {
+TEST(RealProcessWorker, AFailedExecReachesTheSupervisorAsItsDistinguishedCode) {
   // End to end, through a real process boundary: the child cannot exec, returns
   // kExecFailed, exits with it, and the supervisor reads that exact code back.
   // This is what proves the code survives exit(2) in practice and not only in
@@ -477,7 +477,7 @@ TEST(RealWorker, AFailedExecReachesTheSupervisorAsItsDistinguishedCode) {
   EXPECT_FALSE(status.is_success());
 }
 
-TEST(RealWorker, ARealChildLeadsItsOwnSessionAndProcessGroup) {
+TEST(RealProcessWorker, ARealChildLeadsItsOwnSessionAndProcessGroup) {
   // What start_session does in the one place it is called: the child of a
   // fork, which is never a group leader, becomes the leader of a new session
   // and of a group whose id is its pid. Shown in a child because only a child

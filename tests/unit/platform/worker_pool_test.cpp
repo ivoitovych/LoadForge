@@ -38,7 +38,7 @@ constexpr pid_t kSecond = 102;
 constexpr pid_t kThird = 103;
 
 /// Status words in the encoding the kernel actually uses -- confirmed by the
-/// RealWaitStatus tier in exit_status_test.cpp, not recalled.
+/// RealProcessWaitStatus tier in exit_status_test.cpp, not recalled.
 constexpr int exited(int code) { return (code & 0xff) << 8; }
 constexpr int signalled(int sig) { return sig; }
 
@@ -401,7 +401,7 @@ TEST(WorkerPoolTest, PidAtOutOfRangeIsZeroRatherThanUndefined) {
 
 // --- T8: two real processes, two real deaths ---------------------------------
 
-TEST(RealWorkerPool, TwoRealWorkersAreSpawnedReapedAndToldApart) {
+TEST(RealProcessWorkerPool, TwoRealWorkersAreSpawnedReapedAndToldApart) {
   // The whole thing against a real kernel: two children that exit with
   // DIFFERENT codes, so the test can prove the pool matched each status to the
   // right slot rather than merely counting deaths.
@@ -435,7 +435,7 @@ TEST(RealWorkerPool, TwoRealWorkersAreSpawnedReapedAndToldApart) {
   EXPECT_EQ(nothing_left.error().number, ECHILD);
 }
 
-TEST(RealWorkerPool, RealWorkersAreKilledBySignalAllAndClassifiedAsSignalled) {
+TEST(RealProcessWorkerPool, RealWorkersAreKilledBySignalAllAndClassifiedAsSignalled) {
   // Proves the signal actually lands and that the death reads back as a signal
   // rather than an exit -- the distinction the whole classifier exists for.
   RealSyscalls syscalls;
