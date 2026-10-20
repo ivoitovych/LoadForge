@@ -428,6 +428,17 @@ TEST_F(CacheTest, AnIdPastAnythingACacheAttributeHoldsIsRefused) {
   EXPECT_NE(describe(caches.error()).find("past anything"), std::string::npos);
 }
 
+TEST_F(CacheTest, TheLargestIdACacheAttributeHoldsIsAccepted) {
+  set_online("0");
+  add_cpu(0, "0", "0", "0");
+  add_cache(0, 0, "1", "Data", "65535", "48K", "0");
+
+  auto caches = discover();
+  ASSERT_TRUE(caches.has_value()) << describe(caches.error());
+  EXPECT_EQ(caches.value().count(), 1U);
+  EXPECT_EQ(caches.value().caches().front().id, std::optional<std::uint32_t>{65535U});
+}
+
 TEST_F(CacheTest, ALevelDeeperThanAnyCacheHierarchyIsRefused) {
   set_online("0");
   add_cpu(0, "0", "0", "0");
@@ -625,6 +636,23 @@ TEST_F(CacheTest, ACacheThatDoesNotNestInsideTheNextLevelIsRefused) {
   ASSERT_FALSE(caches.has_value());
   EXPECT_EQ(caches.error().kind, DiscoveryFailure::Kind::kContradiction);
   EXPECT_NE(describe(caches.error()).find("caches nest"), std::string::npos);
+}
+
+TEST_F(CacheTest, TwoCachesAtOneLevelNeedNotNestInEachOther) {
+  // cpu0's L1 Instruction cache is shared with cpu1 while its L1 Data cache is
+  // private. They are two caches at one level, not one inside the other, so
+  // the nesting rule (which relates a level to the NEXT one) has nothing to say.
+  set_online("0-1");
+  add_cpu(0, "0", "0", "0-1");
+  add_cpu(1, "0", "0", "0-1");
+  for (std::uint32_t cpu = 0; cpu < 2; ++cpu) {
+    add_cache(cpu, 0, "1", "Data", std::to_string(cpu), "48K", std::to_string(cpu));
+    add_cache(cpu, 1, "1", "Instruction", "0", "32K", "0-1");
+  }
+
+  auto caches = discover();
+  ASSERT_TRUE(caches.has_value()) << describe(caches.error());
+  EXPECT_EQ(caches.value().count_at_level(1), 3U);
 }
 
 // --- the real machine (T8) ---------------------------------------------------

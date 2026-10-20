@@ -19,8 +19,10 @@ work continues.
 
 ## Standing items
 
-- **Find an outside reviewer.** No PR has had one. Every completion report
-  repeats this until one is found.
+- **Outside review.** The first independent review arrived on 2026-10-20
+  (`reviews/review-response-2026-10-20-0352-UTC.md`): three findings, all
+  accepted, items 10b to 10d. It covered supervision only; the rest of the tree
+  and every stream PR still have had no outside reviewer.
 - **Branch protection on `main`.** Owner-only: a repository setting.
 
 ## Now — finish M1
@@ -37,15 +39,18 @@ work continues.
 | 8 | Fake-worker executable with the misbehaviour catalogue, including a worker that ignores its control pipe (the only real test that the parent-death signal ends a worker); gate: no test-hook symbol in the shipped binary; gate: lock obligations in the ledger | IMPLEMENTATION §10 | done, #29 |
 | 9 | Memory-budget reader (`MemAvailable`, cgroup v1 and v2) and OOM classified from the kernel's record | IMPLEMENTATION §10, journal §1.18 | done, #30 |
 | 10 | M1 exit: every criterion in IMPLEMENTATION §4 met and marked | IMPLEMENTATION §4 | done, #33, pending the mutation verdict: M1 is complete when the first sweep over `src/` reports zero unexplained survivors |
+| 10b | EXT-01: a successful `kill` is not proof the controller caused a SIGKILL death; split attempted from established, never signal a worker that has already exited, report ambiguous provenance, always consult the OOM count; the fake models `kill` on a zombie as the kernel does | external review, reaction plan 2026-10-20 12:30 UTC | |
+| 10c | EXT-02: startup as its own supervised phase: the controller beats between forks, each worker's allowance anchored at its own launch, the duration's start decided and documented | external review | |
+| 10d | EXT-03: a crash signal names a fault, not its cause; header, operator and verification documents, and abort and software-SIGBUS catalogue cases | external review | |
 
 ## Next — prerequisite for M2a
 
 | # | Item | Source | State |
 |---|------|--------|-------|
 | 11 | Pin a Mull release by verified SHA-256 and run the mutation gate end to end in CI; schedule it weekly on `main` | IMPLEMENTATION §4 M0, review R-31 | done, #32; the first full sweep over `src/` reports on its first scheduled run |
-| 11a | Shard the mutation sweep: one job per module under `src/`, each gated on its own (`--scope`), every mutant against the tests that create no process (`RealProcess*` left out and checked), a per-mutant timeout, and a verdict job. The first full run, as one job, was cancelled at six hours | journal §1.26, §2.28 | done, this PR; the first sharded run found 56 survivors in six shards (journal §2.28) |
+| 11a | Shard the mutation sweep: one job per module under `src/`, each gated on its own (`--scope`), every mutant against the tests that create no process (`RealProcess*` left out and checked), a per-mutant timeout, and a verdict job. The first full run, as one job, was cancelled at six hours | journal §1.26, §2.28 | done, #46; the first sharded run found 56 survivors in six shards (journal §2.28) |
 | 11b | Kill the 56 survivors of the first sharded run, or allowlist each equivalent one with its reason. Per module: `platform`, including moving the pid decisions in `fork_process` and `reap_any_nonblocking` above the seam; `controller` and `worker`; then `topology`, `resources` and `config`. M1 is formally complete when the weekly sweep passes | journal §2.28 | |
-| 12 | clang-tidy over tests and tools, or the scope documented; trust-chain linter versions pinned | review R-07, R-32 | |
+| 12 | clang-tidy over tests and tools, or the scope documented; trust-chain linter versions pinned | review R-07, R-32 | tests: done, #36 (tests/.clang-tidy); tools and linter pins open |
 | 12a | Contracts first: the workload, verifier and telemetry-source contracts, each with the provider's own tests and the cross-execution harness that runs them against consumers' mocks. M2a to M4 then proceed as parallel streams, one component each | ADR 0003, ADR 0004 | done, this PR: twenty-one contract headers, their suites and references, the fragment mechanism, the stream plan below |
 
 ## Then — the milestones, as streams in waves
@@ -73,8 +78,8 @@ supervision, verification oracles, or a pattern every later stream copies.
 change (ADR 0004, "Changing a contract"):
 
 - before wave 2: the specification headers for sort and Monte Carlo
-  (`src/workloads/<name>/spec.hpp`), and any contract corrections wave 1's streams
-  recorded under "Contract questions";
+  (`src/workloads/<name>/spec.hpp`) -- landed in this PR (journal §2.29) -- and any
+  contract corrections wave 1's streams recorded under "Contract questions";
 - before M2a can exit (stream 11): M1 complete, which waits only on the first mutation
   sweep (item 10); the Mull pin, item 11, is in (#32);
 - before wave 3: the specification headers for FFT, stencil, sparse, graph and

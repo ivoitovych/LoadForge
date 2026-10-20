@@ -506,12 +506,13 @@ TEST_F(ConfigFileTest, LoadsARealFileAndNamesItInErrors) {
 
 TEST_F(ConfigFileTest, AFileLongerThanOneReadChunkIsReadWhole) {
   // load() reads in 4 KiB pieces; a document that spans more than one is the
-  // only thing that takes the loop round twice. The padding is a comment, so
-  // the parsed result is the minimal configuration.
-  std::string padded{kMinimal};
-  padded += "\n# ";
+  // only thing that takes the loop round twice. The padding is a comment and
+  // comes FIRST, so the configuration itself lies past the first chunk: a read
+  // that stopped after one chunk would see no configuration at all.
+  std::string padded = "# ";
   padded.append(8192, 'x');
   padded += "\n";
+  padded += kMinimal;
   const auto result = load(write("padded.toml", padded));
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(result.value(), parsed(kMinimal));

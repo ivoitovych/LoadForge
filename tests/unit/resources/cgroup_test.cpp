@@ -175,6 +175,16 @@ TEST(MountEntryTest, PathsAreUnescapedTheWayTheKernelEscapedThem) {
   EXPECT_EQ(entry.value().mount_point, "/mnt/x\\y\nz");
 }
 
+TEST(MountEntryTest, AnEscapeMayEndTheFieldAndTheLargestByteIsStillAByte) {
+  // 377 (octal) is the largest value three octal digits may carry that is still a
+  // byte, and its digits include the largest octal digit. An escape that ends
+  // its field has exactly three characters after the backslash, no more.
+  auto entry = parse_mount_entry(R"(1 2 0:3 /a\377 /m\040 rw - cgroup2 cgroup2 rw)");
+  ASSERT_TRUE(entry.has_value()) << entry.error();
+  EXPECT_EQ(entry.value().root, "/a\xff");
+  EXPECT_EQ(entry.value().mount_point, "/m ");
+}
+
 TEST(MountEntryTest, EveryShapeTheKernelDoesNotWriteIsRefusedWithItsReason) {
   struct Case {
     std::string_view line;

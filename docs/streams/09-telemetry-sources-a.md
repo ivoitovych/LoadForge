@@ -1,6 +1,6 @@
 # Stream 09 — Telemetry sources: thermal, fan, frequency, memory; the capability probe
 
-**State:** not started  
+**State:** complete on `feature/telemetry-sources-a`, 2026-10-20 13:05 UTC; awaiting the manager's pull request  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier A — a bounded component built against a written contract  
