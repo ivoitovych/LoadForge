@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "oracle/workloads/raytrace/reference.hpp"
+#include "primitives/simd/dispatch.hpp"
 #include "worker/executor.hpp"
 #include "workloads/workload.hpp"
 
@@ -76,6 +77,31 @@ class DroppingExecutor final : public worker::Executor {
  private:
   std::set<std::size_t> dropped_;
 };
+
+/// The paths of this build that this machine can run: scalar, and the wide
+/// path where the build has one and the CPU has what it needs.
+[[nodiscard]] inline std::vector<simd::IsaPath> runnable_paths() {
+  std::vector<simd::IsaPath> paths = {simd::IsaPath::kScalar};
+#if !defined(LOADFORGE_SIMD_SCALAR) && defined(__x86_64__)
+  if (__builtin_cpu_supports("avx2")) {
+    paths.push_back(simd::IsaPath::kAvx2);
+  }
+#elif !defined(LOADFORGE_SIMD_SCALAR) && defined(__aarch64__)
+  paths.push_back(simd::IsaPath::kNeon);
+#endif
+  return paths;
+}
+
+[[nodiscard]] inline workloads::WorkloadConfig config_for(simd::IsaPath path,
+                                                          std::uint32_t edge = 0,
+                                                          std::uint64_t seed = 1) {
+  workloads::WorkloadConfig config;
+  config.seed = seed;
+  config.footprint_bytes = 1U << 20U;
+  config.decomposition = edge;
+  config.isa = path;
+  return config;
+}
 
 [[nodiscard]] inline Bytes generate_unit(const workloads::Workload& workload,
                                          std::uint64_t index) {
