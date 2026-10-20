@@ -38,6 +38,7 @@ work continues.
 |---|------|--------|-------|
 | 11 | Pin a Mull release by verified SHA-256 and run the mutation gate end to end in CI; schedule it weekly on `main` | IMPLEMENTATION §4 M0, review R-31 | |
 | 12 | clang-tidy over tests and tools, or the scope documented; trust-chain linter versions pinned | review R-07, R-32 | |
+| 12a | Contracts first: the workload, verifier and telemetry-source contracts, each with the provider's own tests and the cross-execution harness that runs them against consumers' mocks. M2a to M4 then proceed as parallel streams, one component each | ADR 0003 | |
 
 ## Then — the milestones
 
