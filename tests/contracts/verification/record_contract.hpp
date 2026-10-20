@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -132,6 +133,22 @@ inline std::vector<ErrorRecord> valid_samples() {
   infinite.tolerance = std::numeric_limits<double>::denorm_min();
   infinite.check = std::string(verification::kMaxTextBytes, 'c');
   samples.emplace_back(infinite);
+  // A failure is a residual past the tolerance or a NaN, whatever the NaN's
+  // sign or payload; the smallest residual past the tolerance is one.
+  NumericalVerificationFailure barely = numerical();
+  barely.residual = std::nextafter(barely.tolerance, std::numeric_limits<double>::infinity());
+  samples.emplace_back(barely);
+  NumericalVerificationFailure negative_nan = numerical();
+  negative_nan.residual = std::bit_cast<double>(0xFFF8000000000123ULL);
+  samples.emplace_back(negative_nan);
+  // A last offset past the window, and one inside it that differs.
+  ExactBitCorruption beyond = exact();
+  beyond.difference->last_offset = 0x1003 + 5000;
+  samples.emplace_back(beyond);
+  ExactBitCorruption inside = exact();
+  inside.difference->last_offset = 0x1006;
+  inside.difference->actual[6] = std::byte{0x01};
+  samples.emplace_back(inside);
   samples.emplace_back(not_performed());
   VerificationNotPerformed counted = not_performed();
   counted.blocks_compared = std::numeric_limits<std::uint64_t>::max();
@@ -207,6 +224,36 @@ inline std::vector<ErrorRecord> invalid_samples() {
   bounded = numerical();
   bounded.check = std::string(verification::kMaxTextBytes + 1, 'c');
   samples.emplace_back(bounded);
+  // A numerical FAILURE has a NaN residual or one past the tolerance (external
+  // review 2026-10-20 12:51 UTC, W1-01): a residual inside it is a pass, a
+  // negative one is no measurement.
+  for (const double residual :
+       {0.0, -0.0, 1.0e-300, bounded.tolerance / 2, bounded.tolerance, -bounded.tolerance, -1.0,
+        -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::max()}) {
+    bounded = numerical();
+    bounded.residual = residual;
+    samples.emplace_back(bounded);
+  }
+  // An exact difference agrees with its own window (W1-05): it covers
+  // first_offset and the bytes differ there, and at last_offset when that lies
+  // inside the window.
+  record = exact();
+  record.difference->actual[3] = record.difference->expected[3];
+  samples.emplace_back(record);
+  record = exact(3);
+  samples.emplace_back(record);
+  record = exact(4);
+  record.difference->actual[3] = std::byte{0x00};
+  record.difference->actual[0] = std::byte{0x01};
+  samples.emplace_back(record);
+  record = exact();
+  record.difference->last_offset = 0x1006;
+  samples.emplace_back(record);
+  record = exact();
+  record.difference->last_offset = 0x1006;
+  record.difference->actual[6] = std::byte{0x01};
+  record.difference->actual[3] = std::byte{0x00};
+  samples.emplace_back(record);
   VerificationNotPerformed unrun = not_performed();
   unrun.what = std::string(verification::kMaxTextBytes + 1, 'q');
   samples.emplace_back(unrun);

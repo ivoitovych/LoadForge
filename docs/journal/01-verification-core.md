@@ -205,6 +205,33 @@ verification outcome, and the module makes no record. No module has P2 (no syste
 or P5 (the only threads are the tests' executors; `record_golden()` computes units in
 order on the caller's executor).
 
+### Contract change: a numerical failure must fail, an exact difference must show it (2026-10-20 15:59 UTC)
+
+External review 2026-10-20 12:51 UTC, W1-01/W1-05, found two rules missing from the frozen
+`record.hpp` (ADR 0004, "Changing a contract"). Both were weaknesses the contract and this
+codec shared, not a divergence between them. Changed together: the header's rules and
+comments, the contract suite and its reference implementation under `tests/contracts/`,
+and this codec (`is_valid`, `broken_rule`, `decode`).
+
+- **W1-01.** A `NumericalVerificationFailure` is valid only if its residual is NaN or
+  exceeds its tolerance (`exceeds_tolerance`). A residual at or below the tolerance is a
+  check that passed; a negative residual (-infinity included) is no measurement. +infinity
+  is a failure. Signed zero is not a failure (-0.0 <= any positive tolerance). **Negative
+  NaN: a NaN of any sign bit and payload is a failure**, since the sign of a NaN carries no
+  meaning; the codec still keeps its bits as written. The layout test that serialised a
+  -0.0 residual now serialises a NaN with the sign bit set, which still checks the
+  bit-pattern layout.
+- **W1-05.** A `Difference` must have a window that covers `first_offset` with the bytes
+  differing there, and, when `last_offset` is inside the window, differing there too.
+  Not checkable from a 64-byte excerpt, and so left to the producer and the channel's
+  checksum: whether earlier bytes differ, whether `last_offset` is the last difference
+  when it lies beyond the window, whether `popcount` is the whole-comparison count (an
+  excerpt gives at most a lower bound, not enforced), and the bytes outside the window.
+  Documented at `Difference` in the header.
+- Evidence: the regression tests (`codec_test.cpp`, the contract suite's invalid and
+  valid samples) failed against the old rules and pass against the new ones. The fuzz
+  generator now builds failures and differences that satisfy the new rules.
+
 ## Contract questions
 
 1. **`DecodeFault` has no member for a malformed field.** A presence flag of 2 is neither

@@ -442,6 +442,20 @@ std::optional<std::string> broken_difference_rule(const Difference& difference) 
     return "difference windows of " + std::to_string(difference.expected.size()) +
            " bytes, more than the " + std::to_string(kMaxWindowBytes) + " a record carries";
   }
+  if (!in_window(difference, difference.first_offset)) {
+    return "difference first offset " + std::to_string(difference.first_offset) +
+           " outside its window of " + std::to_string(difference.expected.size()) +
+           " bytes at offset " + std::to_string(difference.window_offset);
+  }
+  if (!differs_at(difference, difference.first_offset)) {
+    return "difference first offset " + std::to_string(difference.first_offset) +
+           ": expected and actual bytes there are the same";
+  }
+  if (in_window(difference, difference.last_offset) &&
+      !differs_at(difference, difference.last_offset)) {
+    return "difference last offset " + std::to_string(difference.last_offset) +
+           ": expected and actual bytes there are the same";
+  }
   return std::nullopt;
 }
 
@@ -478,6 +492,10 @@ std::optional<std::string> broken_kind_rule(const NumericalVerificationFailure& 
   }
   if (record.tolerance <= 0.0) {
     return "tolerance " + shortest(record.tolerance) + " is not strictly positive";
+  }
+  if (!exceeds_tolerance(record.residual, record.tolerance)) {
+    return "residual " + shortest(record.residual) + " does not exceed tolerance " +
+           shortest(record.tolerance) + ": a check that passed, not a failure";
   }
   return std::nullopt;
 }

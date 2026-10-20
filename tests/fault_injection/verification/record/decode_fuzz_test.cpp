@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -150,8 +151,8 @@ TEST(RecordDecodeFaultInjection, EverySingleByteCorruptionOfAStreamIsAnsweredWit
 TEST(RecordDecodeFaultInjection, TheHeaderBytesAreRefusedAsWhatTheyAre) {
   const Stream stream = stream_of_samples();
   for (std::size_t index = 0; index + 1 < stream.starts.size(); ++index) {
-    Bytes record(record_at(stream.bytes, stream, index).begin(),
-                 record_at(stream.bytes, stream, index).end());
+    const Bytes record(record_at(stream.bytes, stream, index).begin(),
+                       record_at(stream.bytes, stream, index).end());
     for (unsigned value = 0; value < 256; ++value) {
       Bytes changed = record;
       changed[0] = static_cast<std::byte>(value);
@@ -252,10 +253,21 @@ ErrorRecord random_record(std::mt19937_64& random) {
         difference.last_offset = difference.first_offset + random() % 5000;
         difference.popcount = 1 + random() % 100;
         difference.window_offset = difference.first_offset / kWordBytes * kWordBytes;
-        const std::size_t window = 1 + random() % kMaxWindowBytes;
+        const std::size_t first_at = difference.first_offset - difference.window_offset;
+        const std::size_t window = first_at + 1 + random() % (kMaxWindowBytes - first_at);
         for (std::size_t at = 0; at < window; ++at) {
           difference.expected.push_back(static_cast<std::byte>(random()));
           difference.actual.push_back(static_cast<std::byte>(random()));
+        }
+        // A valid difference differs where it says it does (W1-05).
+        const auto make_differ = [&difference](std::size_t at) {
+          if (difference.expected[at] == difference.actual[at]) {
+            difference.actual[at] = ~difference.expected[at];
+          }
+        };
+        make_differ(first_at);
+        if (difference.last_offset - difference.window_offset < window) {
+          make_differ(difference.last_offset - difference.window_offset);
         }
         record.difference = difference;
       }
@@ -265,8 +277,15 @@ ErrorRecord random_record(std::mt19937_64& random) {
       NumericalVerificationFailure record;
       record.provenance = provenance;
       record.check = text(40);
-      record.residual = std::bit_cast<double>(random());
       record.tolerance = 1e-300 + static_cast<double>(random() % 1000000);
+      // A failure: a NaN of any sign and payload, or a residual past the
+      // tolerance (W1-01).
+      record.residual = std::fabs(std::bit_cast<double>(random()));
+      if (coin()) {
+        record.residual = std::bit_cast<double>(random() | 0x7FF0000000000001ULL);
+      } else if (!(record.residual > record.tolerance)) {
+        record.residual = record.tolerance * static_cast<double>(2 + random() % 10);
+      }
       if (coin()) {
         record.condition_number = std::bit_cast<double>(random());
       }

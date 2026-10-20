@@ -23,6 +23,7 @@
 
 #include "contracts/verification/record_contract.hpp"
 #include "verification/record.hpp"
+#include "verification/record/format.hpp"
 
 namespace loadforge::verification {
 namespace {
@@ -86,7 +87,7 @@ TEST(RecordCodecLayout, EveryProvenanceFieldAndEveryExactFieldInItsPlace) {
 TEST(RecordCodecLayout, ANumericalRecordCarriesItsDoublesAsBitPatterns) {
   NumericalVerificationFailure record;
   record.check = "momentum";
-  record.residual = -0.0;
+  record.residual = std::bit_cast<double>(0xFFF8000000000000ULL);
   record.tolerance = 0.5;
   record.condition_number = std::numeric_limits<double>::infinity();
   Layout expected;
@@ -95,7 +96,7 @@ TEST(RecordCodecLayout, ANumericalRecordCarriesItsDoublesAsBitPatterns) {
     expected.u8(0);
   }
   expected.text("momentum")
-      .u64(std::bit_cast<std::uint64_t>(-0.0))
+      .u64(0xFFF8000000000000ULL)
       .u64(std::bit_cast<std::uint64_t>(0.5))
       .u8(1)
       .u64(std::bit_cast<std::uint64_t>(std::numeric_limits<double>::infinity()))
@@ -386,6 +387,134 @@ TEST(RecordCodecRules, EachRuleIsNamedInWords) {
   unrun = not_performed();
   unrun.why = std::string(kMaxTextBytes + 1, 'q');
   EXPECT_EQ(rule(unrun), "why of 1025 bytes, more than the 1024 a record carries");
+}
+
+// External review 2026-10-20 12:51 UTC, W1-01: a numerical FAILURE has a NaN
+// residual or one past its tolerance. The decoder is the trust boundary, so
+// each way to describe a passing check is refused by is_valid(), broken_rule()
+// and decode() alike, and never reaches a consumer's is_wrong_result().
+TEST(RecordCodecNumericalFailure, AResidualInsideTheToleranceIsACheckThatPassedAndDoesNotDecode) {
+  using contracts::record_samples::numerical;
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  NumericalVerificationFailure record = numerical();
+  record.tolerance = 1.0;
+  record.check = "C versus AB";
+  record.condition_number.reset();
+  record.element.reset();
+  record.provenance = Provenance{};
+  for (const double residual : {0.0, -0.0, 0.5, 1.0, std::nextafter(1.0, 0.0), -1.0, -1.0e-300,
+                                -2.0, -std::numeric_limits<double>::max(), -kInf}) {
+    record.residual = residual;
+    const ErrorRecord wrapped = record;
+    EXPECT_FALSE(is_valid(wrapped)) << shortest(residual);
+    ASSERT_TRUE(broken_rule(wrapped).has_value()) << shortest(residual);
+    EXPECT_NE(broken_rule(wrapped)->find("does not exceed tolerance 1"), std::string::npos)
+        << *broken_rule(wrapped);
+    const auto decoded = decode(encode(wrapped));
+    ASSERT_FALSE(decoded.has_value()) << shortest(residual);
+    EXPECT_EQ(decoded.error().fault, DecodeFault::kInvalid);
+    EXPECT_NE(decoded.error().detail.find("a check that passed"), std::string::npos)
+        << decoded.error().detail;
+  }
+}
+
+TEST(RecordCodecNumericalFailure, ANanOrAResidualPastTheToleranceDecodesAndIsAWrongResult) {
+  using contracts::record_samples::numerical;
+  NumericalVerificationFailure record = numerical();
+  record.tolerance = 1.0;
+  for (const double residual :
+       {std::nextafter(1.0, 2.0), 1.5, std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN(),
+        std::bit_cast<double>(0x7FF8000000000123ULL), std::bit_cast<double>(0xFFF8000000000000ULL),
+        std::bit_cast<double>(0xFFF8000000000123ULL)}) {
+    record.residual = residual;
+    const ErrorRecord wrapped = record;
+    EXPECT_TRUE(is_valid(wrapped)) << shortest(residual);
+    EXPECT_EQ(broken_rule(wrapped), std::nullopt) << shortest(residual);
+    const auto decoded = decode(encode(wrapped));
+    ASSERT_TRUE(decoded.has_value()) << shortest(residual);
+    EXPECT_TRUE(is_wrong_result(decoded.value()));
+    EXPECT_EQ(std::bit_cast<std::uint64_t>(
+                  std::get<NumericalVerificationFailure>(decoded.value()).residual),
+              std::bit_cast<std::uint64_t>(residual))
+        << "the residual's bits, a NaN's sign and payload included, are kept as they were";
+  }
+}
+
+// W1-05: an exact difference agrees with its own excerpt.
+TEST(RecordCodecDifferenceWindow, AClaimedFirstDifferenceThatTheWindowShowsIdenticalDoesNotDecode) {
+  using contracts::record_samples::exact;
+  ExactBitCorruption record = exact();
+  record.difference->actual = record.difference->expected;
+  const ErrorRecord wrapped = record;
+  EXPECT_FALSE(is_valid(wrapped));
+  EXPECT_EQ(broken_rule(wrapped),
+            "difference first offset 4099: expected and actual bytes there are the same");
+  const auto decoded = decode(encode(wrapped));
+  ASSERT_FALSE(decoded.has_value());
+  EXPECT_EQ(decoded.error().fault, DecodeFault::kInvalid);
+
+  // The review's counterexample: popcount 1, offsets 0, identical windows.
+  ExactBitCorruption review;
+  review.check = "input against its regeneration";
+  review.difference = Difference{Domain::kStored, 0, 0, 1, 0, {std::byte{0x5A}}, {std::byte{0x5A}}};
+  EXPECT_FALSE(is_valid(ErrorRecord{review}));
+  EXPECT_FALSE(decode(encode(ErrorRecord{review})).has_value());
+  review.difference->actual[0] = std::byte{0x5B};
+  EXPECT_TRUE(is_valid(ErrorRecord{review}));
+  EXPECT_TRUE(decode(encode(ErrorRecord{review})).has_value());
+}
+
+TEST(RecordCodecDifferenceWindow, ADifferenceElsewhereInTheWindowDoesNotStandInForTheFirstOffset) {
+  using contracts::record_samples::exact;
+  ExactBitCorruption record = exact();
+  record.difference->actual[3] = record.difference->expected[3];
+  record.difference->actual[5] = std::byte{0x01};
+  EXPECT_FALSE(is_valid(ErrorRecord{record}));
+  EXPECT_EQ(broken_rule(ErrorRecord{record}),
+            "difference first offset 4099: expected and actual bytes there are the same");
+}
+
+TEST(RecordCodecDifferenceWindow, AWindowThatDoesNotCoverTheFirstOffsetDoesNotDecode) {
+  using contracts::record_samples::exact;
+  const ExactBitCorruption record = exact(3);  // offsets 0x1000..0x1002; first_offset is 0x1003
+  const ErrorRecord wrapped = record;
+  EXPECT_FALSE(is_valid(wrapped));
+  EXPECT_EQ(broken_rule(wrapped),
+            "difference first offset 4099 outside its window of 3 bytes at offset 4096");
+  const auto decoded = decode(encode(wrapped));
+  ASSERT_FALSE(decoded.has_value());
+  EXPECT_EQ(decoded.error().fault, DecodeFault::kInvalid);
+}
+
+TEST(RecordCodecDifferenceWindow, ALastOffsetInsideTheWindowMustDifferThereAndOutsideNeedNot) {
+  using contracts::record_samples::exact;
+  ExactBitCorruption record = exact();
+  record.difference->last_offset = 0x1006;  // inside the window, bytes identical
+  EXPECT_FALSE(is_valid(ErrorRecord{record}));
+  EXPECT_EQ(broken_rule(ErrorRecord{record}),
+            "difference last offset 4102: expected and actual bytes there are the same");
+  EXPECT_FALSE(decode(encode(ErrorRecord{record})).has_value());
+  record.difference->actual[6] = std::byte{0x80};
+  EXPECT_TRUE(is_valid(ErrorRecord{record}));
+  EXPECT_TRUE(decode(encode(ErrorRecord{record})).has_value());
+  // Beyond the window the excerpt cannot say, and the record is accepted.
+  record.difference->last_offset = 0x1008;
+  record.difference->actual[6] = record.difference->expected[6];
+  EXPECT_TRUE(is_valid(ErrorRecord{record}));
+  EXPECT_TRUE(decode(encode(ErrorRecord{record})).has_value());
+}
+
+TEST(RecordCodecDifferenceWindow, WindowMembershipIsJudgedAtBothEdges) {
+  const Difference difference = contracts::record_samples::difference();  // 0x1000, 8 bytes
+  EXPECT_FALSE(in_window(difference, 0x0FFF)) << "before the window";
+  EXPECT_TRUE(in_window(difference, 0x1000));
+  EXPECT_TRUE(in_window(difference, 0x1007));
+  EXPECT_FALSE(in_window(difference, 0x1008)) << "past the window";
+  EXPECT_FALSE(differs_at(difference, 0x0FFF));
+  EXPECT_FALSE(differs_at(difference, 0x1008));
+  EXPECT_FALSE(differs_at(difference, 0x1002)) << "inside, and the same";
+  EXPECT_TRUE(differs_at(difference, 0x1003));
 }
 
 TEST(RecordCodecRules, ADecodeErrorWithoutDetailIsItsFaultAlone) {
