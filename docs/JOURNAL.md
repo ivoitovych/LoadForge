@@ -18,6 +18,9 @@ minutes and saves the next person the experiment.
 **How to add to it:** entries are dated by milestone, not by calendar. State the fact, then
 how it was established. "I believe" is not an entry; "I ran this and got that" is.
 
+**What it is not:** a log of what happened when. That is `docs/history/`, one
+timestamped file per working session; this file keeps only what was learned.
+
 ---
 
 ## 1. Established by experiment — facts that contradict the obvious reading
@@ -788,6 +791,53 @@ So the sweep's own work is minutes, and its cost is set-up. The six hours were n
 mutants of `src/` running against a slow suite; with no output to read, the two
 mechanisms above -- every target mutated, and a forked child holding Mull's pipes -- each
 suffice to explain them, and neither can be confirmed until a run reports.
+
+
+### 1.27 clang-tidy 18's static analyzer crashes on `std::bit_cast<std::uintptr_t>(p) + offset`
+
+*Established 2026-10-20, wave 1 and wave 2 (#40, #63).* `clang-tidy-18` died with a
+segmentation fault, not a diagnostic, on a translation unit that computed an address as
+`std::bit_cast<std::uintptr_t>(pointer) + offset` inside one expression. The backtrace is in
+the static analyzer (`clang-analyzer-*`), so the job fails with no finding to read. Binding
+the converted value first, to a local or to a member set once in the constructor, and adding
+the offset to that, makes the crash go away with identical code generation
+(`src/verification/integrity/slice_runner.cpp` keeps `start_address_` for this reason).
+
+*Consequence:* a tidy job that ends in a crash is a toolchain defect, not a clean pass and
+not a finding. Reduce the expression, do not suppress the check.
+
+### 1.28 clang-format will format a `CMakeLists.txt` as C++, and its ignore file has no `**`
+
+*Established 2026-10-20, wave 1 and wave 4 (#77, #78).* Given a `CMakeLists.txt` on its
+command line, `clang-format-18` does not refuse it; it guesses C++ and rewrites it, joining
+and re-indenting the arguments of CMake commands until the file no longer configures.
+Streams did this by passing every changed file to the formatter. `.clang-format-ignore`
+(clang-format 18 and later) prevents it, but its patterns are matched like shell globs:
+`*` does not cross a `/`, and `**` is not supported. The file therefore lists
+`CMakeLists.txt`, `*/CMakeLists.txt`, `*/*/CMakeLists.txt` and so on to the deepest
+directory in the tree, plus the `*.cmake` patterns. A new directory deeper than the last
+pattern needs a new line.
+
+### 1.29 A signed `__int128` multiplication does not link under UBSan on ARM64
+
+*Established 2026-10-20, wave 1 (#42).* With `-fsanitize=undefined`, a multiplication of
+two signed `__int128` values is compiled into a call to `__muloti4`, the overflow-checking
+multiply. On x86-64 the runtime provides it; on the ARM64 runners the link fails with an
+undefined reference. Unsigned arithmetic has no overflow to check, so the same
+multiplication as `unsigned __int128` emits no call. The bounded-verification code
+multiplies magnitudes as unsigned and applies the sign itself (`exact::product`).
+
+### 1.30 Coverage counters updated from several threads go negative
+
+*Established 2026-10-20, wave 1 (#67).* gcov's counters are plain increments by
+default. Code that runs on several threads at once under the coverage build loses updates,
+and an edge counter can end up smaller than the counter it is derived from: gcov reports
+the difference as a negative count, and gcovr 8.6 refuses the report (`NegativeHits`). Seen
+in the compression oracle and decoder (`oracle.cpp:48`, `decoder.cpp:121`) and in each
+stream that ran tasks on the executor. `-fprofile-update=atomic` makes the increments
+atomic and the counts exact. It is now set for every target in
+`loadforge_enable_coverage()` (`cmake/Coverage.cmake`), so a component no longer needs its
+own copy; the copies the wave-1 streams added are redundant and are being removed.
 
 ---
 
@@ -2345,6 +2395,47 @@ controls — a pipe, a barrier, a wait — never with the child's own speed.** A
 passes because the child is usually slow enough is a test that fails when the build gets
 slower, which is exactly when it is needed.
 
+
+### 4.12 A diagnosis in a report taken as a fact
+
+On 2026-10-20 a stream's report said its pull request (#57) failed because `main` had
+added pure virtual methods to `platform::Syscalls`, so every fake no longer compiled. The
+pull request itself had added them. The report was plausible and wrong, and acting on it
+would have meant "fixing" `main`. Reading the diff of the branch against its merge base
+took a minute and settled it.
+
+*The structural fix* was the seam rule in §5.7, which removes the failure mode. *The
+general rule* is the corollary of §5.5, applied to reports as well as to CI: before acting
+on anyone's account of a failure, a stream's, a reviewer's or one's own, reproduce it on
+the branch and on the base.
+
+### 4.13 A review finding is a claim, not a verdict
+
+Owner's rule, 2026-10-20. Independent reviewers make mistakes too, and a finding accepted
+without being reproduced costs a change that may be wrong in a direction no gate checks.
+Every finding is therefore reproduced or disproved before any fix starts, and the reaction
+plan records the verdict for each: **CONFIRMED** (reproduced; the evidence is named),
+**REJECTED** (disproved; the evidence is named) or **PARTLY** (which part holds). The
+earlier reaction plans (`reviews/reaction-plan-*`) predate the rule and are being given
+their evidence after the fact.
+
+### 4.14 A failed gate pushed because only its last lines were read
+
+On 2026-10-20 a local gate run was judged green from the tail of its output, and the push
+went out with a failing step earlier in the log. CI caught it. This is §4.1's mistake in a
+new shape: the evidence was a summary, not the status. **The verdict of a gate is its exit
+code, read directly, every time.**
+
+### 4.15 Parallel worktrees filled the disk
+
+At about 19:05 UTC on 2026-10-20 roughly thirty worktrees, each with one or more build
+directories of 1 to 2 GB, exhausted the container's disk allowance. Builds and pushes in
+every running stream failed at once with `No space left on device`, each looking like that
+stream's own defect. Deleting the build directories of inactive worktrees freed 22 GB and
+the streams re-ran their failed steps. *The fix is a habit:* a stream deletes its build
+directories when it reports, and the manager removes the worktree of every merged branch at
+each check-in.
+
 ---
 
 ## 5. Process knowledge
@@ -2411,6 +2502,59 @@ The corollary is worth stating separately, because it is easy to get backwards: 
 on a branch is not automatically that branch's defect. Before changing anything, establish
 whether the same failure reproduces on the base — if it does, the branch is a bystander, and
 "fixing" it locally would mean changing code that was never wrong.
+
+
+### 5.6 What the first day of parallel streams showed
+
+ADR 0004's waves ran for the first time on 2026-10-20. Between 12:16 and 22:19 UTC
+thirty-three pull requests merged: all of wave 1 (streams 01 to 10), all of wave 2, the
+mutation fixes and both wave-4 workloads, while wave 3 and the first integration streams
+were in flight. What decided the pace was never the writing of a component:
+
+- **A change to a shared gate is a wave event.** When #36 extended clang-tidy to `tests/`,
+  every open wave-1 pull request turned red at once, each needing its own fix. Such a change
+  should land before a wave starts, or be announced to every stream with the fix pattern.
+- **A change to a shared contract breaks every consumer's mock.** See §4.12 and §5.7.
+- **Merging is the bottleneck.** Pull requests that were green waited behind CI queues, and
+  each merge to `main` made the next one stale. Merging main into a branch and re-running
+  CI is the steady-state cost of parallel work, and per-branch CI concurrency with
+  cancel-in-progress (#78) stops superseded runs from holding the queue.
+- **Reports need reading, not forwarding.** A stream's report is a claim about its own
+  work (§4.12, §4.13); its "Contract questions" are where the useful information is, and
+  they are only useful if the manager folds them into a contract change.
+- **Every stream pushing at each meaningful step paid for itself.** All work stopped for
+  2.5 hours (13:05 to 15:40 UTC) on an external usage quota, and again briefly when the disk
+  filled (§4.15); because each branch was pushed, nothing was lost and each stream resumed
+  from its last commit when told to continue.
+
+### 5.7 A method added to the syscall seam gets a default that fails with `ENOSYS`
+
+`platform::Syscalls` is the one interface every component's fakes derive from: a known,
+accepted exception to ADR 0003's "share only contracts". Adding a pure virtual method to it
+breaks the compilation of every fake in the tree, in every open branch. So a new method is
+added **non-pure, with a default that fails with `ENOSYS`**, defined in
+`src/platform/syscalls.cpp` and exercised by `tests/unit/platform/syscalls_defaults_test.cpp`.
+A fake that needs the call overrides it; a fake that does not is untouched, and a component
+that reaches a call its fake does not model gets a clear refusal instead of a silent
+success. (Introduced with #57. `Syscalls::has_exited` predates the rule and still has stubs
+in two test fakes; giving it a default is an open follow-up.)
+
+### 5.8 Numbered sections in a shared file collide across parallel pull requests
+
+§2.31 was claimed twice on 2026-10-20, by the wave-4 specifications and by the EXT-02
+fix, on branches that could not see each other. The collision shows up only as a merge
+conflict, and the loser's internal references must then be renumbered by hand. This is why
+streams write to their own fragments (§7). For pull requests outside the streams that must
+add to this file, the rule is: take the next free number at the time of the merge, not at
+the time of writing, and check cross-references when renumbering.
+
+### 5.9 A stacked pull request must be retargeted by hand
+
+A branch cut from an unmerged branch (§5.2) opens its pull request against that branch.
+GitHub retargets such a pull request to `main` automatically only when its base branch is
+deleted on merge, and the credential this work runs under cannot delete refs (§6). So after
+the parent merges, the child is retargeted to `main` explicitly and `main` is merged into it
+before its CI is believed. EXT-01, EXT-02 and EXT-03 (#79, #80, #81) are such a stack.
 
 ---
 
@@ -2523,6 +2667,18 @@ Kept short and current; move an item to the relevant document once it is settled
   counter's raw value with its modulus (`telemetry/sample.hpp`), `counter_delta()` defines
   the advance across one wrap, and the Load Signature never adds an advance across a gap in
   the readings, where the counter may have reset (`statistics/signature.hpp`).
+
+- **State on 2026-10-20 at 22:22 UTC.** Waves 1, 2 and 4 are merged. Waves 3 (#69 to #74,
+  waiting on the wave-3 specifications in #65) and the primitives (#63) are open. The
+  external review's EXT-01 to EXT-03 are a stack of pull requests (#79 to #81, §5.9).
+  Integration streams 11 (M2) and 21 (M3) are running; 29, 33 and 34 follow. Open
+  follow-ups: the seam default for `has_exited` (§5.7); removing the per-target
+  `-fprofile-update=atomic` copies (§1.30); the contract corrections collected from the
+  wave-1 fragments (`chore/contract-corrections-wave1`), whose release build still has
+  `-Werror=unused-result` failures to be checked against `main`; vector kernels for FFT and
+  sparse; evidence for the earlier reaction plans (§4.13). The third outside review request
+  is `reviews/review-request-2026-10-20-1841-UTC.md` (#68). Everything since supervision
+  still has had no independent reviewer.
 
 ---
 
