@@ -110,7 +110,7 @@ on the stack and allocate nothing, so `NotChecked` for a failed allocation does
 not arise. The graph oracle recomputes its whole output (4 MiB), takes it from
 a `ScratchFactory` function pointer, and answers `NotChecked` when the factory
 returns nothing; the factory is the injection seam. The reasoning and the
-rejected options are in `docs/adr/proposed/27-oracles-scratch-and-sampling.md`.
+rejected options are in `docs/adr/proposed/27-oracles-wave3-scratch-and-sampling.md`.
 
 ### D2. The sample of a unit is arithmetic on a mixed index, with the pinned members written in
 
