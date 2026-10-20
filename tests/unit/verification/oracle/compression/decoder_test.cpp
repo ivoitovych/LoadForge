@@ -23,7 +23,6 @@ namespace {
 using test::lz4::block_of;
 using test::lz4::Bytes;
 using test::lz4::encode;
-using test::lz4::Sequence;
 using test::lz4::slice;
 using test::lz4::text;
 

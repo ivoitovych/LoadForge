@@ -335,7 +335,7 @@ inline std::vector<WrongUnit> wrong_units() {
   out.push_back({"inside an offset", from_block(110, slice(block, 0, 10)), kHeader + 9,
                  rule(Rule::kOffsetTruncated)});
   {
-    contracts::OracleCase unit = from_output(111, kHeader + 9, std::byte{0});
+    const contracts::OracleCase unit = from_output(111, kHeader + 9, std::byte{0});
     out.push_back({"offset 0", unit, kHeader + 9, rule(Rule::kOffsetZero)});
   }
   out.push_back({"offset before the start", from_output(112, kHeader + 9, std::byte{9}),

@@ -134,7 +134,7 @@ struct Flips {
   std::size_t malformed = 0;
   std::size_t derived = 0;
   std::size_t reencoded = 0;
-  std::size_t total() const { return malformed + derived + reencoded; }
+  [[nodiscard]] std::size_t total() const { return malformed + derived + reencoded; }
 };
 
 /// Whether flipping `mask` in byte `at` of `block` changes one match's offset
@@ -279,7 +279,7 @@ TEST(CompressionOracleNotChecked, EvidenceOfAnyOtherSizeComparesNothing) {
   const CompressionOracle oracle;
   const lz4::Fixture fixture = lz4::fixture("records-l9");
   const contracts::OracleCase good = lz4::unit_case(4, fixture.input, fixture.block);
-  std::vector<std::pair<lz4::Bytes, lz4::Bytes>> sizes = {
+  const std::vector<std::pair<lz4::Bytes, lz4::Bytes>> sizes = {
       {lz4::Bytes(spec::kInputBytes + 1), good.output},
       {good.input, lz4::Bytes(good.output.size() - 1)},
       {lz4::Bytes(good.input.size() / 2), lz4::Bytes(good.output.size() / 2)},
@@ -300,7 +300,8 @@ TEST(CompressionOracleNotChecked, EvidenceOfAnyOtherSizeComparesNothing) {
   }
 }
 
-std::atomic<int> scratch_requests{0};
+// The injected hook, a free function, counts into this; it must be mutable.
+std::atomic<int> scratch_requests{0};  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 std::unique_ptr<Scratch> no_scratch() noexcept {
   scratch_requests.fetch_add(1, std::memory_order_seq_cst);
