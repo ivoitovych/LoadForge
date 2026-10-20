@@ -47,7 +47,7 @@ struct Fixture {
   Serial serial;
 
   Bytes run(const Hotspots& spots) { return computed(*workload, 0, input_of(spots), serial); }
-  Hotspots unit(std::uint64_t index) { return hotspots_of(generated(*workload, index)); }
+  Hotspots unit(std::uint64_t index) const { return hotspots_of(generated(*workload, index)); }
 };
 
 TEST(AdaptiveMeshProperties, TheShapeOfAnyOutput) {

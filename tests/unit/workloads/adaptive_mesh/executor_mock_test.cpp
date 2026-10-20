@@ -25,9 +25,7 @@ struct SerialMock {
 };
 
 struct DealtThreeMock {
-  static std::unique_ptr<worker::Executor> make() {
-    return std::make_unique<testing::Dealt>(3, 1);
-  }
+  static std::unique_ptr<worker::Executor> make() { return std::make_unique<testing::Dealt>(3, 1); }
 };
 
 struct ShuffledSevenMock {
@@ -40,8 +38,7 @@ struct ClaimingFourMock {
   static std::unique_ptr<worker::Executor> make() { return std::make_unique<testing::Claiming>(4); }
 };
 
-using Mocks =
-    ::testing::Types<SerialMock, DealtThreeMock, ShuffledSevenMock, ClaimingFourMock>;
+using Mocks = ::testing::Types<SerialMock, DealtThreeMock, ShuffledSevenMock, ClaimingFourMock>;
 
 TEST(AdaptiveMeshMockExecutors, AShuffleIsAPermutationAndTheSeedChangesIt) {
   const auto one = testing::Dealt::permutation(64, 1);
@@ -60,6 +57,5 @@ TEST(AdaptiveMeshMockExecutors, AShuffleIsAPermutationAndTheSeedChangesIt) {
 }  // namespace loadforge::workloads::adaptive_mesh
 
 namespace loadforge::contracts {
-INSTANTIATE_TYPED_TEST_SUITE_P(AdaptiveMeshMock, ExecutorContract,
-                               workloads::adaptive_mesh::Mocks);
+INSTANTIATE_TYPED_TEST_SUITE_P(AdaptiveMeshMock, ExecutorContract, workloads::adaptive_mesh::Mocks);
 }  // namespace loadforge::contracts

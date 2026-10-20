@@ -71,6 +71,8 @@ void store_u64(std::span<std::byte> bytes, std::size_t at, std::uint64_t value) 
 /// kMaxLeaves, which no input can exceed (adaptive_mesh.hpp).
 [[nodiscard]] std::size_t build_mesh(const Hotspots& hotspots, std::span<Leaf> leaves,
                                      std::span<std::uint32_t> counts) noexcept {
+  // Indices are bounded by kStackCells and kMaxLeaves (adaptive_mesh.hpp).
+  // NOLINTBEGIN(cppcoreguidelines-pro-bounds-constant-array-index)
   std::size_t made = 0;
   for (std::size_t cell = 0; cell < kCoarseCells; ++cell) {
     std::array<Cell, kStackCells> pending{};
@@ -82,16 +84,18 @@ void store_u64(std::span<std::byte> bytes, std::size_t at, std::uint64_t value) 
       const Cell next = pending[--top];
       if (splits(next, hotspots)) {
         for (std::uint32_t q = 4; q-- > 0;) {
-          pending[top++] = Cell{next.level + 1, (2 * next.ix) + (q & 1U), (2 * next.iy) + (q >> 1U)};
+          pending[top++] =
+              Cell{next.level + 1, (2 * next.ix) + (q & 1U), (2 * next.iy) + (q >> 1U)};
         }
       } else {
-        leaves[made++] = Leaf{static_cast<std::uint16_t>(cell), static_cast<std::uint16_t>(next.ix),
-                              static_cast<std::uint16_t>(next.iy),
-                              static_cast<std::uint8_t>(next.level)};
+        leaves[made++] =
+            Leaf{static_cast<std::uint16_t>(cell), static_cast<std::uint16_t>(next.ix),
+                 static_cast<std::uint16_t>(next.iy), static_cast<std::uint8_t>(next.level)};
       }
     }
     counts[cell] = static_cast<std::uint32_t>(made - before);
   }
+  // NOLINTEND(cppcoreguidelines-pro-bounds-constant-array-index)
   return made;
 }
 
@@ -109,6 +113,7 @@ struct UnitWork {
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void run_leaf(void* context, std::size_t index, std::size_t slot) noexcept {
   const auto& work = *static_cast<const UnitWork*>(context);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   const Leaf& leaf = work.leaves[index];
   const Point point{cell_centre(leaf.level, leaf.ix), cell_centre(leaf.level, leaf.iy)};
   double sum = 0.0;
@@ -117,6 +122,7 @@ void run_leaf(void* context, std::size_t index, std::size_t slot) noexcept {
   }
   const double value = sum * leaf_area(leaf.level);
   // The scratch has no alignment promise, so the partial sum moves by memcpy.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   std::byte* partial = work.scratch + (slot * kScratchBytes) + (leaf.cell * sizeof(double));
   double held = 0.0;
   std::memcpy(&held, partial, sizeof held);
@@ -146,10 +152,12 @@ class AdaptiveMesh final : public Workload {
   }
 
   void compute(std::uint64_t /*index*/, std::span<const std::byte> input,
+               // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                std::span<std::byte> output, std::span<std::byte> scratch,
                worker::Executor& executor) const noexcept override {
     Hotspots hotspots{};
     for (std::size_t h = 0; h < kHotspots; ++h) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
       hotspots[h] = Hotspot{load_u32(input, h * kHotspotBytes),
                             load_u32(input, (h * kHotspotBytes) + sizeof(std::uint32_t))};
     }
@@ -166,11 +174,13 @@ class AdaptiveMesh final : public Workload {
       double integral = 0.0;
       for (std::size_t slot = 0; slot < slots; ++slot) {
         double held = 0.0;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
         std::memcpy(&held, scratch.data() + (slot * kScratchBytes) + (cell * sizeof(double)),
                     sizeof held);
         integral += held;
       }
       store_u64(output, integral_offset(cell), std::bit_cast<std::uint64_t>(integral));
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
       store_u32(output, count_offset(cell), counts[cell]);
     }
   }

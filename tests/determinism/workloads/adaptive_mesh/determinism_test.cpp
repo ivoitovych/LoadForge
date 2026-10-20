@@ -39,7 +39,7 @@ namespace loadforge::workloads::adaptive_mesh::testing {
 namespace {
 
 Bytes counts_of(const Bytes& output) {
-  return Bytes(output.begin() + static_cast<std::ptrdiff_t>(kCountsOffset), output.end());
+  return {output.begin() + static_cast<std::ptrdiff_t>(kCountsOffset), output.end()};
 }
 
 TEST(AdaptiveMeshDeterminism, CountsAreExactAndIntegralsBoundedOnEverySchedule) {

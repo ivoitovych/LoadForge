@@ -79,15 +79,15 @@ TEST(AdaptiveMeshPlan, TheFiguresOfOneUnit) {
   EXPECT_EQ(plan.operations, kTypicalLeaves * kHotspots * (kOperationsPerTerm + 1));
 }
 
-TEST(AdaptiveMeshPlan, TheLeafTableIsExactlyTheMostAnInputCanMake) {
-  EXPECT_EQ(kMaxLeaves, 4096U);
-}
+TEST(AdaptiveMeshPlan, TheLeafTableIsExactlyTheMostAnInputCanMake) { EXPECT_EQ(kMaxLeaves, 4096U); }
 
 TEST(AdaptiveMeshPlan, TheFootprintAtEachSideOfOneUnitAndOfTwo) {
-  for (const auto& [footprint, units] :
-       {std::pair<std::uint64_t, std::uint64_t>{kUnit, 1}, {(2 * kUnit) - 1, 1}, {2 * kUnit, 2},
-        {(3 * kUnit) + 5, 3}, {std::numeric_limits<std::uint64_t>::max(),
-                               std::numeric_limits<std::uint64_t>::max() / kUnit}}) {
+  for (const auto& [footprint, units] : {std::pair<std::uint64_t, std::uint64_t>{kUnit, 1},
+                                         {(2 * kUnit) - 1, 1},
+                                         {2 * kUnit, 2},
+                                         {(3 * kUnit) + 5, 3},
+                                         {std::numeric_limits<std::uint64_t>::max(),
+                                          std::numeric_limits<std::uint64_t>::max() / kUnit}}) {
     const auto workload = testing::make(WorkloadConfig{1, footprint, 0, IsaPath::kScalar});
     ASSERT_NE(workload, nullptr) << footprint;
     EXPECT_EQ(workload->plan().units, units) << footprint;
@@ -302,6 +302,5 @@ namespace loadforge::contracts {
 // The registry that links every workload is the integration stream's, and
 // runs RegistryContract there.
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-INSTANTIATE_TYPED_TEST_SUITE_P(AdaptiveMesh, WorkloadContract,
-                               workloads::adaptive_mesh::Subjects);
+INSTANTIATE_TYPED_TEST_SUITE_P(AdaptiveMesh, WorkloadContract, workloads::adaptive_mesh::Subjects);
 }  // namespace loadforge::contracts

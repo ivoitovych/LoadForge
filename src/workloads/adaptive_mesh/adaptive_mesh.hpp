@@ -50,7 +50,8 @@ inline constexpr std::uint32_t kWorkloadVersion = 1;
 
 /// The most leaves any input can make: the 256 coarse cells, and three more
 /// for each of the at most kMaxLevel - kBaseLevel cells a hotspot splits.
-inline constexpr std::size_t kMaxLeaves = kCoarseCells + 3 * (kMaxLevel - kBaseLevel) * kHotspots;
+inline constexpr std::size_t kMaxLeaves =
+    kCoarseCells + (std::size_t{3} * (kMaxLevel - kBaseLevel) * kHotspots);
 
 /// Scratch per executor slot (Plan::scratch_bytes): one partial sum per coarse cell.
 inline constexpr std::uint64_t kScratchBytes = kCoarseCells * sizeof(double);
