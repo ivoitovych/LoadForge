@@ -94,9 +94,26 @@ loadforge_set_fp_contract(loadforge_topology)
 loadforge_enable_sanitizers(loadforge_topology)
 loadforge_enable_coverage(loadforge_topology)
 
+# ---- controller -------------------------------------------------------------
+# The supervisor: spawns the workers, judges their beats and their records,
+# stops them at the deadline and classifies what became of each. Depends on
+# worker (the IPC and the argv it execs workers with) and config; the console
+# reporter is the one voice it has at M1.
+add_library(loadforge_controller STATIC
+  src/controller/supervision.cpp
+  src/controller/safety.cpp
+  src/controller/orchestration.cpp
+  src/reporters/console.cpp
+)
+target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config)
+loadforge_set_warnings(loadforge_controller)
+loadforge_set_fp_contract(loadforge_controller)
+loadforge_enable_sanitizers(loadforge_controller)
+loadforge_enable_coverage(loadforge_controller)
+
 # ---- cli --------------------------------------------------------------------
 add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp)
-target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker)
+target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)

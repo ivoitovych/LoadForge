@@ -553,6 +553,11 @@ std::string to_toml(const Config& config) {
   return out.str();
 }
 
+bool operator==(const MemoryBudget& lhs, const MemoryBudget& rhs) {
+  return lhs.available_bytes == rhs.available_bytes &&
+         lhs.cgroup_limit_bytes == rhs.cgroup_limit_bytes;
+}
+
 std::uint64_t ceiling_of(const MemoryBudget& budget) noexcept {
   if (budget.cgroup_limit_bytes.has_value()) {
     return std::min(budget.available_bytes, budget.cgroup_limit_bytes.value());

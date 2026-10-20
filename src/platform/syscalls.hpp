@@ -7,6 +7,7 @@
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -300,6 +301,15 @@ class Syscalls {
   /// getpid(2). Cannot fail. A worker stamps its beats with it so a reader
   /// can tell a slot's writer from a stale pid the controller remembers.
   [[nodiscard]] virtual pid_t process_id() = 0;
+
+  /// waitpid(-1, WNOHANG): a child that has terminated, if one has. The
+  /// controller's loop owns a poll and must never block in waitpid; a
+  /// worker's exit closes its record pipe, which wakes the poll, and this is
+  /// asked afterwards. ECHILD -- no children at all -- is an error here as
+  /// in wait_any, because a supervisor that believes it has live workers and
+  /// is told otherwise has lost track of them.
+  [[nodiscard]] virtual core::Result<std::optional<Reaped>, SyscallError>
+  reap_any_nonblocking() = 0;
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -347,6 +357,7 @@ class RealSyscalls final : public Syscalls {
       const std::vector<int>& fds, int timeout_ms) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> ignore_signal(int signal) override;
   [[nodiscard]] pid_t process_id() override;
+  [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_any_nonblocking() override;
 };
 
 }  // namespace loadforge::platform

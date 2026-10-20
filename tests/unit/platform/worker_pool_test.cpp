@@ -460,5 +460,42 @@ TEST(RealWorkerPool, RealWorkersAreKilledBySignalAllAndClassifiedAsSignalled) {
   EXPECT_EQ(pool.live_count(), 0U);
 }
 
+// --- reaping without waiting ----------------------------------------------------
+
+TEST(WorkerPoolTest, ReapingWithoutWaitingReportsNothingThenOursAndSkipsStrangers) {
+  RunningPool running(2);
+  ASSERT_TRUE(running.spawned);
+  auto nothing = running.pool.reap_next_nonblocking();
+  ASSERT_TRUE(nothing.has_value()) << describe(nothing.error());
+  EXPECT_FALSE(nothing.value().has_value());
+  EXPECT_EQ(running.pool.live_count(), 2U);
+
+  // A stranger terminated first, then the second worker: the stranger is
+  // reaped and skipped in the same call, and the worker is the answer.
+  running.syscalls.script_nonblocking_reaps(
+      {{Reaped{9999, exited(0)}, 0}, {Reaped{kSecond, signalled(SIGSEGV)}, 0}});
+  auto death = running.pool.reap_next_nonblocking();
+  ASSERT_TRUE(death.has_value()) << describe(death.error());
+  ASSERT_TRUE(death.value().has_value());
+  EXPECT_EQ(*death.value(), (WorkerDeath{1, kSecond, ExitStatus{signalled(SIGSEGV)}}));
+  EXPECT_EQ(running.pool.live_count(), 1U);
+  EXPECT_EQ(running.pool.pid_at(1), 0);
+  EXPECT_EQ(running.syscalls.nonblocking_reap_count(), 3);
+
+  running.syscalls.fail_nonblocking_reap(ECHILD);
+  auto failed = running.pool.reap_next_nonblocking();
+  ASSERT_FALSE(failed.has_value());
+  EXPECT_EQ(failed.error().number, ECHILD);
+  EXPECT_EQ(running.pool.live_count(), 1U) << "an error changes no bookkeeping";
+}
+
+TEST(WorkerPoolTest, ADeathComparesFieldByField) {
+  const WorkerDeath death{1, kSecond, ExitStatus{exited(0)}};
+  EXPECT_EQ(death, (WorkerDeath{1, kSecond, ExitStatus{exited(0)}}));
+  EXPECT_NE(death, (WorkerDeath{0, kSecond, ExitStatus{exited(0)}}));
+  EXPECT_NE(death, (WorkerDeath{1, kFirst, ExitStatus{exited(0)}}));
+  EXPECT_NE(death, (WorkerDeath{1, kSecond, ExitStatus{exited(1)}}));
+}
+
 }  // namespace
 }  // namespace loadforge::platform

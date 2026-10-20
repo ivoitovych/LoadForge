@@ -379,6 +379,45 @@ TEST_F(RealSyscallsTest, WaitAnyReapsARealChildAndReportsItsStatusWord) {
   EXPECT_EQ(ExitStatus{reaped.value().status}.code(), 9);
 }
 
+TEST_F(RealSyscallsTest, ReapingWithoutWaitingAnswersNothingYetThenTheChildThenECHILD) {
+  // Children, none terminated: nothing. One terminated: that one. None at
+  // all: ECHILD, the failing arm, reachable here because nothing blocks.
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(::pipe(fds), 0);
+  const auto forked = syscalls.fork_process();
+  ASSERT_TRUE(forked.has_value()) << describe(forked.error());
+  if (forked.value() == 0) {
+    char byte = 0;
+    (void)::read(fds[0], &byte, 1);  // Held until the parent says go.
+    ::_exit(5);
+  }
+  auto nothing_yet = syscalls.reap_any_nonblocking();
+  ASSERT_TRUE(nothing_yet.has_value()) << describe(nothing_yet.error());
+  EXPECT_FALSE(nothing_yet.value().has_value());
+
+  ASSERT_EQ(::write(fds[1], "g", 1), 1);
+  std::optional<Reaped> reaped;
+  for (int attempt = 0; attempt < 500 && !reaped.has_value(); ++attempt) {
+    auto answer = syscalls.reap_any_nonblocking();
+    ASSERT_TRUE(answer.has_value()) << describe(answer.error());
+    reaped = answer.value();
+    if (!reaped.has_value()) {
+      ::usleep(2000);
+    }
+  }
+  ASSERT_TRUE(reaped.has_value()) << "the child never terminated";
+  EXPECT_EQ(reaped->pid, forked.value());
+  EXPECT_EQ(ExitStatus{reaped->status}.code(), 5);
+  ::close(fds[0]);
+  ::close(fds[1]);
+
+  auto none = syscalls.reap_any_nonblocking();
+  ASSERT_FALSE(none.has_value());
+  EXPECT_EQ(none.error().number, ECHILD);
+  EXPECT_EQ(none.error().call, "waitpid");
+  EXPECT_EQ(none.error().subject, "any child, without waiting");
+}
+
 TEST(SyscallResultTest, TheFailingArmWorksForEveryTypeTheSeamInstantiates) {
   // A template is compiled once per type, so each instantiation carries its own
   // coverage. The fork instantiation is exercised above; these are the others

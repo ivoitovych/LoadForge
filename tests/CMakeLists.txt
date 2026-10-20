@@ -28,12 +28,17 @@ add_executable(loadforge_unit_tests
   unit/worker/ipc/record_test.cpp
   unit/worker/scheduler_test.cpp
   unit/worker/entry_test.cpp
+  unit/controller/supervision_test.cpp
+  unit/controller/safety_test.cpp
+  unit/controller/orchestration_test.cpp
+  unit/reporters/console_test.cpp
   unit/platform/real_syscalls_test.cpp
   unit/platform/result_instantiations_test.cpp
   unit/third_party/tomlplusplus_smoke_test.cpp
 )
 target_link_libraries(loadforge_unit_tests PRIVATE
-  loadforge_cli loadforge_config loadforge_platform loadforge_topology loadforge_worker GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
+  loadforge_cli loadforge_config loadforge_platform loadforge_topology loadforge_worker
+  loadforge_controller GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
 # tests/ is on the include path so that support/ fakes resolve the same way
 # src/ headers do, rather than by relative path from wherever a test lives.
 target_include_directories(loadforge_unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -79,3 +84,19 @@ add_test(NAME cli_worker_bad_args_code
 add_test(NAME cli_worker_bad_args_message COMMAND loadforge --worker --slot 0)
 set_tests_properties(cli_worker_bad_args_message PROPERTIES
                      PASS_REGULAR_EXPRESSION "loadforge --worker: --workers: required")
+
+# M1 exit criterion 1 through the real binary: the controller runs the null
+# workload in two worker processes for the configured second, honouring its
+# limits, and says so. A mode this build does not run is refused by name.
+add_test(NAME cli_stress_runs
+         COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress.toml")
+set_tests_properties(cli_stress_runs PROPERTIES
+                     PASS_REGULAR_EXPRESSION "2 of 2 worker\\(s\\) completed")
+add_test(NAME cli_stress_refuses_other_modes
+         COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/benchmark-mode.toml")
+set_tests_properties(cli_stress_refuses_other_modes PROPERTIES WILL_FAIL TRUE)
+add_test(NAME cli_stress_usage COMMAND loadforge stress)
+set_tests_properties(cli_stress_usage PROPERTIES WILL_FAIL TRUE)
+
+# T7: the supervision tier, with really spawned, really killed children.
+add_subdirectory(supervision)

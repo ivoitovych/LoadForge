@@ -1,0 +1,901 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The controller's loop over the fake: workers that are pids and pipes the
+// test plays from inside the reporter's callbacks, the only place a test can
+// act while the loop owns the thread. Every scenario runs two workers.
+
+#include "controller/orchestration.hpp"
+
+#include <gtest/gtest.h>
+#include <time.h>
+
+#include <cerrno>
+#include <csignal>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "config/config.hpp"
+#include "controller/report.hpp"
+#include "controller/safety.hpp"
+#include "controller/supervision.hpp"
+#include "core/byte_size.hpp"
+#include "core/duration.hpp"
+#include "platform/syscalls.hpp"
+#include "support/fake_syscalls.hpp"
+#include "worker/entry.hpp"
+#include "worker/ipc/heartbeat.hpp"
+#include "worker/ipc/record.hpp"
+#include "worker/scheduler.hpp"
+
+namespace loadforge::controller {
+namespace {
+
+using loadforge::platform::Reaped;
+using loadforge::testing::FakeSyscalls;
+
+constexpr std::int64_t kMs = 1'000'000;
+constexpr pid_t kFirstPid = 1001;
+constexpr pid_t kSecondPid = 1002;
+// The fake hands out descriptors in a fixed order: the region, then per worker
+// a record pipe and a control pipe.
+constexpr int kRegionFd = 100;
+constexpr int kRecordRead0 = 200;
+constexpr int kRecordWrite0 = 201;
+constexpr int kControlRead0 = 202;
+constexpr int kControlWrite0 = 203;
+constexpr int kRecordRead1 = 204;
+constexpr int kRecordWrite1 = 205;
+constexpr int kControlRead1 = 206;
+constexpr int kControlWrite1 = 207;
+
+/// A reporter whose every callback is a hook the test sets.
+class Choreographer final : public Reporter {
+ public:
+  void run_starting(const RunPlan& plan) override {
+    plans.push_back(plan);
+    if (on_starting) {
+      on_starting();
+    }
+  }
+  void event(std::int64_t elapsed_ns, std::string_view line) override {
+    events.emplace_back(line);
+    elapsed.push_back(elapsed_ns);
+    if (on_event) {
+      on_event(std::string{line});
+    }
+  }
+  void run_finished(const RunReport& report) override { reports.push_back(report); }
+
+  std::vector<RunPlan> plans;
+  std::vector<std::string> events;
+  std::vector<std::int64_t> elapsed;
+  std::vector<RunReport> reports;
+  std::function<void()> on_starting;
+  std::function<void(const std::string&)> on_event;
+};
+
+std::string frame_text(ipc::RecordType type, std::string_view payload) {
+  std::vector<std::byte> bytes;
+  for (const char c : payload) {
+    bytes.push_back(static_cast<std::byte>(c));
+  }
+  auto encoded = ipc::encode(static_cast<std::uint16_t>(type), bytes);
+  EXPECT_TRUE(encoded.has_value());
+  std::string text;
+  for (const std::byte b : encoded.value()) {
+    text.push_back(static_cast<char>(std::to_integer<unsigned char>(b)));
+  }
+  return text;
+}
+
+struct Rig {
+  FakeSyscalls syscalls;
+  Choreographer reporter;
+  config::Config config;
+  RunOptions options;
+  void* region_bytes = nullptr;
+
+  Rig() {
+    config.run.mode = config::Mode::kStress;
+    config.run.duration = core::Duration{50};
+    config.workloads.push_back(config::Workload{"first", config::Threads::all(), true, {}});
+    config.workloads.push_back(config::Workload{"second", config::Threads::all(), true, {}});
+    options.executable = "/opt/loadforge";
+    options.interval_ns = 10 * kMs;
+    options.stale_after_ns = 100 * kMs;
+    options.grace = Grace{20 * kMs, 20 * kMs};
+    syscalls.advance_clocks_per_read(10 * kMs);
+    syscalls.script_forks({{kFirstPid, 0}, {kSecondPid, 0}});
+  }
+
+  ~Rig() {
+    if (region_bytes != nullptr) {
+      (void)syscalls.unmap(region_bytes, ipc::HeartbeatRegion::bytes_for(2));
+    }
+  }
+  Rig(const Rig&) = delete;
+  Rig& operator=(const Rig&) = delete;
+  Rig(Rig&&) = delete;
+  Rig& operator=(Rig&&) = delete;
+
+  core::Result<RunReport, ControllerError> run() {
+    Controller controller(syscalls, reporter);
+    return controller.run(config, options);
+  }
+
+  /// The ends a real worker would keep after exec, held from the moment they
+  /// exist: called from run_starting, before the controller closes its copies.
+  void hold_worker_ends() {
+    for (const int fd : {kRecordWrite0, kControlRead0, kRecordWrite1, kControlRead1}) {
+      syscalls.worker_holds_end(fd);
+    }
+  }
+  void worker_exits(std::size_t slot, int raw_status) {
+    syscalls.worker_releases_end(slot == 0 ? kRecordWrite0 : kRecordWrite1);
+    syscalls.worker_releases_end(slot == 0 ? kControlRead0 : kControlRead1);
+    reaps.push_back(
+        FakeSyscalls::WaitStep{Reaped{slot == 0 ? kFirstPid : kSecondPid, raw_status}, 0});
+    syscalls.script_nonblocking_reaps(reaps);
+  }
+  void deliver(std::size_t slot, ipc::RecordType type, std::string_view payload) {
+    syscalls.deliver_to_pipe(slot == 0 ? kRecordRead0 : kRecordRead1, frame_text(type, payload));
+  }
+
+  /// A beat in a worker's slot, written through a second mapping of the
+  /// region's file, so the test never owns the region's descriptor.
+  void beat(std::size_t slot, std::uint64_t progress, std::int64_t timestamp_ns,
+            std::uint64_t sequence = 2) {
+    if (region_bytes == nullptr) {
+      auto mapped = syscalls.map_shared(kRegionFd, ipc::HeartbeatRegion::bytes_for(2));
+      ASSERT_TRUE(mapped.has_value());
+      region_bytes = mapped.value();
+    }
+    auto* cell = static_cast<std::byte*>(region_bytes) + ipc::HeartbeatRegion::kHeaderBytes +
+                 ipc::worker_slot(slot) * ipc::HeartbeatRegion::kSlotBytes;
+    const std::uint32_t phase = 1;
+    const std::uint32_t pid = 7;
+    std::memcpy(cell, &sequence, sizeof sequence);
+    std::memcpy(cell + 8, &timestamp_ns, sizeof timestamp_ns);
+    std::memcpy(cell + 16, &progress, sizeof progress);
+    std::memcpy(cell + 24, &phase, sizeof phase);
+    std::memcpy(cell + 28, &pid, sizeof pid);
+  }
+
+  std::vector<FakeSyscalls::WaitStep> reaps;
+};
+
+bool starts_with(const std::string& line, std::string_view prefix) {
+  return line.substr(0, prefix.size()) == prefix;
+}
+
+// --- the happy path ----------------------------------------------------------------
+
+TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
+  Rig rig;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 7, 10 * kMs);
+      rig.beat(1, 9, 10 * kMs);
+    } else if (starts_with(line, "deadline")) {
+      // The stop byte is on each control pipe before the event is told, and
+      // the controller's own beat has gone into slot 0 once before the fork
+      // and on each of the five ticks since: sequence 12.
+      EXPECT_EQ(rig.syscalls.pipe_contents(kControlWrite0), "s") << "the stop byte";
+      EXPECT_EQ(rig.syscalls.pipe_contents(kControlWrite1), "s");
+      std::uint64_t sequence = 0;
+      std::memcpy(&sequence,
+                  static_cast<std::byte*>(rig.region_bytes) + ipc::HeartbeatRegion::kHeaderBytes,
+                  sizeof sequence);
+      EXPECT_EQ(sequence, 12U);
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.deliver(1, ipc::RecordType::kFinished, "done too");
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const RunReport& report = result.value();
+  EXPECT_FALSE(report.worker_exit_code.has_value());
+  ASSERT_EQ(report.workers.size(), 2U);
+  EXPECT_EQ(report.workers[0], (WorkerReport{0,
+                                             kFirstPid,
+                                             WorkerFate::kCompleted,
+                                             "exited with code 0",
+                                             "stop requested",
+                                             7,
+                                             {"finished: done"}}));
+  EXPECT_EQ(report.workers[1], (WorkerReport{1,
+                                             kSecondPid,
+                                             WorkerFate::kCompleted,
+                                             "exited with code 0",
+                                             "stop requested",
+                                             9,
+                                             {"finished: done too"}}));
+  EXPECT_TRUE(all_clean(report));
+  EXPECT_EQ(clean_count(report), 2U);
+  // Five ticks reach the 50 ms deadline; the finish reads the clock once more.
+  EXPECT_EQ(report.elapsed_ns, 60 * kMs);
+  EXPECT_EQ(
+      rig.reporter.events,
+      (std::vector<std::string>{
+          "spawned 2 worker(s): pids 1001 1002", "deadline reached: stop requested",
+          "worker 0 (pid 1001): exited with code 0", "worker 1 (pid 1002): exited with code 0"}));
+  EXPECT_EQ(rig.reporter.elapsed, (std::vector<std::int64_t>{0, 50 * kMs, 50 * kMs, 50 * kMs}));
+  EXPECT_TRUE(rig.syscalls.signals_sent().empty()) << "nobody needed a signal";
+  EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  ASSERT_EQ(rig.reporter.plans.size(), 1U);
+  EXPECT_EQ(rig.reporter.plans[0].workers, 2U);
+  EXPECT_EQ(rig.reporter.plans[0].executable, "/opt/loadforge");
+  EXPECT_EQ(rig.reporter.plans[0].limits.size(), 1U);
+  ASSERT_EQ(rig.reporter.reports.size(), 1U);
+  EXPECT_EQ(rig.reporter.reports[0], report);
+}
+
+TEST(ControllerTest, TheChildOfAFailedExecReturnsItsOwnExitCodeAndTouchesNothingElse) {
+  Rig rig;
+  rig.syscalls.script_forks({{0, 0}});  // This process is the first worker.
+  // In the child, getppid is the controller's pid; the fake's parent must be
+  // what its own process_id says, or the launcher sees the orphan race.
+  rig.syscalls.set_parent_pid(FakeSyscalls::kFakePid);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_TRUE(result.value().worker_exit_code.has_value());
+  EXPECT_EQ(*result.value().worker_exit_code, 120) << "exec failed: the launcher's code";
+  EXPECT_TRUE(result.value().workers.empty());
+  // Exactly its own descriptors were handed over, and the argv is the one the
+  // worker's parser reads back.
+  // Read from the history: the child's teardown closed its copies after the
+  // exec failed, as it should, so the live view is empty again.
+  EXPECT_EQ(rig.syscalls.handed_over(),
+            (std::vector<int>{kRegionFd, kRecordWrite0, kControlRead0}));
+  EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  worker::WorkerArgs expected;
+  expected.slot = 0;
+  expected.workers = 2;
+  expected.heartbeat_fd = kRegionFd;
+  expected.record_fd = kRecordWrite0;
+  expected.control_fd = kControlRead0;
+  expected.supervisor_pid = FakeSyscalls::kFakePid;
+  expected.pacing = worker::Pacing{50 * kMs, 10 * kMs, 100 * kMs};
+  EXPECT_EQ(rig.syscalls.last_exec_argv(), worker::argv_for("/opt/loadforge", expected));
+  EXPECT_EQ(rig.syscalls.last_exec_path(), "/opt/loadforge");
+  EXPECT_TRUE(rig.reporter.events.empty()) << "a child reports nothing";
+  EXPECT_TRUE(rig.reporter.reports.empty());
+}
+
+// --- the catalogue ---------------------------------------------------------------
+
+TEST(ControllerTest, AWorkerWhoseBeatGoesStaleIsTerminatedThenKilledAndTimedOut) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  // Worker 0 beat once, at 0: stale by timestamp once the allowance passes.
+  // Worker 1 never beat: stale once the allowance has passed since the start.
+  // Both at tick 4. Worker 1 has vanished by the time its signals go: ESRCH
+  // is not an error, and the reap that follows says how it went.
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, 0);
+    } else if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  rig.syscalls.fail_signal_for(kSecondPid, ESRCH);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  for (const WorkerReport& worker : result.value().workers) {
+    EXPECT_EQ(worker.fate, WorkerFate::kTimedOut) << worker.slot;
+    EXPECT_EQ(worker.termination, "killed by signal 9");
+    EXPECT_EQ(worker.stop, "SIGKILL sent");
+  }
+  // Stale at tick 4 (40 ms past a 30 ms allowance), SIGKILL 20 ms of grace
+  // later (tick 6).
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGTERM},
+                                                {kSecondPid, SIGTERM},
+                                                {kFirstPid, SIGKILL},
+                                                {kSecondPid, SIGKILL}}));
+  EXPECT_EQ(rig.reporter.events[1], "worker 0: sent signal 15 (heartbeat stale)");
+  EXPECT_EQ(rig.reporter.elapsed[1], 40 * kMs);
+  EXPECT_EQ(rig.reporter.elapsed[3], 60 * kMs);
+  EXPECT_FALSE(all_clean(result.value()));
+}
+
+TEST(ControllerTest, AWorkerThatBeatsWithoutProgressIsASpinAndTimesOut) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      // Beats from far in the future stay fresh by timestamp forever; the
+      // progress never moves, which is the spin.
+      rig.beat(0, 7, 10'000 * kMs);
+      rig.beat(1, 7, 10'000 * kMs);
+    } else if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(result.value().workers[0].progress, 7U);
+  // Progress 7 was seen at tick 1 (10 ms); 40 ms later with no change, at
+  // tick 5, the allowance of 30 ms is exceeded.
+  EXPECT_EQ(rig.reporter.elapsed[1], 50 * kMs);
+}
+
+TEST(ControllerTest, AWorkerThatDiedInsideAPublishIsTreatedAsStale) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, 10 * kMs, 3);  // An odd sequence: a writer that never finished.
+      rig.beat(1, 1, 10'000 * kMs);
+    } else if (line == "worker 0: sent signal 15 (heartbeat stale)") {
+      rig.worker_exits(0, SIGSEGV);
+    } else if (line == "worker 0 (pid 1001): killed by signal 11") {
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kFault)
+      << "SIGTERM was sent, but what killed it was the fault";
+  EXPECT_EQ(rig.reporter.elapsed[1], 10 * kMs) << "unreadable on the first tick";
+}
+
+TEST(ControllerTest, AStopRequestIgnoredIsEscalatedAndOneWorkerHonoursTheTerm) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{30};
+  rig.options.stale_after_ns = 1000 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, 10'000 * kMs);
+      rig.beat(1, 1, 10'000 * kMs);
+    } else if (line == "worker 0: sent signal 15") {
+      rig.deliver(0, ipc::RecordType::kFinished, "stopped on term");
+      rig.worker_exits(0, 0);
+    } else if (line == "worker 1: sent signal 9") {
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(result.value().workers[0].stop, "SIGTERM sent");
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kStoppedByController);
+  EXPECT_EQ(result.value().workers[1].stop, "SIGKILL sent");
+  // Deadline at tick 3 (30 ms), SIGTERM 20 ms later, SIGKILL 20 ms after that.
+  EXPECT_EQ(rig.reporter.events[1], "deadline reached: stop requested");
+  EXPECT_EQ(rig.reporter.elapsed[1], 30 * kMs);
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{
+                {kFirstPid, SIGTERM}, {kSecondPid, SIGTERM}, {kSecondPid, SIGKILL}}));
+}
+
+TEST(ControllerTest, AFaultIsReportedWithTheRecordsThatArrivedBeforeIt) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kStarted, "slot 0 pid 1001");
+      rig.deliver(0, ipc::RecordType::kError, "about to crash");
+      rig.worker_exits(0, SIGSEGV);
+      rig.syscalls.deliver_to_pipe(kRecordRead1,
+                                   frame_text(static_cast<ipc::RecordType>(900), "?"));
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[1].records,
+            (std::vector<std::string>{"unknown record: ?", "finished: done"}))
+      << "a type this build does not know is carried, not refused";
+  EXPECT_EQ(result.value().workers[0],
+            (WorkerReport{0,
+                          kFirstPid,
+                          WorkerFate::kFault,
+                          "killed by signal 11",
+                          "running",
+                          0,
+                          {"started: slot 0 pid 1001", "error: about to crash"}}));
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(clean_count(result.value()), 1U);
+}
+
+TEST(ControllerTest, ACorruptFrameAndATruncatedStreamAreEachReportedAsSuch) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      std::string corrupt = frame_text(ipc::RecordType::kFinished, "done");
+      corrupt[4] = '\x02';  // version 2
+      rig.syscalls.deliver_to_pipe(kRecordRead0, corrupt);
+      rig.worker_exits(0, 0);
+      const std::string whole = frame_text(ipc::RecordType::kFinished, "cut");
+      rig.syscalls.deliver_to_pipe(kRecordRead1, whole.substr(0, whole.size() - 1));
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kChannelCorrupt);
+  EXPECT_EQ(result.value().workers[0].records,
+            (std::vector<std::string>{"record channel: the frame is of a version this build "
+                                      "does not read: version 2, expected 1"}));
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTruncatedEvidence);
+  EXPECT_EQ(result.value().workers[1].records,
+            (std::vector<std::string>{
+                "record channel: the stream ended inside a frame: bytes left 18, expected 0"}));
+  EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+}
+
+TEST(ControllerTest, AChannelHeldOpenAfterTheWorkerDiedIsTruncatedNotWaitedForForever) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      // Worker 1 dies, but something it started still holds its record pipe's
+      // write end: only the control end is released.
+      rig.syscalls.worker_releases_end(kControlRead1);
+      rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+      rig.syscalls.script_nonblocking_reaps(rig.reaps);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTruncatedEvidence);
+  EXPECT_EQ(result.value().workers[1].records,
+            (std::vector<std::string>{"record channel: held open after the worker died"}));
+  // The final drain waited one stop grace on the held channel, then gave up.
+  EXPECT_EQ(rig.syscalls.poll_timeouts().back(), 20);
+  EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+}
+
+TEST(ControllerTest, AChannelThatNeverEndsIsGivenABoundedNumberOfDrains) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      // Most of a large frame, a byte per read, from a writer that stays.
+      const std::string big = frame_text(ipc::RecordType::kFinished, std::string(2000, 'x'));
+      rig.syscalls.deliver_to_pipe(kRecordRead1, big.substr(0, 1500));
+      rig.syscalls.limit_pipe_reads(1);
+      rig.syscalls.worker_releases_end(kControlRead1);
+      rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+      rig.syscalls.script_nonblocking_reaps(rig.reaps);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTruncatedEvidence);
+  EXPECT_EQ(result.value().workers[1].records.back(),
+            "record channel: held open after the worker died");
+  EXPECT_GT(rig.syscalls.read_count(), 1000) << "the bound, not the stream's end, stopped it";
+}
+
+TEST(ControllerTest,
+     AStopByteToAWorkerAlreadyGoneIsNotAnErrorAndACleanExitWithoutAFinishIsNotClean) {
+  // No ends held: the workers' pipes close as soon as the controller closes
+  // its copies, so the channels end at once; the reaps come only after the
+  // deadline, by which time the stop byte has nobody to go to.
+  Rig rig;
+  // However poll says the far side is gone -- an error condition on one
+  // channel, an invalid descriptor on the other -- the channel is drained
+  // and its end of file taken.
+  rig.syscalls.script_readiness(kRecordRead0, platform::Readiness{false, false, true, false});
+  rig.syscalls.script_readiness(kRecordRead1, platform::Readiness{false, false, false, true});
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "deadline")) {
+      rig.syscalls.script_nonblocking_reaps(
+          {{Reaped{kFirstPid, 0}, 0}, {Reaped{kSecondPid, 0}, 0}});
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  for (const WorkerReport& worker : result.value().workers) {
+    EXPECT_EQ(worker.fate, WorkerFate::kTruncatedEvidence);
+    EXPECT_EQ(worker.stop, "stop requested");
+  }
+  EXPECT_EQ(rig.syscalls.pipe_contents(kControlWrite0), "") << "EPIPE: nothing was delivered";
+}
+
+TEST(ControllerTest, TheDeadlineAsksNothingOfAWorkerAlreadyGoneOrAlreadyBeingStopped) {
+  // Worker 0 finishes at once; worker 1 never beats and is terminated at tick
+  // 4, before the 60 ms deadline at tick 6, which therefore asks nothing of
+  // either -- and worker 1's SIGKILL falls due on the same tick.
+  Rig rig;
+  rig.config.run.duration = core::Duration{60};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done early");
+      rig.worker_exits(0, 0);
+    } else if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(result.value().workers[0].stop, "running") << "it was gone before anyone asked";
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(
+      rig.reporter.events,
+      (std::vector<std::string>{
+          "spawned 2 worker(s): pids 1001 1002", "worker 0 (pid 1001): exited with code 0",
+          "worker 1: sent signal 15 (heartbeat stale)", "deadline reached: stop requested",
+          "worker 1: sent signal 9 (heartbeat stale)", "worker 1 (pid 1002): killed by signal 9"}));
+}
+
+TEST(ControllerTest, AWorkerThatGoesStaleAfterTheStopRequestIsTerminatedForStaleness) {
+  // Asked to stop at tick 3; never beat, so stale at tick 5 -- before the
+  // request's 100 ms grace would have sent SIGTERM for the deadline. The
+  // SIGTERM is for staleness, and the fate is a timeout, not a stop.
+  Rig rig;
+  rig.config.run.duration = core::Duration{30};
+  rig.options.stale_after_ns = 40 * kMs;
+  rig.options.grace = Grace{100 * kMs, 20 * kMs};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(rig.reporter.events[1], "deadline reached: stop requested");
+  EXPECT_EQ(rig.reporter.elapsed[1], 30 * kMs);
+  EXPECT_EQ(rig.reporter.events[2], "worker 0: sent signal 15 (heartbeat stale)");
+  EXPECT_EQ(rig.reporter.elapsed[2], 50 * kMs);
+  EXPECT_EQ(rig.reporter.elapsed[4], 70 * kMs) << "SIGKILL 20 ms after SIGTERM";
+}
+
+// --- the controller's own failures ---------------------------------------------------
+
+TEST(ControllerTest, RefusesBeforeSpawningWhenTheConfigurationCannotBeRun) {
+  {
+    Rig rig;
+    rig.config.workloads[0].memory = core::ByteSize::bytes(std::uint64_t{2} << 30U);
+    rig.options.budget = config::MemoryBudget{std::uint64_t{1} << 30U, std::nullopt};
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "memory");
+    EXPECT_EQ(rig.syscalls.fork_count(), 0);
+  }
+  {
+    Rig rig;
+    rig.config.workloads[0].enabled = false;
+    rig.config.workloads[1].enabled = false;
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), (ControllerError{"config", "no workload is enabled"}));
+    EXPECT_EQ(describe(result.error()), "config: no workload is enabled");
+  }
+}
+
+TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehind) {
+  {
+    Rig rig;
+    rig.syscalls.fail_create_memory_file(ENOMEM);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "heartbeat");
+  }
+  {
+    Rig rig;
+    rig.syscalls.fail_clock(CLOCK_MONOTONIC_RAW, EINVAL);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "clock");
+  }
+  {
+    Rig rig;
+    rig.syscalls.fail_create_pipe_on(1, EMFILE);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "record channel");
+    EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  }
+  {
+    Rig rig;
+    rig.syscalls.fail_create_pipe_on(2, EMFILE);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "control pipe");
+    EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  }
+  {
+    Rig rig;
+    rig.syscalls.script_forks({{kFirstPid, 0}, {0, EAGAIN}});
+    rig.syscalls.script_waits({{Reaped{kFirstPid, SIGKILL}, 0}});
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "spawn");
+    EXPECT_EQ(rig.syscalls.signals_sent(),
+              (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGKILL}}))
+        << "the pool unwound the worker it had started";
+    EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  }
+  for (const int fd : {kRecordWrite0, kControlRead0}) {
+    Rig rig;
+    rig.syscalls.fail_close_of(fd, EIO);
+    // Only one reap is scripted: the teardown's wait for the second meets
+    // ECHILD and stops rather than spinning on a kernel that will not say.
+    rig.syscalls.script_waits({{Reaped{kFirstPid, SIGKILL}, 0}});
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value()) << fd;
+    EXPECT_EQ(result.error().stage, "spawn");
+    EXPECT_EQ(rig.syscalls.signals_sent(),
+              (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGKILL}, {kSecondPid, SIGKILL}}))
+        << "both workers were running and were killed on the way out";
+    EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  }
+}
+
+TEST(ControllerTest, EveryFailureInsideTheLoopNamesItsStageAndKillsTheWorkers) {
+  const auto expect_stage = [](Rig& rig, std::string_view stage) {
+    rig.syscalls.script_waits({{Reaped{kFirstPid, SIGKILL}, 0}, {Reaped{kSecondPid, SIGKILL}, 0}});
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value()) << stage;
+    EXPECT_EQ(result.error().stage, stage);
+    EXPECT_EQ(rig.syscalls.signals_sent().back(), (std::pair<pid_t, int>{kSecondPid, SIGKILL}));
+    EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  };
+  {
+    Rig rig;
+    rig.syscalls.fail_poll(EINVAL);
+    expect_stage(rig, "record channel");
+  }
+  {
+    Rig rig;
+    rig.syscalls.fail_nonblocking_reap(EIO);
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    expect_stage(rig, "reap");
+  }
+  {
+    Rig rig;
+    rig.options.stale_after_ns = 10 * kMs;
+    rig.syscalls.fail_signal(EPERM);
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    rig.syscalls.script_waits({{Reaped{kFirstPid, SIGKILL}, 0}, {Reaped{kSecondPid, SIGKILL}, 0}});
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "signal");
+  }
+  {
+    Rig rig;
+    rig.syscalls.script_writes({{0, EIO}});
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    expect_stage(rig, "control pipe");
+  }
+  {
+    Rig rig;
+    rig.syscalls.script_readiness(kRecordRead0, platform::Readiness{true, false, false, false});
+    rig.syscalls.always_fail_read(EIO);
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    expect_stage(rig, "record channel");
+  }
+  {
+    Rig rig;
+    for (const int clock_id : {CLOCK_MONOTONIC_RAW, CLOCK_MONOTONIC, CLOCK_BOOTTIME}) {
+      rig.syscalls.set_clock(clock_id, platform::TimeSpec{100, 0});
+    }
+    rig.syscalls.advance_clocks_per_read(-10 * kMs);
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    expect_stage(rig, "clock");
+  }
+  {
+    Rig rig;
+    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 2, EIO);
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    expect_stage(rig, "clock");
+  }
+}
+
+TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
+  const auto complete_at_deadline = [](Rig& rig) {
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    rig.reporter.on_event = [&rig](const std::string& line) {
+      if (starts_with(line, "deadline")) {
+        rig.deliver(0, ipc::RecordType::kFinished, "done");
+        rig.deliver(1, ipc::RecordType::kFinished, "done");
+        rig.worker_exits(0, 0);
+        rig.worker_exits(1, 0);
+      }
+    };
+  };
+  {
+    Rig rig;
+    complete_at_deadline(rig);
+    rig.syscalls.fail_unmap(EINVAL);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "heartbeat");
+    EXPECT_TRUE(rig.reporter.reports.empty()) << "no report was told for a run that failed";
+  }
+  {
+    Rig rig;
+    complete_at_deadline(rig);
+    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 7, EIO);  // The finish's reading.
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "clock");
+  }
+  {
+    Rig rig;
+    complete_at_deadline(rig);
+    // The finish's reading is earlier than the start's: a clock that jumped.
+    rig.syscalls.set_clock(CLOCK_MONOTONIC_RAW, platform::TimeSpec{10, 0});
+    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 7, platform::TimeSpec{0, 0});
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "clock");
+    EXPECT_NE(result.error().detail.find("backwards"), std::string::npos) << result.error().detail;
+  }
+  {
+    // After every worker is reaped, the final drain's poll on a channel still
+    // held open fails: the controller's own failure, reported as such.
+    Rig rig;
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    rig.reporter.on_event = [&rig](const std::string& line) {
+      if (starts_with(line, "spawned")) {
+        rig.deliver(0, ipc::RecordType::kFinished, "done");
+        rig.worker_exits(0, 0);
+        rig.syscalls.worker_releases_end(kControlRead1);
+        rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+        rig.syscalls.script_nonblocking_reaps(rig.reaps);
+      }
+    };
+    rig.syscalls.fail_poll_on(2, EINVAL);  // The loop polled once; this is the final drain's.
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "record channel");
+    EXPECT_NE(result.error().detail.find("poll("), std::string::npos) << result.error().detail;
+  }
+  {
+    // The final drain is told the held channel is readable, and the read fails.
+    Rig rig;
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    rig.reporter.on_event = [&rig](const std::string& line) {
+      if (starts_with(line, "spawned")) {
+        rig.deliver(0, ipc::RecordType::kFinished, "done");
+        rig.worker_exits(0, 0);
+        rig.syscalls.worker_releases_end(kControlRead1);
+        rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+        rig.syscalls.script_nonblocking_reaps(rig.reaps);
+      } else if (starts_with(line, "worker 1 (pid 1002)")) {
+        rig.syscalls.script_readiness(kRecordRead1, platform::Readiness{true, false, false, false});
+        rig.syscalls.always_fail_read(EIO);
+      }
+    };
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "record channel");
+    EXPECT_NE(result.error().detail.find("read("), std::string::npos) << result.error().detail;
+  }
+  {
+    Rig rig;
+    complete_at_deadline(rig);
+    rig.syscalls.fail_poll(EINVAL);
+    rig.syscalls.script_waits({{Reaped{kFirstPid, SIGKILL}, 0}, {Reaped{kSecondPid, SIGKILL}, 0}});
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "record channel");
+  }
+}
+
+TEST(ControllerTest, ReportValuesCompareFieldByField) {
+  const WorkerReport a{0, 1, WorkerFate::kCompleted, "t", "s", 2, {"r"}};
+  WorkerReport b = a;
+  EXPECT_EQ(a, b);
+  b.slot = 9;
+  EXPECT_NE(a, b);
+  b = a;
+  b.pid = 9;
+  EXPECT_NE(a, b);
+  b = a;
+  b.fate = WorkerFate::kFault;
+  EXPECT_NE(a, b);
+  b = a;
+  b.termination = "x";
+  EXPECT_NE(a, b);
+  b = a;
+  b.stop = "x";
+  EXPECT_NE(a, b);
+  b = a;
+  b.progress = 9;
+  EXPECT_NE(a, b);
+  b = a;
+  b.records = {};
+  EXPECT_NE(a, b);
+
+  RunReport r;
+  r.workers = {a};
+  r.elapsed_ns = 5;
+  RunReport s = r;
+  EXPECT_EQ(r, s);
+  s.elapsed_ns = 6;
+  EXPECT_NE(r, s);
+  s = r;
+  s.worker_exit_code = 120;
+  EXPECT_NE(r, s);
+  s = r;
+  s.workers.clear();
+  EXPECT_NE(r, s);
+  EXPECT_FALSE(all_clean(s)) << "no workers is not all clean";
+
+  const RunOptions o;
+  RunOptions p = o;
+  EXPECT_EQ(o, p);
+  p.executable = "x";
+  EXPECT_NE(o, p);
+  p = o;
+  p.interval_ns = 1;
+  EXPECT_NE(o, p);
+  p = o;
+  p.stale_after_ns = 1;
+  EXPECT_NE(o, p);
+  p = o;
+  p.grace.kill_ns = 1;
+  EXPECT_NE(o, p);
+  p = o;
+  config::MemoryBudget budget;
+  budget.available_bytes = 1;
+  p.budget = budget;
+  EXPECT_NE(o, p);
+
+  const RunPlan plan;
+  RunPlan other = plan;
+  EXPECT_EQ(plan, other);
+  other.mode = config::Mode::kExplore;
+  EXPECT_NE(plan, other);
+  other = plan;
+  other.duration = core::Duration{1};
+  EXPECT_NE(plan, other);
+  other = plan;
+  other.workers = 1;
+  EXPECT_NE(plan, other);
+  other = plan;
+  other.executable = "x";
+  EXPECT_NE(plan, other);
+  other = plan;
+  other.limits.push_back(LimitStatus{});
+  EXPECT_NE(plan, other);
+
+  const ControllerError e{"a", "b"};
+  EXPECT_EQ(e, (ControllerError{"a", "b"}));
+  EXPECT_NE(e, (ControllerError{"x", "b"}));
+  EXPECT_NE(e, (ControllerError{"a", "x"}));
+}
+
+}  // namespace
+}  // namespace loadforge::controller

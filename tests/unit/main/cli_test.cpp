@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <sstream>
@@ -13,8 +14,11 @@
 #include <utility>
 #include <vector>
 
+#include "config/config.hpp"
+#include "core/duration.hpp"
 #include "platform/clock.hpp"
 #include "platform/syscalls.hpp"
+#include "support/fake_syscalls.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -207,6 +211,95 @@ TEST(Cli, TheWorkerSwitchRunsARealWorkerInThisProcess) {
   EXPECT_TRUE(syscalls.close(records.value().read_fd).has_value());
   EXPECT_TRUE(syscalls.close(control.value().read_fd).has_value());
   EXPECT_TRUE(syscalls.close(control.value().write_fd).has_value());
+}
+
+TEST(Cli, StressTakesExactlyConfigAndAFile) {
+  for (const std::vector<std::string_view>& args :
+       {std::vector<std::string_view>{"stress"},
+        std::vector<std::string_view>{"stress", "--conf", "a.toml"},
+        std::vector<std::string_view>{"stress", "--config", "a.toml", "extra"}}) {
+    const Outcome r = invoke(args);
+    EXPECT_EQ(r.code, 2);
+    EXPECT_NE(r.err.find("stress takes exactly --config FILE"), std::string::npos) << r.err;
+    EXPECT_TRUE(r.out.empty());
+  }
+}
+
+TEST(Cli, StressRefusesAMissingFileAndAModeThisBuildDoesNotRun) {
+  const Outcome missing =
+      invoke({"stress", "--config", LOADFORGE_SOURCE_DIR "/config/absent.toml"});
+  EXPECT_EQ(missing.code, 1);
+  EXPECT_NE(missing.err.find("absent.toml: cannot open the file"), std::string::npos)
+      << missing.err;
+
+  const Outcome benchmark = invoke(
+      {"stress", "--config", LOADFORGE_SOURCE_DIR "/tests/fixtures/config/benchmark-mode.toml"});
+  EXPECT_EQ(benchmark.code, 1);
+  EXPECT_NE(benchmark.err.find("mode benchmark lands with a later milestone"), std::string::npos)
+      << benchmark.err;
+  EXPECT_TRUE(benchmark.out.empty());
+}
+
+TEST(Cli, StressRefusesToRunWhenItCannotNameTheWorkerExecutable) {
+  // A live medium without /proc is where a wrong worker binary would be
+  // hardest to notice, so there is no fallback: the run is refused and says why.
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(stress(LOADFORGE_SOURCE_DIR "/tests/fixtures/config/short-stress.toml",
+                   LOADFORGE_SOURCE_DIR "/no-such-link", out, err),
+            1);
+  EXPECT_NE(err.str().find("cannot resolve this executable for the workers: readlink("),
+            std::string::npos)
+      << err.str();
+  EXPECT_TRUE(out.str().empty());
+}
+
+/// Two null workloads for a short while, for driving run_stress over a fake.
+config::Config two_workloads() {
+  config::Config config;
+  config.run.mode = config::Mode::kStress;
+  config.run.duration = core::Duration{50};
+  config.workloads.push_back(config::Workload{"first", config::Threads::all(), true, {}});
+  config.workloads.push_back(config::Workload{"second", config::Threads::all(), true, {}});
+  return config;
+}
+
+TEST(Cli, RunStressReturnsAFailedWorkersExitCodeInTheChild) {
+  testing::FakeSyscalls syscalls;
+  syscalls.advance_clocks_per_read(10'000'000);
+  syscalls.script_forks({{0, 0}});  // This process is the worker; its exec will fail.
+  syscalls.set_parent_pid(testing::FakeSyscalls::kFakePid);
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", out, err), 120);
+  EXPECT_TRUE(err.str().empty()) << err.str();
+  EXPECT_EQ(syscalls.exec_count(), 1);
+}
+
+TEST(Cli, RunStressReportsAControllerFailureAndTheUncleanRun) {
+  testing::FakeSyscalls failing;
+  failing.advance_clocks_per_read(10'000'000);
+  failing.script_forks({{0, EAGAIN}});
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(run_stress(failing, two_workloads(), "/opt/loadforge", out, err), 1);
+  EXPECT_NE(err.str().find("loadforge: spawn: fork(worker process): Resource temporarily"),
+            std::string::npos)
+      << err.str();
+
+  // Two workers that exit at once with nothing sent: the run ends, and it is
+  // not clean, which is its own exit code.
+  testing::FakeSyscalls unclean;
+  unclean.advance_clocks_per_read(10'000'000);
+  unclean.script_forks({{1001, 0}, {1002, 0}});
+  unclean.script_nonblocking_reaps(
+      {{platform::Reaped{1001, 0}, 0}, {platform::Reaped{1002, 0}, 0}});
+  std::ostringstream report;
+  std::ostringstream quiet;
+  EXPECT_EQ(run_stress(unclean, two_workloads(), "/opt/loadforge", report, quiet), 3);
+  EXPECT_NE(report.str().find("0 of 2 worker(s) completed"), std::string::npos) << report.str();
+  EXPECT_NE(report.str().find("evidence truncated"), std::string::npos) << report.str();
+  EXPECT_TRUE(quiet.str().empty()) << quiet.str();
 }
 
 TEST(Cli, DiagnosticsGoToStderrNotStdout) {

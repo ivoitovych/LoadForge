@@ -1311,6 +1311,14 @@ changed by the caller, and the working directory may move. It is resolved and ca
 startup, before any `chdir`, with a fallback for a live medium where `/proc` is not
 mounted.
 
+> *Implementation note (M1).* `platform::ExecutablePath` resolves `/proc/self/exe` and,
+> when it cannot, **refuses with no fallback** — not to `argv[0]`, which this section
+> already rules out, and not to anything else: a live medium without `/proc` is exactly
+> where a wrong worker binary would be hardest to notice, and the code's position is that
+> an explicit override belongs on the command line, where the user can see what they chose.
+> That override does not exist yet. Whether the fallback this paragraph promises stands,
+> or the explicit override replaces it, is an open owner decision (JOURNAL §6).
+
 #### The rule that makes multi-process safer rather than more dangerous
 
 A worker can die **holding a process-shared lock**. Unless every such mutex is
