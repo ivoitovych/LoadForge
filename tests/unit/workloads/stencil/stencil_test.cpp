@@ -177,7 +177,7 @@ TEST(StencilGenerate, IsLittleEndianIeeeBytes) {
   const auto workload = testing::make(testing::config_for(simd::IsaPath::kScalar));
   const Bytes input = testing::generated(*workload, 1);
   const double first = entry_value(rng::u64_of(rng::block_at(0x5EED, 1, 0)));
-  const std::uint64_t bits = std::bit_cast<std::uint64_t>(first);
+  const auto bits = std::bit_cast<std::uint64_t>(first);
   for (std::size_t byte = 0; byte < 8; ++byte) {
     EXPECT_EQ(std::to_integer<std::uint64_t>(input[byte]), (bits >> (8 * byte)) & 0xFFU) << byte;
   }

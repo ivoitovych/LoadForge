@@ -195,7 +195,7 @@ inline double max_magnitude(std::span<const std::byte> grid) {
 
 // ---- the exact reference ---------------------------------------------------------
 
-__extension__ typedef __int128 Exact;
+__extension__ using Exact = __int128;
 
 /// Every cell of the grid after kSteps sweeps as an integer multiple of 2^-76.
 /// The input is a multiple of 2^-52, each sweep (4 u + N + S + E + W) / 8

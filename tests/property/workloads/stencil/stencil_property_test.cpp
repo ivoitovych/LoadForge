@@ -60,6 +60,7 @@ Bytes transposed(const Bytes& grid) {
   Bytes result(kGridBytes);
   for (std::size_t row = 0; row < kEdge; ++row) {
     for (std::size_t column = 0; column < kEdge; ++column) {
+      // NOLINTNEXTLINE(readability-suspicious-call-argument): the transpose
       testing::set_cell(result, column, row, testing::cell_of(grid, row, column));
     }
   }
