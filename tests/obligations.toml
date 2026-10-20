@@ -167,7 +167,9 @@ worker contract that misbehaves on demand, and every reachable row is a test \
 with N >= 2 -- exit 0 with no zombie, exit non-zero, SIGSEGV, SIGBUS and SIGABRT \
 with the timeline kept, a silent hang holding its descriptors, a spin beside a \
 slow worker that completes, a record pipe closed early, a truncated record, a \
-bad checksum, SIGTERM ignored and SIGKILL one grace later, and (N = 3) \
+bad checksum, a stop byte written to a control pipe nobody reads (EPIPE, \
+never death by SIGPIPE: the row "exit just before the deadline stop" without \
+its race), SIGTERM ignored and SIGKILL one grace later, and (N = 3) \
 grandchildren left spinning, which the controller now kills with their worker's \
 process group as it reaps the worker. A worker deaf to its control pipe is \
 ended by the parent-death signal alone when the controller is killed: the one \

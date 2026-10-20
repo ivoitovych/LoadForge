@@ -381,6 +381,33 @@ TEST(MisbehaviourCatalogue, ARecordPipeClosedEarlyIsTruncatedEvidenceDespiteExit
   EXPECT_FALSE(all_clean(report));
 }
 
+// --- The stop byte to a pipe nobody reads: EPIPE, never death by SIGPIPE -----
+
+TEST(MisbehaviourCatalogue, AStopByteToAPipeNobodyReadsIsEpipeAndNotDeathBySigpipe) {
+  // The row "exit just before the deadline stop", made deterministic: worker 1
+  // closes its end of the control pipe at once, so when the deadline comes the
+  // controller writes its stop byte to a pipe with no reader at all. With
+  // SIGPIPE at its default that write kills the controller -- this test
+  // process -- by signal 13 (review R-02); ignored, it is EPIPE, which the
+  // stop request tolerates. Worker 1 finishes on its own three controller
+  // ticks after its duration, well inside a stop grace long enough that no
+  // escalation comes into it; worker 0 answers the stop byte.
+  const Selector selector{"0=complete,1=close-control"};
+  Recorder recorder;
+  RunOptions options = fake_options(2000);
+  options.grace = Grace{5000 * kMs, 5000 * kMs};
+  const RunReport report = run_fake(workloads(2, 300), options, recorder);
+  ASSERT_EQ(report.workers.size(), 2U);
+  EXPECT_TRUE(recorder.when("deadline reached: stop requested").has_value());
+  for (const WorkerReport& worker : report.workers) {
+    expect_completed(worker);
+    EXPECT_EQ(worker.termination, "exited with code 0");
+    EXPECT_EQ(worker.stop, "stop requested") << "worker " << worker.slot;
+  }
+  EXPECT_FALSE(recorder.when("worker 1: sent signal 15").has_value());
+  EXPECT_TRUE(all_clean(report));
+}
+
 // --- A truncated record: rejected, because a partial record is not one ------
 
 TEST(MisbehaviourCatalogue, ATruncatedRecordIsRejectedAndTheEvidenceIsTruncated) {

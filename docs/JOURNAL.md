@@ -1639,6 +1639,26 @@ plan describes it in one line, which the console prints in the banner, before th
 At M1 nothing reads the snapshot but the banner; telemetry attribution, placement and the
 run fingerprint arrive from M3 and read it from there.
 
+### 2.26 "Exit just before the deadline stop", tested without the race
+
+Found by the M1 exit review: the catalogue row added for review finding R-02 had no T7
+test. Its evidence was the controller's unit test over the fake, which models a write to a
+pipe with no reader as `EPIPE` (the reading ADR 0003 records as the one that hid the bug),
+and the real-binary stress test, which died by signal 13 in 2 runs of 12 before the fix and
+so shows the fix only statistically.
+
+**Chosen:** a fake-worker misbehaviour, `close-control`, that closes its end of the control
+pipe at once and works on. The controller closed its own copy of the read end at spawn, so
+at the deadline the stop byte goes to a pipe with no reader at all, on every run. The worker
+finishes by itself three controller beats after its duration -- the third beat begins after
+the tick that requested the stop has finished -- inside a stop grace long enough that no
+escalation comes into it. With the controller's `ignore_signal(SIGPIPE)` changed to another
+signal, the test process dies by signal 13 (status 141) in that test, every time.
+
+*Rejected:* a worker that really exits just before the deadline. Whether the stop byte then
+meets a closed pipe depends on whether the controller reaped the worker in the tick before
+the deadline's, which is the scheduler's choice: the race §2.19 forbids in these tests.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
