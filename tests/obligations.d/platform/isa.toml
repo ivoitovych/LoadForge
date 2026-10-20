@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/platform/isa and nothing else.
+
+[[module]]
+path             = "src/platform/isa"
+classes          = ["P1", "P2", "P7"]
+tiers            = ["T1", "T2", "T8"]
+provides         = ["IsaProbeContract"]
+fixture_builders = ["tests/unit/platform/isa/fake_source.hpp"]
+note             = """
+What the CPU and the kernel can execute: CPUID leaves 0, 1 and 7 and XCR0 on \
+x86-64, AT_HWCAP on AArch64, read through a seam of three calls (IsaSource) \
+so every feature-bit combination is a unit test. P1 is the decision for each \
+path and each architecture. P7 is the module's subject: the capability \
+states a machine can present -- AVX2 reported with the OS not saving YMM \
+state, AVX-512F with the opmask or ZMM state missing (each XCR0 bit alone), \
+each of FMA, AVX, OSXSAVE and the leaf-7 bits missing alone, a CPU with \
+fewer leaves than the probe wants (the leaf is never read: a leaf above the \
+highest returns another leaf's data), a missing or unrelated capability word \
+-- built per test by the fake source in tests/unit/platform/isa/, which also \
+records the reads real hardware faults on (XGETBV without OSXSAVE). P2 is \
+the unreadable feature: the cpuid, xgetbv and getauxval reads cannot return \
+an error, so the failure mode they have is a zero capability word or an \
+absent leaf, and a feature the probe cannot read is not supported -- it never \
+guesses upward; each is a case of the table. The probe is read once at \
+construction and is a constant, so supported() is the same on every call and \
+from any thread. \
+\
+T8 compares the real machine's answer with /proc/cpuinfo, read as text \
+independently of the probe, and on x86-64 with the compiler runtime's own \
+__builtin_cpu_supports. IsaProbeContract runs against the real machine's \
+probe and against described x86-64, AArch64 and other machines."""
