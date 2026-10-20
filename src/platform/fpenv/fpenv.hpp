@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "core/result.hpp"
@@ -60,7 +61,11 @@ struct FpState {
   std::optional<bool> denormals_are_zero;
   std::optional<bool> default_nan;
 
-  [[nodiscard]] friend bool operator==(const FpState&, const FpState&) = default;
+  [[nodiscard]] friend bool operator==(const FpState& lhs, const FpState& rhs) noexcept {
+    // std::tie and noexcept, not = default: journal §1.13, §1.22 (ADR 0004).
+    return std::tie(lhs.rounding, lhs.flush_to_zero, lhs.denormals_are_zero, lhs.default_nan) ==
+           std::tie(rhs.rounding, rhs.flush_to_zero, rhs.denormals_are_zero, rhs.default_nan);
+  }
 };
 
 /// Reads and writes the calling thread's floating-point control state.
@@ -114,13 +119,19 @@ struct FpViolation {
   std::string property;  ///< "rounding", "flush_to_zero", "denormals_are_zero", "default_nan".
   std::string found;     ///< "upward", "on".
 
-  [[nodiscard]] friend bool operator==(const FpViolation&, const FpViolation&) = default;
+  [[nodiscard]] friend bool operator==(const FpViolation& lhs, const FpViolation& rhs) noexcept {
+    // std::tie and noexcept, not = default: journal §1.13, §1.22 (ADR 0004).
+    return std::tie(lhs.property, lhs.found) == std::tie(rhs.property, rhs.found);
+  }
 };
 
 struct FpError {
   std::vector<FpViolation> violations;  ///< Never empty.
 
-  [[nodiscard]] friend bool operator==(const FpError&, const FpError&) = default;
+  [[nodiscard]] friend bool operator==(const FpError& lhs, const FpError& rhs) noexcept {
+    // std::tie and noexcept, not = default: journal §1.13, §1.22 (ADR 0004).
+    return std::tie(lhs.violations) == std::tie(rhs.violations);
+  }
 };
 
 /// Whether `state` is the required one. Provided by the numerics stream.

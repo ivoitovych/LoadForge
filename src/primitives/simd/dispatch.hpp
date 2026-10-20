@@ -39,6 +39,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 
 #include "core/result.hpp"
@@ -104,7 +105,9 @@ class IsaSet {
   }
   [[nodiscard]] constexpr bool empty() const noexcept { return bits_ == 0U; }
 
-  [[nodiscard]] friend constexpr bool operator==(IsaSet, IsaSet) noexcept = default;
+  [[nodiscard]] friend constexpr bool operator==(IsaSet lhs, IsaSet rhs) noexcept {
+    return lhs.bits_ == rhs.bits_;
+  }
 
  private:
   constexpr explicit IsaSet(std::uint8_t bits) noexcept : bits_(bits) {}
@@ -151,7 +154,12 @@ struct DispatchError {
   IsaPath requested = IsaPath::kScalar;
   std::string detail;  ///< For a person: which path, and what this build or machine has.
 
-  [[nodiscard]] friend bool operator==(const DispatchError&, const DispatchError&) = default;
+  [[nodiscard]] friend bool operator==(const DispatchError& lhs,
+                                       const DispatchError& rhs) noexcept {
+    // std::tie and noexcept, not = default: journal §1.13, §1.22 (ADR 0004).
+    return std::tie(lhs.fault, lhs.requested, lhs.detail) ==
+           std::tie(rhs.fault, rhs.requested, rhs.detail);
+  }
 };
 
 /// What the running CPU and kernel can execute.

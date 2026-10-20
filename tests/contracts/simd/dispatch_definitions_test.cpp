@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "contracts/equality.hpp"
 #include "primitives/simd/dispatch.hpp"
 
 namespace loadforge::simd {
@@ -82,6 +83,22 @@ TEST(KernelTableDefinition, EachPathAnswersItsKernelOrNothing) {
 TEST(KernelTableDefinition, ATableWithoutItsScalarKernelSaysSo) {
   const KernelTable<int (*)(int)> broken{.avx2 = &avx2_kernel};
   EXPECT_FALSE(kernel_paths(broken).contains(IsaPath::kScalar));
+}
+
+}  // namespace
+}  // namespace loadforge::simd
+
+namespace loadforge::simd {
+namespace {
+
+TEST(DispatchEquality, EveryMemberIsCompared) {
+  contracts::expect_memberwise_equality(IsaSet{IsaPath::kScalar},
+                                        {[](IsaSet& s) { s = s.with(IsaPath::kAvx2); }});
+  contracts::expect_memberwise_equality(
+      DispatchError{DispatchFault::kNotCompiled, IsaPath::kAvx2, "detail"},
+      {[](DispatchError& e) { e.fault = DispatchFault::kNotSupported; },
+       [](DispatchError& e) { e.requested = IsaPath::kNeon; },
+       [](DispatchError& e) { e.detail = "other"; }});
 }
 
 }  // namespace

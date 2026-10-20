@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "contracts/equality.hpp"
 #include "contracts/fpenv/fpenv_contract.hpp"
 #include "platform/fpenv/fpenv.hpp"
 
@@ -99,6 +100,19 @@ TEST(FpEnvDefinition, TheRequiredStateHasExactlyTheArchitecturesFlagsAllOff) {
   EXPECT_EQ(x86, (FpState{fpenv::Rounding::kToNearestEven, false, false, std::nullopt}));
   const FpState arm = fpenv::required_state(false, true);
   EXPECT_EQ(arm, (FpState{fpenv::Rounding::kToNearestEven, false, std::nullopt, false}));
+}
+
+TEST(FpEnvEquality, EveryMemberIsCompared) {
+  expect_memberwise_equality(
+      FpState{fpenv::Rounding::kToNearestEven, false, false, false},
+      {[](FpState& s) { s.rounding = fpenv::Rounding::kUpward; },
+       [](FpState& s) { s.flush_to_zero = true; }, [](FpState& s) { s.denormals_are_zero.reset(); },
+       [](FpState& s) { s.default_nan = true; }});
+  expect_memberwise_equality(FpViolation{"rounding", "upward"},
+                             {[](FpViolation& v) { v.property = "flush_to_zero"; },
+                              [](FpViolation& v) { v.found = "downward"; }});
+  expect_memberwise_equality(FpError{{{"rounding", "upward"}}},
+                             {[](FpError& e) { e.violations.push_back({"default_nan", "on"}); }});
 }
 
 }  // namespace
