@@ -2,8 +2,8 @@
 #include "platform/syscalls.hpp"
 
 #include <fcntl.h>
-#include <linux/perf_event.h>
 #include <linux/mempolicy.h>
+#include <linux/perf_event.h>
 #include <poll.h>
 #include <sched.h>
 #include <sys/ioctl.h>
@@ -23,6 +23,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -43,6 +44,11 @@ std::string describe_event(const PerfEventSpec& spec) {
 }
 
 }  // namespace
+
+bool operator==(const PerfCount& lhs, const PerfCount& rhs) noexcept {
+  return std::tie(lhs.value, lhs.time_enabled, lhs.time_running) ==
+         std::tie(rhs.value, rhs.time_enabled, rhs.time_running);
+}
 
 // Every function below is a translation and nothing else. There is no decision
 // here to test, which is the point: docs/PLAN.md §4.3 keeps the layer that
@@ -442,9 +448,10 @@ core::Result<int, SyscallError> RealSyscalls::open_perf_event(const PerfEventSpe
   attr.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING;
   // The glibc syscall() wrapper is variadic and perf_event_open has no other
   // spelling: glibc provides none.
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-  const long fd = ::syscall(SYS_perf_event_open, &attr, spec.pid, spec.cpu, -1,
-                            PERF_FLAG_FD_CLOEXEC);
+  // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
+  const long fd =
+      ::syscall(SYS_perf_event_open, &attr, spec.pid, spec.cpu, -1, PERF_FLAG_FD_CLOEXEC);
+  // NOLINTEND(cppcoreguidelines-pro-type-vararg)
   // Not an `if`: whether the kernel grants a counter depends on the machine's
   // PMU and perf_event_paranoid, so a test cannot choose the arm on every
   // machine, and a branch here would be covered on one runner and not another.

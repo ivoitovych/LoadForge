@@ -42,8 +42,8 @@ namespace {
 
 using loadforge::testing::FakeSyscalls;
 using telemetry::Counter;
-using telemetry::EdacSource;
 using telemetry::edac_remediation;
+using telemetry::EdacSource;
 using telemetry::Kind;
 using telemetry::MetricStatus;
 using telemetry::Reading;
@@ -186,9 +186,7 @@ const MetricStatus* find_status(const std::vector<MetricStatus>& statuses, std::
   return nullptr;
 }
 
-const Unavailable& as_unavailable(const Reading& reading) {
-  return std::get<Unavailable>(reading);
-}
+const Unavailable& as_unavailable(const Reading& reading) { return std::get<Unavailable>(reading); }
 
 std::vector<Reading> sample_once(Source& source) {
   std::vector<Reading> readings;
@@ -284,7 +282,8 @@ TEST(EdacSourceTest, ThisMachineHasNoEdacAndSaysSoOncePerMetricWithAdviceThatCan
     EXPECT_TRUE(why.path.ends_with("/devices/system/edac/mc"));
     EXPECT_EQ(why.detail, "no memory controller is registered with EDAC");
     // A fix that cannot work is worse than saying nothing.
-    for (const std::string_view advice : {"privileg", "permission", "root", "CAP_", "chmod", "sudo"}) {
+    for (const std::string_view advice :
+         {"privileg", "permission", "root", "CAP_", "chmod", "sudo"}) {
       EXPECT_FALSE(mentions(why.remediation, advice)) << why.remediation;
     }
     EXPECT_TRUE(mentions(why.remediation, "nothing can be changed"));

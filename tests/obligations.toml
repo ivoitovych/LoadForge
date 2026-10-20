@@ -204,5 +204,18 @@ accepted any mask would be laxer than the kernel and prove nothing about the \
 one case that matters. The real kernel's answers (EINVAL for an empty or \
 unknown mask, ESRCH for a vanished thread) are asserted against the calling \
 process ONLY: as root, sched_setaffinity moves any pid, and a probe that \
-pinned init proved it. The telemetry sources' P7 still arrives at M3.\
+pinned init proved it. The telemetry sources' P7 still arrives at M3. \
+\
+The performance-counter calls join the seam with the telemetry sources that \
+need them (wave 2): perf_event_open, the three ioctl requests a counter \
+takes, and the read of a counter, which is a whole record or an error (a \
+short read is EIO, unlike read()). The real kernel's answers are asserted \
+on any machine: a software counter is granted or refused with an errno, an \
+unknown PMU type is refused, a descriptor that is not a counter is ENOTTY \
+and EBADF, and the counter read is checked against a file of exactly three \
+words, a file of two, and a closed descriptor. The open and the ioctl are \
+written without a branch of their own (result_or_error), because whether a \
+runner grants a counter depends on its PMU and perf_event_paranoid, and a \
+branch taken on one runner and not another would make the gate depend on the \
+machine.\
 """

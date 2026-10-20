@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "platform/fs.hpp"
@@ -53,6 +54,23 @@ Metric make_metric(const EventSpec& event) {
   return metric;
 }
 
+/// Fills a failure where it will live. Built in place, a field at a time, so
+/// that no half-built Unavailable exists while the next string is allocated:
+/// the cleanup of one is a branch no test can take (journal §1.13).
+void fill_failure(Unavailable& why, topology::Availability kind,
+                  const platform::SyscallError& error, const std::string& path,
+                  std::optional<std::int64_t> paranoid, bool name_paranoid) {
+  why.kind = kind;
+  why.path = path;
+  why.detail = platform::describe(error);
+  if (name_paranoid && paranoid.has_value()) {
+    why.detail += " (kernel.perf_event_paranoid is ";
+    why.detail += std::to_string(*paranoid);
+    why.detail += ")";
+  }
+  why.remediation = perf_remediation(kind, paranoid, path);
+}
+
 }  // namespace
 
 topology::Availability classify_perf_open(int error) noexcept {
@@ -85,21 +103,24 @@ std::string perf_remediation(topology::Availability kind, std::optional<std::int
       if (*paranoid > 2) {
         text += " (it is ";
         text += std::to_string(*paranoid);
-        text += ", and above 2 every unprivileged use is refused; 2 or below allows counting "
-                "your own processes in user space)";
+        text +=
+            ", and above 2 every unprivileged use is refused; 2 or below allows counting "
+            "your own processes in user space)";
         return text;
       }
       text = "kernel.perf_event_paranoid is ";
       text += std::to_string(*paranoid);
-      text += ", which already allows counting your own processes in user space, so "
-              "something else refuses perf_event_open (a container's seccomp profile or a "
-              "security module); allow the call there, or grant LoadForge CAP_PERFMON";
+      text +=
+          ", which already allows counting your own processes in user space, so "
+          "something else refuses perf_event_open (a container's seccomp profile or a "
+          "security module); allow the call there, or grant LoadForge CAP_PERFMON";
       return text;
     case topology::Availability::kAbsent:
       text = "this machine does not offer ";
       text += subject;
-      text += " (a virtual machine without a PMU, a CPU without the event, or a kernel built "
-              "without perf events); nothing can be changed from the software side";
+      text +=
+          " (a virtual machine without a PMU, a CPU without the event, or a kernel built "
+          "without perf events); nothing can be changed from the software side";
       return text;
     case topology::Availability::kVanished:
       return "the CPU or process the counter followed went away (a CPU taken offline, or the "
@@ -149,41 +170,33 @@ std::vector<MetricStatus> CountersSource::probe() {
     spec.user_only = true;
     spec.inherit = true;
 
-    // One failure's report: kind chosen by `kind`, the error's own words, and
-    // the remedy for the provider that failed. Built a step at a time (journal
-    // §1.13).
-    const auto failure = [&](topology::Availability kind, const platform::SyscallError& error) {
-      std::string detail = platform::describe(error);
-      if (paranoid_.has_value()) {
-        detail += " (kernel.perf_event_paranoid is ";
-        detail += std::to_string(*paranoid_);
-        detail += ")";
-      }
-      std::string remediation = perf_remediation(kind, paranoid_, error.subject);
-      return MetricStatus{make_metric(event),
-                          Unavailable{kind, error.subject, std::move(detail),
-                                      std::move(remediation)}};
+    // One failure, filled where it lives (journal §1.13).
+    const auto fail = [&](topology::Availability kind, const platform::SyscallError& error) {
+      statuses.emplace_back();
+      statuses.back().metric = make_metric(event);
+      statuses.back().unavailable.emplace();
+      fill_failure(*statuses.back().unavailable, kind, error, error.subject, paranoid_, true);
     };
 
     auto opened = syscalls_->open_perf_event(spec);
     if (!opened.has_value()) {
-      statuses.push_back(failure(classify_perf_open(opened.error().number), opened.error()));
+      fail(classify_perf_open(opened.error().number), opened.error());
       continue;
     }
     const int fd = opened.value();
     // Reset then enable, so every count starts from zero at its own enabling.
-    std::optional<MetricStatus> refused;
+    bool refused = false;
     for (const platform::PerfAction action :
          {platform::PerfAction::kReset, platform::PerfAction::kEnable}) {
       auto done = syscalls_->control_perf_event(fd, action);
       if (!done.has_value()) {
-        refused = failure(topology::Availability::kUnreadable, done.error());
+        fail(topology::Availability::kUnreadable, done.error());
+        refused = true;
         break;
       }
     }
-    if (refused.has_value()) {
+    if (refused) {
       static_cast<void>(syscalls_->close(fd));
-      statuses.push_back(std::move(*refused));
       continue;
     }
     std::string subject = "perf event type ";
@@ -191,7 +204,8 @@ std::vector<MetricStatus> CountersSource::probe() {
     subject += " config ";
     subject += std::to_string(event.config);
     channels_.push_back(Channel{fd, std::move(subject)});
-    statuses.push_back(MetricStatus{make_metric(event), std::nullopt});
+    statuses.emplace_back();
+    statuses.back().metric = make_metric(event);
   }
   return statuses;
 }
@@ -201,23 +215,23 @@ void CountersSource::sample(std::vector<Reading>& out) {
     auto count = syscalls_->read_perf_count(channel.fd);
     if (!count.has_value()) {
       const platform::SyscallError& error = count.error();
-      const topology::Availability kind = topology::classify(error, true);
-      std::string detail = platform::describe(error);
-      std::string remediation = perf_remediation(kind, paranoid_, channel.subject);
-      out.emplace_back(Unavailable{kind, channel.subject, std::move(detail),
-                                   std::move(remediation)});
+      Unavailable why;
+      fill_failure(why, topology::classify(error, true), error, channel.subject, paranoid_, false);
+      out.emplace_back(std::move(why));
       continue;
     }
     const platform::PerfCount& reading = count.value();
     if (reading.time_running == 0 && reading.time_enabled > 0) {
-      std::string detail = "enabled for ";
-      detail += std::to_string(reading.time_enabled);
-      detail += " ns and never scheduled onto a counter";
-      std::string remediation =
+      Unavailable why;
+      why.kind = topology::Availability::kUnreadable;
+      why.path = channel.subject;
+      why.detail = "enabled for ";
+      why.detail += std::to_string(reading.time_enabled);
+      why.detail += " ns and never scheduled onto a counter";
+      why.remediation =
           "another user of the PMU holds every counter (the NMI watchdog, perf, a profiler); "
           "stop it, or set kernel.nmi_watchdog=0 to free one";
-      out.emplace_back(Unavailable{topology::Availability::kUnreadable, channel.subject,
-                                   std::move(detail), std::move(remediation)});
+      out.emplace_back(std::move(why));
       continue;
     }
     std::uint64_t value = reading.value;

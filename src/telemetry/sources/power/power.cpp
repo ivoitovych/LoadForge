@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -41,16 +42,33 @@ struct Labelled {
   Unavailable failure;
 };
 
-Unavailable make_failure(Availability kind, std::string path, std::string detail,
-                         std::string remediation) {
-  return Unavailable{kind, std::move(path), std::move(detail), std::move(remediation)};
+// Every failure below is filled where it will live, a field at a time, so that
+// no half-built Unavailable exists while the next string is allocated: the
+// cleanup of one is a branch no test can take (journal §1.13).
+
+/// A failure of a powercap or PMU-description read, with powercap's remedy.
+void fill(Unavailable& why, Availability kind, const std::string& path, std::string_view detail) {
+  why.kind = kind;
+  why.path = path;
+  why.detail = detail;
+  why.remediation = powercap_remediation(kind, path);
+}
+
+/// A failed perf call, in the report's form: the kernel's words, the perf remedy.
+void fill_perf(Unavailable& why, Availability kind, const platform::SyscallError& error,
+               const std::string& path) {
+  why.kind = kind;
+  why.path = path;
+  why.detail = platform::describe(error);
+  why.remediation = perf_remediation(kind, std::nullopt, path);
 }
 
 /// A failed read of a sysfs attribute, in the report's form.
-Unavailable from_file(topology::Unavailable failure) {
-  std::string remediation = powercap_remediation(failure.kind, failure.path);
-  return make_failure(failure.kind, std::move(failure.path), std::move(failure.detail),
-                      std::move(remediation));
+void fill_from_file(Unavailable& why, topology::Unavailable failure) {
+  why.kind = failure.kind;
+  why.remediation = powercap_remediation(failure.kind, failure.path);
+  why.path = std::move(failure.path);
+  why.detail = std::move(failure.detail);
 }
 
 /// A decimal count the kernel wrote: digits and nothing else.
@@ -72,20 +90,16 @@ core::Result<std::uint64_t, topology::Unavailable> read_count(topology::Source& 
 /// How much more a failure can be acted on: a refusal of permission is the
 /// most, a fact about the platform the least.
 int actionability(Availability kind) {
-  switch (kind) {
-    case Availability::kDenied:
-      return 5;
-    case Availability::kMalformed:
-      return 4;
-    case Availability::kUnreadable:
-      return 3;
-    case Availability::kVanished:
-      return 2;
-    case Availability::kAbsent:
-    case Availability::kPresent:
-      break;
+  if (kind == Availability::kDenied) {
+    return 5;
   }
-  return 1;
+  if (kind == Availability::kMalformed) {
+    return 4;
+  }
+  if (kind == Availability::kUnreadable) {
+    return 3;
+  }
+  return 1;  // absent: a fact about the platform; vanished cannot occur at probe
 }
 
 /// Several providers failed for one package; say it once. The kind and path are
@@ -93,7 +107,7 @@ int actionability(Availability kind) {
 /// provider's; the remedy is each ACTIONABLE provider's own, labelled, and a
 /// provider that merely lacks the interface contributes none -- advice for it
 /// could not work. When none is actionable, the first one's remedy stands alone.
-Unavailable combine(const std::vector<Labelled>& failures) {
+void combine(Unavailable& out, const std::vector<Labelled>& failures) {
   const Labelled* best = &failures.front();
   std::size_t actionable = 0;
   for (const Labelled& labelled : failures) {
@@ -105,76 +119,72 @@ Unavailable combine(const std::vector<Labelled>& failures) {
     }
   }
   if (failures.size() == 1) {
-    return best->failure;
+    out = best->failure;
+    return;
   }
-  std::string detail;
-  std::string remediation;
+  out.kind = best->failure.kind;
+  out.path = best->failure.path;
   for (const Labelled& labelled : failures) {
-    if (!detail.empty()) {
-      detail += "; ";
+    if (!out.detail.empty()) {
+      out.detail += "; ";
     }
-    detail += labelled.provider;
-    detail += ": ";
-    detail += labelled.failure.detail;
+    out.detail += labelled.provider;
+    out.detail += ": ";
+    out.detail += labelled.failure.detail;
     if (labelled.failure.kind != Availability::kAbsent) {
-      if (!remediation.empty()) {
-        remediation += "; ";
+      if (!out.remediation.empty()) {
+        out.remediation += "; ";
       }
       if (actionable > 1) {
-        remediation += labelled.provider;
-        remediation += ": ";
+        out.remediation += labelled.provider;
+        out.remediation += ": ";
       }
-      remediation += labelled.failure.remediation;
+      out.remediation += labelled.failure.remediation;
     }
   }
   if (actionable == 0) {
-    remediation = best->failure.remediation;
+    out.remediation = best->failure.remediation;
   }
-  return make_failure(best->failure.kind, best->failure.path, std::move(detail),
-                      std::move(remediation));
-}
-
-Metric make_metric(std::uint32_t index, std::optional<std::uint64_t> modulus,
-                   std::string_view provider) {
-  Metric metric;
-  metric.name = std::string{kPackageMetric};
-  metric.unit = Unit::kJoules;
-  metric.kind = Kind::kCounter;
-  metric.scope = Scope::kPackage;
-  metric.scope_index = index;
-  metric.modulus = modulus;
-  metric.provider = std::string{provider};
-  return metric;
 }
 
 /// The power PMU as sysfs describes it: its type number, the energy-pkg event's
 /// config, the factor from a count to microjoules, and the CPU that stands for
-/// each package. Or why none of that could be had.
+/// each package. Or, with `failed`, why none of that could be had.
 struct PmuInfo {
   std::uint32_t type = 0;
   std::uint64_t config = 0;
   double factor = 0.0;
   std::vector<std::uint32_t> cpus;
-  std::optional<Unavailable> failure;
+  bool failed = false;
+  Unavailable failure;
 };
 
-PmuInfo read_pmu(platform::FileSystem& filesystem, const std::string& root) {
-  PmuInfo info;
-  const std::string directory = root + "/bus/event_source/devices/power";
+/// One provider's attempt at one package: the channel that reads it, or, with
+/// `failed`, why not. Neither: the provider had nothing to try.
+struct Attempt {
+  std::optional<PowerChannel> channel;
+  bool failed = false;
+  Unavailable failure;
+};
 
-  topology::Source type_file{filesystem, directory + "/type"};
-  auto type = read_count(type_file);
-  if (!type.has_value()) {
-    info.failure = from_file(type.error());
-    return info;
-  }
-  info.type = static_cast<std::uint32_t>(type.value());
+void fail_malformed(PmuInfo& info, const std::string& path, std::string_view detail) {
+  info.failed = true;
+  fill(info.failure, Availability::kMalformed, path, detail);
+}
 
+void fail_read(PmuInfo& info, topology::Unavailable failure) {
+  info.failed = true;
+  fill_from_file(info.failure, std::move(failure));
+}
+
+/// The energy-pkg event's config, from "event=0x<hex>". False, with the reason
+/// in `info`, when it is anything else.
+bool read_event(platform::FileSystem& filesystem, const std::string& directory, PmuInfo& info) {
   topology::Source event_file{filesystem, directory + "/events/energy-pkg"};
   auto event = event_file.text();
   if (!event.has_value()) {
-    info.failure = from_file(event.error());
-    return info;
+    fail_read(info, event.error());
+    return false;
   }
   constexpr std::string_view kPrefix = "event=0x";
   const std::string_view event_text = event.value();
@@ -186,48 +196,288 @@ PmuInfo read_pmu(platform::FileSystem& filesystem, const std::string& root) {
     std::string detail = "not an event=0x<hex> description: '";
     detail += event_text;
     detail += "'";
-    info.failure = from_file(topology::Unavailable{Availability::kMalformed,
-                                                   directory + "/events/energy-pkg", detail});
-    return info;
+    fail_malformed(info, event_file.path(), detail);
+    return false;
   }
   info.config = config;
+  return true;
+}
 
+/// The factor from a count to microjoules, from the joules-per-count scale.
+bool read_scale(platform::FileSystem& filesystem, const std::string& directory, PmuInfo& info) {
   topology::Source scale_file{filesystem, directory + "/events/energy-pkg.scale"};
   auto scale = scale_file.text();
   if (!scale.has_value()) {
-    info.failure = from_file(scale.error());
-    return info;
+    fail_read(info, scale.error());
+    return false;
   }
   double joules = 0.0;
   const std::string_view scale_text = scale.value();
-  const auto [scale_stop, scale_ec] =
+  const auto [stop, ec] =
       std::from_chars(scale_text.data(), scale_text.data() + scale_text.size(), joules);
   const double factor = joules * kMicrojoulesPerJoule;
-  if (scale_ec != std::errc{} || scale_stop != scale_text.data() + scale_text.size() ||
-      !(factor > 0.0 && factor <= kLargestFactor)) {
+  // Written so that NaN, which from_chars accepts, is not plausible.
+  const bool plausible = factor > 0.0 && factor <= kLargestFactor;
+  if (ec != std::errc{} || stop != scale_text.data() + scale_text.size() || !plausible) {
     std::string detail = "not a plausible joules-per-count scale: '";
     detail += scale_text;
     detail += "'";
-    info.failure = from_file(topology::Unavailable{
-        Availability::kMalformed, directory + "/events/energy-pkg.scale", detail});
-    return info;
+    fail_malformed(info, scale_file.path(), detail);
+    return false;
   }
   info.factor = factor;
+  return true;
+}
+
+PmuInfo read_pmu(platform::FileSystem& filesystem, const std::string& root) {
+  PmuInfo info;
+  const std::string directory = root + "/bus/event_source/devices/power";
+
+  topology::Source type_file{filesystem, directory + "/type"};
+  auto type = read_count(type_file);
+  if (!type.has_value()) {
+    fail_read(info, type.error());
+    return info;
+  }
+  if (type.value() > std::numeric_limits<std::uint32_t>::max()) {
+    std::string detail = "not a PMU type number: ";
+    detail += std::to_string(type.value());
+    fail_malformed(info, type_file.path(), detail);
+    return info;
+  }
+  info.type = static_cast<std::uint32_t>(type.value());
+
+  if (!read_event(filesystem, directory, info) || !read_scale(filesystem, directory, info)) {
+    return info;
+  }
 
   topology::Source mask_file{filesystem, directory + "/cpumask"};
   auto mask = mask_file.cpu_list();
   if (!mask.has_value()) {
-    info.failure = from_file(mask.error());
+    fail_read(info, mask.error());
     return info;
   }
   info.cpus = mask.value().ids();
   if (info.cpus.empty()) {
-    info.failure = make_failure(Availability::kAbsent, directory + "/cpumask",
-                                "the power PMU names no CPU to read it from",
-                                powercap_remediation(Availability::kAbsent, directory));
+    info.failed = true;
+    fill(info.failure, Availability::kAbsent, mask_file.path(),
+         "the power PMU names no CPU to read it from");
   }
   return info;
 }
+
+/// Package power from powercap: the zone's range, then its energy, each checked.
+Attempt try_powercap(platform::FileSystem& filesystem, const std::string& root,
+                     const std::string& zone) {
+  Attempt attempt;
+  const std::string directory = root + "/class/powercap/" + zone;
+  topology::Source range_file{filesystem, directory + "/max_energy_range_uj"};
+  auto range = read_count(range_file);
+  if (!range.has_value()) {
+    attempt.failed = true;
+    fill_from_file(attempt.failure, range.error());
+    return attempt;
+  }
+  if (range.value() == 0) {
+    attempt.failed = true;
+    fill(attempt.failure, Availability::kMalformed, range_file.path(),
+         "a range of zero cannot hold a counter");
+    return attempt;
+  }
+  topology::Source energy{filesystem, directory + "/energy_uj"};
+  auto first = read_count(energy);
+  if (!first.has_value()) {
+    attempt.failed = true;
+    fill_from_file(attempt.failure, first.error());
+    return attempt;
+  }
+  if (first.value() >= range.value()) {
+    std::string detail = "energy ";
+    detail += std::to_string(first.value());
+    detail += " is not below the range ";
+    detail += std::to_string(range.value());
+    attempt.failed = true;
+    fill(attempt.failure, Availability::kMalformed, energy.path(), detail);
+    return attempt;
+  }
+  attempt.channel.emplace(std::move(energy), range.value(), -1, 0.0, std::string{});
+  return attempt;
+}
+
+/// Package power from the power PMU: the energy-pkg counter, system-wide on
+/// `cpu`, reset and enabled.
+Attempt try_perf(platform::Syscalls& syscalls, platform::FileSystem& filesystem, const PmuInfo& pmu,
+                 std::uint32_t cpu) {
+  Attempt attempt;
+  platform::PerfEventSpec spec;
+  spec.type = pmu.type;
+  spec.config = pmu.config;
+  spec.pid = -1;
+  spec.cpu = static_cast<int>(cpu);
+  auto opened = syscalls.open_perf_event(spec);
+  if (!opened.has_value()) {
+    const platform::SyscallError& error = opened.error();
+    attempt.failed = true;
+    fill_perf(attempt.failure, classify_perf_open(error.number), error, error.subject);
+    return attempt;
+  }
+  const int fd = opened.value();
+  for (const platform::PerfAction action :
+       {platform::PerfAction::kReset, platform::PerfAction::kEnable}) {
+    auto done = syscalls.control_perf_event(fd, action);
+    if (!done.has_value()) {
+      static_cast<void>(syscalls.close(fd));
+      const platform::SyscallError& error = done.error();
+      attempt.failed = true;
+      fill_perf(attempt.failure, Availability::kUnreadable, error, error.subject);
+      return attempt;
+    }
+  }
+  std::string subject = "perf event type ";
+  subject += std::to_string(pmu.type);
+  subject += " config ";
+  subject += std::to_string(pmu.config);
+  attempt.channel.emplace(topology::Source{filesystem, std::string{}}, 0, fd, pmu.factor,
+                          std::move(subject));
+  return attempt;
+}
+
+/// The probe's working state: where the statuses and channels go, and the two
+/// providers' attempts at each package.
+class Prober {
+ public:
+  Prober(platform::Syscalls& syscalls, platform::FileSystem& filesystem, const std::string& root,
+         std::vector<PowerChannel>& channels, std::vector<MetricStatus>& statuses)
+      : syscalls_(&syscalls),
+        filesystem_(&filesystem),
+        root_(&root),
+        channels_(&channels),
+        statuses_(&statuses),
+        pmu_(read_pmu(filesystem, root)) {}
+
+  void run() {
+    std::uint32_t package = 0;
+    for (std::uint32_t zone = 0; step(zone, package); ++zone) {
+    }
+    // No powercap zone at all: the packages are the power PMU's CPUs, or, when
+    // it has none to offer, one metric that says why there is no package power.
+    if (package == 0) {
+      pmu_only();
+    }
+  }
+
+ private:
+  /// One zone. False when the list of zones has ended; `package` advances only
+  /// for a zone that is a package.
+  bool step(std::uint32_t zone, std::uint32_t& package) {
+    std::string zone_name = "intel-rapl:";
+    zone_name += std::to_string(zone);
+    topology::Source name_file{*filesystem_, *root_ + "/class/powercap/" + zone_name + "/name"};
+    auto name = name_file.text();
+    if (!name.has_value() && name.error().kind == Availability::kAbsent) {
+      return false;
+    }
+    if (name.has_value() && !name.value().starts_with("package")) {
+      return true;  // A zone that is not a package (psys): not ours to report.
+    }
+    Attempt powercap;
+    if (name.has_value()) {
+      powercap = try_powercap(*filesystem_, *root_, zone_name);
+    } else {
+      powercap.failed = true;
+      fill_from_file(powercap.failure, name.error());
+    }
+    package_through_providers(package, powercap);
+    ++package;
+    return true;
+  }
+
+  void package_through_providers(std::uint32_t package, Attempt& powercap) {
+    if (powercap.channel.has_value()) {
+      serve(package, std::move(*powercap.channel));
+      return;
+    }
+    std::vector<Labelled> failures;
+    failures.emplace_back();
+    failures.back().provider = "powercap";
+    failures.back().failure = powercap.failure;
+    Attempt perf = second_provider(package);
+    if (perf.channel.has_value()) {
+      serve(package, std::move(*perf.channel));
+      return;
+    }
+    if (perf.failed) {
+      failures.emplace_back();
+      failures.back().provider = "perf";
+      failures.back().failure = perf.failure;
+    }
+    combine(refuse(package, kPowercapProvider), failures);
+  }
+
+  /// The power PMU's try at a package powercap could not serve. Nothing to try
+  /// when it has no CPU for it, or is simply not there: a power PMU that is
+  /// absent was never a second provider, and saying it failed would be noise.
+  /// One that is there and cannot be read is a failure of the perf provider.
+  Attempt second_provider(std::uint32_t package) {
+    if (!pmu_.failed && package < pmu_.cpus.size()) {
+      return try_perf(*syscalls_, *filesystem_, pmu_, pmu_.cpus[package]);
+    }
+    Attempt attempt;
+    attempt.failed = pmu_.failed && pmu_.failure.kind != Availability::kAbsent;
+    if (attempt.failed) {
+      attempt.failure = pmu_.failure;
+    }
+    return attempt;
+  }
+
+  void pmu_only() {
+    for (std::uint32_t index = 0; !pmu_.failed && index < pmu_.cpus.size(); ++index) {
+      Attempt perf = try_perf(*syscalls_, *filesystem_, pmu_, pmu_.cpus[index]);
+      if (perf.channel.has_value()) {
+        serve(index, std::move(*perf.channel));
+      } else {
+        refuse(index, kPerfProvider) = perf.failure;
+      }
+    }
+    if (statuses_->empty()) {
+      refuse(0, kPowercapProvider) = pmu_.failure;
+    }
+  }
+
+  /// A package that was served: its status, and the channel that reads it.
+  void serve(std::uint32_t package, PowerChannel&& channel) {
+    const bool via_perf = channel.fd >= 0;
+    MetricStatus& status = start_status(package, via_perf ? kPerfProvider : kPowercapProvider);
+    if (!via_perf) {
+      status.metric.modulus = channel.modulus;
+    }
+    channels_->push_back(std::move(channel));
+  }
+
+  /// A package that was not: the status carries the failure, filled by the caller.
+  Unavailable& refuse(std::uint32_t package, std::string_view provider) {
+    return start_status(package, provider).unavailable.emplace();
+  }
+
+  MetricStatus& start_status(std::uint32_t package, std::string_view provider) {
+    statuses_->emplace_back();
+    MetricStatus& status = statuses_->back();
+    status.metric.name = kPackageMetric;
+    status.metric.unit = Unit::kJoules;
+    status.metric.kind = Kind::kCounter;
+    status.metric.scope = Scope::kPackage;
+    status.metric.scope_index = package;
+    status.metric.provider = provider;
+    return status;
+  }
+
+  platform::Syscalls* syscalls_;
+  platform::FileSystem* filesystem_;
+  const std::string* root_;
+  std::vector<PowerChannel>* channels_;
+  std::vector<MetricStatus>* statuses_;
+  PmuInfo pmu_;
+};
 
 }  // namespace
 
@@ -241,9 +491,10 @@ std::string powercap_remediation(Availability kind, std::string_view path) {
     case Availability::kDenied:
       text = "reading ";
       text += path;
-      text += " is refused: energy_uj is root-only since CVE-2020-8694; run LoadForge "
-              "privileged, or give your user read access to the file with a udev rule or "
-              "group ownership";
+      text +=
+          " is refused: energy_uj is root-only since CVE-2020-8694; run LoadForge "
+          "privileged, or give your user read access to the file with a udev rule or "
+          "group ownership";
       return text;
     case Availability::kVanished:
       return "the power interface went away during the run (driver unloaded); read the kernel "
@@ -270,7 +521,7 @@ PowerSource::PowerSource(platform::Syscalls& syscalls, platform::FileSystem& fil
 PowerSource::~PowerSource() { close_all(); }
 
 void PowerSource::close_all() {
-  for (const Channel& channel : channels_) {
+  for (const PowerChannel& channel : channels_) {
     if (channel.fd >= 0) {
       static_cast<void>(syscalls_->close(channel.fd));
     }
@@ -281,174 +532,23 @@ void PowerSource::close_all() {
 std::vector<MetricStatus> PowerSource::probe() {
   close_all();
   std::vector<MetricStatus> statuses;
-
-  const PmuInfo pmu = read_pmu(*filesystem_, root_);
-  std::optional<Unavailable> pmu_failure = pmu.failure;
-
-  // Powercap's side of package `index`, if the machine has a zone for it: the
-  // channel, or why the zone could not be read.
-  struct Attempt {
-    std::optional<Channel> channel;
-    std::optional<Unavailable> failure;
-  };
-
-  const auto try_powercap = [&](const std::string& zone) {
-    Attempt attempt;
-    const std::string directory = root_ + "/class/powercap/" + zone;
-    topology::Source range_file{*filesystem_, directory + "/max_energy_range_uj"};
-    auto range = read_count(range_file);
-    if (!range.has_value()) {
-      attempt.failure = from_file(range.error());
-      return attempt;
-    }
-    if (range.value() == 0) {
-      attempt.failure = make_failure(Availability::kMalformed, range_file.path(),
-                                     "a range of zero cannot hold a counter",
-                                     powercap_remediation(Availability::kMalformed,
-                                                          range_file.path()));
-      return attempt;
-    }
-    topology::Source energy{*filesystem_, directory + "/energy_uj"};
-    auto first = read_count(energy);
-    if (!first.has_value()) {
-      attempt.failure = from_file(first.error());
-      return attempt;
-    }
-    if (first.value() >= range.value()) {
-      std::string detail = "energy ";
-      detail += std::to_string(first.value());
-      detail += " is not below the range ";
-      detail += std::to_string(range.value());
-      attempt.failure = make_failure(Availability::kMalformed, energy.path(), std::move(detail),
-                                     powercap_remediation(Availability::kMalformed,
-                                                          energy.path()));
-      return attempt;
-    }
-    attempt.channel = Channel{std::move(energy), range.value(), -1, 0.0, std::string{}};
-    return attempt;
-  };
-
-  const auto try_perf = [&](std::uint32_t cpu) {
-    Attempt attempt;
-    platform::PerfEventSpec spec;
-    spec.type = pmu.type;
-    spec.config = pmu.config;
-    spec.pid = -1;
-    spec.cpu = static_cast<int>(cpu);
-    auto opened = syscalls_->open_perf_event(spec);
-    if (!opened.has_value()) {
-      const platform::SyscallError& error = opened.error();
-      const Availability kind = classify_perf_open(error.number);
-      attempt.failure = make_failure(kind, error.subject, platform::describe(error),
-                                     perf_remediation(kind, std::nullopt, error.subject));
-      return attempt;
-    }
-    const int fd = opened.value();
-    for (const platform::PerfAction action :
-         {platform::PerfAction::kReset, platform::PerfAction::kEnable}) {
-      auto done = syscalls_->control_perf_event(fd, action);
-      if (!done.has_value()) {
-        static_cast<void>(syscalls_->close(fd));
-        const platform::SyscallError& error = done.error();
-        attempt.failure = make_failure(Availability::kUnreadable, error.subject,
-                                       platform::describe(error),
-                                       perf_remediation(Availability::kUnreadable, std::nullopt,
-                                                        error.subject));
-        return attempt;
-      }
-    }
-    std::string subject = "perf event type ";
-    subject += std::to_string(pmu.type);
-    subject += " config ";
-    subject += std::to_string(pmu.config);
-    attempt.channel = Channel{topology::Source{*filesystem_, std::string{}}, 0, fd, pmu.factor,
-                              std::move(subject)};
-    return attempt;
-  };
-
-  std::uint32_t package = 0;
-  for (std::uint32_t zone = 0;; ++zone) {
-    const std::string zone_name = "intel-rapl:" + std::to_string(zone);
-    topology::Source name_file{*filesystem_,
-                               root_ + "/class/powercap/" + zone_name + "/name"};
-    auto name = name_file.text();
-    const bool has_pmu_cpu = !pmu.failure.has_value() && package < pmu.cpus.size();
-    if (!name.has_value() && name.error().kind == Availability::kAbsent) {
-      break;
-    }
-    if (name.has_value() && !name.value().starts_with("package")) {
-      continue;  // A zone that is not a package (psys): not ours to report.
-    }
-    Attempt best = name.has_value() ? try_powercap(zone_name) : Attempt{};
-    std::vector<Labelled> failures;
-    if (!name.has_value()) {
-      failures.push_back(Labelled{"powercap", from_file(name.error())});
-    } else if (best.failure.has_value()) {
-      failures.push_back(Labelled{"powercap", *best.failure});
-    }
-    if (!best.channel.has_value() && has_pmu_cpu) {
-      Attempt perf = try_perf(pmu.cpus[package]);
-      if (perf.channel.has_value()) {
-        best.channel = std::move(perf.channel);
-      } else {
-        failures.push_back(Labelled{"perf", *perf.failure});
-      }
-    } else if (!best.channel.has_value() && pmu_failure.has_value()) {
-      failures.push_back(Labelled{"perf", *pmu_failure});
-    }
-
-    if (best.channel.has_value()) {
-      const bool via_perf = best.channel->fd >= 0;
-      std::optional<std::uint64_t> modulus;
-      if (!via_perf) {
-        modulus = best.channel->modulus;
-      }
-      statuses.push_back(MetricStatus{
-          make_metric(package, modulus, via_perf ? kPerfProvider : kPowercapProvider),
-          std::nullopt});
-      channels_.push_back(std::move(*best.channel));
-    } else {
-      statuses.push_back(MetricStatus{make_metric(package, std::nullopt, kPowercapProvider),
-                                      combine(failures)});
-    }
-    ++package;
-  }
-
-  // No powercap zone at all: the packages are the power PMU's CPUs, or, when it
-  // has none to offer, one metric that says why there is no package power.
-  if (package == 0) {
-    for (std::uint32_t index = 0; !pmu.failure.has_value() && index < pmu.cpus.size(); ++index) {
-      Attempt perf = try_perf(pmu.cpus[index]);
-      if (perf.channel.has_value()) {
-        statuses.push_back(
-            MetricStatus{make_metric(index, std::nullopt, kPerfProvider), std::nullopt});
-        channels_.push_back(std::move(*perf.channel));
-      } else {
-        statuses.push_back(MetricStatus{make_metric(index, std::nullopt, kPerfProvider),
-                                        *perf.failure});
-      }
-    }
-    if (statuses.empty()) {
-      statuses.push_back(MetricStatus{make_metric(0, std::nullopt, kPowercapProvider),
-                                      *pmu_failure});
-    }
-  }
+  Prober{*syscalls_, *filesystem_, root_, channels_, statuses}.run();
   return statuses;
 }
 
 void PowerSource::sample(std::vector<Reading>& out) {
-  for (Channel& channel : channels_) {
+  for (PowerChannel& channel : channels_) {
     if (channel.fd >= 0) {
       auto count = syscalls_->read_perf_count(channel.fd);
-      if (!count.has_value()) {
+      if (count.has_value()) {
+        out.emplace_back(Counter{static_cast<std::uint64_t>(
+            static_cast<double>(count.value().value) * channel.microjoules_per_count)});
+      } else {
         const platform::SyscallError& error = count.error();
-        const Availability kind = topology::classify(error, true);
-        out.emplace_back(make_failure(kind, channel.subject, platform::describe(error),
-                                      perf_remediation(kind, std::nullopt, channel.subject)));
-        continue;
+        Unavailable why;
+        fill_perf(why, topology::classify(error, true), error, channel.subject);
+        out.emplace_back(std::move(why));
       }
-      out.emplace_back(Counter{static_cast<std::uint64_t>(
-          static_cast<double>(count.value().value) * channel.microjoules_per_count)});
       continue;
     }
     auto energy = read_count(channel.energy);
@@ -457,14 +557,15 @@ void PowerSource::sample(std::vector<Reading>& out) {
       detail += std::to_string(energy.value());
       detail += " is not below the range ";
       detail += std::to_string(channel.modulus);
-      out.emplace_back(make_failure(Availability::kMalformed, channel.energy.path(),
-                                    std::move(detail),
-                                    powercap_remediation(Availability::kMalformed,
-                                                         channel.energy.path())));
+      Unavailable why;
+      fill(why, Availability::kMalformed, channel.energy.path(), detail);
+      out.emplace_back(std::move(why));
     } else if (energy.has_value()) {
       out.emplace_back(Counter{energy.value()});
     } else {
-      out.emplace_back(from_file(energy.error()));
+      Unavailable why;
+      fill_from_file(why, energy.error());
+      out.emplace_back(std::move(why));
     }
   }
 }

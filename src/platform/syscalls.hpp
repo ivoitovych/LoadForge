@@ -119,8 +119,6 @@ struct PerfEventSpec {
   int cpu = -1;
   bool user_only = false;
   bool inherit = false;
-
-  [[nodiscard]] friend bool operator==(const PerfEventSpec&, const PerfEventSpec&) = default;
 };
 
 /// What read(2) on a counter returns with the read format above: the count,
@@ -131,7 +129,9 @@ struct PerfCount {
   std::uint64_t time_enabled = 0;  ///< Nanoseconds since the event was enabled.
   std::uint64_t time_running = 0;  ///< Nanoseconds it was on a counter.
 
-  [[nodiscard]] friend bool operator==(const PerfCount&, const PerfCount&) = default;
+  /// Defined in syscalls.cpp, once: a defaulted comparison in a header reads as
+  /// uncovered the moment a second translation unit uses it (journal §1.22).
+  friend bool operator==(const PerfCount& lhs, const PerfCount& rhs) noexcept;
 };
 
 /// The three ioctl(2) requests a counter needs, as perf_event_open(2) names them.
@@ -427,8 +427,8 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] pid_t process_id() override;
   [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_any_nonblocking() override;
   [[nodiscard]] core::Result<int, SyscallError> open_perf_event(const PerfEventSpec& spec) override;
-  [[nodiscard]] core::Result<core::Ok, SyscallError> control_perf_event(
-      int fd, PerfAction action) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> control_perf_event(int fd,
+                                                                        PerfAction action) override;
   [[nodiscard]] core::Result<PerfCount, SyscallError> read_perf_count(int fd) override;
 };
 

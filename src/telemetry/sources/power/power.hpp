@@ -15,6 +15,16 @@
 
 namespace loadforge::telemetry {
 
+/// One package being read: by a powercap file (`fd` is -1) or a held counter.
+/// Public only so that the probe, written as free functions, can name it.
+struct PowerChannel {
+  topology::Source energy;
+  std::uint64_t modulus = 0;
+  int fd = -1;
+  double microjoules_per_count = 0.0;
+  std::string subject;
+};
+
 /// What the user can do about a sysfs attribute of the power providers that
 /// could not be read, in the state it is in. The mechanism here is file
 /// permission, so the advice is about files: CAP_PERFMON governs
@@ -61,21 +71,12 @@ class PowerSource final : public Source {
   void sample(std::vector<Reading>& out) override;
 
  private:
-  /// One package served: by a powercap file (`fd` is -1) or a held counter.
-  struct Channel {
-    topology::Source energy;
-    std::uint64_t modulus = 0;
-    int fd = -1;
-    double microjoules_per_count = 0.0;
-    std::string subject;
-  };
-
   void close_all();
 
   platform::Syscalls* syscalls_;
   platform::FileSystem* filesystem_;
   std::string root_;
-  std::vector<Channel> channels_;
+  std::vector<PowerChannel> channels_;
 };
 
 }  // namespace loadforge::telemetry
