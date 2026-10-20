@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/workloads/adaptive_mesh and nothing else.
+
+[[module]]
+path    = "src/workloads/adaptive_mesh"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+Today the adaptive mesh specification alone (spec.hpp, ADR 0004): the sizes \
+and offsets, the hotspot decoder, the mesh's integer predicate, the exact \
+pieces of a leaf's value, and the tolerance with its derivation checked on \
+both sides, tested in tests/contracts/workloads/. The adaptive mesh stream \
+takes this row over with the workload and owes what IMPLEMENTATION §3 lists \
+for it -- P4 and P5, and T3, T4, T5, T5b, T6 -- with provides = \
+["WorkloadContract"]."""
