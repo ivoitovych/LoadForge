@@ -9,6 +9,9 @@
 #include <cstdint>
 #include <cstddef>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -183,6 +186,24 @@ class FakeSyscalls final : public platform::Syscalls {
   void fail_file_read(const std::string& path, int error) {
     use_tree_ = true;
     tree_read_errors_[path] = error;
+  }
+  /// Every regular file below a directory of the source tree, as if the
+  /// directory were `machine_prefix` ("/sys") on the machine: the committed
+  /// fixtures, made available to a test that must also refuse or remove some
+  /// of their files, which a clone cannot hold (a mode-000 file arrives
+  /// readable).
+  void add_tree(const std::filesystem::path& host_directory, const std::string& machine_prefix) {
+    use_tree_ = true;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(host_directory)) {
+      if (!entry.is_regular_file()) {
+        continue;
+      }
+      std::ifstream in(entry.path());
+      std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      tree_files_[machine_prefix + "/" +
+                  std::filesystem::relative(entry.path(), host_directory).generic_string()] =
+          std::move(content);
+    }
   }
   [[nodiscard]] int tree_opens_of(const std::string& path) const {
     const auto found = tree_opens_.find(path);
