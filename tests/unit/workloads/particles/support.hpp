@@ -102,8 +102,9 @@ inline Bytes generate(const Workload& workload, std::uint64_t index) {
 
 /// Computes unit `index` on `input`, the scratch and the output pre-filled
 /// with `fill`.
-inline Bytes compute(const Workload& workload, std::uint64_t index, std::span<const std::byte> input,
-                     worker::Executor& executor, std::byte fill = std::byte{0}) {
+inline Bytes compute(const Workload& workload, std::uint64_t index,
+                     std::span<const std::byte> input, worker::Executor& executor,
+                     std::byte fill = std::byte{0}) {
   Bytes output(workload.plan().output_bytes, fill);
   Bytes scratch(workload.plan().scratch_bytes * executor.threads(), fill);
   workload.compute(index, input, output, scratch, executor);

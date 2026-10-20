@@ -3,6 +3,8 @@
 // The geometry of the neighbour search: grid, cell of a coordinate, rows of
 // cells that can interact, scratch layout.
 
+#include "workloads/particles/grid.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -11,7 +13,6 @@
 #include <cstdint>
 #include <limits>
 
-#include "workloads/particles/grid.hpp"
 #include "workloads/particles/spec.hpp"
 
 namespace loadforge::workloads::particles {
@@ -190,7 +191,7 @@ TEST(ParticlesGrid, TheLayoutHoldsEachArrayAlignedAndApart) {
     const std::size_t index_bytes = kParticles * 4;
     const std::size_t coordinate_bytes = (kParticles + kMaxLanes) * 8;
     const Region regions[] = {
-        {layout.cell_start, (grid.cells + 1U) * 4},
+        {layout.cell_start, (static_cast<std::size_t>(grid.cells) + 1U) * 4},
         {layout.cell_of, index_bytes},
         {layout.order, index_bytes},
         {layout.x, coordinate_bytes},

@@ -44,8 +44,8 @@ TEST(ParticlesDeterminism, EveryThreadCountAndEveryRunGivesTheSameBytesForOneDec
         const Bytes input = testing::generate(*workload, unit);
         testing::SerialExecutor serial;
         const Bytes reference = testing::compute(*workload, unit, input, serial);
-        for (const std::size_t threads : {std::size_t{1}, std::size_t{2}, std::size_t{3},
-                                          std::size_t{4}, std::size_t{7}}) {
+        for (const std::size_t threads :
+             {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{4}, std::size_t{7}}) {
           testing::PoolExecutor pool(threads);
           EXPECT_EQ(testing::compute(*workload, unit, input, pool), reference)
               << "c " << cells << " " << simd::describe(path) << " unit " << unit << " threads "
@@ -83,8 +83,7 @@ void expect_within_tolerance(const Bytes& input, const Bytes& a, const Bytes& b,
   for (const std::size_t p : direct::sample(1)) {
     const direct::Direct sum = direct::sum_directly(positions, p);
     for (std::size_t c = 0; c < 3; ++c) {
-      EXPECT_LE(std::fabs(first[3 * p + c] - second[3 * p + c]),
-                2.0 * direct::tolerance_of(sum, c))
+      EXPECT_LE(std::fabs(first[3 * p + c] - second[3 * p + c]), 2.0 * direct::tolerance_of(sum, c))
           << what << " particle " << p << " component " << c;
     }
   }

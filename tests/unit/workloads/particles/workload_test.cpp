@@ -70,8 +70,8 @@ TEST(ParticlesWorkload, ADecompositionThatIsNotOneTwoOrFourIsRefusedByName) {
 }
 
 TEST(ParticlesWorkload, AnIsaPathWithoutAKernelIsRefusedByName) {
-  for (const simd::IsaPath path : {simd::IsaPath::kAvx2, simd::IsaPath::kAvx512,
-                                   simd::IsaPath::kNeon}) {
+  for (const simd::IsaPath path :
+       {simd::IsaPath::kAvx2, simd::IsaPath::kAvx512, simd::IsaPath::kNeon}) {
     const auto probe = testing::make(testing::config_for(0, simd::IsaPath::kScalar));
     if (probe->descriptor().paths.contains(path)) {
       continue;
@@ -80,6 +80,18 @@ TEST(ParticlesWorkload, AnIsaPathWithoutAKernelIsRefusedByName) {
     ASSERT_FALSE(created.has_value());
     EXPECT_EQ(created.error().fault, WorkloadFault::kConfiguration);
     EXPECT_NE(created.error().detail.find(std::string(simd::describe(path))), std::string::npos)
+        << created.error().detail;
+  }
+}
+
+TEST(ParticlesWorkload, AnIsaPathOutsideTheEnumerationIsRefusedLikeOneWithoutAKernel) {
+  // A value no worker would pass: the kernel table has no entry for it, and
+  // the table's lookup says so (dispatch.hpp, kernel_at) rather than guessing.
+  for (const auto raw : {std::uint8_t{4}, std::uint8_t{200}, std::uint8_t{255}}) {
+    const auto created = create(testing::config_for(0, static_cast<simd::IsaPath>(raw)));
+    ASSERT_FALSE(created.has_value()) << static_cast<int>(raw);
+    EXPECT_EQ(created.error().fault, WorkloadFault::kConfiguration);
+    EXPECT_NE(created.error().detail.find("unrecognised"), std::string::npos)
         << created.error().detail;
   }
 }
@@ -147,9 +159,9 @@ TEST(ParticlesWorkload, ThePlanStatesSizesAndWork) {
     EXPECT_EQ(plan.logical_bytes, kInputBytes + kOutputBytes + 2 * layout.total);
     // 17 operations for each candidate pair; kParticles / cells candidates in
     // a cell on average, in each of the cells visited.
-    EXPECT_EQ(plan.operations,
-              kParticles * kParticles * cells_visited(static_cast<int>(expected.c)) / expected.cells *
-                  17U);
+    EXPECT_EQ(plan.operations, kParticles * kParticles *
+                                   cells_visited(static_cast<int>(expected.c)) / expected.cells *
+                                   17U);
   }
   EXPECT_EQ(cells_visited(1), 27U);
   EXPECT_EQ(cells_visited(2), 125U);
@@ -232,7 +244,9 @@ struct Subject {
     const auto paths = particles::testing::runnable_paths();
     return kVector ? paths.back() : simd::IsaPath::kScalar;
   }
-  static workloads::WorkloadConfig config() { return particles::testing::config_for(kCells, path()); }
+  static workloads::WorkloadConfig config() {
+    return particles::testing::config_for(kCells, path());
+  }
   static core::Result<std::unique_ptr<workloads::Workload>, workloads::WorkloadError> create(
       const workloads::WorkloadConfig& config) {
     return workloads::particles::create(config);

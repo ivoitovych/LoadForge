@@ -22,8 +22,10 @@
 // simd::compiled_paths() (primitives/simd/dispatch.hpp).
 #if defined(LOADFORGE_SIMD_SCALAR)
 #elif defined(__x86_64__)
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): selects which kernel is compiled
 #define LOADFORGE_PARTICLES_AVX2 1
 #elif defined(__aarch64__)
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): selects which kernel is compiled
 #define LOADFORGE_PARTICLES_NEON 1
 #endif
 

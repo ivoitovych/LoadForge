@@ -22,7 +22,7 @@
 
 namespace loadforge::workloads::particles::direct {
 
-enum class Verdict { kAgreement, kBoundedMismatch, kNotChecked };
+enum class Verdict : std::uint8_t { kAgreement, kBoundedMismatch, kNotChecked };
 
 struct Result {
   Verdict verdict = Verdict::kNotChecked;
@@ -147,8 +147,8 @@ inline bool checkable(std::span<const std::byte> input, std::span<const std::byt
     return false;
   }
   const std::vector<double> positions = doubles_of(input);
-  return std::ranges::all_of(
-      positions, [](double v) { return std::isfinite(v) && v >= 0.0 && v < kBoxEdge; });
+  return std::ranges::all_of(positions,
+                             [](double v) { return std::isfinite(v) && v >= 0.0 && v < kBoxEdge; });
 }
 
 /// The verdict on `output` for the particles `chosen` (ascending), against

@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -27,7 +28,7 @@ struct Cloud {
   std::vector<double> x;
   std::vector<double> y;
   std::vector<double> z;
-  std::size_t size() const { return x.size() - kMaxLanes; }
+  [[nodiscard]] std::size_t size() const { return x.size() - kMaxLanes; }
 };
 
 /// `n` particles with kMaxLanes zeros after them, as the search leaves them.
@@ -130,16 +131,21 @@ Force model_lanes(const Cloud& cloud, const std::vector<NeighbourRun>& runs, std
 }
 
 bool same_bits(double a, double b) {
-  return std::memcmp(&a, &b, sizeof(double)) == 0 || (std::isnan(a) && std::isnan(b));
+  return std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b) ||
+         (std::isnan(a) && std::isnan(b));
 }
 
-void expect_forces(const std::vector<double>& force, const Cloud& cloud, const std::vector<NeighbourRun>& runs,
-                   std::uint32_t first, std::uint32_t last, auto model) {
+/// Entry `component` of the force on sorted particle `i`.
+constexpr std::size_t entry(std::size_t i, std::size_t component = 0) { return 3 * i + component; }
+
+void expect_forces(const std::vector<double>& force, const Cloud& cloud,
+                   const std::vector<NeighbourRun>& runs, std::uint32_t first, std::uint32_t last,
+                   auto model) {
   for (std::uint32_t i = first; i < last; ++i) {
     const Force expected = model(cloud, runs, i);
     for (std::size_t c = 0; c < 3; ++c) {
-      EXPECT_TRUE(same_bits(force[3 * i + c], expected[c]))
-          << "particle " << i << " component " << c << ": " << force[3 * i + c] << " against "
+      EXPECT_TRUE(same_bits(force[entry(i, c)], expected[c]))
+          << "particle " << i << " component " << c << ": " << force[entry(i, c)] << " against "
           << expected[c];
     }
   }
@@ -244,7 +250,8 @@ TEST(ParticlesKernel, NoRunsMeansExactlyZeroForce) {
       lane_cell_kernel<Lanes4>(job);
     }
     for (std::size_t k = 0; k < 24; ++k) {
-      EXPECT_EQ(std::bit_cast<std::uint64_t>(force[k]), 0U) << "kernel " << kernel << " entry " << k;
+      EXPECT_EQ(std::bit_cast<std::uint64_t>(force[k]), 0U)
+          << "kernel " << kernel << " entry " << k;
     }
   }
 }
@@ -267,9 +274,9 @@ TEST(ParticlesKernel, ATermIsZeroAtAndBeyondTheCutoffAndActiveJustInside) {
   }
   for (std::uint32_t only = 1; only < 6; ++only) {
     const std::vector<NeighbourRun> runs = {{only, only + 1}};
-    std::vector<double> scalar(3 * 6, kGuard);
-    std::vector<double> two(3 * 6, kGuard);
-    std::vector<double> four(3 * 6, kGuard);
+    std::vector<double> scalar(entry(6), kGuard);
+    std::vector<double> two(entry(6), kGuard);
+    std::vector<double> four(entry(6), kGuard);
     cell_kernel_scalar(job_for(cloud, runs, 0, 1, scalar));
     lane_cell_kernel<Lanes2>(job_for(cloud, runs, 0, 1, two));
     lane_cell_kernel<Lanes4>(job_for(cloud, runs, 0, 1, four));
@@ -294,16 +301,16 @@ TEST(ParticlesKernel, ANotANumberPositionMakesTheForceNotANumberInEveryKernel) {
   Cloud cloud = random_cloud(16, 1.0, 8);
   cloud.x[3] = std::numeric_limits<double>::quiet_NaN();
   const std::vector<NeighbourRun> runs = {{0, 16}};
-  std::vector<double> scalar(3 * 16, kGuard);
-  std::vector<double> two(3 * 16, kGuard);
-  std::vector<double> four(3 * 16, kGuard);
+  std::vector<double> scalar(entry(16), kGuard);
+  std::vector<double> two(entry(16), kGuard);
+  std::vector<double> four(entry(16), kGuard);
   cell_kernel_scalar(job_for(cloud, runs, 0, 16, scalar));
   lane_cell_kernel<Lanes2>(job_for(cloud, runs, 0, 16, two));
   lane_cell_kernel<Lanes4>(job_for(cloud, runs, 0, 16, four));
   for (std::uint32_t i = 0; i < 16; ++i) {
-    EXPECT_TRUE(std::isnan(scalar[3 * i])) << i << ": the NaN term is active, not dropped";
-    EXPECT_TRUE(std::isnan(two[3 * i]));
-    EXPECT_TRUE(std::isnan(four[3 * i]));
+    EXPECT_TRUE(std::isnan(scalar[entry(i)])) << i << ": the NaN term is active, not dropped";
+    EXPECT_TRUE(std::isnan(two[entry(i)]));
+    EXPECT_TRUE(std::isnan(four[entry(i)]));
   }
   // The other components of the others stay finite: only x was corrupted.
   EXPECT_FALSE(std::isnan(scalar[3 * 5 + 1]) && false);
@@ -316,15 +323,15 @@ TEST(ParticlesKernel, InfinitePositionsAndHugeSeparationsGiveNoTermWithoutTrappi
   cloud.y[4] = -1e300;
   cloud.z[6] = 1e200;
   const std::vector<NeighbourRun> runs = {{0, 8}};
-  std::vector<double> scalar(3 * 8, kGuard);
-  std::vector<double> four(3 * 8, kGuard);
+  std::vector<double> scalar(entry(8), kGuard);
+  std::vector<double> four(entry(8), kGuard);
   cell_kernel_scalar(job_for(cloud, runs, 0, 8, scalar));
   lane_cell_kernel<Lanes4>(job_for(cloud, runs, 0, 8, four));
   expect_forces(scalar, cloud, runs, 0, 8, model_scalar);
   expect_forces(four, cloud, runs, 0, 8, model_lanes<4>);
   // Particle 2 is infinitely far from the others: its term with each is zero
   // (t = -inf), except with itself, inf - inf = NaN.
-  EXPECT_TRUE(std::isnan(scalar[3 * 2]));
+  EXPECT_TRUE(std::isnan(scalar[entry(2)]));
 }
 
 TEST(ParticlesKernel, TheNativeVectorKernelIsTheLaneKernelOfItsWidth) {

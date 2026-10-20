@@ -3,6 +3,8 @@
 // The neighbour search: carving the scratch, sorting into cells, listing the
 // runs of a cell, putting the forces back in the input's order.
 
+#include "workloads/particles/bin.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -17,7 +19,6 @@
 
 #include "primitives/rng/philox.hpp"
 #include "unit/workloads/particles/support.hpp"
-#include "workloads/particles/bin.hpp"
 #include "workloads/particles/spec.hpp"
 
 namespace loadforge::workloads::particles {
@@ -68,10 +69,9 @@ TEST(ParticlesBin, CarvingGivesAlignedDisjointArraysInsideTheScratchWhateverItsA
         const auto begin = reinterpret_cast<std::uintptr_t>(span.data());
         return Range{begin, begin + span.size_bytes()};
       };
-      std::vector<Range> ranges = {range(binned.cell_start), range(binned.cell_of),
-                                   range(binned.order),      range(binned.x),
-                                   range(binned.y),          range(binned.z),
-                                   range(binned.force)};
+      std::vector<Range> ranges = {
+          range(binned.cell_start), range(binned.cell_of), range(binned.order), range(binned.x),
+          range(binned.y),          range(binned.z),       range(binned.force)};
       std::ranges::sort(ranges, {}, &Range::begin);
       const auto low = reinterpret_cast<std::uintptr_t>(bytes.data());
       const auto high = low + bytes.size();
@@ -122,7 +122,7 @@ TEST(ParticlesBin, ParticlesAreSortedIntoTheirCellsKeepingInputOrderWithinACell)
       const std::uint32_t iy = cell / grid.edge % grid.edge;
       const std::uint32_t ix = cell % grid.edge;
       for (std::uint32_t at = binned.cell_start[cell]; at < binned.cell_start[cell + 1]; ++at) {
-        const std::uint32_t particle = binned.order[at];
+        const std::size_t particle = binned.order[at];
         ASSERT_LT(particle, kParticles);
         EXPECT_FALSE(seen[particle]) << "each particle once";
         seen[particle] = true;
@@ -195,8 +195,7 @@ TEST(ParticlesBin, AllParticlesAtOnePointShareOneCell) {
 
 // A populated sorted structure to list runs on: the generated input of unit 2.
 struct Sorted {
-  explicit Sorted(std::uint32_t c)
-      : grid(make_grid(c)), rows(make_row_table(c)), scratch(grid) {
+  explicit Sorted(std::uint32_t c) : grid(make_grid(c)), rows(make_row_table(c)), scratch(grid) {
     input = generated_input(21, 2);
     positions = testing::as_doubles(input);
     binned = carve(scratch.span(), scratch.layout, grid);
@@ -212,7 +211,7 @@ struct Sorted {
 
 TEST(ParticlesBin, TheRunsOfACellHoldEveryParticleWithinTheCutoffOfAParticleOfIt) {
   for (const std::uint32_t c : kCellsPerCutoff) {
-    Sorted sorted(c);
+    const Sorted sorted(c);
     const Grid& grid = sorted.grid;
     std::array<NeighbourRun, kMaxRows> runs{};
     // Cells in the interior, on each face, edge and corner of the box.
@@ -261,16 +260,19 @@ TEST(ParticlesBin, ARunIsWholeCellsOfOneRowAndTheRunsFollowTheRowTable) {
   const std::uint32_t ix = 6;
   const std::uint32_t iy = 9;
   const std::uint32_t iz = 3;
-  const std::size_t count = collect_runs(grid, sorted.rows, sorted.binned.cell_start, ix, iy, iz, runs);
+  const std::size_t count =
+      collect_runs(grid, sorted.rows, sorted.binned.cell_start, ix, iy, iz, runs);
   std::size_t next = 0;
   for (std::size_t r = 0; r < sorted.rows.count; ++r) {
     const RowOffset& row = sorted.rows.rows[r];
-    const std::uint32_t base = static_cast<std::uint32_t>((static_cast<int>(iz) + row.dz) *
-                                                              static_cast<int>(grid.edge) +
-                                                          static_cast<int>(iy) + row.dy) *
-                               grid.edge;
-    const std::uint32_t begin = sorted.binned.cell_start[base + ix - static_cast<std::uint32_t>(row.dx_max)];
-    const std::uint32_t end = sorted.binned.cell_start[base + ix + static_cast<std::uint32_t>(row.dx_max) + 1];
+    const std::uint32_t base =
+        static_cast<std::uint32_t>((static_cast<int>(iz) + row.dz) * static_cast<int>(grid.edge) +
+                                   static_cast<int>(iy) + row.dy) *
+        grid.edge;
+    const std::uint32_t begin =
+        sorted.binned.cell_start[base + ix - static_cast<std::uint32_t>(row.dx_max)];
+    const std::uint32_t end =
+        sorted.binned.cell_start[base + ix + static_cast<std::uint32_t>(row.dx_max) + 1];
     if (begin == end) {
       continue;
     }

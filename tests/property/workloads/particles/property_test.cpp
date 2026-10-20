@@ -58,7 +58,8 @@ TEST(ParticlesProperty, TheForcesOnAllParticlesSumToZeroWithinTheBoundOfTheSumma
     ASSERT_NE(workload, nullptr);
     testing::PoolExecutor pool(4);
     const Bytes input = testing::generate(*workload, 6);
-    const std::vector<double> forces = testing::as_doubles(testing::compute(*workload, 6, input, pool));
+    const std::vector<double> forces =
+        testing::as_doubles(testing::compute(*workload, 6, input, pool));
     const std::vector<double> positions = testing::as_doubles(input);
     std::array<double, 3> total{};
     std::array<double, 3> bound{};
@@ -111,8 +112,8 @@ TEST(ParticlesProperty, RelabellingTheParticlesRelabelsTheForcesWithinTheToleran
     }
     const std::vector<double> original =
         testing::as_doubles(testing::compute(*workload, 3, input, serial));
-    const std::vector<double> relabelled = testing::as_doubles(
-        testing::compute(*workload, 3, testing::as_bytes(shuffled), serial));
+    const std::vector<double> relabelled =
+        testing::as_doubles(testing::compute(*workload, 3, testing::as_bytes(shuffled), serial));
     bool any_bit_differs = false;
     for (const std::size_t p : direct::sample(3)) {
       const direct::Direct sum = direct::sum_directly(positions, p);
@@ -185,8 +186,8 @@ TEST(ParticlesProperty, AParticleMovedBeyondTheCutoffOfTheOthersChangesNothingFo
     ASSERT_NE(workload, nullptr);
     testing::SerialExecutor serial;
     const auto forces = [&](const std::vector<testing::Point>& test) {
-      return testing::as_doubles(testing::compute(
-          *workload, 0, testing::as_bytes(testing::isolated_unit(test)), serial));
+      return testing::as_doubles(
+          testing::compute(*workload, 0, testing::as_bytes(testing::isolated_unit(test)), serial));
     };
     // The cluster alone, with the fifth particle parked at once: exactly as
     // `after`, whose fifth particle is out of reach of the four.
@@ -208,8 +209,8 @@ TEST(ParticlesProperty, TheForceOnAParticleDoesNotDependOnWhereTheOthersAreOutsi
     const auto workload = testing::make(testing::config_for(variant.cells, variant.path));
     ASSERT_NE(workload, nullptr);
     testing::SerialExecutor serial;
-    const std::vector<double> alone = testing::as_doubles(testing::compute(
-        *workload, 0, testing::as_bytes(testing::isolated_unit(near)), serial));
+    const std::vector<double> alone = testing::as_doubles(
+        testing::compute(*workload, 0, testing::as_bytes(testing::isolated_unit(near)), serial));
     std::vector<double> scattered = testing::isolated_unit(near);
     std::mt19937_64 engine(5);
     for (std::size_t p = near.size(); p < kParticles; ++p) {
@@ -219,8 +220,8 @@ TEST(ParticlesProperty, TheForceOnAParticleDoesNotDependOnWhereTheOthersAreOutsi
     }
     // Particles near (13.5, 13.5, 13.5) are in the box's far corner, 8+ away
     // from the four: they repel one another but not the four.
-    const std::vector<double> moved = testing::as_doubles(
-        testing::compute(*workload, 0, testing::as_bytes(scattered), serial));
+    const std::vector<double> moved =
+        testing::as_doubles(testing::compute(*workload, 0, testing::as_bytes(scattered), serial));
     for (std::size_t k = 0; k < 3 * near.size(); ++k) {
       if (variant.path == simd::IsaPath::kScalar) {
         EXPECT_EQ(bits(moved[k]), bits(alone[k])) << name_of(variant) << " entry " << k;
@@ -255,10 +256,20 @@ TEST(ParticlesProperty, ComputeIsTotalAndDeterministicOverBitFlipsAnywhereInTheI
 TEST(ParticlesProperty, EveryDoubleThatIsNotAFiniteCoordinateInTheBoxIsComputedOn) {
   const double nan = std::numeric_limits<double>::quiet_NaN();
   const double inf = std::numeric_limits<double>::infinity();
-  const std::vector<double> specials = {nan,   -nan, inf,   -inf, -0.0, 0.0,
-                                        -1.0,  16.0, 1e300, -1e300, std::numeric_limits<double>::denorm_min(),
+  const std::vector<double> specials = {nan,
+                                        -nan,
+                                        inf,
+                                        -inf,
+                                        -0.0,
+                                        0.0,
+                                        -1.0,
+                                        16.0,
+                                        1e300,
+                                        -1e300,
+                                        std::numeric_limits<double>::denorm_min(),
                                         std::numeric_limits<double>::max(),
-                                        std::numeric_limits<double>::lowest(), 15.999999999999998};
+                                        std::numeric_limits<double>::lowest(),
+                                        15.999999999999998};
   for (const Variant& variant : variants()) {
     const auto workload = testing::make(testing::config_for(variant.cells, variant.path, 3));
     ASSERT_NE(workload, nullptr);
@@ -286,8 +297,10 @@ TEST(ParticlesProperty, AnUnitOfParticlesAllInOneCellStillHasAboundedAmountOfWor
     ASSERT_NE(workload, nullptr);
     testing::PoolExecutor pool(3);
     const Bytes input = testing::as_bytes(std::vector<double>(3 * kParticles, 3.5));
-    const std::vector<double> forces = testing::as_doubles(testing::compute(*workload, 0, input, pool));
-    EXPECT_TRUE(std::ranges::all_of(forces, [](double f) { return bits(f) == 0; })) << name_of(variant);
+    const std::vector<double> forces =
+        testing::as_doubles(testing::compute(*workload, 0, input, pool));
+    EXPECT_TRUE(std::ranges::all_of(forces, [](double f) { return bits(f) == 0; }))
+        << name_of(variant);
   }
 }
 

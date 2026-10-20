@@ -46,8 +46,8 @@ std::vector<std::size_t> every_th(std::size_t step) {
 }
 
 TEST(ParticlesOracle, TheSampleIsSixteenDistinctParticlesIncludingTheFirstAndTheLast) {
-  for (const std::uint64_t index : {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{77},
-                                    ~std::uint64_t{0}}) {
+  for (const std::uint64_t index :
+       {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{77}, ~std::uint64_t{0}}) {
     const std::vector<std::size_t> chosen = direct::sample(index);
     ASSERT_EQ(chosen.size(), kSampledParticles);
     EXPECT_TRUE(std::ranges::is_sorted(chosen));
@@ -96,7 +96,7 @@ TEST(ParticlesOracle, EveryThirtySecondParticleAgreesAndTheBoundIsNotLoose) {
       EXPECT_EQ(result.entries_compared, 3 * chosen.size());
       // The residual is rounding, a small fraction of a bound that covers the
       // worst case: a ratio of 1 would mean the bound is the error.
-      EXPECT_LT(worst_ratio(input, output, chosen), 0.5);
+      EXPECT_LT(worst_ratio(input, output, chosen), 0.1);
     }
   }
 }

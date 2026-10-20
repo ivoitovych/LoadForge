@@ -4,12 +4,13 @@
 // specification's constants, so that the verdicts of the workload's tests mean
 // something.
 
+#include "oracle/workloads/particles/direct_check.hpp"
+
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <vector>
 
-#include "oracle/workloads/particles/direct_check.hpp"
 #include "unit/workloads/particles/support.hpp"
 
 namespace loadforge::workloads::particles {
@@ -41,7 +42,7 @@ TEST(ParticlesDirectCheck, TheDirectSumOfTwoParticlesAtDistanceOneIsTheHandCompu
 }
 
 TEST(ParticlesDirectCheck, AParticleWithNoCandidateHasTheFloorAsItsTolerance) {
-  direct::Direct none;
+  const direct::Direct none;
   EXPECT_EQ(direct::tolerance_of(none, 0), kMinTolerance);
   direct::Direct some;
   some.candidates = 33;

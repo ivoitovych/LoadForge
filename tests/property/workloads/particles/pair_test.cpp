@@ -58,7 +58,8 @@ Outcome run(const std::vector<Point>& test, std::uint32_t cells, simd::IsaPath p
   EXPECT_NE(workload, nullptr);
   const Bytes input = testing::as_bytes(testing::isolated_unit(test));
   testing::PoolExecutor pool(3);
-  const std::vector<double> forces = testing::as_doubles(testing::compute(*workload, 0, input, pool));
+  const std::vector<double> forces =
+      testing::as_doubles(testing::compute(*workload, 0, input, pool));
   Outcome outcome;
   for (std::size_t p = 0; p < test.size(); ++p) {
     outcome.forces.push_back({forces[3 * p], forces[3 * p + 1], forces[3 * p + 2]});
@@ -71,8 +72,8 @@ Outcome run(const std::vector<Point>& test, std::uint32_t cells, simd::IsaPath p
 
 class ParticlesPair : public ::testing::TestWithParam<std::tuple<std::uint32_t, simd::IsaPath>> {
  protected:
-  std::uint32_t cells() const { return std::get<0>(GetParam()); }
-  simd::IsaPath path() const { return std::get<1>(GetParam()); }
+  [[nodiscard]] static std::uint32_t cells() { return std::get<0>(GetParam()); }
+  [[nodiscard]] static simd::IsaPath path() { return std::get<1>(GetParam()); }
 };
 
 std::vector<std::tuple<std::uint32_t, simd::IsaPath>> combinations() {
@@ -127,12 +128,14 @@ TEST_P(ParticlesPair, AtTheCutoffThereIsNoForceAndJustInsideThereIsATinyOne) {
   EXPECT_EQ(bits(near.forces[0][0]), bits(expected[0]));
   EXPECT_LT(near.forces[0][0], 0.0);
   EXPECT_GT(near.forces[0][0], -1e-30) << "t is about 2^-51, w about 2^-102";
-  const Outcome beyond = run({{0.0, 9.0, 9.0}, {std::nextafter(2.0, 3.0), 9.0, 9.0}}, cells(), path());
+  const Outcome beyond =
+      run({{0.0, 9.0, 9.0}, {std::nextafter(2.0, 3.0), 9.0, 9.0}}, cells(), path());
   EXPECT_EQ(bits(beyond.forces[0][0]), 0U);
 }
 
 TEST_P(ParticlesPair, ThreeOnALineHaveTheMiddleOneInBalance) {
-  const Outcome outcome = run({{8.0, 9.0, 9.0}, {9.0, 9.0, 9.0}, {10.0, 9.0, 9.0}}, cells(), path());
+  const Outcome outcome =
+      run({{8.0, 9.0, 9.0}, {9.0, 9.0, 9.0}, {10.0, 9.0, 9.0}}, cells(), path());
   EXPECT_EQ(bits(outcome.forces[1][0]), 0U) << "equal and opposite pushes sum to exactly +0";
   // The ends feel the middle one at distance 1 and each other at exactly 2.
   EXPECT_EQ(outcome.forces[0][0], -0.5625);
@@ -160,8 +163,8 @@ TEST_P(ParticlesPair, APairAcrossACellBoundaryInteractsAsOneInsideACellDoes) {
 
 TEST_P(ParticlesPair, ParticlesAtTheCornersAndFacesOfTheBoxInteractWithTheirNeighbours) {
   const double top = kBoxEdge - std::ldexp(1.0, -49);
-  const std::vector<Point> test = {{0.0, 0.0, 0.0},    {0.5, 0.25, 0.75}, {top, top, top},
-                                   {top - 0.5, top - 0.25, top - 0.75}};
+  const std::vector<Point> test = {
+      {0.0, 0.0, 0.0}, {0.5, 0.25, 0.75}, {top, top, top}, {top - 0.5, top - 0.25, top - 0.75}};
   const Outcome outcome = run(test, cells(), path());
   const Point low = model_term(test[0], test[1]);
   const Point high = model_term(test[2], test[3]);
@@ -177,8 +180,8 @@ TEST_P(ParticlesPair, ParticlesAtTheCornersAndFacesOfTheBoxInteractWithTheirNeig
 
 TEST_P(ParticlesPair, ParticlesOnTheBoundaryOfTheBoxInEveryAxisAreCounted) {
   // Face of the box, not a corner: (0, y, z) and (x, 0, z) and (x, y, 0).
-  const std::vector<Point> test = {{0.0, 8.0, 8.0}, {0.75, 8.5, 8.25}, {8.0, 0.0, 12.0},
-                                   {8.25, 0.5, 12.5}};
+  const std::vector<Point> test = {
+      {0.0, 8.0, 8.0}, {0.75, 8.5, 8.25}, {8.0, 0.0, 12.0}, {8.25, 0.5, 12.5}};
   const Outcome outcome = run(test, cells(), path());
   const Point first = model_term(test[0], test[1]);
   const Point second = model_term(test[2], test[3]);
@@ -276,7 +279,8 @@ TEST_P(ParticlesPair, ThePairAtEveryCellOffsetIsFoundWhenTheCellsAreInReach) {
   }
   EXPECT_GT(checked_in_reach, offsets.size() / 2) << "most offsets hold an active pair";
   if (c == 4) {
-    EXPECT_GT(checked_out_of_reach, 0U) << "the corners the search leaves out are beyond the cutoff";
+    EXPECT_GT(checked_out_of_reach, 0U)
+        << "the corners the search leaves out are beyond the cutoff";
   }
 }
 

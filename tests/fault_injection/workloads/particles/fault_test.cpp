@@ -180,7 +180,7 @@ std::size_t neighbour_of_first(const Evidence& evidence) {
 
 TEST(ParticlesFault, AnInputCorruptedBeforeComputeShowsInTheForcesOfItsNeighbours) {
   for (const simd::IsaPath path : testing::runnable_paths()) {
-    Evidence evidence = correct_evidence(2, path);
+    const Evidence evidence = correct_evidence(2, path);
     const std::size_t neighbour = neighbour_of_first(evidence);
     ASSERT_GT(neighbour, 0U);
     const auto workload = testing::make(testing::config_for(2, path, 41));
@@ -201,17 +201,17 @@ TEST(ParticlesFault, AnInputCorruptedBelowTheToleranceOrOutsideTheSampleGoesUnse
   // What the check does not claim (spec.hpp, "What the bound does not claim"):
   // the lowest bit of a coordinate moves a force by about 1e-16, and a
   // particle none of the sampled ones has in its cutoff is not examined.
-  Evidence evidence = correct_evidence(2, simd::IsaPath::kScalar);
+  const Evidence evidence = correct_evidence(2, simd::IsaPath::kScalar);
   const auto workload = testing::make(testing::config_for(2, simd::IsaPath::kScalar, 41));
   testing::SerialExecutor serial;
   const std::size_t neighbour = neighbour_of_first(evidence);
   std::vector<double> tiny = evidence.positions;
   tiny[3 * neighbour + 1] = flipped(tiny[3 * neighbour + 1], 0);
-  EXPECT_EQ(direct::judge(evidence.reference,
-                          testing::as_doubles(testing::compute(*workload, kUnit,
-                                                               testing::as_bytes(tiny), serial)))
-                .verdict,
-            Verdict::kAgreement);
+  EXPECT_EQ(
+      direct::judge(evidence.reference, testing::as_doubles(testing::compute(
+                                            *workload, kUnit, testing::as_bytes(tiny), serial)))
+          .verdict,
+      Verdict::kAgreement);
 
   // A particle at least 2 from every sampled particle: move it by 3.
   std::vector<double> far = evidence.positions;
@@ -228,11 +228,11 @@ TEST(ParticlesFault, AnInputCorruptedBelowTheToleranceOrOutsideTheSampleGoesUnse
       break;
     }
   }
-  EXPECT_EQ(direct::judge(evidence.reference,
-                          testing::as_doubles(testing::compute(*workload, kUnit,
-                                                               testing::as_bytes(far), serial)))
-                .verdict,
-            Verdict::kAgreement)
+  EXPECT_EQ(
+      direct::judge(evidence.reference, testing::as_doubles(testing::compute(
+                                            *workload, kUnit, testing::as_bytes(far), serial)))
+          .verdict,
+      Verdict::kAgreement)
       << "unexamined particles are not examined";
 }
 
@@ -241,8 +241,8 @@ TEST(ParticlesFault, AnInputCorruptedBelowTheToleranceOrOutsideTheSampleGoesUnse
 TEST(ParticlesFaultUnrun, EvidenceOfTheWrongSizeIsNotChecked) {
   const Evidence evidence = correct_evidence(2, simd::IsaPath::kScalar);
   const Bytes output = testing::as_bytes(evidence.forces);
-  for (const std::size_t input_size : {std::size_t{0}, kInputBytes - 8, kInputBytes + 8,
-                                       kInputBytes - 1}) {
+  for (const std::size_t input_size :
+       {std::size_t{0}, kInputBytes - 8, kInputBytes + 8, kInputBytes - 1}) {
     const direct::Result result = direct::check(kUnit, Bytes(input_size), output);
     EXPECT_EQ(result.verdict, Verdict::kNotChecked) << input_size;
     EXPECT_NE(result.verdict, Verdict::kAgreement);
@@ -276,7 +276,8 @@ TEST(ParticlesFaultUnrun, AnInputThatCannotBearATolerancePreventsTheCheckWhateve
   }
   // The same wrong output on a valid input is a mismatch, not NotChecked: a
   // NaN in the OUTPUT is a finding.
-  EXPECT_EQ(direct::check(kUnit, evidence.input, garbage_output).verdict, Verdict::kBoundedMismatch);
+  EXPECT_EQ(direct::check(kUnit, evidence.input, garbage_output).verdict,
+            Verdict::kBoundedMismatch);
 }
 
 TEST(ParticlesFaultUnrun, AnAgreementAlwaysCountsTheFullSample) {

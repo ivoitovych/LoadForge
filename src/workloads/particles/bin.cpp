@@ -28,15 +28,16 @@ std::array<double, 3> position_of(std::span<const std::byte> input, std::size_t 
 
 std::uint32_t cell_of_position(const std::array<double, 3>& position, const Grid& grid) noexcept {
   return cell_coordinate(position[0], grid) +
-         grid.edge * (cell_coordinate(position[1], grid) + grid.edge * cell_coordinate(position[2], grid));
+         grid.edge *
+             (cell_coordinate(position[1], grid) + grid.edge * cell_coordinate(position[2], grid));
 }
 
 template <typename T>
-std::span<T> typed_span(std::byte* base, std::size_t offset, std::size_t count) noexcept {
+std::span<T> typed_span(std::span<std::byte> base, std::size_t offset, std::size_t count) noexcept {
   // The scratch is byte storage the runner owns; the layout puts each array
   // at an offset aligned for its type, so the cast yields an aligned pointer.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  return {reinterpret_cast<T*>(base + offset), count};
+  return {reinterpret_cast<T*>(base.subspan(offset, count * sizeof(T)).data()), count};
 }
 
 }  // namespace
@@ -45,7 +46,7 @@ Binned carve(std::span<std::byte> scratch, const Layout& layout, const Grid& gri
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   const auto address = reinterpret_cast<std::uintptr_t>(scratch.data());
   const std::size_t skip = (kScratchAlignment - address % kScratchAlignment) % kScratchAlignment;
-  std::byte* const base = scratch.data() + skip;
+  const std::span<std::byte> base = scratch.subspan(skip);
   constexpr std::size_t kPadded = kParticles + kMaxLanes;
   Binned binned;
   binned.cell_start = typed_span<std::uint32_t>(base, layout.cell_start, grid.cells + 1U);
@@ -99,8 +100,7 @@ std::size_t collect_runs(const Grid& grid, const RowTable& rows,
                          std::array<NeighbourRun, kMaxRows>& runs) noexcept {
   const auto edge = static_cast<std::int32_t>(grid.edge);
   std::size_t count = 0;
-  for (std::size_t r = 0; r < rows.count; ++r) {
-    const RowOffset& row = rows.rows[r];
+  for (const RowOffset& row : std::span(rows.rows).first(rows.count)) {
     const std::int32_t y = static_cast<std::int32_t>(iy) + row.dy;
     const std::int32_t z = static_cast<std::int32_t>(iz) + row.dz;
     if (y < 0 || y >= edge || z < 0 || z >= edge) {
@@ -108,13 +108,14 @@ std::size_t collect_runs(const Grid& grid, const RowTable& rows,
     }
     const std::int32_t low = std::max(static_cast<std::int32_t>(ix) - row.dx_max, 0);
     const std::int32_t high = std::min(static_cast<std::int32_t>(ix) + row.dx_max, edge - 1);
-    const auto base = static_cast<std::size_t>((z * edge + y) * edge);
+    const std::size_t base =
+        (static_cast<std::size_t>(z) * grid.edge + static_cast<std::size_t>(y)) * grid.edge;
     const std::uint32_t begin = cell_start[base + static_cast<std::size_t>(low)];
     const std::uint32_t end = cell_start[base + static_cast<std::size_t>(high) + 1];
     if (begin == end) {
       continue;
     }
-    runs[count] = NeighbourRun{begin, end};
+    runs.at(count) = NeighbourRun{begin, end};
     ++count;
   }
   return count;

@@ -53,7 +53,7 @@ RowTable make_row_table(std::uint32_t cells_per_cutoff) noexcept {
           dx_max = dx;
         }
       }
-      table.rows[table.count] = RowOffset{dy, dz, dx_max};
+      table.rows.at(table.count) = RowOffset{dy, dz, dx_max};
       ++table.count;
     }
   }

@@ -86,9 +86,12 @@ class ParticlesWorkload final : public Workload {
     }
   }
 
+  // The signature is the contract's.
+  // NOLINTBEGIN(bugprone-easily-swappable-parameters)
   void compute(std::uint64_t /*index*/, std::span<const std::byte> input,
                std::span<std::byte> output, std::span<std::byte> scratch,
                worker::Executor& executor) const noexcept override {
+    // NOLINTEND(bugprone-easily-swappable-parameters)
     const Binned binned = carve(scratch, layout_, grid_);
     sort_into_cells(input, grid_, binned);
     Sum sum;
@@ -137,8 +140,8 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
   const Layout layout = make_layout(grid);
   const RowTable rows = make_row_table(cells);
   std::uint64_t visited_cells = 0;
-  for (std::size_t r = 0; r < rows.count; ++r) {
-    visited_cells += 2U * static_cast<std::uint64_t>(rows.rows[r].dx_max) + 1U;
+  for (const RowOffset& row : std::span(rows.rows).first(rows.count)) {
+    visited_cells += 2U * static_cast<std::uint64_t>(row.dx_max) + 1U;
   }
   Plan plan;
   plan.input_bytes = kInputBytes;
@@ -151,8 +154,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
   // Candidate pairs: each particle meets the particles of the cells it looks
   // at, kParticles / grid.cells of them in a cell on average.
   plan.operations = kParticles * kParticles * visited_cells / grid.cells * kOperationsPerPair;
-  Descriptor descriptor{std::string(kName), kVersion,
-                        DeterminismClass::kBitExactFixedDecomposition,
+  Descriptor descriptor{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
                         verification::Contract::kBounded, simd::kernel_paths(table)};
   return std::unique_ptr<Workload>(
       std::make_unique<ParticlesWorkload>(config, grid, kernel, plan, std::move(descriptor)));

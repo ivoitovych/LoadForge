@@ -18,13 +18,9 @@
 namespace loadforge::workloads::particles {
 
 #if defined(LOADFORGE_PARTICLES_AVX2)
-void cell_kernel_vector(const CellJob& job) noexcept {
-  lane_cell_kernel<Lanes4>(job);
-}
+void cell_kernel_vector(const CellJob& job) noexcept { lane_cell_kernel<Lanes4>(job); }
 #elif defined(LOADFORGE_PARTICLES_NEON)
-void cell_kernel_vector(const CellJob& job) noexcept {
-  lane_cell_kernel<Lanes2>(job);
-}
+void cell_kernel_vector(const CellJob& job) noexcept { lane_cell_kernel<Lanes2>(job); }
 #endif
 
 }  // namespace loadforge::workloads::particles
