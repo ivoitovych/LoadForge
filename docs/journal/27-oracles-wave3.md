@@ -70,6 +70,18 @@ past eleven CPU-minutes because the contract suite runs five checks at once on
 the same counters. The heads are now decoded once into the scratch (one pass of
 262144) and the sixteen PageRank sweeps read a plain array.
 
+### A file that is only a table is "absent" from the coverage report
+
+The first layout of the FFT's twiddle table was a generated `twiddle_table.cpp`
+holding one `const std::array` initializer. It has no executable line, so gcovr
+produced no record for it, and `tools/coverage.sh` — which requires every
+`src/**.cpp` to appear in the report — failed at 100.0 % line, function and
+branch with "1 source file(s) absent". The table is now `twiddle_table.inc`,
+the initializer list alone, included by `twiddle.cpp` next to the accessor that
+reads it. The generator writes the `.inc`; running it and comparing with `cmp`
+against the committed file shows them identical. A data-only `.cpp` in `src/`
+fails the gate however well it is tested.
+
 ### The contract suites are instantiated where they are declared
 
 `INSTANTIATE_TYPED_TEST_SUITE_P(Prefix, contracts::OracleContract, ...)` does
@@ -119,7 +131,8 @@ digits, exact rational rounding, the multiples of n/4 written down) rather than
 derived from a first-octant table at run time. Options: octant reduction in the
 oracle (a third of the data, more code to cover and to get wrong); libm (not
 reproducible, determinism.md §4). A flat table has one accessor and is checked
-for the exact images the specification names, for every m.
+for the exact images the specification names, for every m. It lives in
+`twiddle_table.inc` (see above), read by `twiddle.cpp`.
 
 ### D4. A plan is held to the specification even where the oracle does not depend on it
 
