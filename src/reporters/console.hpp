@@ -20,6 +20,7 @@ class ConsoleReporter final : public controller::Reporter {
   void run_starting(const controller::RunPlan& plan) override;
   void event(std::int64_t elapsed_ns, std::string_view line) override;
   void run_finished(const controller::RunReport& report) override;
+  void isolation_finished(const controller::RunReport& report) override;
 
  private:
   std::ostream* out_;

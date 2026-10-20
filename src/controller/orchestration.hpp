@@ -5,13 +5,17 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "config/config.hpp"
+#include "controller/plan.hpp"
 #include "controller/report.hpp"
 #include "controller/safety.hpp"
 #include "core/result.hpp"
+#include "platform/fpenv/fpenv.hpp"
 #include "platform/syscalls.hpp"
 #include "resources/oom_kill_record.hpp"
+#include "telemetry/source.hpp"
 #include "topology/snapshot.hpp"
 
 namespace loadforge::controller {
@@ -40,6 +44,16 @@ struct RunOptions {
   /// without one. Null when none is offered, which the plan then says. Not
   /// owned; it must outlive the run.
   const topology::Snapshot* topology = nullptr;
+  /// The workloads that verify themselves (plan.hpp). Without a registry a
+  /// configured name is a label for the null workload, as at M1.
+  VerificationOptions verification;
+  /// The floating-point control the run establishes and asserts at startup
+  /// (docs/determinism.md §3) and states in the banner; none: not asserted.
+  /// Not owned; it must outlive the run.
+  fpenv::FpControl* fp = nullptr;
+  /// The telemetry sources probed once before the first fork, whose
+  /// capability report the banner states (M2a exit criterion 5). Not owned.
+  std::vector<telemetry::Source*> sources;
 
   [[nodiscard]] friend bool operator==(const RunOptions&, const RunOptions&) = default;
 };

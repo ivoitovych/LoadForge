@@ -2,7 +2,10 @@
 #ifndef LOADFORGE_MAIN_CLI_HPP
 #define LOADFORGE_MAIN_CLI_HPP
 
+#include <cstddef>
+#include <cstdint>
 #include <iosfwd>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -11,6 +14,7 @@
 #include "config/config.hpp"
 #include "core/version.hpp"
 #include "platform/syscalls.hpp"
+#include "primitives/simd/dispatch.hpp"
 #include "topology/snapshot.hpp"
 
 namespace loadforge::cli {
@@ -44,6 +48,28 @@ inline constexpr std::string_view kVersion = core::kVersion;
 [[nodiscard]] int stress(std::string_view config_path, const std::string& self_link,
                          std::string_view sysfs_root, std::ostream& out, std::ostream& err);
 
+/// What a run is given beyond a configuration: the choices the command line
+/// has and a configuration file does not (yet).
+///
+///   isa              the ISA path asked for; none: the best the machine and
+///                    each workload offer.
+///   seed             the run's seed; worker i runs seed + i * controller::kSeedStride.
+///   footprint_bytes  a worker's footprint when its configuration names none.
+///   isolation_limit  the most wrong results fault isolation repeats.
+struct StressOptions {
+  std::optional<simd::IsaPath> isa;
+  std::uint64_t seed = 1;
+  std::uint64_t footprint_bytes = std::uint64_t{32} << 20U;
+  std::size_t isolation_limit = 16;
+};
+
+/// The stress command for one named workload: `loadforge stress --test NAME
+/// [options]`. `args` starts at NAME. A workload this build does not have, or
+/// an option misused, is a usage error that says which. One worker per CPU the
+/// process may use, unless told otherwise, each pinned to its own.
+[[nodiscard]] int stress_test(std::span<const std::string_view> args, const std::string& self_link,
+                              std::string_view sysfs_root, std::ostream& out, std::ostream& err);
+
 /// The stress command past its argument handling: a loaded configuration,
 /// the executable the workers will be, the topology snapshot already taken,
 /// and the seam they run on. A reference, so no run can start without the
@@ -59,6 +85,11 @@ inline constexpr std::string_view kVersion = core::kVersion;
 [[nodiscard]] int run_stress(platform::Syscalls& syscalls, const config::Config& config,
                              const std::string& executable, const topology::Snapshot& snapshot,
                              std::ostream& out, std::ostream& err);
+
+/// The same, with the choices a command line adds.
+[[nodiscard]] int run_stress(platform::Syscalls& syscalls, const config::Config& config,
+                             const std::string& executable, const topology::Snapshot& snapshot,
+                             const StressOptions& options, std::ostream& out, std::ostream& err);
 
 }  // namespace loadforge::cli
 

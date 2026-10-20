@@ -12,23 +12,29 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/plan.hpp"
 #include "controller/report.hpp"
 #include "controller/safety.hpp"
 #include "controller/supervision.hpp"
 #include "core/result.hpp"
 #include "platform/clock.hpp"
 #include "platform/exit_status.hpp"
+#include "platform/fpenv/environment.hpp"
 #include "platform/process.hpp"
 #include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
 #include "platform/worker_pool.hpp"
 #include "resources/oom_kill_record.hpp"
+#include "telemetry/capability/capability.hpp"
 #include "topology/snapshot.hpp"
+#include "verification/record.hpp"
 #include "worker/entry.hpp"
+#include "worker/frames.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
 #include "worker/scheduler.hpp"
@@ -47,6 +53,34 @@ std::size_t clean_count(const RunReport& report) noexcept {
 
 bool all_clean(const RunReport& report) noexcept {
   return !report.workers.empty() && clean_count(report) == report.workers.size();
+}
+
+std::uint64_t wrong_result_count(const RunReport& report) noexcept {
+  std::uint64_t total = 0;
+  for (const WorkerReport& worker : report.workers) {
+    total += worker.wrong_results;
+  }
+  return total;
+}
+
+std::uint64_t not_performed_count(const RunReport& report) noexcept {
+  std::uint64_t total = 0;
+  for (const WorkerReport& worker : report.workers) {
+    total += worker.not_performed;
+  }
+  return total;
+}
+
+bool operator==(const WorkerWork& lhs, const WorkerWork& rhs) noexcept {
+  return std::tie(lhs.descriptor, lhs.isa, lhs.decomposition, lhs.duty, lhs.logical_bytes,
+                  lhs.threads, lhs.cpu, lhs.seed, lhs.footprint_bytes, lhs.line_bytes) ==
+         std::tie(rhs.descriptor, rhs.isa, rhs.decomposition, rhs.duty, rhs.logical_bytes,
+                  rhs.threads, rhs.cpu, rhs.seed, rhs.footprint_bytes, rhs.line_bytes);
+}
+
+bool operator==(const FindingReport& lhs, const FindingReport& rhs) noexcept {
+  return std::tie(lhs.record, lhs.isolation, lhs.not_isolated) ==
+         std::tie(rhs.record, rhs.isolation, rhs.not_isolated);
 }
 
 std::string describe(const ControllerError& error) { return error.stage + ": " + error.detail; }
@@ -104,6 +138,13 @@ struct Tracked {
   std::int64_t progress_changed_ns = 0;
   std::int64_t last_read_ns = 0;  ///< When its slot last gave a consistent sample.
   std::vector<std::string> notes;
+  WorkerPlan plan;  ///< What it was told to run (null workload: no args).
+  verification::Tally tally;
+  bool tally_seen = false;
+  std::vector<FindingReport> findings;
+  std::uint64_t wrong_results = 0;
+  std::uint64_t not_performed = 0;
+  std::uint64_t findings_dropped = 0;
 };
 
 /// One run, from the first beat to the report. Holds what must be released
@@ -142,6 +183,12 @@ class Run {
                                                              std::int64_t now_ns, bool stale);
   [[nodiscard]] core::Result<core::Ok, ControllerError> poll_and_drain(int timeout_ms);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain(Tracked& worker);
+  /// Takes one record a worker sent into the worker's account of itself, or
+  /// says why the channel can no longer be believed.
+  [[nodiscard]] std::optional<std::string> ingest(Tracked& worker, const ipc::Record& record);
+  [[nodiscard]] std::optional<std::string> take_error_record(Tracked& worker,
+                                                             const ipc::Record& record);
+  [[nodiscard]] std::optional<std::string> take_tally(Tracked& worker, const ipc::Record& record);
   [[nodiscard]] core::Result<core::Ok, ControllerError> reap(std::int64_t elapsed_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
   void attribute_oom_kills();
@@ -170,6 +217,7 @@ class Run {
   std::size_t live_ = 0;
   bool stop_requested_ = false;
   bool spawned_ = false;
+  std::string environment_;
 };
 
 core::Result<core::Ok, ControllerError> Run::prepare() {
@@ -188,10 +236,26 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
   if (auto memory = check_memory(*config_, options_->budget); !memory.has_value()) {
     return error_at("memory", memory.error());
   }
+  if (options_->fp != nullptr) {
+    // Before anything is planned or started: a machine whose registers are
+    // not in the required state is a configuration error, reported here and
+    // not as a verification failure of some worker later (determinism.md §3).
+    fpenv::FpControl& control = *options_->fp;
+    if (auto established = fpenv::establish_environment(control); !established.has_value()) {
+      return error_at("floating-point environment", fpenv::describe(established.error()));
+    }
+    environment_ = "floating point (asserted at startup): " + describe_state(control.read());
+  }
   for (const config::Workload& workload : config_->workloads) {
     if (workload.enabled) {
       workers_.push_back(Tracked{});
       workers_.back().slot = workers_.size() - 1;
+      auto planned = plan_worker(workload, workers_.back().slot, options_->budget,
+                                 options_->verification, options_->topology);
+      if (!planned.has_value()) {
+        return error_at("workload", planned.error());
+      }
+      workers_.back().plan = std::move(planned).value();
     }
   }
   if (workers_.empty()) {
@@ -255,6 +319,8 @@ core::Result<std::optional<int>, ControllerError> Run::spawn() {
     args.control_fd = worker.control.read_fd;
     args.supervisor_pid = supervisor;
     args.pacing = worker::Pacing{duration_ns_, options_->interval_ns, options_->stale_after_ns};
+    args.cpus = worker.plan.cpus;
+    args.workload = worker.plan.args;
     argvs.push_back(worker::argv_for(options_->executable, args));
   }
 
@@ -469,15 +535,86 @@ core::Result<core::Ok, ControllerError> Run::drain(Tracked& worker) {
     return core::Ok{};
   }
   for (const ipc::Record& record : drained.value().records) {
-    if (record.type == static_cast<std::uint16_t>(ipc::RecordType::kFinished)) {
-      worker.evidence.finished_seen = true;
+    if (const auto refusal = ingest(worker, record); refusal.has_value()) {
+      // The frame was whole and its checksum right, so these are the bytes the
+      // worker sent: and they are not something a worker that works sends.
+      // Nothing it says after this is evidence of the machine.
+      worker.evidence.channel_corrupt = true;
+      worker.notes.push_back("record channel: " + *refusal);
+      close_channel(worker);
+      return core::Ok{};
     }
-    worker.notes.push_back(std::string{record_word(record.type)} + ": " + text_of(record.payload));
   }
   if (drained.value().end_of_stream) {
     close_channel(worker);
   }
   return core::Ok{};
+}
+
+std::optional<std::string> Run::ingest(Tracked& worker, const ipc::Record& record) {
+  if (record.type == verification::kErrorRecordFrameType) {
+    return take_error_record(worker, record);
+  }
+  if (record.type == worker::kTallyFrameType) {
+    return take_tally(worker, record);
+  }
+  if (record.type == static_cast<std::uint16_t>(ipc::RecordType::kFinished)) {
+    worker.evidence.finished_seen = true;
+  }
+  worker.notes.push_back(std::string{record_word(record.type)} + ": " + text_of(record.payload));
+  return std::nullopt;
+}
+
+std::optional<std::string> Run::take_error_record(Tracked& worker, const ipc::Record& record) {
+  auto decoded = verification::decode(record.payload);
+  if (!decoded.has_value()) {
+    return "an error record that does not decode (" +
+           std::string{verification::describe(decoded.error().fault)} +
+           "): " + decoded.error().detail;
+  }
+  const verification::ErrorRecord& found = decoded.value();
+  // A worker reports on the one workload it was told to run. A record about
+  // any other is garbage that happened to be well formed, and a finding made
+  // of it would be a verdict on hardware from nothing.
+  const verification::Provenance& where = verification::provenance_of(found);
+  if (!worker.plan.args.has_value()) {
+    return "an error record from a worker that runs no workload";
+  }
+  if (where.workload.has_value() && *where.workload != worker.plan.args->workload) {
+    return "an error record about workload '" + *where.workload + "' from a worker that runs '" +
+           worker.plan.args->workload + "'";
+  }
+  if (verification::is_wrong_result(found)) {
+    ++worker.wrong_results;
+  } else {
+    ++worker.not_performed;
+  }
+  if (worker.findings.size() < kMaxFindingsKept) {
+    FindingReport kept;
+    kept.record = found;
+    worker.findings.push_back(std::move(kept));
+  } else {
+    ++worker.findings_dropped;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> Run::take_tally(Tracked& worker, const ipc::Record& record) {
+  auto decoded = worker::decode_tally(record.payload);
+  if (!decoded.has_value()) {
+    return decoded.error();
+  }
+  // A tally is cumulative: one that is smaller than the last is not a
+  // worker's running total.
+  const verification::Tally& now = decoded.value();
+  if (worker.tally_seen && (now.units_computed < worker.tally.units_computed ||
+                            now.oracle_blocks < worker.tally.oracle_blocks ||
+                            now.integrity_checked < worker.tally.integrity_checked)) {
+    return "a tally that went backwards";
+  }
+  worker.tally = now;
+  worker.tally_seen = true;
+  return std::nullopt;
 }
 
 void Run::close_channel(Tracked& worker) {
@@ -626,6 +763,13 @@ core::Result<RunReport, ControllerError> Run::finish() {
     entry.stop = std::string{describe(worker.step)};
     entry.progress = worker.progress;
     entry.records = std::move(worker.notes);
+    entry.tally = worker.tally;
+    entry.tally_seen = worker.tally_seen;
+    entry.work = worker.plan.work;
+    entry.findings = std::move(worker.findings);
+    entry.wrong_results = worker.wrong_results;
+    entry.not_performed = worker.not_performed;
+    entry.findings_dropped = worker.findings_dropped;
     report.workers.push_back(std::move(entry));
   }
   auto released = region_->release();
@@ -689,6 +833,16 @@ core::Result<RunReport, ControllerError> Run::execute() {
     plan.topology = topology::describe(*options_->topology);
   } else {
     plan.topology = "no snapshot offered";
+  }
+  for (const Tracked& worker : workers_) {
+    plan.workloads.push_back(worker.plan.description);
+  }
+  plan.environment = environment_;
+  if (!options_->sources.empty()) {
+    // Once, before the first fork, and nowhere else: the sources are probed
+    // here so the set the banner states is the set that was found.
+    plan.capabilities =
+        telemetry::render_capabilities(telemetry::probe_capabilities(options_->sources));
   }
   reporter_->run_starting(plan);
 

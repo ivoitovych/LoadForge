@@ -81,6 +81,7 @@ class Choreographer final : public Reporter {
     }
   }
   void run_finished(const RunReport& report) override { reports.push_back(report); }
+  void isolation_finished(const RunReport& /*report*/) override {}
 
   std::vector<RunPlan> plans;
   std::vector<std::string> events;

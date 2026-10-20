@@ -30,6 +30,8 @@ std::string_view describe(StopReason reason) noexcept {
       return "the controller's heartbeat went stale";
     case StopReason::kControllerUnreadable:
       return "the controller's heartbeat could not be read";
+    case StopReason::kRunnerStopped:
+      return "the verification runner stopped the run";
   }
   return "unrecognised stop reason";
 }
@@ -51,9 +53,8 @@ WorkerError error_at(std::string_view stage, std::string detail) {
 
 }  // namespace
 
-std::optional<StopReason> NullWorkload::controller_gone(const platform::TimePoint& now,
-                                                        std::int64_t elapsed_ns,
-                                                        std::int64_t& last_read_ns) const {
+std::optional<StopReason> ControllerWatch::gone(const platform::TimePoint& now,
+                                                std::int64_t elapsed_ns) {
   // A reader that cannot get a consistent sample has a controller in the
   // middle of a publish: one that died there, or one the scheduler took off
   // the core between the two halves of its write, for as long as it likes.
@@ -62,26 +63,25 @@ std::optional<StopReason> NullWorkload::controller_gone(const platform::TimePoin
   // that stopped beating; and one that never beat within the allowance is
   // treated as stale, because a controller publishes its first beat before it
   // spawns anyone.
-  auto observed = session_.region->observe(ipc::kControllerSlot);
+  auto observed = session_->region->observe(ipc::kControllerSlot);
   if (!observed.has_value()) {
-    if (now.running_ns - last_read_ns > session_.pacing.stale_after_ns) {
+    if (now.running_ns - last_read_ns_ > session_->pacing.stale_after_ns) {
       return StopReason::kControllerUnreadable;
     }
     return std::nullopt;
   }
-  last_read_ns = now.running_ns;
+  last_read_ns_ = now.running_ns;
   const ipc::Liveness liveness =
-      ipc::liveness(observed.value(), now.running_ns, session_.pacing.stale_after_ns);
+      ipc::liveness(observed.value(), now.running_ns, session_->pacing.stale_after_ns);
   if (liveness == ipc::Liveness::kStale ||
-      (liveness == ipc::Liveness::kNeverBeat && elapsed_ns > session_.pacing.stale_after_ns)) {
+      (liveness == ipc::Liveness::kNeverBeat && elapsed_ns > session_->pacing.stale_after_ns)) {
     return StopReason::kControllerStale;
   }
   return std::nullopt;
 }
 
-core::Result<std::optional<StopReason>, WorkerError> NullWorkload::wait_on_control(
-    int interval_ms) {
-  const std::vector<int> watched{session_.control_fd};
+core::Result<std::optional<StopReason>, WorkerError> ControllerWatch::wait(int interval_ms) {
+  const std::vector<int> watched{session_->control_fd};
   auto ready = syscalls_->poll_readable(watched, interval_ms);
   if (!ready.has_value()) {
     return error_at("control pipe", describe(ready.error()));
@@ -96,7 +96,7 @@ core::Result<std::optional<StopReason>, WorkerError> NullWorkload::wait_on_contr
   // A byte is a stop request; end of file is the writer gone, which poll
   // reports as readable on some kernels before it reports the hang-up.
   std::array<char, 1> byte{};
-  auto count = syscalls_->read(session_.control_fd, byte.data(), byte.size());
+  auto count = syscalls_->read(session_->control_fd, byte.data(), byte.size());
   if (!count.has_value()) {
     return error_at("control pipe", describe(count.error()));
   }
@@ -117,7 +117,7 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
   const auto interval_ms =
       static_cast<int>(session_.pacing.interval_ns / kNanosecondsPerMillisecond);
   std::uint64_t progress = 0;
-  std::int64_t last_read_ns = started.value().running_ns;
+  ControllerWatch watch(*syscalls_, session_, started.value().running_ns);
 
   while (true) {
     auto now = clock.now();
@@ -137,11 +137,10 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
     if (elapsed_ns >= session_.pacing.duration_ns) {
       return Outcome{StopReason::kDurationElapsed, progress, elapsed_ns};
     }
-    if (const auto gone = controller_gone(now.value(), elapsed_ns, last_read_ns);
-        gone.has_value()) {
+    if (const auto gone = watch.gone(now.value(), elapsed_ns); gone.has_value()) {
       return Outcome{*gone, progress, elapsed_ns};
     }
-    auto waited = wait_on_control(interval_ms);
+    auto waited = watch.wait(interval_ms);
     if (!waited.has_value()) {
       return waited.error();
     }

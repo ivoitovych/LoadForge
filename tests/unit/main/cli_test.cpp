@@ -227,7 +227,7 @@ TEST(Cli, StressTakesExactlyConfigAndAFile) {
         std::vector<std::string_view>{"stress", "--config", "a.toml", "extra"}}) {
     const Outcome r = invoke(args);
     EXPECT_EQ(r.code, 2);
-    EXPECT_NE(r.err.find("stress takes exactly --config FILE"), std::string::npos) << r.err;
+    EXPECT_NE(r.err.find("stress takes --config FILE or --test NAME"), std::string::npos) << r.err;
     EXPECT_TRUE(r.out.empty());
   }
 }

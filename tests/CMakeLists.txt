@@ -61,7 +61,7 @@ gtest_discover_tests(loadforge_unit_tests)
 add_test(NAME cli_smoke_version COMMAND loadforge --version)
 add_test(NAME cli_smoke_help    COMMAND loadforge --help)
 add_test(NAME cli_smoke_usage   COMMAND loadforge)
-set_tests_properties(cli_smoke_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.0\\.0-m0")
+set_tests_properties(cli_smoke_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.0\\.0-m2")
 
 # The config module's T8: the real binary reads real files. One that parses,
 # one that does not exist, one that is refused by the schema -- and the refused
