@@ -228,6 +228,13 @@ and this codec (`is_valid`, `broken_rule`, `decode`).
   when it lies beyond the window, whether `popcount` is the whole-comparison count (an
   excerpt gives at most a lower bound, not enforced), and the bytes outside the window.
   Documented at `Difference` in the header.
+- Follow-up, same day: ARM64 asan failed five tests on the first push. Root cause: not
+  `char` signedness and not the offset arithmetic, but the test fixture
+  `record_samples::difference(window)` writing `actual[3]` unconditionally, a heap
+  overflow when the new window-coverage samples asked for a 3-byte window. It showed as
+  failures on ARM64 and passed on x86-64 by the allocator's luck. Reproduced on x86-64
+  under asan with `-funsigned-char`; the fixture now sets that byte only when the window
+  holds it. The header's byte comparisons use `std::byte`, which has no signedness.
 - Evidence: the regression tests (`codec_test.cpp`, the contract suite's invalid and
   valid samples) failed against the old rules and pass against the new ones. The fuzz
   generator now builds failures and differences that satisfy the new rules.

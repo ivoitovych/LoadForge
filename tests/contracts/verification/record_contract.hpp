@@ -64,7 +64,9 @@ inline verification::Difference difference(std::size_t window = 8) {
   difference.window_offset = 0x1000;
   difference.expected.assign(window, std::byte{0x00});
   difference.actual.assign(window, std::byte{0x00});
-  difference.actual[3] = std::byte{0x10};
+  if (window > 3) {  // a window shorter than that cannot hold the differing byte
+    difference.actual[3] = std::byte{0x10};
+  }
   return difference;
 }
 
