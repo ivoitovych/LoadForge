@@ -75,10 +75,15 @@ void put_u16(std::span<std::byte> out, std::uint16_t value) {
   out[1] = static_cast<std::byte>((value >> 8U) & 0xFFU);
 }
 
+// Four stores written out, as put_u16 writes its two. A loop to four would
+// carry a bound no test can check: one store too many lands on the first byte
+// of the next field, which is written afterwards anyway, or one past the end
+// of a frame with no payload.
 void put_u32(std::span<std::byte> out, std::uint32_t value) {
-  for (std::size_t index = 0; index < 4; ++index) {
-    out[index] = static_cast<std::byte>((value >> (8U * index)) & 0xFFU);
-  }
+  out[0] = static_cast<std::byte>(value & 0xFFU);
+  out[1] = static_cast<std::byte>((value >> 8U) & 0xFFU);
+  out[2] = static_cast<std::byte>((value >> 16U) & 0xFFU);
+  out[3] = static_cast<std::byte>((value >> 24U) & 0xFFU);
 }
 
 std::uint16_t get_u16(std::span<const std::byte> in) {
