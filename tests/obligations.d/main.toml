@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/main and nothing else.
+
+[[module]]
+path    = "src/main"
+classes = ["P1", "P2", "P3", "P6"]
+tiers   = ["T1", "T2", "T7", "T8"]
+note    = """
+CLI dispatch, the selftest digest, and what a finished run is to the shell. \
+P1 and P3: the argument grammar of `stress --test` (every option refused by \
+name, each given once), the exit-code table (0 clean; 3 a worker did not \
+complete; 4 a wrong result outranks the rest; 5 a check was not made or a \
+verifying worker compared nothing), the report put into the results' types and \
+the verdict they derive. P2: the affinity the kernel will not report (the \
+snapshot's CPUs stand and a withheld one is refused by name when a worker is \
+placed), a machine whose cache-line size is not known (refused: a \
+classification by an assumed line is a fabricated fact), a run over the fake of \
+the system calls. P6: the whole command is the controller's lifecycle seen \
+from the shell, and its isolation pass runs after the workers are gone; a \
+forked child whose exec failed returns its code from main. The selftest digest \
+now folds the scalar outputs of the compression and dense-linear workloads \
+(two units of each, on one thread), which determinism.md holds bit-identical on \
+x86-64 and ARM64: the digest is compared across architectures by CI and, here, \
+against a three-thread computation of the same units. T7 and T8: the real \
+binary as the workers of a real run (`stress --test` in ctest, per workload; \
+the re-run switch; the unprivileged and the rootless refusals), and the \
+isolation ladder through the command line against the faulty worker \
+(tests/supervision/ladder_test.cpp). main() is covered, not excluded."""

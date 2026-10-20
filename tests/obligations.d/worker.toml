@@ -3,10 +3,29 @@
 
 [[module]]
 path    = "src/worker"
-classes = ["P1", "P2", "P3", "P6"]
+classes = ["P1", "P2", "P3", "P4", "P6"]
 tiers   = ["T1", "T2", "T8"]
+consumes = ["SliceRunnerContract", "RecordCodecContract"]
 note    = """
-The worker process itself: the internal switch's argument parser, the null \
+From M2a a worker runs a real workload: the null workload's loop with the work \
+inside it. P4: it is what a verification result leaves the machine through, so \
+it sends every record the runner made and the running tally on the record \
+channel, a record it cannot send because the channel has no reader is the \
+controller gone (EPIPE) and anything else is its own failure, and the final \
+report that states what the whole run did not check goes out before the \
+worker says it finished. The runner and the record codec it consumes are run \
+against the worker's own models of them (model_runner.hpp, model_codec.hpp): \
+the providers' suites, not the providers' tests. Start-up is ordered and each \
+step has its own refusal: registers established before any thread and asserted \
+again after everything that could have loaded a library (a change is reported, \
+not repaired), the ISA path the controller chose used or refused and never \
+replaced, the workload, its oracle for the plan it resolved, the executor, the \
+runner. The re-run entry point (--rerun) runs one unit on one CPU with every \
+check on and answers by exit code (clean, reproduced, not performed, bad \
+arguments), and a version mismatch, a check that could not be made and a \
+signal are never a clean re-run. The tally frame (type 17) is cumulative. \
+\
+The worker process itself, as M1 shipped it: the internal switch's argument parser, the null \
 workload loop, and the entry point from attach to exit code. P6 is the point: \
 this is the worker's lifecycle from the inside -- attach, report started, run, \
 and the four ways out (complete, setup failed, controller lost, bad arguments), \
