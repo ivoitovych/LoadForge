@@ -68,7 +68,7 @@ class ThreadedExecutor final : public worker::Executor {
 /// the scalar path where there is none. Chosen as the worker would choose it.
 [[nodiscard]] inline simd::IsaPath native_path() noexcept {
 #if defined(__x86_64__) && !defined(LOADFORGE_SIMD_SCALAR)
-  return __builtin_cpu_supports("avx2") != 0 ? simd::IsaPath::kAvx2 : simd::IsaPath::kScalar;
+  return __builtin_cpu_supports("avx2") ? simd::IsaPath::kAvx2 : simd::IsaPath::kScalar;
 #elif defined(__aarch64__) && !defined(LOADFORGE_SIMD_SCALAR)
   return simd::IsaPath::kNeon;
 #else

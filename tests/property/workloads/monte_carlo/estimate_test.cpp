@@ -72,7 +72,7 @@ TEST(MonteCarloProperty, TheMeanAndTheSpreadOfTheSumsAreThoseOfTheIntegral) {
     const std::vector<double> unit = sums_of(compute_unit(*workload, index, input, serial));
     sums.insert(sums.end(), unit.begin(), unit.end());
   }
-  const double count = static_cast<double>(sums.size());
+  const auto count = static_cast<double>(sums.size());
   double mean = 0.0;
   for (const double sum : sums) {
     mean += sum / count;
@@ -97,7 +97,7 @@ TEST(MonteCarloProperty, ABatchSumDependsOnItsOwnKeyAlone) {
   const std::vector<std::byte> base = compute_unit(*workload, 1, input, serial);
 
   std::vector<std::byte> changed = input;
-  changed[5 * 8] ^= std::byte{0x10};
+  changed[std::size_t{5} * 8] ^= std::byte{0x10};
   const std::vector<std::byte> after = compute_unit(*workload, 1, changed, serial);
   for (std::size_t batch = 0; batch < kBatches; ++batch) {
     const auto before_word = std::span<const std::byte>(base).subspan(batch * 8, 8);
@@ -108,7 +108,7 @@ TEST(MonteCarloProperty, ABatchSumDependsOnItsOwnKeyAlone) {
 
   std::vector<std::byte> swapped = input;
   for (std::size_t byte = 0; byte < 8; ++byte) {
-    std::swap(swapped[3 * 8 + byte], swapped[40 * 8 + byte]);
+    std::swap(swapped[std::size_t{3} * 8 + byte], swapped[std::size_t{40} * 8 + byte]);
   }
   const std::vector<std::byte> swapped_output = compute_unit(*workload, 1, swapped, serial);
   const std::vector<double> original_sums = sums_of(base);
