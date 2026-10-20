@@ -1846,6 +1846,23 @@ test at the boundary, or allowlisted with a written reason if it is equivalent, 
 follow-up changes per module (ROADMAP item 11b). The sweep merges first: it is weekly and
 gates no pull request, so a red sweep holds nothing up and names exactly what is left.
 
+**The `topology`, `resources` and `config` survivors (ROADMAP item 11b).** All 15 are
+killed or removed; none is allowlisted. Seven were boundary mutants killed by tests at the
+boundary: id 65535 accepted (`cpu_topology.cpp:46`, `cache.cpp:72`; tests
+`TheLargestIdTheKernelCanAssignIsAccepted`, `TheLargestIdACacheAttributeHoldsIsAccepted`),
+two L1 caches of one CPU that do not nest (`cache.cpp:236`, `TwoCachesAtOneLevelNeedNotNestInEachOther`),
+a claim of an offline CPU while other CPUs are online (`numa.cpp:120`, which a one-CPU
+fixture cannot tell from a correct claim), the octal escape `\377` (`cgroup.cpp:57`, `:62`),
+and a configuration lying past the first 4 KiB read (`config.cpp:511`: the old padding was
+a trailing comment, so a truncated read parsed the same; the padding now comes first). Eight
+were equivalent as written, because the comparison sat after an inequality test or one
+element past the end of a view that always has a space or NUL there, and were refactored
+away: `ordered_before` is one tuple comparison (`cache.cpp:298`, `:301`, `:303`), and the
+digit scans (`cache.cpp:332`, `numa.cpp:46`), the escape length check (`cgroup.cpp:51`)
+and the separator search (`cgroup.cpp:188`) use `find_first_not_of`, `substr` and
+`std::find`, which cannot read past the end. Each boundary kill was proved by hand: apply
+the mutation, rebuild, run the module's tests, see the named test fail, revert.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
