@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/controller/journal and nothing else.
+
+[[module]]
+path    = "src/controller/journal"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+The crash-journal contract (F16): today the header alone (ADR 0004). P1 here \
+is the fault and ending words and member-by-member equality. The journal \
+stream takes this row over with the format, the writer, the replay and a \
+file Storage, and owes what IMPLEMENTATION §3 lists -- P2 (every failure of \
+open, write and fsync, injected through its own file seam), P6 and T7 (a \
+controller really killed mid-run leaves a journal that replays), T10 -- and \
+runs JournalContract, whose every-byte cut and every-byte corruption already \
+run against a reference in tests/contracts/journal/."""
