@@ -32,6 +32,7 @@ constexpr std::size_t kMaxAccumulators = 8;
   return kTeleport + kDamping * sum;
 }
 
+#if defined(LOADFORGE_GRAPH_AVX2) || defined(LOADFORGE_GRAPH_NEON)
 /// Adds the terms the vector loop left over -- fewer than a full group, term
 /// q going to lane q mod a, which for a tail starting at a multiple of a is
 /// the tail's own index -- to the lanes the vector accumulators were stored in.
@@ -41,6 +42,7 @@ void add_tail(const InEdges& edges, std::span<const double> cur, std::span<doubl
     lanes[term - first] += cur[edges.tails[term]] * kEdgeShare;
   }
 }
+#endif
 
 void sweep_scalar(const InEdges& edges, std::span<const double> cur, std::span<double> next,
                   std::uint32_t accumulators, std::size_t begin, std::size_t end) noexcept {
