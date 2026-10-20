@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry/timeline and nothing else.
+
+[[module]]
+path     = "src/telemetry/timeline"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T4"]
+provides = ["TimelineContract"]
+note     = """
+The common timeline: series added in order, points appended in strictly \
+increasing time per series, phase marks, and a capacity in points over all \
+series that is refused when reached, never made by dropping the oldest. \
+\
+P1 is the happy path and every refusal's text: a duplicate series, an \
+unknown series, a stale timestamp or phase, a reading of the wrong kind, \
+capacity, each leaving the timeline as it was; an Unavailable accepted for \
+a gauge and a counter. P3: capacity 0 and capacity reached exactly, a \
+timestamp equal to the last, a series id one past the last, run_capacity \
+and memory_bound_bytes at the largest size_t (both saturate rather than \
+wrap). \
+\
+T4 runs random operations against a model written separately from the \
+timeline and checks, after each, the answer, series independence in time, \
+strict order in every series, that a refusal changes nothing, that the \
+total never passes the capacity, and that the room the buffers hold is \
+never more than twice the points held -- the premise of the memory bound \
+(exit criterion 2: 3 * capacity * sizeof(Point) bytes, 11,520,000 points \
+for five hours at 10 Hz over 64 series). \
+\
+No P2: the module makes no system call. No P5: no thread; the owner \
+serialises writer and readers (timeline.hpp). The only failure the module \
+cannot take is an allocation failure, which the contract does not name."""
