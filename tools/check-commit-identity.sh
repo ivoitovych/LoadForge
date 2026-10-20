@@ -32,9 +32,13 @@
 # committer on any other commit is not that shape and fails.
 set -uo pipefail
 
-HEAD_REF="${1:?usage: check-commit-identity.sh <head-ref> [repo] [identities-file]}"
+HEAD_REF="${1:?usage: check-commit-identity.sh <head-ref> [repo] [identities-file] [exclude-spec]}"
 REPO="${2:-.}"
 IDENTITIES="${3:-.github/commit-identities}"
+# Optional: a rev-list exclusion such as --remotes=origin, so that the pre-push
+# hook judges only the commits a push introduces. CI passes none and walks the
+# whole history.
+EXCLUDE="${4:-}"
 GITHUB_COMMITTER="noreply@github.com"
 
 cd "$REPO" || { echo "check-commit-identity: no repository at $REPO" >&2; exit 1; }
@@ -63,7 +67,11 @@ is_admitted() { # email
   return 1
 }
 
-mapfile -t commits < <(git rev-list "$HEAD_REF")
+if [ -n "$EXCLUDE" ]; then
+  mapfile -t commits < <(git rev-list "$HEAD_REF" --not "$EXCLUDE")
+else
+  mapfile -t commits < <(git rev-list "$HEAD_REF")
+fi
 bad=0
 report() { echo "  REFUSED $(git log -1 --format='%h %s' "$1"): $2" >&2; bad=$((bad + 1)); }
 
