@@ -42,6 +42,8 @@
 
 namespace {
 
+// The replaceable operator new has to bump one process-wide counter.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables): must be mutable global state
 std::atomic<std::uint64_t> allocations{0};
 
 }  // namespace
@@ -70,16 +72,29 @@ void* operator new(std::size_t size, std::align_val_t alignment) {
 void* operator new[](std::size_t size, std::align_val_t alignment) {
   return ::operator new(size, alignment);
 }
-void operator delete(void* memory) noexcept { std::free(memory); }                      // NOLINT
-void operator delete[](void* memory) noexcept { std::free(memory); }                    // NOLINT
-void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }         // NOLINT
-void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }       // NOLINT
-void operator delete(void* memory, std::align_val_t) noexcept { std::free(memory); }    // NOLINT
-void operator delete[](void* memory, std::align_val_t) noexcept { std::free(memory); }  // NOLINT
-void operator delete(void* memory, std::size_t, std::align_val_t) noexcept {
+void operator delete(void* memory) noexcept {
   std::free(memory);  // NOLINT
 }
-void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept {
+void operator delete[](void* memory) noexcept {
+  std::free(memory);  // NOLINT
+}
+void operator delete(void* memory, std::size_t /*size*/) noexcept {
+  std::free(memory);  // NOLINT
+}
+void operator delete[](void* memory, std::size_t /*size*/) noexcept {
+  std::free(memory);  // NOLINT
+}
+void operator delete(void* memory, std::align_val_t /*alignment*/) noexcept {
+  std::free(memory);  // NOLINT
+}
+void operator delete[](void* memory, std::align_val_t /*alignment*/) noexcept {
+  std::free(memory);  // NOLINT
+}
+void operator delete(void* memory, std::size_t /*size*/, std::align_val_t /*alignment*/) noexcept {
+  std::free(memory);  // NOLINT
+}
+void operator delete[](void* memory, std::size_t /*size*/,
+                       std::align_val_t /*alignment*/) noexcept {
   std::free(memory);  // NOLINT
 }
 #endif
@@ -94,7 +109,7 @@ long threads_now() {
   std::ifstream status("/proc/self/status");
   std::string line;
   while (std::getline(status, line)) {
-    if (line.rfind("Threads:", 0) == 0) {
+    if (line.starts_with("Threads:")) {
       return std::stol(line.substr(8));
     }
   }
@@ -132,7 +147,7 @@ struct Tally {
 TEST(ExecutorSoak, MillionsOfRunsLoseNoIndexAndGrowNothing) {
   PosixThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
-  X86FpControl fp;
+  const X86FpControl fp;
   const long threads_without_pool = threads_now();
   auto made = make_thread_pool(std::vector<ThreadPlacement>(kThreads), threads, syscalls, fp);
   ASSERT_TRUE(made.has_value());

@@ -199,7 +199,7 @@ CpuMask own_affinity() {
 TEST(RealPool, EachThreadRunsOnItsOwnCpuAndTheCallerIsNotMoved) {
   platform::RealSyscalls syscalls;
   PosixThreads threads;
-  RegisterFpControl fp;
+  const RegisterFpControl fp;
   const CpuMask before = syscalls.get_affinity(0).value();
   const CpuMask chosen = some_permitted(4);
   const std::vector<ThreadPlacement> placements = one_thread_per_cpu(chosen);
@@ -255,7 +255,7 @@ TEST(RealPool, ACpuTheKernelCannotUseIsRefusedWithEinvalAsTheFakeModelsIt) {
   for (const CpuMask& refused_mask : {missing, CpuMask{}}) {
     platform::RealSyscalls syscalls;
     testing::ScriptedThreads threads;
-    RegisterFpControl fp;
+    const RegisterFpControl fp;
     const std::vector<ThreadPlacement> placements = {some_permitted(1), refused_mask};
     const auto made = make_thread_pool(placements, threads, syscalls, fp);
     ASSERT_FALSE(made.has_value());
@@ -336,7 +336,7 @@ struct PinnedPool {
   static std::unique_ptr<Executor> make() {
     static platform::RealSyscalls syscalls;
     static PosixThreads threads;
-    static RegisterFpControl fp;
+    static const RegisterFpControl fp;
     return make_thread_pool(one_thread_per_cpu(some_permitted(8)), threads, syscalls, fp).value();
   }
 };

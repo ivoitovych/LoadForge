@@ -53,7 +53,7 @@ struct UnpinnedPool {
   static std::unique_ptr<Executor> make() {
     static PosixThreads threads;
     static loadforge::testing::FakeSyscalls syscalls;
-    static X86FpControl fp;
+    static const X86FpControl fp;
     return make_thread_pool(unpinned(kThreads), threads, syscalls, fp).value();
   }
 };
@@ -77,7 +77,7 @@ TEST(OneThreadPerCpu, AnEmptyMaskGivesNoPlacements) {
 TEST(MakeThreadPool, NoPlacementsIsRefusedAndStartsNothing) {
   ScriptedThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
-  X86FpControl fp;
+  const X86FpControl fp;
   const auto made = make_thread_pool({}, threads, syscalls, fp);
   ASSERT_FALSE(made.has_value());
   EXPECT_TRUE(std::holds_alternative<NoThreads>(made.error()));
@@ -89,7 +89,7 @@ TEST(MakeThreadPool, NoPlacementsIsRefusedAndStartsNothing) {
 TEST(MakeThreadPool, OnePlacementIsOneThread) {
   ScriptedThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
-  X86FpControl fp;
+  const X86FpControl fp;
   {
     const auto made = make_thread_pool(unpinned(1), threads, syscalls, fp);
     ASSERT_TRUE(made.has_value());
@@ -102,7 +102,7 @@ TEST(MakeThreadPool, OnePlacementIsOneThread) {
 TEST(MakeThreadPool, EachPlacedThreadPinsItselfAndReadsItsOwnRegisters) {
   ScriptedThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
-  X86FpControl fp;
+  const X86FpControl fp;
   const std::vector<ThreadPlacement> placements = {cpus({2}), std::nullopt, cpus({0, 3})};
   {
     const auto made = make_thread_pool(placements, threads, syscalls, fp);
@@ -124,7 +124,7 @@ TEST(MakeThreadPool, EachPlacedThreadPinsItselfAndReadsItsOwnRegisters) {
 TEST(MakeThreadPool, AnUnusedPoolStopsAndJoinsEveryThread) {
   ScriptedThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
-  ArmFpControl fp;
+  const ArmFpControl fp;
   {
     const auto made = make_thread_pool(unpinned(5), threads, syscalls, fp);
     ASSERT_TRUE(made.has_value());
@@ -144,7 +144,7 @@ class ThreadNotStartedTest : public ::testing::TestWithParam<int> {};
 TEST_P(ThreadNotStartedTest, TheFirstThreadRefusedStartsNothingAndJoinsNothing) {
   ScriptedThreads threads(0, GetParam());
   loadforge::testing::FakeSyscalls syscalls;
-  X86FpControl fp;
+  const X86FpControl fp;
   const auto made = make_thread_pool(unpinned(3), threads, syscalls, fp);
   ASSERT_FALSE(made.has_value());
   const auto* refused = std::get_if<ThreadNotStarted>(&made.error());
@@ -160,7 +160,7 @@ TEST_P(ThreadNotStartedTest, TheFirstThreadRefusedStartsNothingAndJoinsNothing) 
 TEST_P(ThreadNotStartedTest, ALaterThreadRefusedJoinsEveryThreadAlreadyStarted) {
   ScriptedThreads threads(2, GetParam());
   loadforge::testing::FakeSyscalls syscalls;
-  X86FpControl fp;
+  const X86FpControl fp;
   const auto made = make_thread_pool(unpinned(4), threads, syscalls, fp);
   ASSERT_FALSE(made.has_value());
   const auto* refused = std::get_if<ThreadNotStarted>(&made.error());
@@ -192,7 +192,7 @@ TEST_P(ThreadNotPlacedTest, TheRefusedThreadIsJoinedAndTheRefusalCarried) {
   ScriptedThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
   syscalls.fail_set_affinity(GetParam().error);
-  X86FpControl fp;
+  const X86FpControl fp;
   const auto made = make_thread_pool({cpus({1}), cpus({2})}, threads, syscalls, fp);
   ASSERT_FALSE(made.has_value());
   const auto* refused = std::get_if<ThreadNotPlaced>(&made.error());
@@ -223,7 +223,7 @@ TEST(MakeThreadPool, ACpuTheCpusetWithholdsRefusesThatThreadAndUnwindsTheRest) {
   ScriptedThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
   syscalls.permit_cpus(cpus({0, 1}));
-  X86FpControl fp;
+  const X86FpControl fp;
   const auto made = make_thread_pool(one_thread_per_cpu(cpus({0, 1, 2})), threads, syscalls, fp);
   ASSERT_FALSE(made.has_value());
   const auto* refused = std::get_if<ThreadNotPlaced>(&made.error());
@@ -296,7 +296,7 @@ TEST(MakeThreadPool, EveryPropertyOfADifferentStateIsNamed) {
 TEST(ThreadPoolRun, ThreadsIsThePlacementCountForTheLifeOfThePool) {
   ScriptedThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
-  X86FpControl fp;
+  const X86FpControl fp;
   const auto made = make_thread_pool(unpinned(6), threads, syscalls, fp);
   ASSERT_TRUE(made.has_value());
   Executor& executor = *made.value();
