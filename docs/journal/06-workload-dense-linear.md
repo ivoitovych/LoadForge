@@ -50,6 +50,15 @@ docs/determinism.md promises bit-identity only within a path; this workload give
 its T6 tier asserts what it gives. The emulator is IEEE-exact for these operations, but it is
 not hardware: CI's ARM64 runner checks the same digests on a real core on every run.
 
+### The NEON kernel reaches 100% on AArch64 before CI sees it
+
+The coverage build cross-compiled with `aarch64-linux-gnu-g++-13`, this stream's seven test
+executables run under qemu, and gcovr reading with `aarch64-linux-gnu-gcov-13`, filtered to
+`src/workloads/dense_linear/` and `src/primitives/simd/arm/`: 134 of 134 lines, 21 of 21
+functions, 74 of 74 branches. The rest of `src/` was not measured that way, since its
+real-machine tiers would read the x86-64 host's `/sys` through the emulator. The ARM64
+coverage job is the first measurement of it there.
+
 ### No FMA in the scalar kernel, on either compiler or architecture
 
 `objdump -d` of `scalar_kernel.cpp` compiled at `-O2 -ffp-contract=off` shows no `vfmadd`
