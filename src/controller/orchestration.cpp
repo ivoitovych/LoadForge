@@ -488,12 +488,28 @@ core::Result<core::Ok, ControllerError> Run::reap(std::int64_t elapsed_ns) {
 core::Result<core::Ok, ControllerError> Run::drain_after_death() {
   // Every worker is reaped, so every record pipe's writer is gone and end of
   // file is due -- unless something the worker started still holds the
-  // write end. That is bounded: a channel that stays open without delivering
-  // its end is recorded as truncated and closed.
-  const auto grace_ms = static_cast<int>(options_->grace.stop_ns / kNanosecondsPerMillisecond);
+  // write end. That is bounded twice: a channel gets one stop grace of wall
+  // time in all, and at most kMaxDrainsAfterDeath drains within it. A count
+  // alone let a writer that trickled one byte just inside each grace hold the
+  // run for 1024 graces, seventeen minutes at the default; the time alone
+  // would let a writer that floods keep the loop busy for the whole grace. A
+  // channel that has not ended by either bound is recorded as truncated.
   for (Tracked& worker : workers_) {
-    for (int attempt = 0; worker.channel_open && attempt < kMaxDrainsAfterDeath; ++attempt) {
-      auto ready = syscalls_->poll_readable({worker.records.read_fd}, grace_ms);
+    if (!worker.channel_open) {
+      continue;
+    }
+    auto opened = elapsed_now();
+    if (!opened.has_value()) {
+      return opened.error();
+    }
+    const std::int64_t give_up_at = opened.value() + options_->grace.stop_ns;
+    std::int64_t now_ns = opened.value();
+    for (int attempt = 0;
+         worker.channel_open && attempt < kMaxDrainsAfterDeath && now_ns < give_up_at; ++attempt) {
+      const std::int64_t remaining_ns = give_up_at - now_ns;
+      const auto timeout_ms = static_cast<int>((remaining_ns + kNanosecondsPerMillisecond - 1) /
+                                               kNanosecondsPerMillisecond);
+      auto ready = syscalls_->poll_readable({worker.records.read_fd}, timeout_ms);
       if (!ready.has_value()) {
         return error_at("record channel", describe(ready.error()));
       }
@@ -504,6 +520,11 @@ core::Result<core::Ok, ControllerError> Run::drain_after_death() {
       if (auto drained = drain(worker); !drained.has_value()) {
         return drained;
       }
+      auto now = elapsed_now();
+      if (!now.has_value()) {
+        return now.error();
+      }
+      now_ns = now.value();
     }
     if (worker.channel_open) {
       worker.evidence.channel_truncated = true;
