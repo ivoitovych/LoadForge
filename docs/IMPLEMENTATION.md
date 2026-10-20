@@ -254,7 +254,8 @@ those, so a blank there means a real exemption and never an oversight.
 | `worker/ipc` | M1 ✅ | P1, P2, P3, P4, P5 | T1, T2 | **Shipped** (JOURNAL §2.15, §2.16): the heartbeat region (seqlock slots, no lock, memfd across exec) and the record channel (CRC-32 frames, a reader that never resynchronises). Its own library, `loadforge_ipc`, so the test-only fake worker links the protocol without the real worker's loop (ADR 0003). No process-shared lock, and the ledger gate checks that on every run. Corrected against what was built: the boundary is fuzzed and every single-byte corruption of a multi-frame stream is tried, but at T1 (`tests/unit`), because `tests/fault_injection` (T5) does not exist until M2a creates it — the row claimed a tier before the tier; P4 added because the frame check is a verification with a classification per corruption |
 | `controller/orchestration` | M1 | P1, P2, P3, P6 | T1, T2, T7 | Run control: one loop, one blocking call; the deadline's stop request; spawn and teardown; each reaped worker's process group killed with it. T7 is the misbehaviour catalogue against `tests/support/fake_worker` (JOURNAL §2.19) |
 | `controller/safety` | M1 | P1, P3 | T1 | The escalation ladder as a function of time; the limits a run states and whether each is enforced |
-| `controller/supervision` | M1 | P1, P3 | T1 | Crash classification: the table of fates, OOM to be told from a fault once the kernel's record is read |
+| `controller/supervision` | M1 | P1, P3 | T1 | Crash classification: the table of fates. OOM is told from a fault and from a plain kill by the cgroup's OOM-kill count, read before the first fork and after the last reap, all or none (JOURNAL §2.19) |
+| `resources/` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped** (JOURNAL §1.23, §2.19): the memory budget (`MemAvailable`; the cgroup limit under v1 and v2, found through `/proc/self/cgroup` and `mountinfo`) and the cgroup's OOM-kill count, behind the contract the controller consults. Above `topology`, not inside `platform`, because every source is classified with topology's capability model. T8 checks the real machine against the kernel's other figures, including a child really OOM-killed where a v1 cgroup can be made |
 | `controller/results` | M3 | P1, P3 | T1, T8 | Schema, fingerprint, aggregation (F12) |
 | `controller/journal` | M5 | P1, P2, P6 | T1, T7, T10 | Append-only crash journal (F16) |
 | `verification/oracle` | M2a | P1, P3, P4 | T1, T3, T5, T5b | Written **before** the kernel it checks |
@@ -318,8 +319,8 @@ exclusions, CI green on {x86-64, ARM64} × {GCC 13, Clang 18}.
 ### M1 — Core framework and supervision
 
 **Builds:** `config`, `platform/{fs,clock,process,affinity,memory}`, `topology`,
-`worker/{scheduler,ipc}`, `controller/{orchestration,safety,supervision}`,
-`reporters/console`.
+`resources` (the memory budget and the OOM-kill record), `worker/{scheduler,ipc}`,
+`controller/{orchestration,safety,supervision}`, `reporters/console`.
 
 This is the milestone that establishes the process boundary, and the one where getting the
 seam right pays for the whole project: **every later module's P2 paths are testable only
@@ -729,31 +730,36 @@ in. Q10 closed (PLAN §4.6, revision 14), and `main` now holds, each at 100% lin
 branch with zero exclusions and a ledger row the gate checks: `core`, `main`, the whole of
 `platform` (seam and `fs`, exit status, launcher and pool, clock, affinity, memory),
 `topology`, `config` with `loadforge --check-config FILE`, `worker/ipc` (heartbeat region,
-record channel), `worker` (the `--worker` switch and the null workload loop), and
-`controller` with `reporters/console` and `loadforge stress` (#23), and the misbehaviour
-catalogue: `tests/support/fake_worker`, a second implementation of the worker contract
+record channel), `worker` (the `--worker` switch and the null workload loop),
+`controller` with `reporters/console` and `loadforge stress` (#23), the misbehaviour
+catalogue (#29: `tests/support/fake_worker`, a second implementation of the worker contract
 that misbehaves on demand, every reachable catalogue row as a T7 test against it, and the
-two gates M1 adds (no test-hook symbol in the shipped binary; the `EOWNERDEAD` obligation
-per lock in the ledger). The ledger in §3 marks each ✅ with the corrections made against
-what was actually built.
+two gates M1 adds: no test-hook symbol in the shipped binary; the `EOWNERDEAD` obligation
+per lock in the ledger), and `resources` (the memory budget and the OOM-kill record). The
+ledger in §3 marks each ✅ with the corrections made against what was actually built.
 
 **Against the M1 exit criteria in §4:** criteria 5 (config round-trips; every rejection
 tested for its message) and 6 (100% / zero exclusions; ledger current) are met on `main`.
 Criterion 1 (the controller runs the null workload for the configured duration and honours
-its limits) is met on `main` with its T7 tier. Criterion 2 is met for every transition but
-one: COMPLETE, FAULT (`SIGSEGV`, `SIGBUS`, `SIGABRT`), TIMEOUT (the hang and the spin) and
-the controller killed each have a T7 test against the fake worker, and the controller-killed
-case is now proved for a worker that ignores its control pipe, which only the parent-death
-signal can end. The OOM transition waits, with criterion 3, on the kernel's own record;
-the fake worker's `allocate` misbehaviour is ready for it. Criterion 4 waits on the
-remaining injected paths. Of the catalogue's rows, "die holding a process-shared lock" has
-nothing to test, because there is no such lock (PLAN §4.6), and the ledger gate now checks
-that on every run.
+its limits) is met on `main` with its T7 tier, and the memory limit is honoured against a
+real ceiling: `src/resources` reads `MemAvailable` and the cgroup limit under either
+hierarchy, and `stress` reports memory NOT ENFORCED only when that budget cannot be read,
+with the reader's reason. Criterion 2 is met for every transition but one: COMPLETE, FAULT
+(`SIGSEGV`, `SIGBUS`, `SIGABRT`), TIMEOUT (the hang and the spin) and the controller killed
+each have a T7 test against the fake worker, and the controller-killed case is proved for a
+worker that ignores its control pipe, which only the parent-death signal can end.
+Criterion 3 is met on the classification side: a SIGKILL the controller did not send is
+`kOomKilled` only when the cgroup's OOM-kill count accounts for it, asserted row by row in
+the table and through the loop against the controller's own fake of the record, and the
+kernel's side (a child really OOM-killed moves the count by one, a `kill -9` by none) is
+asserted against the real kernel. What remains of criteria 2 and 3 is one T7 test: the
+fake worker's `allocate` misbehaviour, OOM-killed for real under a memory limit, reported
+`kOomKilled` end to end. Criterion 4 waits on the remaining injected paths. Of the
+catalogue's rows, "die holding a process-shared lock" has nothing to test, because there is
+no such lock (PLAN §4.6), and the ledger gate checks that on every run.
 
-The next concrete actions, in order, after the review fixes queued in the roadmap:
-
-1. OOM classified distinctly from the kernel's own record, and the memory-budget reader
-   (`MemAvailable` and the cgroup limit under either hierarchy).
+The next concrete actions, after the review fixes queued in the roadmap: that T7 OOM test,
+and the M1 exit review of every criterion in §4.
 
 Outside the repository, and still owner-only: **branch protection on `main`**, and a
 **Mull release pinned by verified SHA-256** — the latter a hard prerequisite for M2a.

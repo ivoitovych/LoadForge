@@ -41,7 +41,11 @@ inline constexpr std::string_view kVersion = core::kVersion;
                          std::ostream& out, std::ostream& err);
 
 /// The stress command past its argument handling: a loaded configuration,
-/// the executable the workers will be, and the seam they run on. Public so
+/// the executable the workers will be, and the seam they run on. It reads the
+/// memory budget and opens the OOM-kill record through that seam, so the
+/// controller checks memory against a real ceiling and can tell an OOM kill
+/// from any other SIGKILL; memory is reported NOT ENFORCED only when the
+/// budget cannot be read, and the reason goes with it. Public so
 /// that the paths a real binary cannot take -- a fork that fails, an exec
 /// that fails and returns a worker's exit code, a run that ends unclean --
 /// are driven with a fake; `run` calls it with the real seam and this

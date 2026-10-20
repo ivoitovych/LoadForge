@@ -10,10 +10,15 @@
 #include "controller/orchestration.hpp"
 #include "core/duration.hpp"
 #include "main/selftest.hpp"
+#include "platform/fs.hpp"
 #include "platform/process.hpp"
 #include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
 #include "reporters/console.hpp"
+#include "resources/cgroup.hpp"
+#include "resources/cgroup_oom_record.hpp"
+#include "resources/memory_budget.hpp"
+#include "topology/cpu_topology.hpp"
 #include "worker/entry.hpp"
 
 namespace loadforge::cli {
@@ -68,6 +73,18 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
                const std::string& executable, std::ostream& out, std::ostream& err) {
   controller::RunOptions options;
   options.executable = executable;
+  // What the machine offers and what the kernel will say about an OOM kill,
+  // both read through the same seam the run uses: the running machine's
+  // files on the real one.
+  platform::FileSystem machine(syscalls);
+  auto budget = resources::read_memory_budget(machine, resources::kMachineRoot);
+  if (budget.has_value()) {
+    options.budget = budget.value();
+  } else {
+    options.budget_unread = topology::describe(budget.error());
+  }
+  resources::CgroupOomKillRecord oom_record(machine, resources::kMachineRoot);
+  options.oom_record = &oom_record;
   reporters::ConsoleReporter reporter(out);
   controller::Controller supervisor(syscalls, reporter);
   // Flushed before the controller forks, so a child that fails to exec and

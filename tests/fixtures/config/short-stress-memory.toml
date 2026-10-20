@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# short-stress.toml with memory configured: a share of the machine for the
+# run, and a small footprint for one workload. Small enough to fit any
+# machine CI runs on, so the run starts and the banner says whether the
+# memory limit is enforced against the budget the machine offers.
+
+schema_version = 1
+
+[run]
+mode     = "stress"
+duration = "1s"
+
+[limits]
+memory = "50%"
+
+[[workload]]
+name    = "first"
+threads = "all"
+memory  = "16MiB"
+
+[[workload]]
+name    = "second"
+threads = "all"

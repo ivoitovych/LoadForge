@@ -94,18 +94,37 @@ loadforge_set_fp_contract(loadforge_topology)
 loadforge_enable_sanitizers(loadforge_topology)
 loadforge_enable_coverage(loadforge_topology)
 
+# ---- resources --------------------------------------------------------------
+# What the kernel lets this process use and what it records when that runs
+# out: MemAvailable, the memory cgroup's limit under either hierarchy, and the
+# cgroup's OOM-kill count. Platform-level knowledge read through the seam, but
+# classified with topology's capability model, so it sits above topology
+# rather than inside platform, which nothing may make depend on topology.
+add_library(loadforge_resources STATIC
+  src/resources/decimal.cpp
+  src/resources/cgroup.cpp
+  src/resources/memory_budget.cpp
+  src/resources/cgroup_oom_record.cpp
+)
+target_link_libraries(loadforge_resources PUBLIC loadforge_topology loadforge_config)
+loadforge_set_warnings(loadforge_resources)
+loadforge_set_fp_contract(loadforge_resources)
+loadforge_enable_sanitizers(loadforge_resources)
+loadforge_enable_coverage(loadforge_resources)
+
 # ---- controller -------------------------------------------------------------
 # The supervisor: spawns the workers, judges their beats and their records,
 # stops them at the deadline and classifies what became of each. Depends on
-# worker (the IPC and the argv it execs workers with) and config; the console
-# reporter is the one voice it has at M1.
+# worker (the IPC and the argv it execs workers with) and config, and on the
+# OOM-kill record's contract in resources; the console reporter is the one
+# voice it has at M1.
 add_library(loadforge_controller STATIC
   src/controller/supervision.cpp
   src/controller/safety.cpp
   src/controller/orchestration.cpp
   src/reporters/console.cpp
 )
-target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config)
+target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config loadforge_resources)
 loadforge_set_warnings(loadforge_controller)
 loadforge_set_fp_contract(loadforge_controller)
 loadforge_enable_sanitizers(loadforge_controller)
@@ -113,7 +132,7 @@ loadforge_enable_coverage(loadforge_controller)
 
 # ---- cli --------------------------------------------------------------------
 add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp)
-target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller)
+target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller loadforge_resources)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)
