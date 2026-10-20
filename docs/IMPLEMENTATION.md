@@ -669,6 +669,15 @@ What CI enforces at each milestone. A gate, once added, is never removed.
 **Exclusion count target at every milestone: zero.** It is zero now, and every increase
 should be treated as a design failure to be argued for, not a routine event.
 
+**How the mutation gate runs.** Since 2026-10-20 11:45 UTC the sweep is one CI job per
+module under `src/` (`tools/mutation-shard.py`), each mutating only its own sources and
+judged on its own by `tools/mutation-gate.py --scope`: a mutant outside the shard is
+refused, and only the shard's own allowlist entries are applied or can be stale. Every
+mutant runs the in-process unit tests; the tests that create a process are named
+`RealProcess*` and left out, and the workflow checks that name against what each test
+really does. The first run as a single job reached the six-hour limit with no report
+(JOURNAL §1.26, §2.28).
+
 ---
 
 ## 7. Cross-review against the design of record
@@ -783,10 +792,12 @@ process-shared lock" has nothing to test, because there is no such lock (PLAN §
 ledger gate checks that on every run.
 
 **What remains of M1:** the mutation clause of the obligation every milestone exits under.
-Mull is pinned and scheduled, but has not yet swept `src/`; its first run is scheduled for
-2026-10-26 03:17 UTC, and an owner may dispatch it sooner. M1 is marked complete here and in
-§4 when that run reports zero unexplained survivors; a survivor is a test to strengthen
-first. Recorded and not an exit criterion: a worker's grandchild outlives a controller that
+Mull is pinned and scheduled, but has not yet swept `src/`. Its first full run, as one job,
+reached GitHub's six-hour limit and was cancelled with no report; the sweep now runs one job
+per module against the tests that create no process (JOURNAL §1.26, §2.28), and five
+survivors are expected in `src/platform/syscalls.cpp`, where only a forking test reaches the
+decision on a returned pid. M1 is marked complete here and in §4 when a sweep reports zero
+unexplained survivors; a survivor is a test to strengthen first. Recorded and not an exit criterion: a worker's grandchild outlives a controller that
 is itself `SIGKILL`ed (JOURNAL §2.20); the real worker forks nothing.
 
 Outside the repository, and still owner-only: **branch protection on `main`**. The Mull
