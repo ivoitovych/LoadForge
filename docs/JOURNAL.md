@@ -793,7 +793,7 @@ mechanisms above -- every target mutated, and a forked child holding Mull's pipe
 suffice to explain them, and neither can be confirmed until a run reports.
 
 
-### 1.27 clang-tidy 18's static analyzer crashes on `std::bit_cast<std::uintptr_t>(p) + offset`
+### 1.28 clang-tidy 18's static analyzer crashes on `std::bit_cast<std::uintptr_t>(p) + offset`
 
 *Established 2026-10-20, wave 1 and wave 2 (#40, #63).* `clang-tidy-18` died with a
 segmentation fault, not a diagnostic, on a translation unit that computed an address as
@@ -806,7 +806,7 @@ the offset to that, makes the crash go away with identical code generation
 *Consequence:* a tidy job that ends in a crash is a toolchain defect, not a clean pass and
 not a finding. Reduce the expression, do not suppress the check.
 
-### 1.28 clang-format will format a `CMakeLists.txt` as C++, and its ignore file has no `**`
+### 1.29 clang-format will format a `CMakeLists.txt` as C++, and its ignore file has no `**`
 
 *Established 2026-10-20, wave 1 and wave 4 (#77, #78).* Given a `CMakeLists.txt` on its
 command line, `clang-format-18` does not refuse it; it guesses C++ and rewrites it, joining
@@ -818,7 +818,7 @@ Streams did this by passing every changed file to the formatter. `.clang-format-
 directory in the tree, plus the `*.cmake` patterns. A new directory deeper than the last
 pattern needs a new line.
 
-### 1.29 A signed `__int128` multiplication does not link under UBSan on ARM64
+### 1.30 A signed `__int128` multiplication does not link under UBSan on ARM64
 
 *Established 2026-10-20, wave 1 (#42).* With `-fsanitize=undefined`, a multiplication of
 two signed `__int128` values is compiled into a call to `__muloti4`, the overflow-checking
@@ -827,7 +827,7 @@ undefined reference. Unsigned arithmetic has no overflow to check, so the same
 multiplication as `unsigned __int128` emits no call. The bounded-verification code
 multiplies magnitudes as unsigned and applies the sign itself (`exact::product`).
 
-### 1.30 Coverage counters updated from several threads go negative
+### 1.31 Coverage counters updated from several threads go negative
 
 *Established 2026-10-20, wave 1 (#67).* gcov's counters are plain increments by
 default. Code that runs on several threads at once under the coverage build loses updates,
@@ -2673,7 +2673,7 @@ Kept short and current; move an item to the relevant document once it is settled
   external review's EXT-01 to EXT-03 are a stack of pull requests (#79 to #81, §5.9).
   Integration streams 11 (M2) and 21 (M3) are running; 29, 33 and 34 follow. Open
   follow-ups: the seam default for `has_exited` (§5.7); removing the per-target
-  `-fprofile-update=atomic` copies (§1.30); the contract corrections collected from the
+  `-fprofile-update=atomic` copies (§1.31); the contract corrections collected from the
   wave-1 fragments (`chore/contract-corrections-wave1`), whose release build still has
   `-Werror=unused-result` failures to be checked against `main`; vector kernels for FFT and
   sparse; evidence for the earlier reaction plans (§4.13). The third outside review request
