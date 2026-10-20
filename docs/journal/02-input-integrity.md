@@ -72,6 +72,22 @@ vote therefore guards the state at rest: from the end of one unit to the start o
 next, which includes the whole interval between slices, the longest time it sits
 unused. The tests that corrupt copies under a running runner do it there.
 
+### `is_valid(Verdict)` and `blocks_of()` fail the static release build when inlined
+
+The `static` preset (Release, `-O3`, the product's `-Wnull-dereference -Werror`) refused
+`slice_runner.cpp`: `oracle.hpp:124` (`blocks_of`'s last arm,
+`std::get_if<NotChecked>(&verdict)->blocks_compared`) "null pointer dereference", and
+`basic_string.h:1072` "potential null pointer dereference" inlined from
+`is_valid(const Verdict&, Contract)` at `oracle.hpp:109` (`unchecked->what.empty()`).
+GCC 13.3 cannot see that the last `get_if` of a chain over a four-way variant is never
+null. The debug, coverage and Clang builds were clean, and the contract headers' own
+compile units (`tests/contracts/headers/`) are built without optimisation, so nothing
+had met it. Calling `is_valid()` out of line with `[[gnu::noinline]]` did not help: the
+warning moved into the wrapper. What works: `std::visit` for the blocks, `std::get` for
+the last alternative, and `is_valid()` asked of a `Verdict` re-made from the held
+alternative inside a visit, where the index is a constant. Any consumer of these two
+helpers in an optimised build will meet the same refusal; contract question 9.
+
 ### GoogleTest refuses typed suites a test includes and does not instantiate
 
 `runner_contract.hpp` and the other suite headers each declare two typed suites
@@ -183,3 +199,9 @@ by name rather than instantiating a registry it does not have.
    workload's `descriptor().contract`. *Reading:* refused as `kConfiguration` too.
 8. **A verdict that breaks `is_valid()`.** The header does not say what the runner does
    with one. *Reading:* a `VerificationNotPerformed`, its blocks not counted (decisions).
+9. **`is_valid(const Verdict&, Contract)` and `blocks_of()` do not compile in the
+   static release build** once inlined into a consumer (above). *Reading:* call them only
+   where the alternative is known (a visit), at the cost of one copy per checked unit.
+   *Proposal:* write their last arms with `std::get` or a visit, as record.hpp's comment
+   on `std::variant`'s `operator==` already does for clang-tidy, and compile
+   `tests/contracts/headers/` under the release flags too.

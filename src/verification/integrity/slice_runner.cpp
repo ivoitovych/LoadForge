@@ -73,6 +73,16 @@ VerificationNotPerformed not_performed(Provenance where, std::string what, std::
   return record;
 }
 
+/// oracle.hpp's is_valid(), asked of a verdict whose alternative the compiler
+/// can see. Over a Verdict of unknown alternative, GCC at -O3 reports the
+/// header's last arm -- a get_if it dereferences -- as a possible null
+/// dereference, and the header is frozen (journal fragment 02). A copy per
+/// checked unit is the price; the oracle's own work dwarfs it.
+bool keeps_contract(const Verdict& verdict, Contract contract) {
+  return std::visit([contract](const auto& held) { return is_valid(Verdict{held}, contract); },
+                    verdict);
+}
+
 /// Everything one unit's steps share, decided by one vote.
 struct Unit {
   std::uint64_t index = 0;
@@ -317,14 +327,17 @@ class IntegrityRunner final : public SliceRunner {
     // way: not an agreement that compared nothing, and not a mismatch to
     // send to fault isolation as the hardware's. The blocks it claims are
     // not counted.
-    if (!is_valid(verdict, oracle_->contract())) {
+    if (!keeps_contract(verdict, oracle_->contract())) {
       ++tally.oracle_not_performed;
       std::string why = "the oracle's verdict (alternative " + std::to_string(verdict.index()) +
                         ") breaks the oracle contract";
       return not_performed(where, std::move(what), std::move(why), 0);
     }
 
-    tally.oracle_blocks += blocks_of(verdict);
+    // By visit rather than blocks_of(): its last arm dereferences a get_if,
+    // which GCC at -O3 reports as a possible null dereference once inlined.
+    tally.oracle_blocks +=
+        std::visit([](const auto& held) noexcept { return held.blocks_compared; }, verdict);
     if (std::holds_alternative<Agreement>(verdict)) {
       return std::nullopt;
     }
@@ -342,10 +355,10 @@ class IntegrityRunner final : public SliceRunner {
                                           numerical->condition_number,
                                           numerical->element};
     }
-    auto* unchecked = std::get_if<NotChecked>(&verdict);
+    auto& unchecked = std::get<NotChecked>(verdict);
     ++tally.oracle_not_performed;
-    return VerificationNotPerformed{where, std::move(unchecked->what), std::move(unchecked->why),
-                                    unchecked->blocks_compared};
+    return not_performed(where, std::move(unchecked.what), std::move(unchecked.why),
+                         unchecked.blocks_compared);
   }
 
   /// The unit is done: the next one is index + 1, in all three copies.
