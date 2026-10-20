@@ -116,7 +116,8 @@ core::Result<Outcome, ConfigError> contend(worker::Executor& executor, const Con
   if (storage.size() < std::uint64_t{slots} * (config.line_bytes / kCounterBytes)) {
     return ConfigError::kStorageTooSmall;
   }
-  if (std::bit_cast<std::uintptr_t>(storage.data()) % config.line_bytes != 0) {
+  const auto storage_address = std::bit_cast<std::uintptr_t>(storage.data());
+  if (storage_address % config.line_bytes != 0) {
     return ConfigError::kStorageMisaligned;
   }
   const std::uint64_t stride = config.line_bytes / kCounterBytes;
