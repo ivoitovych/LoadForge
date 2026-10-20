@@ -768,6 +768,41 @@ expect "T1 is served by tests/contracts alone"               0 $? "ok    src/cor
 
 rm -rf "$ob"
 
+echo "cmake/Components.cmake: build fragments"
+# The glob that replaced editing the two shared CMake files (ADR 0004). It must
+# add every fragment, skip the excluded trees and files, and fail loudly -- not
+# add twice, not skip -- when a fragment adds another itself.
+if command -v cmake >/dev/null 2>&1; then
+  cf="$(mktemp -d)"
+  mkdir -p "$cf/tree/a/b" "$cf/tree/c" "$cf/tree/fixtures/x" "$cf/tree/kept"
+  cat > "$cf/CMakeLists.txt" <<CMAKE
+cmake_minimum_required(VERSION 3.28)
+project(fragments NONE)
+include("$ROOT/cmake/Components.cmake")
+loadforge_add_fragments("\${CMAKE_CURRENT_SOURCE_DIR}/tree" EXCLUDE kept/CMakeLists.txt EXCLUDE_TREES fixtures)
+CMAKE
+  printf 'message(STATUS "fragment-in: tree root, which is never a fragment")\n' > "$cf/tree/CMakeLists.txt"
+  printf 'message(STATUS "fragment-in: a/b")\n' > "$cf/tree/a/b/CMakeLists.txt"
+  printf 'message(STATUS "fragment-in: c")\n' > "$cf/tree/c/CMakeLists.txt"
+  printf 'message(STATUS "fragment-in: fixtures")\n' > "$cf/tree/fixtures/x/CMakeLists.txt"
+  printf 'message(STATUS "fragment-in: kept")\n' > "$cf/tree/kept/CMakeLists.txt"
+  out="$(cmake -S "$cf" -B "$cf/build" 2>&1)"; rc=$?
+  expect "every fragment is added"                           0 $rc "2 build fragment(s) under tree/" "$out"
+  expect "nested fragments are found"                        0 $rc "fragment-in: a/b" "$out"
+  if grep -qE "fragment-in: (fixtures|kept|tree root)" <<< "$out"; then
+    expect "excluded trees and files are not added"          1 0
+  else
+    expect "excluded trees and files are not added"          0 0
+  fi
+  printf 'add_subdirectory(b)\n' > "$cf/tree/a/CMakeLists.txt"
+  rm -rf "$cf/build"
+  out="$(cmake -S "$cf" -B "$cf/build" 2>&1)"
+  expect "a fragment that adds another FAILS at configure"   1 $? "already" "$out"
+  rm -rf "$cf"
+else
+  echo "  FAIL  cmake is not installed, so the fragment glob is untested"; fail=$((fail + 1))
+fi
+
 echo "check-dco.sh"
 # Real git repositories, because the bug this gate had was entirely about what
 # actions/checkout leaves in the working tree on a pull_request event -- which no
