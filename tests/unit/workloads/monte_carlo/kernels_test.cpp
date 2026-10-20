@@ -38,6 +38,15 @@ TEST(KernelTable, HoldsScalarAndTheNativePathOfThisBuild) {
   EXPECT_TRUE(paths.intersect(simd::compiled_paths()) == paths) << "never more than compiled";
 }
 
+TEST(KernelTable, AnswersNothingForAPathOutsideTheEnumeration) {
+  const simd::KernelTable<ChunkKernel> table = chunk_kernels();
+  EXPECT_EQ(simd::kernel_at(table, static_cast<simd::IsaPath>(200)), nullptr);
+  EXPECT_EQ(simd::kernel_at(table, simd::IsaPath::kScalar), table.scalar);
+  EXPECT_EQ(simd::kernel_at(table, simd::IsaPath::kAvx2), table.avx2);
+  EXPECT_EQ(simd::kernel_at(table, simd::IsaPath::kAvx512), table.avx512);
+  EXPECT_EQ(simd::kernel_at(table, simd::IsaPath::kNeon), table.neon);
+}
+
 TEST(Kernels, SumChunksInTheOrderOfTheirPathWhateverTheChunkAndKey) {
   const simd::KernelTable<ChunkKernel> table = chunk_kernels();
   for (const simd::IsaPath path : {simd::IsaPath::kScalar, testing::native_path()}) {
