@@ -632,6 +632,29 @@ TEST(CliStressTest, EveryChoiceReachesTheWorkerThroughTheArgv) {
   EXPECT_EQ(parsed.value().workload->footprint_bytes, std::uint64_t{4} << 20U);
   EXPECT_EQ(parsed.value().workload->numa_node, 0U);
   EXPECT_EQ(parsed.value().cpus.size(), 1U);
+  EXPECT_EQ(parsed.value().pacing.stale_after_ns, 10'000 * 1'000'000LL)
+      << "a unit has no upper bound, so a verifying worker is not called a hang in two seconds";
+}
+
+TEST(CliStressTest, AWorkerOfTheNullWorkloadIsStillCalledAHangAfterTwoSeconds) {
+  testing::FakeSyscalls syscalls;
+  syscalls.advance_clocks_per_read(10'000'000);
+  syscalls.script_forks({{0, 0}});
+  syscalls.set_parent_pid(testing::FakeSyscalls::kFakePid);
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(),
+                       over_a_fake(), out, err),
+            120);
+  std::vector<std::string_view> tail;
+  const std::vector<std::string>& argv = syscalls.last_exec_argv();
+  for (std::size_t at = 2; at < argv.size(); ++at) {
+    tail.emplace_back(argv[at]);
+  }
+  auto parsed = worker::parse_args(tail);
+  ASSERT_TRUE(parsed.has_value()) << parsed.error();
+  EXPECT_EQ(parsed.value().pacing.stale_after_ns, 2'000 * 1'000'000LL);
+  EXPECT_FALSE(parsed.value().workload.has_value());
 }
 
 TEST(CliStressTest, AMachineWhoseCacheLineIsNotKnownDoesNotRunAWorkload) {

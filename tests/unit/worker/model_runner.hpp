@@ -88,12 +88,12 @@ class ModelRunner final : public verification::SliceRunner {
     const std::string name = setup_.workload->descriptor().name;
     if (total_.oracle_blocks == 0) {
       report.records.emplace_back(not_performed(
-          verification::Provenance{}, "oracle over " + name + " units", "no block compared", 0));
+          setup_.base, "oracle over " + name + " units", "no block compared", 0));
     }
     if (total_.integrity_checked == 0) {
       report.records.emplace_back(
-          not_performed(verification::Provenance{},
-                        "input-integrity bracket over " + name + " units", "no unit bracketed", 0));
+          not_performed(setup_.base, "input-integrity bracket over " + name + " units",
+                        "no unit bracketed", 0));
     }
     report.next_index = next_;
     return report;

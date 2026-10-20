@@ -57,6 +57,14 @@ constexpr std::int64_t kDefaultTestMilliseconds = 10'000;
 /// The most workers a `--test` starts when it is not told how many: one per
 /// CPU the process may use, up to this.
 constexpr std::size_t kMostDefaultWorkers = 64;
+/// How stale a verifying worker's beat may be before it is called a hang. A
+/// slice is never shorter than one unit and a unit has no upper bound in the
+/// contracts (a worker cannot beat from inside compute()), so a controller that
+/// called every worker whose progress stood still for the M1 allowance of two
+/// seconds a hang would kill the healthy ones on a slow build or a loaded
+/// machine: a sort unit takes 0.4 s in a debug build and ten times that under a
+/// sanitizer (journal fragment 11). Ten seconds; null workloads keep their two.
+constexpr std::int64_t kVerifyingStaleAfterNs = 10'000'000'000;
 
 void print_usage(std::ostream& out) {
   out << "loadforge " << kVersion << "\n"
@@ -313,6 +321,13 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   telemetry::FanSource fan(machine);
   telemetry::FrequencySource frequency(machine);
   telemetry::MemorySource memory(machine);
+  const std::vector<std::string> registered = registry.names();
+  const bool verifying = std::ranges::any_of(config.workloads, [&registered](const config::Workload& w) {
+    return w.enabled && std::ranges::find(registered, w.name) != registered.end();
+  });
+  if (verifying) {
+    options.stale_after_ns = std::max(options.stale_after_ns, kVerifyingStaleAfterNs);
+  }
   options.verification.registry = &registry;
   options.verification.seed = stress_options.seed;
   options.verification.footprint_bytes = stress_options.footprint_bytes;

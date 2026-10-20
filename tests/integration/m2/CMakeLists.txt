@@ -7,6 +7,7 @@ loadforge_test_suite(loadforge_integration_m2_tests
   SOURCES
     pipeline_test.cpp
     sweep_test.cpp
+    disagreements_test.cpp
   LINK loadforge_controller loadforge_worker loadforge_workloads_registry
        loadforge_verification_oracle_registry loadforge_cli loadforge_controller_results
        loadforge_platform_fpenv loadforge_platform_isa loadforge_worker_executor)
