@@ -7,7 +7,8 @@
 # "vendored" components live under third_party/ and ship in the source tree.
 # "fetched" components are acquired at configure time and are test-only.
 #
-# Nothing is vendored yet, so the runtime dependency count remains zero.
+# One component is vendored: toml++, header-only and compiled into the binary, so
+# the runtime dependency count remains zero.
 
 [[component]]
 name      = "googletest"

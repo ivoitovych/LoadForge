@@ -380,11 +380,26 @@ The fake worker's **misbehaviour catalogue**, each entry a T7 test:
 | Spin without progress | Distinguish "working slowly" from "not progressing" |
 | Allocate until OOM-killed | Classify as OOM **distinctly** from a fault, by reading the kernel's own record |
 | Close the record pipe early | Report truncated evidence as truncated, never as clean |
+| Exit just before the deadline stop | Survive writing the stop byte to a pipe nobody reads: `EPIPE`, never death by `SIGPIPE` |
 | Emit a truncated record | Reject it; a partial record is not a record |
 | Emit a record with a bad checksum | Reject and report — a corrupt worker is what this tool exists to detect |
 | Die holding a process-shared lock | Recover via `EOWNERDEAD`; survivors must not deadlock |
 | Ignore `SIGTERM` | Escalate to `SIGKILL` within the bounded time |
 | Fork a grandchild, then die | Leave no orphan holding a core at full load |
+
+**The worker's exit codes, in one place.** Three headers use them and the controller's
+classifier depends on all of them, so the band is reserved as a whole:
+
+| Code | Set by | Meaning | Controller's fate |
+|---|---|---|---|
+| 0 | worker | Completed, or stopped on request | completed, if its finished record arrived |
+| 119 | worker | Its own setup failed | worker error |
+| 120–123 | launcher (`platform/process.hpp`) | Exec failed; orphaned before arming; death signal unavailable; descriptor not inherited | startup failed |
+| 124 | worker | It judged the controller lost: hung up, stale or unreadable. A controller that was merely stalled, stopped or paged out for longer than the allowance produces this too | controller lost (reported) |
+| 125 | worker (`worker/entry.hpp`) | The internal switch was used wrongly: a controller bug | startup failed |
+
+Codes 0–2 and 126–127 are never reserved, and nothing above 255 is used: `exit(2)` keeps
+eight bits.
 
 D-state (uninterruptible sleep) is deliberately absent: it cannot be produced reliably from
 userspace, and a test that cannot be made to fail is not a test. It is named here so its
@@ -536,7 +551,9 @@ verification continues, and any worker able to die at any point in the rotation.
 1. A five-hour schedule completes with continuous verification.
 2. The journal survives a simulated hard kill and its content is replayable.
 3. T10 soak: no memory growth, no counter overflow, over a multi-hour run.
-4. Q10 revisited — worker granularity re-decided with the mixed workload in hand.
+4. Worker granularity checked against the mixed workload. Q10 closed at M1 in favour of
+   multiple processes (PLAN §4.6); M5 confirms the choice holds when workloads mix, or
+   records in an ADR why it no longer does.
 
 ### M6 — Explore
 
@@ -673,7 +690,7 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 
 | # | Decision | Blocks | Recommendation |
 |---|---|---|---|
-| **Q10** | Worker process granularity — one process, or one per workload group | **M1 — cannot start** | Single worker process at M1; revisit at M5 with the mixed workload in hand |
+| ~~Q10~~ | Worker process granularity | — | **Closed** (PLAN §4.6, revision 14): multiple worker processes, one executable |
 | **Q9** | Milestone confirmation: framework-first with the M2a/M2b split | This whole plan | Proceed as written; the split exists so the first slice proves the machinery |
 | **Q5** | Privilege policy — never escalate, ship a `setcap` helper, or opt-in privileged mode | M3 telemetry | Never escalate; report reduced capability with a remediation hint, document how to grant access |
 | **Q11** | Is Ubuntu 24.04 the declared minimum for the dynamically-linked build | M7 packaging | Yes, with the static artifact covering everything older |
@@ -684,7 +701,10 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 
 ## 10. Status
 
-**M0 complete. M1 in progress; on `main`, everything M1 builds except the controller.**
+**M0 complete. M1 in progress; on `main`, everything M1 builds through the controller.**
+
+The working queue, item by item, is [`ROADMAP.md`](ROADMAP.md); this section is the
+summary it is kept consistent with.
 
 Revision 2 of this section said M1 was blocked only on Q10 and listed the order to build
 in: decide Q10, then `platform/fs` and `platform/process` with injection from the first
@@ -693,24 +713,22 @@ in. Q10 closed (PLAN §4.6, revision 14), and `main` now holds, each at 100% lin
 branch with zero exclusions and a ledger row the gate checks: `core`, `main`, the whole of
 `platform` (seam and `fs`, exit status, launcher and pool, clock, affinity, memory),
 `topology`, `config` with `loadforge --check-config FILE`, `worker/ipc` (heartbeat region,
-record channel) and `worker` (the `--worker` switch and the null workload loop). The
+record channel), `worker` (the `--worker` switch and the null workload loop), and
+`controller` with `reporters/console` and `loadforge stress` (#23). The
 ledger in §3 marks each ✅ with the corrections made against what was actually built.
 
 **Against the M1 exit criteria in §4:** criteria 5 (config round-trips; every rejection
 tested for its message) and 6 (100% / zero exclusions; ledger current) are met on `main`.
 Criterion 1 (the controller runs the null workload for the configured duration and honours
-its limits) is implemented with its T7 tier on a branch and is the next thing to land;
-criteria 2, 3 and 4 wait on the fake-worker executable, the kernel's OOM record, and the
-remaining injected paths.
+its limits) is met on `main` with its T7 tier; criteria 2, 3 and 4 wait on the fake-worker
+executable, the kernel's OOM record, and the remaining injected paths.
 
-The next concrete actions, in order:
+The next concrete actions, in order, after the review fixes queued in the roadmap:
 
-1. Land the controller (`controller/{orchestration,safety,supervision}`,
-   `reporters/console`, `loadforge stress`, `tests/supervision/`).
-2. The fake-worker executable with the misbehaviour catalogue, and the two gates: no
+1. The fake-worker executable with the misbehaviour catalogue, and the two gates: no
    test-hook symbol in the shipped binary; the `EOWNERDEAD` obligation per lock in the
    ledger (today there are zero locks, by design — PLAN §4.6).
-3. OOM classified distinctly from the kernel's own record, and the memory-budget reader
+2. OOM classified distinctly from the kernel's own record, and the memory-budget reader
    (`MemAvailable` and the cgroup limit under either hierarchy).
 
 Outside the repository, and still owner-only: **branch protection on `main`**, and a

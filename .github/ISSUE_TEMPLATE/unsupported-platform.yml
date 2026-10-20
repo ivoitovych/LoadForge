@@ -13,7 +13,8 @@ body:
         exposes is an ongoing part of the project.
 
         **A capture of your `/sys` tree can become a permanent test fixture**, which is
-        one of the most useful contributions available. See `tools/capture-sysfs.sh`.
+        one of the most useful contributions available. A `tools/capture-sysfs.sh` that
+        packages one is planned for M3; until then, the listings below are enough.
 
   - type: dropdown
     id: kind
@@ -75,7 +76,6 @@ body:
         Whatever is relevant to the metric — e.g. `ls /sys/class/hwmon/*/` plus the
         `name` and `*_label` files, `/sys/class/thermal/thermal_zone*/type`,
         `/sys/class/powercap/*/name`, `cat /proc/sys/kernel/perf_event_paranoid`.
-        Or attach a `tools/capture-sysfs.sh` archive.
       render: text
     validations:
       required: false

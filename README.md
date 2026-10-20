@@ -15,11 +15,11 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 
 | | |
 |---|---|
-| **Phase** | M0 done; M1 under way — the platform layer, topology discovery, configuration, the worker process and its IPC have landed; the controller is next |
-| **Code** | Build system, CI, the syscall seam with every `errno` path injectable, exit-status classification, the worker launcher and pool, clocks, affinity, memory mapping, CPU/cache/NUMA topology, TOML configuration (`loadforge --check-config FILE`), the heartbeat region and record channel, and the worker process behind an internal `--worker` switch |
+| **Phase** | M0 done; M1 nearly done — everything through the controller has landed; the queue to 1.0 is [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| **Code** | Build system, CI, the syscall seam with every `errno` path injectable, exit-status classification, the worker launcher and pool, clocks, affinity, memory mapping, CPU/cache/NUMA topology, TOML configuration (`loadforge --check-config FILE`), the heartbeat region and record channel, the worker process behind an internal `--worker` switch, and `loadforge stress`, which runs the null workload in supervised worker processes |
 | **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI; a per-module test-obligation ledger, also gated |
 | **Public API** | Not defined |
-| **Usable** | Not yet — no workloads until M2a; the controller that runs the null workload under supervision has not landed |
+| **Usable** | Not yet — no workloads until M2a. `loadforge stress` runs and supervises the null workload; while it runs, `ps` shows one `loadforge --worker` process per enabled workload |
 
 What exists is the foundation and most of M1: CMake with seven presets, eight CI
 workflows across {x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate, a
@@ -28,9 +28,10 @@ worker died rather than merely whether it returned zero, the launcher that creat
 by `fork` and `exec` and the pool that supervises them, topology discovery with its
 cross-checks, a configuration reader that refuses a typo by name, and the two IPC channels
 a worker and its controller share — a lock-free heartbeat region and a checksummed record
-pipe. The workloads themselves begin at M2a. See [`docs/PLAN.md`](docs/PLAN.md) for the
-milestone sequence and [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) §10 for what
-is on `main` today.
+pipe — and the controller that supervises workers through both. The workloads themselves
+begin at M2a. See [`docs/PLAN.md`](docs/PLAN.md) for the
+milestone sequence, [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) §10 for what is on
+`main` today, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the ordered work from here.
 
 | Document | What it is |
 |---|---|

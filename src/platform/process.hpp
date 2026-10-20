@@ -131,9 +131,10 @@ class WorkerLauncher {
   /// The error from the most recent failed exec, for the supervisor's report.
   ///
   /// Kept because become_worker can only return an exit code -- one byte, with
-  /// no room for an errno and a path. In the child this is read before _exit;
-  /// across the process boundary the supervisor sees only the code, and the
-  /// detail arrives over the error-record pipe at M3.
+  /// no room for an errno and a path. In the child it is for the child's own
+  /// stderr; across the process boundary the supervisor sees only the code. No
+  /// later milestone changes that: the record pipe is the worker's, and a
+  /// child whose exec failed never became one.
   [[nodiscard]] const SyscallError& last_exec_error() const noexcept { return last_exec_error_; }
 
  private:
