@@ -26,6 +26,7 @@
 #include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
 #include "platform/worker_pool.hpp"
+#include "resources/oom_kill_record.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -100,6 +101,7 @@ struct Tracked {
   bool reaped = false;
   std::uint64_t progress = 0;
   std::int64_t progress_changed_ns = 0;
+  std::int64_t last_read_ns = 0;  ///< When its slot last gave a consistent sample.
   std::vector<std::string> notes;
 };
 
@@ -141,8 +143,10 @@ class Run {
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain(Tracked& worker);
   [[nodiscard]] core::Result<core::Ok, ControllerError> reap(std::int64_t elapsed_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
+  void attribute_oom_kills();
   [[nodiscard]] core::Result<RunReport, ControllerError> finish();
   void close_channel(Tracked& worker);
+  void kill_group(Tracked& worker);
   void teardown();
   [[nodiscard]] core::Result<std::int64_t, ControllerError> elapsed_now();
 
@@ -158,12 +162,28 @@ class Run {
   platform::TimePoint started_;
   std::int64_t duration_ns_ = 0;
   std::uint64_t beats_ = 0;
+  /// The OOM-kill count before the first fork, when a record is consulted.
+  /// Read in prepare whenever there is a record, so the initial words are
+  /// never a reading anyone sees.
+  core::Result<std::uint64_t, std::string> oom_before_{std::string{"not read"}};
   std::size_t live_ = 0;
   bool stop_requested_ = false;
   bool spawned_ = false;
 };
 
 core::Result<core::Ok, ControllerError> Run::prepare() {
+  // The controller writes to pipes whose readers can die at any moment: a
+  // worker that exits between one tick's reap and the next tick's stop byte
+  // has closed the read end of its control pipe. With SIGPIPE at its default,
+  // that write kills the controller by signal 13 before write(2) can return
+  // EPIPE -- the one answer request_stop already tolerates -- and the whole
+  // run ends unreported. Ignored, the write reports EPIPE and the worker's
+  // death is reported like any other. First, before anything is created, so
+  // that a refusal leaves nothing to tear down. Workers inherit SIG_IGN across
+  // exec; they set it themselves regardless.
+  if (auto ignored = syscalls_->ignore_signal(SIGPIPE); !ignored.has_value()) {
+    return error_at("signals", describe(ignored.error()));
+  }
   if (auto memory = check_memory(*config_, options_->budget); !memory.has_value()) {
     return error_at("memory", memory.error());
   }
@@ -175,6 +195,12 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
   }
   if (workers_.empty()) {
     return error_at("config", "no workload is enabled");
+  }
+  // Before the first fork, so that every kill of a worker comes after it. A
+  // count that cannot be read is not a reason to refuse the run: it is kept,
+  // and said, if a worker's death ever needs it.
+  if (options_->oom_record != nullptr) {
+    oom_before_ = options_->oom_record->kills();
   }
   duration_ns_ = config_->run.duration.count() * kNanosecondsPerMillisecond;
 
@@ -248,6 +274,7 @@ core::Result<std::optional<int>, ControllerError> Run::spawn() {
   for (Tracked& worker : workers_) {
     worker.pid = spawned.value().pids()[worker.slot];
     worker.progress_changed_ns = started_.running_ns;
+    worker.last_read_ns = started_.running_ns;
     // The worker's ends are the worker's now; the controller keeping a copy
     // would hide the end of file that is the one signal a dead worker cannot
     // fake.
@@ -337,14 +364,22 @@ core::Result<core::Ok, ControllerError> Run::request_stop(std::int64_t now_ns) {
 core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker, const platform::TimePoint& now,
                                                    std::int64_t elapsed_ns) {
   // The worker's beat: stale by timestamp is the hang; fresh but with no
-  // progress for the same allowance is the spin. Both are the same decision,
-  // and a slot that cannot be read is a worker that died inside publish(),
-  // treated as stale because it will not beat again.
+  // progress for the same allowance is the spin. Both are the same decision.
+  //
+  // A slot that cannot be read this tick has a writer in the middle of a
+  // publish. That is a worker that died there and will never beat again, or
+  // one the scheduler took off the core between the two halves of its write,
+  // for as long as the scheduler likes: under TSan with every core busy, the
+  // first version, which called one torn read a death, killed a healthy
+  // worker in a 600 ms run. One look cannot tell the two apart; the allowance
+  // can, so the slot is stale once nothing could be read from it for longer
+  // than a beat may be old.
   bool stale = false;
   auto observed = region_->observe(ipc::worker_slot(worker.slot));
   if (!observed.has_value()) {
-    stale = true;
+    stale = now.running_ns - worker.last_read_ns > options_->stale_after_ns;
   } else {
+    worker.last_read_ns = now.running_ns;
     const std::optional<ipc::Heartbeat> beat = observed.value();
     const ipc::Liveness liveness = ipc::liveness(beat, now.running_ns, options_->stale_after_ns);
     if (beat.has_value() && beat->progress > worker.progress) {
@@ -464,6 +499,7 @@ core::Result<core::Ok, ControllerError> Run::reap(std::int64_t elapsed_ns) {
     worker.evidence.status = dead->status;
     worker.reaped = true;
     --live_;
+    kill_group(worker);
     (void)syscalls_->close(worker.control.write_fd);
     worker.control.write_fd = -1;
     reporter_->event(elapsed_ns, "worker " + std::to_string(worker.slot) + " (pid " +
@@ -473,15 +509,52 @@ core::Result<core::Ok, ControllerError> Run::reap(std::int64_t elapsed_ns) {
   return core::Ok{};
 }
 
+void Run::kill_group(Tracked& worker) {
+  // The worker led a process group of its own (WorkerLauncher::become_worker),
+  // and anything it forked is still in it: a grandchild with no death signal,
+  // since the kernel clears that across fork, holding a core and the record
+  // pipe for as long as nobody kills it. Now that the worker is gone, nothing
+  // in its group has a reason to run. ESRCH -- an empty group -- is the usual
+  // answer and says nothing; a kill that found someone is recorded, because a
+  // worker that left processes behind is part of what it did.
+  //
+  // Straight after the reap, for the pid's sake: the kernel does not reuse a
+  // pid that is still some group's id, so while anything of the worker's is
+  // left the number names that group and nothing else. Once nothing is left,
+  // reuse needs the pid allocator to wrap all the way round in between.
+  auto killed = syscalls_->send_signal(-worker.pid, SIGKILL);
+  if (killed.has_value()) {
+    worker.notes.emplace_back("process group: killed what the worker left running");
+  } else if (killed.error().number != ESRCH) {
+    worker.notes.push_back("process group: " + describe(killed.error()));
+  }
+}
+
 core::Result<core::Ok, ControllerError> Run::drain_after_death() {
   // Every worker is reaped, so every record pipe's writer is gone and end of
   // file is due -- unless something the worker started still holds the
-  // write end. That is bounded: a channel that stays open without delivering
-  // its end is recorded as truncated and closed.
-  const auto grace_ms = static_cast<int>(options_->grace.stop_ns / kNanosecondsPerMillisecond);
+  // write end. That is bounded twice: a channel gets one stop grace of wall
+  // time in all, and at most kMaxDrainsAfterDeath drains within it. A count
+  // alone let a writer that trickled one byte just inside each grace hold the
+  // run for 1024 graces, seventeen minutes at the default; the time alone
+  // would let a writer that floods keep the loop busy for the whole grace. A
+  // channel that has not ended by either bound is recorded as truncated.
   for (Tracked& worker : workers_) {
-    for (int attempt = 0; worker.channel_open && attempt < kMaxDrainsAfterDeath; ++attempt) {
-      auto ready = syscalls_->poll_readable({worker.records.read_fd}, grace_ms);
+    if (!worker.channel_open) {
+      continue;
+    }
+    auto opened = elapsed_now();
+    if (!opened.has_value()) {
+      return opened.error();
+    }
+    const std::int64_t give_up_at = opened.value() + options_->grace.stop_ns;
+    std::int64_t now_ns = opened.value();
+    for (int attempt = 0;
+         worker.channel_open && attempt < kMaxDrainsAfterDeath && now_ns < give_up_at; ++attempt) {
+      const std::int64_t remaining_ns = give_up_at - now_ns;
+      const auto timeout_ms = static_cast<int>((remaining_ns + kNanosecondsPerMillisecond - 1) /
+                                               kNanosecondsPerMillisecond);
+      auto ready = syscalls_->poll_readable({worker.records.read_fd}, timeout_ms);
       if (!ready.has_value()) {
         return error_at("record channel", describe(ready.error()));
       }
@@ -492,6 +565,11 @@ core::Result<core::Ok, ControllerError> Run::drain_after_death() {
       if (auto drained = drain(worker); !drained.has_value()) {
         return drained;
       }
+      auto now = elapsed_now();
+      if (!now.has_value()) {
+        return now.error();
+      }
+      now_ns = now.value();
     }
     if (worker.channel_open) {
       worker.evidence.channel_truncated = true;
@@ -502,10 +580,36 @@ core::Result<core::Ok, ControllerError> Run::drain_after_death() {
   return core::Ok{};
 }
 
+void Run::attribute_oom_kills() {
+  // Every worker is reaped by now, so the deaths and the count are complete:
+  // the window judge_oom_kills needs. The count is read again only when a
+  // death needs it.
+  if (options_->oom_record == nullptr) {
+    return;
+  }
+  std::vector<Tracked*> candidates;
+  for (Tracked& worker : workers_) {
+    if (oom_candidate(worker.evidence)) {
+      candidates.push_back(&worker);
+    }
+  }
+  if (candidates.empty()) {
+    return;
+  }
+  const auto after = options_->oom_record->kills();
+  const OomFinding finding =
+      judge_oom_kills(oom_before_, after, candidates.size(), options_->oom_record->scope());
+  for (Tracked* worker : candidates) {
+    worker->evidence.oom_kill_recorded = finding.attributed;
+    worker->notes.push_back(finding.note);
+  }
+}
+
 core::Result<RunReport, ControllerError> Run::finish() {
   if (auto drained = drain_after_death(); !drained.has_value()) {
     return drained.error();
   }
+  attribute_oom_kills();
   auto elapsed_ns = elapsed_now();
   if (!elapsed_ns.has_value()) {
     return elapsed_ns.error();
@@ -534,6 +638,16 @@ void Run::teardown() {
   // The silent release, for every way out. Live workers are killed and reaped
   // so a failed run leaves none behind; descriptors and the region follow.
   if (spawned_ && live_ > 0) {
+    // Each unreaped worker's group first, while its pid still pins the group's
+    // number (see kill_group), then the workers themselves, for any that died
+    // or failed before leading a group. A worker whose pid was never recorded
+    // -- the spawn failed after the fork -- is skipped: -0 is not its group but
+    // this process's own, and the kill would end the controller.
+    for (const Tracked& worker : workers_) {
+      if (!worker.reaped && worker.pid > 0) {
+        (void)syscalls_->send_signal(-worker.pid, SIGKILL);
+      }
+    }
     (void)pool_.signal_all(SIGKILL);
     while (live_ > 0) {
       auto reaped = pool_.wait_for_next();
@@ -565,7 +679,7 @@ core::Result<RunReport, ControllerError> Run::execute() {
   plan.duration = config_->run.duration;
   plan.workers = workers_.size();
   plan.executable = options_->executable;
-  plan.limits = limit_statuses(*config_, options_->budget);
+  plan.limits = limit_statuses(*config_, options_->budget, options_->budget_unread);
   reporter_->run_starting(plan);
 
   auto spawned = spawn();

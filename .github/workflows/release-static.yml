@@ -29,6 +29,13 @@ jobs:
             echo "binary is dynamically linked" >&2; ldd "$bin"; exit 1
           fi
           "$bin" --version
+      - name: No test-hook symbol in the shipped binary
+        # docs/IMPLEMENTATION.md §4 (M1): the misbehaving worker the controller
+        # is tested against is a separate test-only executable, and this reads
+        # the artifact that ships to prove none of it, nor any test fake or
+        # test framework, ended up inside. Before upload, and on the symbols
+        # as built: a stripped binary would be refused, not waved through.
+        run: ./tools/check-no-test-hooks.sh build/static/loadforge
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: loadforge-static-${{ matrix.runner }}

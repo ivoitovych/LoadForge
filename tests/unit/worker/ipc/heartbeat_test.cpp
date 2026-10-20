@@ -309,7 +309,7 @@ TEST_F(HeartbeatRegionTest, AWriterThatDiedMidUpdateIsReportedAsTornNotWaitedFor
   auto observed = region.observe(worker_slot(0));
   ASSERT_FALSE(observed.has_value());
   EXPECT_EQ(observed.error().fault, RegionFault::kTorn);
-  EXPECT_EQ(observed.error().detail, "retries 64, expected 0");
+  EXPECT_EQ(observed.error().detail, "no consistent sample in 64 attempts");
   EXPECT_TRUE(syscalls.unmap(raw.value(), region.bytes()).has_value());
 }
 

@@ -1,6 +1,6 @@
 # Reaction plan for the comprehensive project review of 2026-10-19 04:49 UTC
 
-- **Purpose:** turn the findings in `reviews/comprehensive-project-review-2026-10-19-0449.md` into ordered, bounded work items, each with its gate.
+- **Purpose:** turn the findings in `reviews/comprehensive-project-review-2026-10-19-0449-UTC.md` into ordered, bounded work items, each with its gate.
 - **Ground rules:** no item is committed or pushed without the owner's authorisation; every code change lands with its test and passes the coverage, obligation and mutation gates; documentation fixes are grouped into one commit so that the status sentences change together.
 
 ## Phase 1 — correctness (do first, one PR each, on top of the controller increment)

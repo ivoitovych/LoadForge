@@ -4,6 +4,7 @@
 
 #include <sys/mman.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <deque>
@@ -79,6 +80,12 @@ class FakeSyscalls final : public platform::Syscalls {
   [[nodiscard]] int open_count() const { return open_count_; }
   [[nodiscard]] int close_count() const { return close_count_; }
   [[nodiscard]] int read_count() const { return read_count_; }
+  /// Reads issued on one descriptor, for a test that must tell one channel's
+  /// reads from another's.
+  [[nodiscard]] int reads_of(int fd) const {
+    const auto found = reads_by_fd_.find(fd);
+    return found == reads_by_fd_.end() ? 0 : found->second;
+  }
   [[nodiscard]] const std::string& last_path() const { return last_path_; }
 
   /// Every descriptor handed out was handed back.
@@ -102,6 +109,7 @@ class FakeSyscalls final : public platform::Syscalls {
   core::Result<std::size_t, platform::SyscallError> read(int fd, char* buffer,
                                                          std::size_t size) override {
     ++read_count_;
+    ++reads_by_fd_[fd];
     if (const auto pipe = pipe_readers_.find(fd); pipe != pipe_readers_.end()) {
       return read_pipe(fd, *pipe->second, buffer, size);
     }
@@ -199,6 +207,7 @@ class FakeSyscalls final : public platform::Syscalls {
   [[nodiscard]] int fork_count() const { return fork_count_; }
   [[nodiscard]] int exec_count() const { return exec_count_; }
   [[nodiscard]] int pdeathsig_count() const { return pdeathsig_count_; }
+  [[nodiscard]] int session_count() const { return session_count_; }
   [[nodiscard]] int last_death_signal() const { return last_death_signal_; }
   [[nodiscard]] const std::string& last_exec_path() const { return last_exec_path_; }
   [[nodiscard]] const std::vector<std::string>& last_exec_argv() const { return last_exec_argv_; }
@@ -271,6 +280,9 @@ class FakeSyscalls final : public platform::Syscalls {
 
   pid_t parent_pid() override { return parent_pid_; }
 
+  /// Counted, and nothing else: in the fake there is no session to lead.
+  void start_session() override { ++session_count_; }
+
   /// One scripted reap: a child delivered, or an errno raised.
   struct WaitStep {
     platform::Reaped reaped;
@@ -290,6 +302,13 @@ class FakeSyscalls final : public platform::Syscalls {
   /// its neighbours are signalled normally. A blanket failure could not tell
   /// "the loop kept going" from "the loop stopped at the first error".
   void fail_signal_for(pid_t pid, int error) { signal_errors_[pid] = error; }
+
+  /// A signal to a process group (a negative pid) answers ESRCH unless the
+  /// test says the group still has members: what the kernel answers for the
+  /// group of a worker that left nothing running, which is the usual case and
+  /// so the default. A fake that accepted every group signal would report
+  /// stragglers that do not exist.
+  void group_left_running(pid_t group) { groups_left_running_.push_back(group); }
 
   [[nodiscard]] int wait_count() const { return wait_count_; }
   [[nodiscard]] const std::vector<std::pair<pid_t, int>>& signals_sent() const {
@@ -431,6 +450,10 @@ class FakeSyscalls final : public platform::Syscalls {
     }
     if (signal_error_ != 0) {
       return platform::SyscallError{signal_error_, "kill", "pid " + std::to_string(pid)};
+    }
+    if (pid < 0 && std::find(groups_left_running_.begin(), groups_left_running_.end(), -pid) ==
+                       groups_left_running_.end()) {
+      return platform::SyscallError{ESRCH, "kill", "pid " + std::to_string(pid)};
     }
     return core::Ok{};
   }
@@ -974,6 +997,7 @@ class FakeSyscalls final : public platform::Syscalls {
   int open_count_ = 0;
   int close_count_ = 0;
   int read_count_ = 0;
+  std::map<int, int> reads_by_fd_;
   bool descriptor_open_ = false;
   std::string last_path_;
 
@@ -997,6 +1021,7 @@ class FakeSyscalls final : public platform::Syscalls {
   int pdeathsig_error_ = 0;
   int pdeathsig_count_ = 0;
   int last_death_signal_ = 0;
+  int session_count_ = 0;
 
   pid_t parent_pid_ = kFakeSupervisorPid;
 
@@ -1010,6 +1035,7 @@ class FakeSyscalls final : public platform::Syscalls {
   int signal_error_ = 0;
   std::map<pid_t, int> signal_errors_;
   std::vector<std::pair<pid_t, int>> signals_sent_;
+  std::vector<pid_t> groups_left_running_;
 
   platform::CpuMask permitted_ = all_cpus();
   platform::CpuMask current_affinity_ = all_cpus();

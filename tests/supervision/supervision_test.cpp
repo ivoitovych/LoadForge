@@ -213,8 +213,21 @@ TEST(SupervisionTest, AControllerKilledLeavesNoWorkerBehind) {
     }
     ASSERT_EQ(reaped, worker) << "worker " << worker
                               << " outlived the controller: " << std::strerror(errno);
-    EXPECT_TRUE(WIFSIGNALED(worker_status)) << "status " << worker_status;
-    EXPECT_EQ(WTERMSIG(worker_status), SIGKILL) << "the parent-death signal";
+    // Two ways out, and either is the worker not outliving its controller. The
+    // kernel delivers the parent-death signal; and the controller's death
+    // closes its end of the control pipe, which wakes the worker's poll. Which
+    // lands first is the scheduler's choice: an earlier version of this test
+    // accepted only SIGKILL and failed in about one run in ten when the worker
+    // left first, exiting 124, controller lost. What this test cannot show is
+    // that the death signal works for a worker that never looks at its pipe:
+    // with the signal disarmed it still passes, every worker leaving on the
+    // hang-up. MisbehaviourCatalogue.AWorkerDeafToItsControlPipeIsEndedByThe-
+    // ParentDeathSignal (catalogue_test.cpp) is that test: its worker ignores
+    // the pipe and can only be ended by the signal.
+    const bool killed_by_death_signal =
+        WIFSIGNALED(worker_status) && WTERMSIG(worker_status) == SIGKILL;
+    const bool left_on_hang_up = WIFEXITED(worker_status) && WEXITSTATUS(worker_status) == 124;
+    EXPECT_TRUE(killed_by_death_signal || left_on_hang_up) << "status " << worker_status;
   }
   ASSERT_EQ(::prctl(PR_SET_CHILD_SUBREAPER, 0), 0);
 }

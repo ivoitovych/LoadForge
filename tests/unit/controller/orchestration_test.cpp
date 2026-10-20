@@ -9,11 +9,13 @@
 #include <gtest/gtest.h>
 #include <time.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <optional>
 #include <string>
@@ -28,6 +30,7 @@
 #include "core/byte_size.hpp"
 #include "core/duration.hpp"
 #include "platform/syscalls.hpp"
+#include "resources/oom_kill_record.hpp"
 #include "support/fake_syscalls.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
@@ -94,6 +97,27 @@ std::string frame_text(ipc::RecordType type, std::string_view payload) {
   }
   return text;
 }
+
+/// The OOM-kill record as this controller reads its contract: a count, read
+/// on demand, that answers from a script and remembers how often it was asked.
+/// The controller's own fake (docs/adr/0003); the reader's real one is tested
+/// against the kernel in tests/unit/resources.
+class ScriptedOomRecord final : public resources::OomKillRecord {
+ public:
+  [[nodiscard]] std::string scope() const override { return "the scripted count"; }
+  core::Result<std::uint64_t, std::string> kills() override {
+    ++reads;
+    if (readings.empty()) {
+      return std::string{"read more often than scripted"};
+    }
+    auto next = readings.front();
+    readings.pop_front();
+    return next;
+  }
+
+  std::deque<core::Result<std::uint64_t, std::string>> readings;
+  int reads = 0;
+};
 
 struct Rig {
   FakeSyscalls syscalls;
@@ -203,6 +227,8 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   };
   auto result = rig.run();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(rig.syscalls.signals_ignored(), std::vector<int>{SIGPIPE})
+      << "a stop byte to a worker that just died must be EPIPE, not signal 13";
   const RunReport& report = result.value();
   EXPECT_FALSE(report.worker_exit_code.has_value());
   ASSERT_EQ(report.workers.size(), 2U);
@@ -222,15 +248,21 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
                                              {"finished: done too"}}));
   EXPECT_TRUE(all_clean(report));
   EXPECT_EQ(clean_count(report), 2U);
-  // Five ticks reach the 50 ms deadline; the finish reads the clock once more.
-  EXPECT_EQ(report.elapsed_ns, 60 * kMs);
+  // Five ticks reach the 50 ms deadline. Both record channels are still open
+  // when the last worker is reaped, so the final drain reads the clock twice
+  // for each (when it starts, and after the drain that ends it), and the
+  // finish reads it once more.
+  EXPECT_EQ(report.elapsed_ns, 100 * kMs);
   EXPECT_EQ(
       rig.reporter.events,
       (std::vector<std::string>{
           "spawned 2 worker(s): pids 1001 1002", "deadline reached: stop requested",
           "worker 0 (pid 1001): exited with code 0", "worker 1 (pid 1002): exited with code 0"}));
   EXPECT_EQ(rig.reporter.elapsed, (std::vector<std::int64_t>{0, 50 * kMs, 50 * kMs, 50 * kMs}));
-  EXPECT_TRUE(rig.syscalls.signals_sent().empty()) << "nobody needed a signal";
+  // Nobody needed a signal. Each worker's process group was swept as it was
+  // reaped, and was empty, so the sweep left no note.
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{{-kFirstPid, SIGKILL}, {-kSecondPid, SIGKILL}}));
   EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
   ASSERT_EQ(rig.reporter.plans.size(), 1U);
   EXPECT_EQ(rig.reporter.plans[0].workers, 2U);
@@ -305,7 +337,9 @@ TEST(ControllerTest, AWorkerWhoseBeatGoesStaleIsTerminatedThenKilledAndTimedOut)
             (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGTERM},
                                                 {kSecondPid, SIGTERM},
                                                 {kFirstPid, SIGKILL},
-                                                {kSecondPid, SIGKILL}}));
+                                                {kSecondPid, SIGKILL},
+                                                {-kFirstPid, SIGKILL},
+                                                {-kSecondPid, SIGKILL}}));
   EXPECT_EQ(rig.reporter.events[1], "worker 0: sent signal 15 (heartbeat stale)");
   EXPECT_EQ(rig.reporter.elapsed[1], 40 * kMs);
   EXPECT_EQ(rig.reporter.elapsed[3], 60 * kMs);
@@ -355,7 +389,37 @@ TEST(ControllerTest, AWorkerThatDiedInsideAPublishIsTreatedAsStale) {
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kFault)
       << "SIGTERM was sent, but what killed it was the fault";
-  EXPECT_EQ(rig.reporter.elapsed[1], 10 * kMs) << "unreadable on the first tick";
+  // Unreadable from the start, and stale once that has lasted longer than the
+  // 100 ms allowance: the tick at 110 ms, not the first one.
+  EXPECT_EQ(rig.reporter.elapsed[1], 110 * kMs) << "unreadable past the allowance";
+}
+
+TEST(ControllerTest, ASlotUnreadableForLessThanTheAllowanceIsNotADeath) {
+  // A worker descheduled between the two halves of a publish leaves its slot
+  // unreadable for as long as the scheduler likes. The first version called
+  // one torn read a death, and under TSan with every core busy it SIGTERMed a
+  // healthy worker in a 600 ms run. Torn from the start of a 50 ms run with a
+  // 100 ms allowance, worker 0 is never signalled, and completes.
+  Rig rig;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, 10 * kMs, 3);
+      rig.beat(1, 1, 10'000 * kMs);
+    } else if (starts_with(line, "deadline")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(result.value().workers[0].stop, "stop requested");
+  for (const auto& [pid, signal] : rig.syscalls.signals_sent()) {
+    EXPECT_LT(pid, 0) << "only the group sweeps; signal " << signal << " to " << pid;
+  }
 }
 
 TEST(ControllerTest, AStopRequestIgnoredIsEscalatedAndOneWorkerHonoursTheTerm) {
@@ -384,8 +448,11 @@ TEST(ControllerTest, AStopRequestIgnoredIsEscalatedAndOneWorkerHonoursTheTerm) {
   EXPECT_EQ(rig.reporter.events[1], "deadline reached: stop requested");
   EXPECT_EQ(rig.reporter.elapsed[1], 30 * kMs);
   EXPECT_EQ(rig.syscalls.signals_sent(),
-            (std::vector<std::pair<pid_t, int>>{
-                {kFirstPid, SIGTERM}, {kSecondPid, SIGTERM}, {kSecondPid, SIGKILL}}));
+            (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGTERM},
+                                                {kSecondPid, SIGTERM},
+                                                {-kFirstPid, SIGKILL},
+                                                {kSecondPid, SIGKILL},
+                                                {-kSecondPid, SIGKILL}}));
 }
 
 TEST(ControllerTest, AFaultIsReportedWithTheRecordsThatArrivedBeforeIt) {
@@ -418,6 +485,278 @@ TEST(ControllerTest, AFaultIsReportedWithTheRecordsThatArrivedBeforeIt) {
                           {"started: slot 0 pid 1001", "error: about to crash"}}));
   EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kCompleted);
   EXPECT_EQ(clean_count(result.value()), 1U);
+}
+
+TEST(ControllerTest, WhatAWorkerLeftRunningInItsGroupIsKilledAndRecorded) {
+  // The catalogue's "fork a grandchild, then die": worker 1's group still has
+  // a member when it is reaped, so the sweep kills it and says so; worker 0's
+  // group is empty and its record is untouched. The real processes are the
+  // supervision tier's (tests/supervision/catalogue_test.cpp).
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.syscalls.group_left_running(kSecondPid);
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.deliver(1, ipc::RecordType::kError, "forked and left");
+      rig.worker_exits(1, 1 << 8);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].records, (std::vector<std::string>{"finished: done"}));
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kWorkerError);
+  EXPECT_EQ(result.value().workers[1].records,
+            (std::vector<std::string>{"error: forked and left",
+                                      "process group: killed what the worker left running"}))
+      << "the sweep is recorded when the worker is reaped, after what it sent";
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{{-kFirstPid, SIGKILL}, {-kSecondPid, SIGKILL}}));
+}
+
+TEST(ControllerTest, AGroupThatCannotBeKilledIsRecordedAndTheRunGoesOn) {
+  // Any refusal but ESRCH means something may still be running that the
+  // controller could not stop: a fact about the worker, not a failure of the
+  // run, so it goes in the worker's record.
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.syscalls.fail_signal_for(-kFirstPid, EPERM);
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_EQ(result.value().workers[0].records.size(), 2U);
+  EXPECT_EQ(result.value().workers[0].records[0], "finished: done");
+  EXPECT_EQ(result.value().workers[0].records[1].substr(0, 15), "process group: ");
+  EXPECT_NE(result.value().workers[0].records[1].find("kill"), std::string::npos)
+      << result.value().workers[0].records[1];
+  EXPECT_EQ(result.value().workers[1].records, (std::vector<std::string>{"finished: done"}));
+}
+
+TEST(ControllerTest, ATeardownSweepsOnlyTheGroupsOfWorkersNotYetReaped) {
+  // Worker 0 is reaped (and its group swept) on the first tick; the second
+  // tick's poll fails. The teardown sweeps worker 1's group, whose pid still
+  // pins it, and not worker 0's again, whose number may since belong to
+  // somebody else.
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+    } else if (starts_with(line, "worker 0 (pid 1001)")) {
+      rig.syscalls.fail_poll(EINVAL);
+    }
+  };
+  rig.syscalls.script_waits({{Reaped{kSecondPid, SIGKILL}, 0}});
+  auto result = rig.run();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().stage, "record channel");
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{
+                {-kFirstPid, SIGKILL}, {-kSecondPid, SIGKILL}, {kSecondPid, SIGKILL}}));
+  EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+}
+
+// --- the OOM killer, from the kernel's record ---------------------------------------
+
+/// Worker 0 dies of a SIGKILL nobody here sent; worker 1 completes.
+void one_killed_one_completes(Rig& rig) {
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kStarted, "slot 0 pid 1001");
+      rig.worker_exits(0, SIGKILL);
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(1, 0);
+    }
+  };
+}
+
+TEST(ControllerOomTest, ASigkillTheCountAccountsForIsAnOomKillAndTheOtherWorkerCompletes) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{3}, std::uint64_t{4}};
+  rig.options.oom_record = &record;
+  one_killed_one_completes(rig);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0],
+            (WorkerReport{0,
+                          kFirstPid,
+                          WorkerFate::kOomKilled,
+                          "killed by signal 9",
+                          "running",
+                          0,
+                          {"started: slot 0 pid 1001",
+                           "OOM kill: the scripted count counted 1 during the run, one or more for "
+                           "each of the 1 worker(s) killed by a SIGKILL the controller did not "
+                           "send"}}));
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(result.value().workers[1].records, (std::vector<std::string>{"finished: done"}))
+      << "a worker the count does not concern carries no word about it";
+  EXPECT_EQ(record.reads, 2) << "once before the first fork, once after the last reap";
+  EXPECT_FALSE(all_clean(result.value())) << "an OOM kill is not a completion";
+}
+
+TEST(ControllerOomTest, TheCountIsReadBeforeTheFirstFork) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}};
+  rig.options.oom_record = &record;
+  rig.reporter.on_starting = [&rig, &record] {
+    EXPECT_EQ(record.reads, 1) << "read before the run was announced";
+    EXPECT_EQ(rig.syscalls.fork_count(), 0);
+    rig.hold_worker_ends();
+  };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "deadline")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_TRUE(all_clean(result.value()));
+  EXPECT_EQ(record.reads, 1) << "nobody died of SIGKILL, so the count is not read again";
+}
+
+TEST(ControllerOomTest, ASigkillTheCountDoesNotAccountForStaysAKillAndSaysWhy) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{3}, std::uint64_t{3}};
+  rig.options.oom_record = &record;
+  one_killed_one_completes(rig);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kKilled);
+  EXPECT_EQ(result.value().workers[0].records.back(),
+            "not attributed to the OOM killer: the scripted count counted no OOM kill during the "
+            "run");
+}
+
+TEST(ControllerOomTest, ACountUnreadableAtEitherEndLeavesAKillWithTheReason) {
+  {
+    Rig rig;
+    ScriptedOomRecord record;
+    record.readings = {std::string{"no count before"}, std::uint64_t{9}};
+    rig.options.oom_record = &record;
+    one_killed_one_completes(rig);
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << describe(result.error());
+    EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kKilled)
+        << "a count the run could not read first is no reason to refuse the run";
+    EXPECT_EQ(result.value().workers[0].records.back(),
+              "not attributed to the OOM killer: the OOM-kill count could not be read before the "
+              "run: no count before");
+  }
+  {
+    Rig rig;
+    ScriptedOomRecord record;
+    record.readings = {std::uint64_t{0}, std::string{"no count after"}};
+    rig.options.oom_record = &record;
+    one_killed_one_completes(rig);
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << describe(result.error());
+    EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kKilled);
+    EXPECT_EQ(result.value().workers[0].records.back(),
+              "not attributed to the OOM killer: the OOM-kill count could not be read after the "
+              "run: no count after");
+  }
+}
+
+TEST(ControllerOomTest, TwoSigkillsAndOneCountedKillAttributeNeither) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}, std::uint64_t{1}};
+  rig.options.oom_record = &record;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.worker_exits(0, SIGKILL);
+    } else if (starts_with(line, "worker 0 (pid")) {
+      rig.worker_exits(1, SIGKILL);  // Reaped after worker 0's death was told.
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const std::string note =
+      "not attributed to the OOM killer: the scripted count counted 1 OOM kill(s) during the run "
+      "for 2 workers killed by a SIGKILL the controller did not send, and a count does not say "
+      "which";
+  for (const WorkerReport& worker : result.value().workers) {
+    EXPECT_EQ(worker.fate, WorkerFate::kKilled) << worker.slot;
+    EXPECT_EQ(worker.records, (std::vector<std::string>{note})) << worker.slot;
+  }
+  EXPECT_EQ(record.reads, 2);
+}
+
+TEST(ControllerOomTest, TheControllersOwnSigkillIsNeverAskedAbout) {
+  // Both workers stale, both escalated to SIGKILL by the controller: their
+  // deaths have a cause already, and the count is not read again.
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}};
+  rig.options.oom_record = &record;
+  rig.config.run.duration = core::Duration{1000};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(record.reads, 1);
+}
+
+TEST(ControllerOomTest, WithNoRecordOfferedASigkillIsAKillAndNothingIsSaidAboutOom) {
+  Rig rig;
+  one_killed_one_completes(rig);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kKilled);
+  EXPECT_EQ(result.value().workers[0].records,
+            (std::vector<std::string>{"started: slot 0 pid 1001"}));
+}
+
+TEST(ControllerOomTest, ABudgetThatCouldNotBeReadIsNotEnforcedAndTheBannerSaysWhy) {
+  Rig rig;
+  rig.config.limits.memory = core::ByteSize::bytes(std::uint64_t{1} << 30U);
+  rig.options.budget_unread = "/proc/meminfo: not permitted (open: Permission denied)";
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_EQ(rig.reporter.plans.size(), 1U);
+  ASSERT_EQ(rig.reporter.plans[0].limits.size(), 2U);
+  EXPECT_EQ(rig.reporter.plans[0].limits[1],
+            (LimitStatus{"memory", false,
+                         "no memory budget could be read: /proc/meminfo: not permitted (open: "
+                         "Permission denied)"}));
 }
 
 TEST(ControllerTest, ACorruptFrameAndATruncatedStreamAreEachReportedAsSuch) {
@@ -477,12 +816,20 @@ TEST(ControllerTest, AChannelHeldOpenAfterTheWorkerDiedIsTruncatedNotWaitedForFo
 TEST(ControllerTest, AChannelThatNeverEndsIsGivenABoundedNumberOfDrains) {
   Rig rig;
   rig.config.run.duration = core::Duration{1000};
+  // A stop grace far longer than 1024 drains take on the fake clock, so the
+  // count is the bound that stops it; the time bound has its own test below.
+  rig.options.grace.stop_ns = 3600 * 1000 * kMs;
+  int reads_when_last_reaped = 0;
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
-  rig.reporter.on_event = [&rig](const std::string& line) {
+  rig.reporter.on_event = [&rig, &reads_when_last_reaped](const std::string& line) {
+    // The last event of the run is the last reap; every read after it belongs
+    // to the final drain, which is what the bound governs.
+    reads_when_last_reaped = rig.syscalls.reads_of(kRecordRead1);
     if (starts_with(line, "spawned")) {
       rig.deliver(0, ipc::RecordType::kFinished, "done");
       rig.worker_exits(0, 0);
-      // Most of a large frame, a byte per read, from a writer that stays.
+      // Most of a large frame, a byte per read, from a writer that stays:
+      // more bytes than the bound allows drains, so only the bound stops it.
       const std::string big = frame_text(ipc::RecordType::kFinished, std::string(2000, 'x'));
       rig.syscalls.deliver_to_pipe(kRecordRead1, big.substr(0, 1500));
       rig.syscalls.limit_pipe_reads(1);
@@ -496,7 +843,77 @@ TEST(ControllerTest, AChannelThatNeverEndsIsGivenABoundedNumberOfDrains) {
   EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTruncatedEvidence);
   EXPECT_EQ(result.value().workers[1].records.back(),
             "record channel: held open after the worker died");
-  EXPECT_GT(rig.syscalls.read_count(), 1000) << "the bound, not the stream's end, stopped it";
+  // Exactly the bound: 1024 drains of one byte each, with bytes still waiting.
+  // A bound that only had to be "more than 1000" let a bound a thousand times
+  // larger pass, which is the same as no bound at all.
+  EXPECT_EQ(rig.syscalls.reads_of(kRecordRead1) - reads_when_last_reaped, 1024)
+      << "the bound, not the stream's end, stopped it";
+}
+
+TEST(ControllerTest, AChannelThatTricklesIsGivenOneStopGraceInAllNotOnePerDrain) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  int reads_when_last_reaped = 0;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig, &reads_when_last_reaped](const std::string& line) {
+    reads_when_last_reaped = rig.syscalls.reads_of(kRecordRead1);
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      // Bytes always waiting, a byte per read, from a writer that stays: a
+      // channel that would never end by itself and never goes quiet.
+      const std::string big = frame_text(ipc::RecordType::kFinished, std::string(2000, 'x'));
+      rig.syscalls.deliver_to_pipe(kRecordRead1, big.substr(0, 1500));
+      rig.syscalls.limit_pipe_reads(1);
+      rig.syscalls.worker_releases_end(kControlRead1);
+      rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+      rig.syscalls.script_nonblocking_reaps(rig.reaps);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTruncatedEvidence);
+  // The stop grace is 20 ms and the fake clock moves 10 ms per reading: the
+  // first poll may wait the whole grace, the second only what is left of it,
+  // and then the grace is spent. Two drains, not 1024.
+  EXPECT_EQ(rig.syscalls.reads_of(kRecordRead1) - reads_when_last_reaped, 2);
+  const std::vector<int>& timeouts = rig.syscalls.poll_timeouts();
+  ASSERT_GE(timeouts.size(), 2U);
+  EXPECT_EQ(timeouts[timeouts.size() - 2], 20);
+  EXPECT_EQ(timeouts.back(), 10);
+}
+
+TEST(ControllerTest, AClockThatFailsDuringTheFinalDrainIsTheControllersFailure) {
+  // The final drain reads the clock when it starts on a held channel and after
+  // each drain; either reading failing ends the run as the controller's own
+  // failure, after the workers are gone.
+  for (const int extra : {1, 2}) {
+    Rig rig;
+    rig.config.run.duration = core::Duration{1000};
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    rig.reporter.on_event = [&rig, extra](const std::string& line) {
+      if (starts_with(line, "worker ")) {
+        // A reap, and the last event before the final drain is the last reap:
+        // the next raw reading is the drain's first, the one after its second.
+        const auto raw_reads =
+            static_cast<int>(std::count(rig.syscalls.clocks_read().begin(),
+                                        rig.syscalls.clocks_read().end(), CLOCK_MONOTONIC_RAW));
+        rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, raw_reads + extra, EIO);
+      }
+      if (starts_with(line, "spawned")) {
+        rig.deliver(0, ipc::RecordType::kFinished, "done");
+        rig.worker_exits(0, 0);
+        rig.syscalls.deliver_to_pipe(kRecordRead1, "xx");
+        rig.syscalls.limit_pipe_reads(1);
+        rig.syscalls.worker_releases_end(kControlRead1);
+        rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+        rig.syscalls.script_nonblocking_reaps(rig.reaps);
+      }
+    };
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value()) << extra;
+    EXPECT_EQ(result.error().stage, "clock") << extra;
+  }
 }
 
 TEST(ControllerTest,
@@ -605,6 +1022,15 @@ TEST(ControllerTest, RefusesBeforeSpawningWhenTheConfigurationCannotBeRun) {
 TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehind) {
   {
     Rig rig;
+    rig.syscalls.fail_ignore_signal(EINVAL);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "signals");
+    EXPECT_TRUE(rig.reporter.plans.empty()) << "refused before the run was announced";
+    EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  }
+  {
+    Rig rig;
     rig.syscalls.fail_create_memory_file(ENOMEM);
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
@@ -654,8 +1080,12 @@ TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehin
     auto result = rig.run();
     ASSERT_FALSE(result.has_value()) << fd;
     EXPECT_EQ(result.error().stage, "spawn");
+    // Worker 0's group, then both workers. Worker 1's pid was never recorded
+    // (the spawn failed on worker 0's close), so its "group" is not swept:
+    // kill(-0) would be this process's own group.
     EXPECT_EQ(rig.syscalls.signals_sent(),
-              (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGKILL}, {kSecondPid, SIGKILL}}))
+              (std::vector<std::pair<pid_t, int>>{
+                  {-kFirstPid, SIGKILL}, {kFirstPid, SIGKILL}, {kSecondPid, SIGKILL}}))
         << "both workers were running and were killed on the way out";
     EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
   }
@@ -745,7 +1175,9 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
   {
     Rig rig;
     complete_at_deadline(rig);
-    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 7, EIO);  // The finish's reading.
+    // The finish's reading: the eleventh, after six in the run and four in the
+    // final drain (two for each record channel still open).
+    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 11, EIO);
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "clock");
@@ -755,7 +1187,7 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
     complete_at_deadline(rig);
     // The finish's reading is earlier than the start's: a clock that jumped.
     rig.syscalls.set_clock(CLOCK_MONOTONIC_RAW, platform::TimeSpec{10, 0});
-    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 7, platform::TimeSpec{0, 0});
+    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 11, platform::TimeSpec{0, 0});
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "clock");
@@ -871,6 +1303,13 @@ TEST(ControllerTest, ReportValuesCompareFieldByField) {
   config::MemoryBudget budget;
   budget.available_bytes = 1;
   p.budget = budget;
+  EXPECT_NE(o, p);
+  p = o;
+  p.budget_unread = "x";
+  EXPECT_NE(o, p);
+  p = o;
+  ScriptedOomRecord record;
+  p.oom_record = &record;
   EXPECT_NE(o, p);
 
   const RunPlan plan;

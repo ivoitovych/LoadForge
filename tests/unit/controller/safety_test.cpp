@@ -63,27 +63,32 @@ TEST(EscalationTest, EveryStepHasWordsAndEachGraceIsStrict) {
 
 TEST(LimitsTest, TheDurationIsAlwaysEnforcedAndTheOthersSayWhatTheyAre) {
   const Config plain = base_config();
-  EXPECT_EQ(limit_statuses(plain, std::nullopt),
+  EXPECT_EQ(limit_statuses(plain, std::nullopt, ""),
             (std::vector<LimitStatus>{LimitStatus{"duration", true, "30s"}}));
 
   Config with_memory = plain;
   with_memory.limits.memory = ByteSize::bytes(512 * kMiB);
   EXPECT_EQ(
-      limit_statuses(with_memory, std::nullopt),
+      limit_statuses(with_memory, std::nullopt, ""),
       (std::vector<LimitStatus>{LimitStatus{"duration", true, "30s"},
                                 LimitStatus{"memory", false, "no memory budget could be read"}}));
+  // The reader's reason, when it gave one, travels with the NOT ENFORCED: a
+  // user told only that no budget could be read has nowhere to look.
+  EXPECT_EQ(limit_statuses(with_memory, std::nullopt, "/proc/meminfo: not permitted (x)")[1],
+            (LimitStatus{"memory", false,
+                         "no memory budget could be read: /proc/meminfo: not permitted (x)"}));
   const MemoryBudget budget{1024 * kMiB, std::optional<std::uint64_t>{768 * kMiB}};
-  EXPECT_EQ(limit_statuses(with_memory, budget)[1],
+  EXPECT_EQ(limit_statuses(with_memory, budget, "")[1],
             (LimitStatus{"memory", true, "checked at start against a ceiling of 768MiB"}));
 
   Config workload_memory = plain;
   workload_memory.workloads[0].memory = ByteSize::bytes(kMiB);
-  EXPECT_EQ(limit_statuses(workload_memory, std::nullopt).size(), 2U)
+  EXPECT_EQ(limit_statuses(workload_memory, std::nullopt, "").size(), 2U)
       << "a workload footprint is a memory limit to state";
 
   Config with_temperature = plain;
   with_temperature.limits.max_temperature_c = 95;
-  EXPECT_EQ(limit_statuses(with_temperature, std::nullopt),
+  EXPECT_EQ(limit_statuses(with_temperature, std::nullopt, ""),
             (std::vector<LimitStatus>{
                 LimitStatus{"duration", true, "30s"},
                 LimitStatus{"temperature", false,

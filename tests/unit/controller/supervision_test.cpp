@@ -8,8 +8,11 @@
 #include <gtest/gtest.h>
 
 #include <csignal>
+#include <cstdint>
 #include <optional>
+#include <string>
 
+#include "core/result.hpp"
 #include "platform/exit_status.hpp"
 
 namespace loadforge::controller {
@@ -35,6 +38,7 @@ TEST(FateWordsTest, EveryFateHasWordsAndOnlyCompletedIsClean) {
   EXPECT_EQ(describe(WorkerFate::kControllerLostReported), "worker reported the controller lost");
   EXPECT_EQ(describe(WorkerFate::kFault), "fault");
   EXPECT_EQ(describe(WorkerFate::kKilled), "killed");
+  EXPECT_EQ(describe(WorkerFate::kOomKilled), "killed by the OOM killer");
   EXPECT_EQ(describe(WorkerFate::kStoppedByController), "stopped by the controller");
   EXPECT_EQ(describe(WorkerFate::kTimedOut), "timed out");
   EXPECT_EQ(describe(WorkerFate::kChannelCorrupt), "record channel corrupt");
@@ -45,9 +49,9 @@ TEST(FateWordsTest, EveryFateHasWordsAndOnlyCompletedIsClean) {
   EXPECT_TRUE(is_clean(WorkerFate::kCompleted));
   for (const WorkerFate fate :
        {WorkerFate::kWorkerError, WorkerFate::kStartupFailed, WorkerFate::kControllerLostReported,
-        WorkerFate::kFault, WorkerFate::kKilled, WorkerFate::kStoppedByController,
-        WorkerFate::kTimedOut, WorkerFate::kChannelCorrupt, WorkerFate::kTruncatedEvidence,
-        WorkerFate::kUnrecognised}) {
+        WorkerFate::kFault, WorkerFate::kKilled, WorkerFate::kOomKilled,
+        WorkerFate::kStoppedByController, WorkerFate::kTimedOut, WorkerFate::kChannelCorrupt,
+        WorkerFate::kTruncatedEvidence, WorkerFate::kUnrecognised}) {
     EXPECT_FALSE(is_clean(fate)) << describe(fate);
   }
 }
@@ -81,6 +85,9 @@ TEST(FateWordsTest, EvidenceComparesFieldByField) {
   EXPECT_NE(a, b);
   b = a;
   b.channel_truncated = true;
+  EXPECT_NE(a, b);
+  b = a;
+  b.oom_kill_recorded = true;
   EXPECT_NE(a, b);
 }
 
@@ -145,6 +152,127 @@ TEST(ClassifyTest, SignalsAreFaultsKillsOrTheControllersOwn) {
   honoured.signal_sent = SIGTERM;
   honoured.finished_seen = true;
   EXPECT_EQ(classify(honoured), WorkerFate::kCompleted);
+}
+
+// --- the OOM killer, told from a fault and from a plain kill ------------------------
+
+/// A SIGKILL the controller did not send, with the kernel's record behind it.
+Evidence recorded(ExitStatus status) {
+  Evidence evidence = after(status);
+  evidence.oom_kill_recorded = true;
+  return evidence;
+}
+
+TEST(OomClassifyTest, ASigkillNobodyHereSentIsAnOomKillOnlyWithTheKernelsRecord) {
+  EXPECT_EQ(classify(recorded(signalled(SIGKILL))), WorkerFate::kOomKilled);
+  EXPECT_EQ(classify(after(signalled(SIGKILL))), WorkerFate::kKilled)
+      << "the same death with no record is the fact, not the inference";
+
+  // The controller had asked it to stop with SIGTERM; the SIGKILL was not its.
+  Evidence terminated = recorded(signalled(SIGKILL));
+  terminated.signal_sent = SIGTERM;
+  EXPECT_EQ(classify(terminated), WorkerFate::kOomKilled);
+}
+
+TEST(OomClassifyTest, TheRecordExplainsNoOtherDeath) {
+  // The OOM killer sends SIGKILL and nothing else.
+  EXPECT_EQ(classify(recorded(signalled(SIGTERM))), WorkerFate::kKilled);
+  for (const int signal : {SIGSEGV, SIGBUS, SIGABRT}) {
+    EXPECT_EQ(classify(recorded(signalled(signal))), WorkerFate::kFault)
+        << "a fault stays a fault: " << signal;
+  }
+  // A SIGKILL the controller sent is the controller's, record or not.
+  Evidence escalated = recorded(signalled(SIGKILL));
+  escalated.signal_sent = SIGKILL;
+  EXPECT_EQ(classify(escalated), WorkerFate::kStoppedByController);
+  escalated.stale_when_signalled = true;
+  EXPECT_EQ(classify(escalated), WorkerFate::kTimedOut);
+  // An exit is an exit.
+  EXPECT_EQ(classify(recorded(exited(1))), WorkerFate::kWorkerError);
+  Evidence finished = recorded(exited(0));
+  finished.finished_seen = true;
+  EXPECT_EQ(classify(finished), WorkerFate::kCompleted);
+  // And garbage on the channel outranks the record as it outranks everything.
+  Evidence corrupt = recorded(signalled(SIGKILL));
+  corrupt.channel_corrupt = true;
+  EXPECT_EQ(classify(corrupt), WorkerFate::kChannelCorrupt);
+  EXPECT_EQ(classify(recorded(ExitStatus{0xff})), WorkerFate::kUnrecognised);
+}
+
+TEST(OomCandidateTest, OnlyASigkillTheControllerDidNotSendOnAnIntactChannel) {
+  EXPECT_TRUE(oom_candidate(after(signalled(SIGKILL))));
+  Evidence after_term = after(signalled(SIGKILL));
+  after_term.signal_sent = SIGTERM;
+  EXPECT_TRUE(oom_candidate(after_term)) << "the controller sent SIGTERM, not this SIGKILL";
+
+  Evidence sent = after(signalled(SIGKILL));
+  sent.signal_sent = SIGKILL;
+  EXPECT_FALSE(oom_candidate(sent)) << "the controller's own SIGKILL";
+  Evidence corrupt = after(signalled(SIGKILL));
+  corrupt.channel_corrupt = true;
+  EXPECT_FALSE(oom_candidate(corrupt));
+  EXPECT_FALSE(oom_candidate(after(signalled(SIGTERM))));
+  EXPECT_FALSE(oom_candidate(after(signalled(SIGSEGV))));
+  EXPECT_FALSE(oom_candidate(after(exited(9)))) << "exit code 9 is not signal 9";
+  EXPECT_FALSE(oom_candidate(after(ExitStatus{0x7f | (SIGKILL << 8)})))
+      << "stopped, with SIGKILL's number where the signal goes";
+}
+
+using Count = core::Result<std::uint64_t, std::string>;
+constexpr std::string_view kScope = "/sys/fs/cgroup/run.scope/memory.events";
+
+TEST(JudgeOomTest, EnoughKillsCountedAttributesEveryCandidate) {
+  const OomFinding one = judge_oom_kills(Count{4}, Count{5}, 1, kScope);
+  EXPECT_TRUE(one.attributed);
+  EXPECT_EQ(one.note,
+            "OOM kill: /sys/fs/cgroup/run.scope/memory.events counted 1 during the run, one or "
+            "more for each of the 1 worker(s) killed by a SIGKILL the controller did not send");
+  EXPECT_TRUE(judge_oom_kills(Count{0}, Count{2}, 2, kScope).attributed) << "exactly as many";
+  EXPECT_TRUE(judge_oom_kills(Count{0}, Count{3}, 2, kScope).attributed)
+      << "more: something else in the cgroup was killed too, and each worker still has one";
+}
+
+TEST(JudgeOomTest, NoKillCountedLeavesAKill) {
+  const OomFinding none = judge_oom_kills(Count{7}, Count{7}, 1, kScope);
+  EXPECT_FALSE(none.attributed);
+  EXPECT_EQ(none.note,
+            "not attributed to the OOM killer: /sys/fs/cgroup/run.scope/memory.events counted no "
+            "OOM kill during the run");
+}
+
+TEST(JudgeOomTest, FewerKillsThanCandidatesAttributesNoneBecauseACountDoesNotSayWhich) {
+  const OomFinding few = judge_oom_kills(Count{0}, Count{1}, 2, kScope);
+  EXPECT_FALSE(few.attributed);
+  EXPECT_EQ(few.note,
+            "not attributed to the OOM killer: /sys/fs/cgroup/run.scope/memory.events counted 1 "
+            "OOM kill(s) during the run for 2 workers killed by a SIGKILL the controller did not "
+            "send, and a count does not say which");
+}
+
+TEST(JudgeOomTest, ACountThatWentBackIsNotTheSameCount) {
+  const OomFinding back = judge_oom_kills(Count{5}, Count{2}, 1, kScope);
+  EXPECT_FALSE(back.attributed);
+  EXPECT_EQ(back.note,
+            "not attributed to the OOM killer: /sys/fs/cgroup/run.scope/memory.events went from 5 "
+            "to 2, so it is not the count that was read before the run");
+}
+
+TEST(JudgeOomTest, ACountThatCouldNotBeReadAtEitherEndAttributesNothingAndSaysWhy) {
+  const OomFinding no_before =
+      judge_oom_kills(Count{std::string{"x: not permitted (y)"}}, Count{9}, 1, kScope);
+  EXPECT_FALSE(no_before.attributed);
+  EXPECT_EQ(no_before.note,
+            "not attributed to the OOM killer: the OOM-kill count could not be read before the "
+            "run: x: not permitted (y)");
+  const OomFinding no_after = judge_oom_kills(
+      Count{0}, Count{std::string{"x: gone since it was last read (z)"}}, 1, kScope);
+  EXPECT_FALSE(no_after.attributed);
+  EXPECT_EQ(no_after.note,
+            "not attributed to the OOM killer: the OOM-kill count could not be read after the "
+            "run: x: gone since it was last read (z)");
+  EXPECT_FALSE(judge_oom_kills(Count{std::string{"a"}}, Count{std::string{"b"}}, 1, kScope)
+                   .note.ends_with("b"))
+      << "the earlier failure is the one reported";
 }
 
 TEST(ClassifyTest, ACorruptChannelOutranksEverythingElse) {

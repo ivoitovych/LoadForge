@@ -450,13 +450,18 @@ class Validator {
 
 }  // namespace
 
+namespace {
+
 /// A fault that concerns the whole document rather than one key. Parameters
 /// by value and moved into the aggregate (journal §1.13): building the
 /// ConfigError from allocating expressions in place leaves a cleanup edge in
-/// the initialiser that no test can take.
+/// the initialiser that no test can take. Internal: nothing outside this file
+/// calls it, and the header does not declare it.
 ConfigError whole_document_fault(std::string origin, std::uint32_t line, std::string message) {
   return ConfigError{std::move(origin), std::string{}, line, std::move(message)};
 }
+
+}  // namespace
 
 core::Result<Config, ConfigError> parse(std::string_view text, std::string origin) {
   // The parser's result is scoped so that only the table outlives it: the

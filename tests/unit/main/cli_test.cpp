@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cerrno>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <sstream>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "core/byte_size.hpp"
 #include "core/duration.hpp"
 #include "platform/clock.hpp"
 #include "platform/syscalls.hpp"
@@ -300,6 +302,80 @@ TEST(Cli, RunStressReportsAControllerFailureAndTheUncleanRun) {
   EXPECT_NE(report.str().find("0 of 2 worker(s) completed"), std::string::npos) << report.str();
   EXPECT_NE(report.str().find("evidence truncated"), std::string::npos) << report.str();
   EXPECT_TRUE(quiet.str().empty()) << quiet.str();
+}
+
+// --- the memory budget and the OOM-kill record, read through the run's seam ----------
+//
+// run_stress reads both through the seam it is given, so over the fake they
+// come from the fake's read script, in the order the readers open their
+// files: /proc/meminfo, then /proc/self/cgroup for the budget, then
+// /proc/self/cgroup again for the record. An empty /proc/self/cgroup names no
+// memory cgroup. How each source is read is the reader's own business and its
+// own tests'; these check that what it reads reaches the controller.
+
+/// Two workers that exit at once with nothing sent.
+testing::FakeSyscalls& two_quick_exits(testing::FakeSyscalls& syscalls, int first_status) {
+  syscalls.advance_clocks_per_read(10'000'000);
+  syscalls.script_forks({{1001, 0}, {1002, 0}});
+  syscalls.script_nonblocking_reaps(
+      {{platform::Reaped{1001, first_status}, 0}, {platform::Reaped{1002, 0}, 0}});
+  return syscalls;
+}
+
+void serve_machine(testing::FakeSyscalls& syscalls, const std::string& meminfo) {
+  syscalls.script_reads({{meminfo, 0}, {"", 0}, {"", 0}, {"", 0}});
+}
+
+TEST(Cli, RunStressChecksMemoryAgainstTheBudgetItReads) {
+  config::Config config = two_workloads();
+  config.workloads[0].memory = core::ByteSize::bytes(std::uint64_t{512} << 20U);
+  testing::FakeSyscalls syscalls;
+  serve_machine(two_quick_exits(syscalls, 0), "MemAvailable:   1048576 kB\n");
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", out, err), 3);
+  EXPECT_NE(out.str().find("limit memory: enforced (checked at start against a ceiling of 1GiB)"),
+            std::string::npos)
+      << out.str();
+
+  config.workloads[0].memory = core::ByteSize::bytes(std::uint64_t{2} << 30U);
+  testing::FakeSyscalls refusing;
+  serve_machine(two_quick_exits(refusing, 0), "MemAvailable:   1048576 kB\n");
+  std::ostringstream quiet;
+  std::ostringstream refusal;
+  EXPECT_EQ(run_stress(refusing, config, "/opt/loadforge", quiet, refusal), 1);
+  EXPECT_NE(refusal.str().find("loadforge: memory: workload.first: "), std::string::npos)
+      << refusal.str();
+  EXPECT_EQ(refusing.fork_count(), 0) << "refused before any worker started";
+}
+
+TEST(Cli, RunStressSaysWhyMemoryIsNotEnforcedWhenTheBudgetCannotBeRead) {
+  config::Config config = two_workloads();
+  config.limits.memory = core::ByteSize::bytes(std::uint64_t{512} << 20U);
+  testing::FakeSyscalls syscalls;
+  serve_machine(two_quick_exits(syscalls, 0), "MemTotal:       16479424 kB\n");
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", out, err), 3);
+  EXPECT_NE(out.str().find("limit memory: NOT ENFORCED (no memory budget could be read: "
+                           "/proc/meminfo: not offered by this kernel (no MemAvailable line"),
+            std::string::npos)
+      << out.str();
+}
+
+TEST(Cli, RunStressConsultsTheOomRecordForASigkillNobodySent) {
+  testing::FakeSyscalls syscalls;
+  serve_machine(two_quick_exits(syscalls, SIGKILL), "MemAvailable:   1048576 kB\n");
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", out, err), 3);
+  EXPECT_NE(out.str().find("worker 0 (pid 1001): killed; killed by signal 9"), std::string::npos)
+      << out.str();
+  EXPECT_NE(out.str().find("not attributed to the OOM killer: the OOM-kill count could not be "
+                           "read before the run: /proc/self/cgroup: not offered by this kernel "
+                           "(this process is in no memory cgroup"),
+            std::string::npos)
+      << out.str();
 }
 
 TEST(Cli, DiagnosticsGoToStderrNotStdout) {

@@ -553,6 +553,102 @@ classes = ["P1"]
 tiers   = ["T1"]'
 expect "a module declared twice FAILS"                       1 $? "declared twice" "$out"
 
+# The EOWNERDEAD obligation, per process-shared lock (IMPLEMENTATION §4, M1's
+# second new gate). The real tree has none, and the gate must say so rather
+# than say nothing; a fixture tree with an undeclared lock must be refused.
+out="$("$ROOT/tools/check-test-obligations.py" 2>&1)"
+expect "the real tree has no lock and says so"               0 $? "none in src/ and none declared" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]'
+expect "a tree without locks owes nothing, explicitly"       0 $? "no EOWNERDEAD obligation is owed" "$out"
+
+cat > "$ob/src/core/shared.cpp" <<'CPP'
+#include <pthread.h>
+void make(pthread_mutexattr_t* attributes) {
+  pthread_mutexattr_setpshared(attributes, PTHREAD_PROCESS_SHARED);
+  pthread_mutexattr_setrobust(attributes, PTHREAD_MUTEX_ROBUST);
+}
+CPP
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P5"]
+tiers   = ["T1"]'
+expect "an undeclared process-shared lock FAILS"             1 $? "declares no process-shared lock" "$out"
+
+printf 'void make() { /* sem_init */ }\n' > "$ob/src/core/shared.cpp"
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P5"]
+tiers   = ["T1"]'
+expect "a primitive named only in a comment still FAILS"     1 $? "uses sem_init" "$out"
+
+cat > "$ob/src/core/shared.cpp" <<'CPP'
+#include <pthread.h>
+void make(pthread_mutexattr_t* attributes) {
+  pthread_mutexattr_setrobust(attributes, PTHREAD_MUTEX_ROBUST);
+}
+CPP
+mkdir -p "$ob/tests/supervision"
+lock_ledger() { # robustness-test, [classes]
+  led "[[module]]
+path    = \"src/core\"
+classes = ${2:-[\"P1\", \"P5\"]}
+tiers   = [\"T1\", \"T7\"]
+process_shared_locks = [
+  { name = \"region lock\", file = \"src/core/shared.cpp\", robustness_test = \"$1\" },
+]"; }
+lock_ledger "tests/supervision/no_such_test.cpp"
+expect "a lock whose robustness test is missing FAILS"       1 $? "not a file under tests/supervision" "$out"
+
+printf 'int dummy;\n' > "$ob/tests/unit/lock_test.cpp"
+lock_ledger "tests/unit/lock_test.cpp"
+expect "a robustness test outside the T7 tier FAILS"         1 $? "not a file under tests/supervision" "$out"
+
+printf 'int robust;\n' > "$ob/tests/supervision/lock_test.cpp"
+lock_ledger "tests/supervision/lock_test.cpp"
+expect "a robustness test that names no lock FAILS"          1 $? "does not carry" "$out"
+
+printf '// LOADFORGE EOWNERDEAD TEST: region lock two\n' >> "$ob/tests/supervision/lock_test.cpp"
+lock_ledger "tests/supervision/lock_test.cpp"
+expect "a robustness test for a different lock FAILS"        1 $? "does not carry" "$out"
+
+printf '// LOADFORGE EOWNERDEAD TEST: region lock\n' >> "$ob/tests/supervision/lock_test.cpp"
+lock_ledger "tests/supervision/lock_test.cpp" '["P1", "P6"]'
+expect "a lock in a module without P5 FAILS"                 1 $? "does not declare P5" "$out"
+
+lock_ledger "tests/supervision/lock_test.cpp"
+expect "a declared lock with its robustness test passes"     0 $? "1 lock(s) declared" "$out"
+
+printf 'void make() {}\n' > "$ob/src/core/shared.cpp"
+lock_ledger "tests/supervision/lock_test.cpp"
+expect "a lock declared where there is none FAILS"           1 $? "uses no process-shared lock" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P5"]
+tiers   = ["T1"]
+process_shared_locks = [{ name = "region lock", file = "src/core/shared.cpp" }]'
+expect "a lock entry missing a field FAILS"                  1 $? "needs exactly" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P5"]
+tiers   = ["T1"]
+process_shared_locks = "src/core/shared.cpp"'
+expect "process_shared_locks that is not a list FAILS"       1 $? "must be a list of tables" "$out"
+
+rm -f "$ob/src/core/shared.cpp"
+mkdir -p "$ob/src/core/trap.cpp"
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]'
+expect "a source file that cannot be read FAILS"             1 $? "cannot be read" "$out"
+rm -rf "$ob/src/core/trap.cpp" "$ob/tests/supervision"
+
 rm -rf "$ob"
 
 echo "check-dco.sh"
@@ -733,6 +829,70 @@ printf 'FetchContent_Declare(gtest GIT_REPOSITORY https://example.invalid/x.git)
 out="$("$ROOT/tools/check-fetch-centralization.sh" "$fz" 2>&1)"
 expect "the same fetch in the reviewed module passes" 0 $? "0 violation(s)" "$out"
 rm -rf "$fz"
+
+echo "check-no-test-hooks.sh"
+# Real binaries, compiled here, because the gate reads real symbol tables and a
+# hand-written imitation of nm's output would agree with whatever the gate
+# believes (F21). Each refused binary differs from the passing one in exactly
+# the thing the case is about. No compiler is a FAILURE, not a skip: the cases
+# that prove the gate can refuse are the only ones that prove it is a gate.
+HOOKS="$ROOT/tools/check-no-test-hooks.sh"
+th="$(mktemp -d)"
+hooks() { out="$("$HOOKS" "$@" 2>&1)"; return $?; }
+build() { # name, extra source; every binary gets a loadforge:: symbol unless told not to
+  { printf 'namespace loadforge::worker { int run(int argc) { return argc - 1; } }\n'
+    printf '%s\n' "$2"
+    printf 'int main(int argc, char**) { return loadforge::worker::run(argc); }\n'
+  } > "$th/$1.cpp"
+  "${CXX:-c++}" -std=c++20 -O0 -o "$th/$1" "$th/$1.cpp" 2> "$th/$1.log"
+}
+if build clean '' \
+   && build fake 'namespace loadforge::fake_worker { int misbehave() { return 7; } }
+                  int poke() { return loadforge::fake_worker::misbehave(); }' \
+   && build fakes 'namespace loadforge::testing { struct FakeSyscalls { int answer(); };
+                   int FakeSyscalls::answer() { return 3; } }
+                   int poke() { return loadforge::testing::FakeSyscalls{}.answer(); }' \
+   && build gtest 'namespace testing { class Test { public: virtual ~Test(); }; Test::~Test() = default; }' \
+   && build selector '#include <cstdlib>
+                      const char* poke() { return std::getenv("LOADFORGE_FAKE_WORKER"); }' \
+   && build lookalike 'namespace loadforge::attesting { int fine() { return 1; } }
+                       int poke() { return loadforge::attesting::fine(); }'; then
+  hooks "$th/clean"
+  expect "a binary with no test hook passes"                   0 $? "0 test hook(s), ok" "$out"
+  hooks "$th/fake"
+  expect "a fake-worker symbol FAILS, named"                   1 $? "TEST HOOK: .*loadforge::fake_worker::misbehave" "$out"
+  hooks "$th/fakes"
+  expect "a test-fake symbol FAILS, named"                     1 $? "TEST HOOK: .*loadforge::testing::FakeSyscalls" "$out"
+  hooks "$th/gtest"
+  expect "a GoogleTest symbol FAILS, named"                    1 $? "TEST HOOK: .*testing::Test" "$out"
+  hooks "$th/selector"
+  expect "the fake worker's selector string FAILS"             1 $? "the selector string" "$out"
+  hooks "$th/lookalike"
+  expect "a name that merely ends in 'testing' passes"         0 $? "0 test hook(s), ok" "$out"
+
+  cp "$th/fake" "$th/stripped" && strip "$th/stripped"
+  hooks "$th/stripped"
+  expect "a stripped binary FAILS: nothing read is not a pass" 1 $? "no symbol table" "$out"
+  printf 'int main() { return 0; }\n' > "$th/foreign.cpp"
+  "${CXX:-c++}" -O0 -o "$th/foreign" "$th/foreign.cpp" 2> "$th/foreign.log"
+  hooks "$th/foreign"
+  expect "a binary with no loadforge:: symbol FAILS"           1 $? "not a LoadForge binary" "$out"
+else
+  echo "  FAIL  could not compile the test-hook fixtures with ${CXX:-c++}:"
+  cat "$th"/*.log 2>/dev/null | sed 's/^/          /'
+  fail=$((fail + 1))
+fi
+: > "$th/empty"
+hooks "$th/empty"
+expect "an empty file FAILS"                                   1 $? "empty" "$out"
+printf 'not an object file\n' > "$th/text"
+hooks "$th/text"
+expect "a file nm cannot read FAILS"                           1 $? "nm could not read it" "$out"
+hooks "$th/no-such-binary"
+expect "a missing binary FAILS"                                1 $? "not a file" "$out"
+hooks
+expect "no argument FAILS"                                     1 $? "usage" "$out"
+rm -rf "$th"
 
 echo; echo "  tooling tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -16,7 +16,10 @@ and that the tests it promises exist:
   * every ledger entry names a directory that still exists;
   * every declared path class is one of the seven in the taxonomy;
   * every declared tier has test files that plausibly serve it;
-  * every declared fixture exists on disk.
+  * every declared fixture exists on disk;
+  * every process-shared or robust lock in src/ is declared, with the
+    robustness test that kills its holder and proves a survivor recovers via
+    EOWNERDEAD (docs/IMPLEMENTATION.md §4, M1's second new gate).
 
 Built to the F20 standard, because a gate is only worth what it does with
 evidence it cannot read: a ledger that does not parse is a failure, and an empty
@@ -34,7 +37,7 @@ CLASSES = {"P1", "P2", "P3", "P4", "P5", "P6", "P7"}
 # universal and deliberately not declarable per module -- see the ledger header.
 TIERS = {"T1", "T2", "T3", "T4", "T5", "T5b", "T6", "T7", "T8", "T10", "T11"}
 REQUIRED_FIELDS = {"path", "classes", "tiers"}
-OPTIONAL_FIELDS = {"fixtures", "fixture_builders", "note"}
+OPTIONAL_FIELDS = {"fixtures", "fixture_builders", "note", "process_shared_locks"}
 
 # A file named as a fixture_builder must SAY it is one. Without a marker the
 # check degenerates into "some file exists", which is the vacuous shape this
@@ -74,6 +77,46 @@ TIER_FILE_MARKERS = {
     "T8": [("tests/CMakeLists.txt", "add_test(")],
 }
 
+# THE EOWNERDEAD OBLIGATION, PER LOCK
+# -----------------------------------
+# docs/PLAN.md §4.6: a worker can die holding a process-shared lock, and unless
+# the lock is robust and every acquirer handles EOWNERDEAD, one dead worker
+# deadlocks every survivor. IMPLEMENTATION §4 turns that into an obligation per
+# lock -- kill the holder mid-critical-section, assert a survivor recovers --
+# and this gate makes the obligation impossible to forget: a source file that
+# uses one of these primitives must be named by a declared lock, and each
+# declared lock must name its robustness test.
+#
+# Matched as written in the raw text, comments included. A comment that names
+# one of these is flagged too, and that is the safe side to err on: an
+# undeclared lock passing because it sat next to a comment-stripping bug would
+# be the failure this gate exists to prevent. A lock hand-rolled from atomics
+# in shared memory has no name to match; the design's answer to that is to have
+# none (the heartbeat region is a seqlock, docs/JOURNAL.md §2.15), and review's.
+LOCK_PRIMITIVES = (
+    "PTHREAD_PROCESS_SHARED",
+    "PTHREAD_MUTEX_ROBUST",
+    "pthread_mutexattr_setpshared",
+    "pthread_mutexattr_setrobust",
+    "pthread_mutex_consistent",
+    "pthread_rwlockattr_setpshared",
+    "pthread_condattr_setpshared",
+    "pthread_barrierattr_setpshared",
+    "pthread_spin_init",
+    "sem_init",
+    "sem_open",
+    "SYS_futex",
+    "FUTEX_WAIT",
+    "interprocess_mutex",
+)
+LOCK_FIELDS = {"name", "file", "robustness_test"}
+# The test that discharges the obligation kills a real holder: a supervision
+# test (T7), where processes are really killed (IMPLEMENTATION §2.3, P6). And it
+# must say which lock it is for, so one test cannot be named for every lock.
+ROBUSTNESS_TEST_DIRECTORY = "tests/supervision"
+ROBUSTNESS_TEST_MARKER = "LOADFORGE EOWNERDEAD TEST:"
+SOURCE_SUFFIXES = {".cpp", ".hpp", ".in"}
+
 failed = False
 
 
@@ -105,6 +148,105 @@ def source_modules(root: pathlib.Path) -> set[str]:
         if any(child.suffix in {".cpp", ".hpp", ".in"} for child in directory.iterdir()):
             modules.add(directory.relative_to(root).as_posix())
     return modules
+
+
+def lock_uses(root: pathlib.Path) -> dict[str, list[str]]:
+    """Every source file under src/ that names a lock primitive, and which ones.
+
+    A file that cannot be read is a failure, not a file without locks.
+    """
+    uses: dict[str, list[str]] = {}
+    src = root / "src"
+    if not src.is_dir():
+        return uses
+    for path in sorted(src.rglob("*")):
+        if path.suffix not in SOURCE_SUFFIXES:
+            continue
+        relative = path.relative_to(root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as error:
+            fail(f"{relative}: cannot be read to look for process-shared locks: {error}")
+            continue
+        found = [primitive for primitive in LOCK_PRIMITIVES if primitive in text]
+        if found:
+            uses[relative] = found
+    return uses
+
+
+def marked_locks(test: pathlib.Path) -> set[str]:
+    """The lock names a robustness test declares itself for, one per marker line.
+    Whole names, so a test for "region lock two" is not one for "region lock"."""
+    names = set()
+    for line in test.read_text(encoding="utf-8", errors="replace").splitlines():
+        if ROBUSTNESS_TEST_MARKER in line:
+            names.add(line.split(ROBUSTNESS_TEST_MARKER, 1)[1].strip())
+    return names
+
+
+def check_locks(root: pathlib.Path, declared: dict[str, dict]) -> str:
+    """The EOWNERDEAD obligation: every lock found is declared, every declared
+    lock is found and has its robustness test. Returns the summary line."""
+    uses = lock_uses(root)
+    named: dict[str, list[str]] = {}
+    count = 0
+    for path, entry in sorted(declared.items()):
+        locks = entry.get("process_shared_locks", [])
+        if not isinstance(locks, list) or any(not isinstance(lock, dict) for lock in locks):
+            fail(f"{path}: 'process_shared_locks' must be a list of tables")
+            continue
+        for lock in locks:
+            count += 1
+            if set(lock) != LOCK_FIELDS or not all(
+                isinstance(lock[field], str) and lock[field] for field in LOCK_FIELDS
+            ):
+                fail(
+                    f"{path}: a process-shared lock needs exactly {sorted(LOCK_FIELDS)}, "
+                    f"each a non-empty string; got {sorted(lock)}"
+                )
+                continue
+            name, file, test = lock["name"], lock["file"], lock["robustness_test"]
+            named.setdefault(file, []).append(name)
+            if pathlib.PurePosixPath(file).parent.as_posix() != path:
+                fail(f"{path}: lock '{name}' is in {file}, which is not this module's")
+            elif file not in uses:
+                fail(
+                    f"{path}: lock '{name}' is declared in {file}, which uses no "
+                    "process-shared lock primitive. Remove the entry: a declaration "
+                    "that outlives its lock is a judgement nobody is reviewing."
+                )
+            if "P5" not in entry.get("classes", []):
+                fail(
+                    f"{path}: holds process-shared lock '{name}' but does not declare P5. "
+                    "A lock two processes share is a concurrency path."
+                )
+            target = root / test
+            if not test.startswith(ROBUSTNESS_TEST_DIRECTORY + "/") or not target.is_file():
+                fail(
+                    f"{path}: lock '{name}' names robustness test '{test}', which is not a "
+                    f"file under {ROBUSTNESS_TEST_DIRECTORY}/. The test kills a real holder "
+                    "mid-critical-section, which is the supervision tier's work."
+                )
+            elif name not in marked_locks(target):
+                fail(
+                    f"{path}: robustness test '{test}' does not carry "
+                    f"'{ROBUSTNESS_TEST_MARKER} {name}'. A test that does not say which "
+                    "lock it kills the holder of is not evidence that any lock recovers."
+                )
+    for file, primitives in sorted(uses.items()):
+        if file not in named:
+            fail(
+                f"{file} uses {', '.join(primitives)} and declares no process-shared lock "
+                "in the ledger. Every process-shared lock owes a robustness test: kill the "
+                "holder mid-critical-section and prove a survivor recovers via EOWNERDEAD "
+                "(docs/PLAN.md §4.6, docs/IMPLEMENTATION.md §4)."
+            )
+    if not uses and not count:
+        return (
+            "process-shared locks: none in src/ and none declared, so no EOWNERDEAD "
+            "obligation is owed (docs/PLAN.md §4.6 prefers designs with none)"
+        )
+    return f"process-shared locks: {len(uses)} source file(s) use one, {count} lock(s) declared"
 
 
 def tier_is_served(root: pathlib.Path, tier: str) -> bool:
@@ -309,6 +451,8 @@ def main() -> int:
             "that outlives its module is a judgement nobody is reviewing."
         )
 
+    locks = check_locks(root, declared)
+
     for path in sorted(declared):
         if not failed:
             entry = declared[path]
@@ -317,7 +461,8 @@ def main() -> int:
                 f"tiers={','.join(entry['tiers']) or '-'}"
             )
 
-    print(f"\ntest-obligation check: {len(declared)} module(s), {'FAILED' if failed else 'ok'}")
+    print(f"\n{locks}")
+    print(f"test-obligation check: {len(declared)} module(s), {'FAILED' if failed else 'ok'}")
     return 1 if failed else 0
 
 

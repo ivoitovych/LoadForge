@@ -119,6 +119,12 @@ class WorkerLauncher {
   /// this check the worker runs on with no supervisor -- the exact orphan the
   /// signal exists to prevent.
   ///
+  /// Once the race check has passed, the child starts a session of its own
+  /// (Syscalls::start_session), and so leads a process group whose id is its
+  /// pid: whatever it forks later stays in that group, and the supervisor can
+  /// kill the group when the worker is gone. The death signal cannot do that
+  /// job, because the kernel clears it in the child of every fork.
+  ///
   /// `inherited_fds` are the descriptors this worker must carry across exec --
   /// its heartbeat region, its record pipe. Everything the supervisor opens is
   /// close-on-exec, so a worker starts with exactly the descriptors named here

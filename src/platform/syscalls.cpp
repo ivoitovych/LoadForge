@@ -120,6 +120,10 @@ core::Result<core::Ok, SyscallError> RealSyscalls::set_parent_death_signal(int s
 
 pid_t RealSyscalls::parent_pid() { return ::getppid(); }
 
+// Its answer is dropped by contract: see the declaration. In the one place it
+// is called, a freshly forked child, setsid cannot refuse.
+void RealSyscalls::start_session() { (void)::setsid(); }
+
 core::Result<Reaped, SyscallError> RealSyscalls::wait_any() {
   int status = 0;
   const pid_t pid = ::waitpid(-1, &status, 0);

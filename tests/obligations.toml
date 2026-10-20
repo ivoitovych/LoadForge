@@ -31,6 +31,27 @@
 #
 # T0 (static), T0b (gate tests) and T9 (sanitizers) are never listed: they are
 # universal. A blank 'tiers' is therefore a real exemption, never an oversight.
+#
+# PROCESS-SHARED LOCKS, ONE ENTRY EACH
+#
+# docs/PLAN.md §4.6: a worker can die holding a process-shared lock, and unless
+# the lock is robust and every acquirer handles EOWNERDEAD, one dead worker
+# deadlocks every survivor. So every such lock is declared in its module's row,
+# with the supervision test that kills its holder mid-critical-section and
+# proves a survivor recovers:
+#
+#   process_shared_locks = [
+#     { name = "...", file = "src/<module>/<file>", robustness_test = "tests/supervision/<file>" },
+#   ]
+#
+# The gate finds the primitives in src/ by name (PTHREAD_PROCESS_SHARED,
+# pthread_mutexattr_setrobust, sem_init, futexes and the like) and refuses a file
+# that uses one without a declaration; the test must carry the line
+# "LOADFORGE EOWNERDEAD TEST: <name>", and the module must declare P5.
+#
+# There are none today, by design: the one piece of state workers and the
+# controller share is the heartbeat region, single-writer seqlock slots with no
+# lock to die holding (docs/JOURNAL.md §2.15). The gate says so on every run.
 
 [[module]]
 path    = "src/core"
@@ -82,7 +103,12 @@ nothing. The pipe is driven against the kernel too -- a forked child sends \
 three records, one of them larger than the pipe buffer, and the parent polls \
 and drains to the end -- and the seam's own answers (POLLHUP with bytes still \
 queued, POLLNVAL for a closed number, a negative number ignored, EPIPE, EINVAL \
-past RLIMIT_NOFILE, EMFILE) are in real_syscalls_test.cpp."""
+past RLIMIT_NOFILE, EMFILE) are in real_syscalls_test.cpp. \
+\
+No process-shared lock: the region is the design PLAN 4.6 prefers to one that \
+recovers, and the lock-obligation gate checks on every run that src/ holds \
+none undeclared. The library is linked by the real worker and, without the \
+real worker's loop, by the test-only fake worker (ADR 0003)."""
 
 [[module]]
 path    = "src/worker"
@@ -129,8 +155,84 @@ the control write, the release. T7 is tests/supervision: the shipped binary \
 as the worker, N >= 2 in every case -- two complete for the duration, one is \
 killed from outside while the other completes, and the controller itself is \
 killed and every orphan is reaped by the test as subreaper and found dead by \
-the parent-death signal within a bounded time. The catalogue's remaining rows \
-need the fake-worker executable, which lands next."""
+the parent-death signal within a bounded time. \
+\
+The misbehaviour catalogue of IMPLEMENTATION 4 is tests/supervision/catalogue_test.cpp: \
+the controller runs tests/support/fake_worker, a second implementation of the \
+worker contract that misbehaves on demand, and every reachable row is a test \
+with N >= 2 -- exit 0 with no zombie, exit non-zero, SIGSEGV, SIGBUS and SIGABRT \
+with the timeline kept, a silent hang holding its descriptors, a spin beside a \
+slow worker that completes, a record pipe closed early, a truncated record, a \
+bad checksum, SIGTERM ignored and SIGKILL one grace later, and (N = 3) \
+grandchildren left spinning, which the controller now kills with their worker's \
+process group as it reaps the worker. A worker deaf to its control pipe is \
+ended by the parent-death signal alone when the controller is killed: the one \
+test of that signal no hang-up can pass for. OOM is \
+below; the process-shared lock row has no lock to test (see the header). \
+\
+OOM is told from a fault and from a plain kill by the kernel's own record: \
+a SIGKILL the controller did not send is kOomKilled only when the workers' \
+cgroup's OOM-kill count, read before the first fork and after the last reap, \
+rose by at least as many as there are such deaths; otherwise every one stays \
+kKilled and its report says why. The table row, the candidate rule and the \
+judgement (every outcome: enough, none, too few, a count that went back, \
+unreadable at either end) are pure and tested row by row; the loop is driven \
+against the controller's own fake of the record's contract \
+(resources/oom_kill_record.hpp), never the reader's tests (docs/adr/0003). \
+The real OOM kill of a real fake worker, the catalogue's last open row, is \
+a T7 test still to write now that both halves exist; the kernel's side of it -- a child really OOM-killed moves its \
+cgroup's count by one, and a kill -9 moves it by none -- is the reader's \
+T8, in tests/unit/resources."""
+
+[[module]]
+path             = "src/resources"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2", "T8"]
+fixture_builders = [
+  "tests/unit/resources/cgroup_test.cpp",
+  "tests/unit/resources/memory_budget_test.cpp",
+  "tests/unit/resources/cgroup_oom_record_test.cpp",
+]
+note             = """
+What the kernel lets this process use and what it records when that runs \
+out: MemAvailable from /proc/meminfo, the memory cgroup's limit under v1 \
+(memory.stat's hierarchical_memory_limit, the kernel's own effective figure) \
+and v2 (the lowest memory.max from the cgroup up to its mount), found through \
+/proc/self/cgroup AND /proc/self/mountinfo -- the second because a v1 \
+container without a cgroup namespace is mounted at its own cgroup, and a \
+reader that joined the two paths would find nothing and call it no limit -- \
+and the cgroup's OOM-kill count (memory.events, memory.oom_control). \
+\
+P7 is the module's subject: every source -- meminfo, the membership, \
+mountinfo, the directory probe, each limit file, the count -- is put in each \
+state it can be in, present, absent, denied, malformed, unreadable, and for \
+the count, which is read more than once, vanished. Absent is a reading in \
+exactly three places (no cgroups at all, no memory cgroup, a v2 level with \
+no memory.max) and a failure everywhere else, because "could not read the \
+limit" must never become "no limit". The trees are BUILT per test and read \
+through RealSyscalls; denial is aimed at one source at a time through \
+FakeSyscalls' read script (P2, T2), since the tests run as root and a \
+mode-000 file arrives from a clone readable; vanished is made by reading the \
+count and removing it. \
+\
+P3: the v1 unlimited sentinel on every page size and the floor below it, \
+the largest limit a page counter holds and one past it, the largest kB count \
+a byte count can carry and one past it, every escape mountinfo writes and \
+the ones it does not, a mount root that prefixes a path as text but not as \
+a path. \
+\
+T8 reads the real machine and checks it against the kernel's other figures: \
+the located cgroup's cgroup.procs lists the test's pid; MemAvailable is no \
+more than sysconf's physical memory; on v1 the hierarchical limit is no \
+higher than any visible level's own; the count does not move for a real \
+kill -9; and where a v1 memory cgroup can be made (root, v1 or hybrid), a \
+child really OOM-killed under a 16 MiB limit dies of SIGKILL and moves its \
+cgroup's count by exactly one. On a v2 host that last test skips and says \
+why: a leaf that holds processes cannot be given a memory-limited child. \
+The binary's own run with memory configured must say the limit is enforced \
+(cli_stress_enforces_memory), so a reader that refused a real machine fails \
+there and not only in the field.\
+"""
 
 [[module]]
 path    = "src/reporters"
@@ -170,7 +272,13 @@ exec, and the three ways a worker can fail before it does any work. Two of \
 those are unreachable against a real kernel and exist only because the seam \
 does -- a fork that fails needs RLIMIT_NPROC, which is not enforced for the \
 privileged process CI runs as, and the PR_SET_PDEATHSIG race needs the \
-supervisor to die inside a window of a few instructions. \
+supervisor to die inside a window of a few instructions. Once past the race \
+check the child starts a session of its own (setsid), so that whatever a \
+worker forks stays in a group the controller can kill after the worker is \
+reaped: the death signal is cleared across fork and cannot. start_session has \
+no failure arm, because the child of a fork never leads a group and so cannot \
+be refused; its line runs in the test process, where setsid is made to be \
+refused, and a real child shows it leads its own session and group. \
 \
 WorkerPool adds the supervisor's half: spawning N, reaping them, telling one \
 worker's death from another's. Every test there runs N >= 2, because with one \

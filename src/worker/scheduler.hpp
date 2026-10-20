@@ -102,9 +102,13 @@ class NullWorkload {
 
  private:
   /// The reason to leave that the controller's slot gives, if any: unreadable,
-  /// stale, or never beat past the allowance.
+  /// stale, or never beat past the allowance. `last_read_ns` is when the slot
+  /// last gave a consistent sample, kept by the caller across ticks: a slot
+  /// that cannot be read is a reason to leave only once it has stayed so for
+  /// longer than the allowance.
   [[nodiscard]] std::optional<StopReason> controller_gone(const platform::TimePoint& now,
-                                                          std::int64_t elapsed_ns) const;
+                                                          std::int64_t elapsed_ns,
+                                                          std::int64_t& last_read_ns) const;
 
   /// One interval spent watching the control pipe: a reason to stop, nothing
   /// (the interval passed), or a failure of the pipe itself.
