@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/simd/x86 and nothing else.
+
+[[module]]
+path    = "src/primitives/simd/x86"
+classes = ["P1", "P3"]
+tiers   = ["T1", "T6"]
+note    = """
+The AVX2 (FMA3) panel kernel of the dense-linear workload: the only directory \
+where x86 intrinsics appear. Built and measured on x86-64 only (the \
+completeness check expects it nowhere else), never in a LOADFORGE_SIMD=scalar \
+build. P1: the column-block, k and row loops at the depths the workload uses, \
+including depth 1. P3: the first and last tile and panel, all of k, buffers \
+at odd addresses (unaligned loads and stores), a subnormal kept, NaN and \
+infinity carried, signed zeros, and the one case that tells a fused \
+multiply-add from a rounded product. T1 is panel_kernel_suite.hpp's \
+PanelKernelSuite: every entry equal, bit for bit, to the std::fma model of \
+panel.hpp. T6 is its PanelKernelDeterminism: the whole product at every \
+depth equal to the same model, which is architecture-neutral, so this \
+kernel and the NEON one give each other's bits; the workload's committed \
+digests check that across machines. No AVX-512 kernel: CI's x86-64 runners \
+do not all have AVX-512, so one could not be measured to 100% there."""

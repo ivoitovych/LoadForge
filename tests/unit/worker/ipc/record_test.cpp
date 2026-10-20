@@ -634,7 +634,7 @@ TEST(RecordSourceTest, ReadFailuresAreReportedAndInterruptionsRetriedUpToTheBoun
 
 // --- the pipe, really ------------------------------------------------------------
 
-TEST(RecordChannelRealTest, AChildWritesRecordsThroughARealPipeAndTheParentReadsThemToTheEnd) {
+TEST(RealProcessRecordChannel, AChildWritesRecordsThroughARealPipeAndTheParentReadsThemToTheEnd) {
   // The round trip the controller/worker split rests on, against the kernel:
   // the child holds the write end, sends three records and exits; the parent
   // closes its copy of the write end, so the child's exit is the end of the
