@@ -139,6 +139,9 @@ class Recorder final : public Reporter {
     if (line.substr(0, 7) == "spawned" && on_spawned) {
       on_spawned(pids_in(line));
     }
+    if (on_line) {
+      on_line(line);
+    }
   }
   void run_finished(const RunReport& /*report*/) override {}
 
@@ -154,6 +157,9 @@ class Recorder final : public Reporter {
 
   std::vector<std::pair<std::int64_t, std::string>> events;
   std::function<void(const std::vector<pid_t>&)> on_spawned;
+  /// Acts on any event, inside the tick that told it: the only way a test
+  /// can come between two workers' escalations on the same tick.
+  std::function<void(std::string_view)> on_line;
 };
 
 bool has_record(const WorkerReport& worker, std::string_view prefix) {
@@ -479,6 +485,120 @@ TEST(MisbehaviourCatalogue, AWorkerIgnoringSigtermIsKilledOneGraceAfterIt) {
   EXPECT_LT(*kill - *term, grace_ns + 5000 * kMs);
 }
 
+// --- EXT-01: a SIGKILL the controller attempts is not a SIGKILL it caused ---
+
+/// Waits until `pid` has terminated WITHOUT reaping it: waitid with WNOWAIT is
+/// the barrier that leaves a zombie for the controller to find.
+bool wait_until_zombie(pid_t pid) {
+  return wait_until([pid] {
+    siginfo_t info{};
+    return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+           info.si_pid == pid;
+  });
+}
+
+TEST(MisbehaviourCatalogue, AWorkerKilledFromOutsideBeforeTheControllersSigkillIsNotBlamedOnIt) {
+  // Both workers ignore SIGTERM, so both are due SIGKILL on the same tick,
+  // worker 0 first. In the event that worker 0's SIGKILL tells, this test
+  // kills worker 1 from outside and holds it unreaped (WNOWAIT): it is a
+  // zombie when the controller's turn for worker 1 comes, and kill(2) on a
+  // zombie succeeds. Before EXT-01 was fixed the controller recorded that
+  // success and reported the outside kill as its own stop.
+  const Selector selector{"*=ignore-term"};
+  Recorder recorder;
+  std::vector<pid_t> pids;
+  recorder.on_spawned = [&pids](const std::vector<pid_t>& spawned) {
+    ASSERT_EQ(spawned.size(), 2U);
+    pids = spawned;
+    for (const pid_t pid : spawned) {
+      ASSERT_TRUE(wait_until([pid] { return ignores(pid, SIGTERM); }))
+          << "worker " << pid << " never ignored SIGTERM";
+    }
+  };
+  bool killed_from_outside = false;
+  recorder.on_line = [&](std::string_view line) {
+    if (line == "worker 0: sent signal 9") {
+      ASSERT_EQ(pids.size(), 2U);
+      ASSERT_EQ(::kill(pids[1], SIGKILL), 0);
+      ASSERT_TRUE(wait_until_zombie(pids[1])) << "worker 1 never terminated";
+      killed_from_outside = true;
+    }
+  };
+  platform::RealSyscalls syscalls;
+  platform::FileSystem filesystem(syscalls);
+  resources::CgroupOomKillRecord record(filesystem, resources::kMachineRoot);
+  const bool counted = record.read().has_value();
+  RunOptions options = fake_options(5000);
+  options.grace = Grace{300 * kMs, 300 * kMs};
+  if (counted) {
+    options.oom_record = &record;
+  }
+  const RunReport report = run_fake(workloads(2, 300), options, recorder);
+  ASSERT_TRUE(killed_from_outside);
+  ASSERT_EQ(report.workers.size(), 2U);
+
+  const WorkerReport& outside = report.workers[1];
+  EXPECT_EQ(outside.termination, "killed by signal 9");
+  EXPECT_NE(outside.fate, WorkerFate::kStoppedByController) << records_of(outside);
+  EXPECT_NE(outside.fate, WorkerFate::kTimedOut) << records_of(outside);
+  EXPECT_EQ(outside.stop, "SIGTERM sent") << "no SIGKILL was sent to a worker already dead";
+  EXPECT_FALSE(recorder.when("worker 1: sent signal 9").has_value());
+  EXPECT_TRUE(has_record(outside, "signal 9 not sent: the worker had already exited"))
+      << records_of(outside);
+  if (counted) {
+    // The count was consulted for it, whichever way it moved.
+    EXPECT_TRUE(has_record(outside, "not attributed to the OOM killer: ") ||
+                has_record(outside, "OOM kill: "))
+        << records_of(outside);
+  }
+  // The companion in the same run: the controller's own kill of a worker that
+  // was running is still its stop, when the count is unconsulted or unmoved.
+  const WorkerReport& controllers = report.workers[0];
+  EXPECT_EQ(controllers.termination, "killed by signal 9");
+  EXPECT_EQ(controllers.stop, "SIGKILL sent");
+  if (!counted) {
+    EXPECT_EQ(controllers.fate, WorkerFate::kStoppedByController) << records_of(controllers);
+  } else {
+    EXPECT_TRUE(controllers.fate == WorkerFate::kStoppedByController ||
+                controllers.fate == WorkerFate::kKilled ||
+                controllers.fate == WorkerFate::kOomKilled)
+        << "only a count that moved during the run may change it: " << records_of(controllers);
+  }
+}
+
+TEST(MisbehaviourCatalogue, TheControllersOwnKillOfARunningWorkerIsStillItsStop) {
+  // The companion without any outside hand: both workers ignore SIGTERM and
+  // are killed by the controller while running. Nothing moves the count, so
+  // with a record offered the count is read and the attempt stands.
+  const Selector selector{"*=ignore-term"};
+  Recorder recorder;
+  recorder.on_spawned = [](const std::vector<pid_t>& spawned) {
+    ASSERT_EQ(spawned.size(), 2U);
+    for (const pid_t pid : spawned) {
+      ASSERT_TRUE(wait_until([pid] { return ignores(pid, SIGTERM); }))
+          << "worker " << pid << " never ignored SIGTERM";
+    }
+  };
+  platform::RealSyscalls syscalls;
+  platform::FileSystem filesystem(syscalls);
+  resources::CgroupOomKillRecord record(filesystem, resources::kMachineRoot);
+  const bool counted = record.read().has_value();
+  RunOptions options = fake_options(5000);
+  options.grace = Grace{300 * kMs, 300 * kMs};
+  if (counted) {
+    options.oom_record = &record;
+  }
+  const RunReport report = run_fake(workloads(2, 300), options, recorder);
+  ASSERT_EQ(report.workers.size(), 2U);
+  for (const WorkerReport& worker : report.workers) {
+    EXPECT_EQ(worker.termination, "killed by signal 9");
+    EXPECT_EQ(worker.stop, "SIGKILL sent");
+    EXPECT_EQ(worker.fate, WorkerFate::kStoppedByController)
+        << describe(worker.fate) << records_of(worker);
+    EXPECT_FALSE(has_record(worker, "signal 9 not sent")) << records_of(worker);
+  }
+}
+
 // --- Fork a grandchild, then die: no orphan left holding a core -------------
 
 TEST(MisbehaviourCatalogue, GrandchildrenOfDeadWorkersAreKilledWithThem) {
@@ -765,7 +885,7 @@ TEST(MisbehaviourCatalogue, AWorkerOomKilledUnderALimitIsOomKilledAndNotAFaultOr
   EXPECT_FALSE(has_record(oom, "error: ")) << "it was killed, not refused" << records_of(oom);
   EXPECT_TRUE(has_record(oom, "OOM kill: " + record.scope() +
                                   " counted 1 during the run, one or more for each of the 1 "
-                                  "worker(s) killed by a SIGKILL the controller did not send"))
+                                  "worker(s) killed by a SIGKILL"))
       << records_of(oom);
 
   const WorkerReport& faulted = report.workers[2];

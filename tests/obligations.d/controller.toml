@@ -43,10 +43,13 @@ test of that signal no hang-up can pass for. OOM is \
 below; the process-shared lock row has no lock to test (see the header). \
 \
 OOM is told from a fault and from a plain kill by the kernel's own record: \
-a SIGKILL the controller did not send is kOomKilled only when the workers' \
-cgroup's OOM-kill count, read before the first fork and after the last reap, \
-rose by at least as many as there are such deaths; otherwise every one stays \
-kKilled and its report says why. The table row, the candidate rule and the \
+a SIGKILL death, the controller's attempted SIGKILL included, is kOomKilled \
+only when the workers' cgroup's OOM-kill count, read before the first fork \
+and after the last reap, rose by at least as many as there are such deaths; \
+otherwise a SIGKILL nobody here attempted stays kKilled and its report says \
+why, and one the controller attempted stays its stop when the count is read \
+and did not move, and is kKilled (provenance ambiguous) when the count could \
+not speak. A worker found already exited is never signalled (EXT-01). The table row, the candidate rule and the \
 judgement (every outcome: enough, none, too few, a count that went back, \
 unreadable at either end) are pure and tested row by row; the loop is driven \
 against the controller's own fake of the record's contract \

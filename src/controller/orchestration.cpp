@@ -409,15 +409,34 @@ core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker, const platfo
 
 core::Result<core::Ok, ControllerError> Run::send(Tracked& worker, int signal, std::int64_t now_ns,
                                                   bool stale) {
-  // ESRCH is a worker that died since the last reap: not an error, and the
-  // reap that follows will say how.
+  // kill(2) succeeds on a zombie, so a success proves a signal was queued and
+  // nothing about what it did (journal §1.27). A worker that has already
+  // exited is therefore never signalled, and no signal is recorded for it:
+  // the reap that follows says how it died, and the record must not say the
+  // controller did it. The look is waitid with WNOWAIT, which reaps nothing.
+  auto exited = syscalls_->has_exited(worker.pid);
+  if (!exited.has_value()) {
+    return error_at("signal", describe(exited.error()));
+  }
+  if (exited.value()) {
+    worker.notes.push_back("signal " + std::to_string(signal) +
+                           " not sent: the worker had already exited");
+    return core::Ok{};
+  }
+  // What remains is a race the interface cannot close: the worker can die
+  // between that look and this kill. ESRCH cannot happen to a child that is
+  // unreaped, but if it does the worker is gone, which is not an error and
+  // not a signal sent.
   auto sent = syscalls_->send_signal(worker.pid, signal);
-  if (!sent.has_value() && sent.error().number != ESRCH) {
-    return error_at("signal", describe(sent.error()));
+  if (!sent.has_value()) {
+    if (sent.error().number != ESRCH) {
+      return error_at("signal", describe(sent.error()));
+    }
+    return core::Ok{};
   }
   worker.step = step_after(signal);
   worker.step_since_ns = now_ns;
-  worker.evidence.signal_sent = signal;
+  worker.evidence.signal_attempted = signal;
   worker.evidence.stale_when_signalled = stale;
   reporter_->event(now_ns - started_.running_ns, "worker " + std::to_string(worker.slot) +
                                                      ": sent signal " + std::to_string(signal) +
@@ -602,6 +621,7 @@ void Run::attribute_oom_kills() {
       judge_oom_kills(oom_before_, after, candidates.size(), options_->oom_record->scope());
   for (Tracked* worker : candidates) {
     worker->evidence.oom_kill_recorded = finding.attributed;
+    worker->evidence.oom_inconclusive = !finding.attributed && !finding.ruled_out;
     worker->notes.push_back(finding.note);
   }
 }

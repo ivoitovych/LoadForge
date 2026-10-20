@@ -789,6 +789,27 @@ mutants of `src/` running against a slow suite; with no output to read, the two
 mechanisms above -- every target mutated, and a forked child holding Mull's pipes -- each
 suffice to explain them, and neither can be confirmed until a run reports.
 
+### 1.27 `kill(2)` succeeds on a zombie, so a successful signal proves nothing about the death
+
+*2026-10-20 19:30 UTC.* The first independent review (EXT-01) and a real-kernel test
+(`RealProcessSyscallsTest.KillSucceedsOnAnUnreapedZombieAndOnlyTheReapMakesItESRCH`):
+
+- A child that has terminated and has not been reaped is a zombie. `kill(zombie, SIGKILL)`
+  **returns success**, the signal is discarded, and `waitpid` then reports the original
+  status (exit 0 in the test). `ESRCH` comes only after the reap.
+- So a controller that records "signal sent" on success, and on `ESRCH`, records a signal
+  that may have arrived after the death. A worker killed by the OOM killer or an outside
+  `kill -9` in the same tick as an escalation was reported as the controller's stop or
+  timeout, and the OOM predicate refused to read the count for it.
+- `waitid(P_PID, pid, ..., WEXITED | WNOHANG | WNOWAIT)` says whether a child has
+  terminated without reaping it (`si_pid` is 0 while it runs); it answers `ECHILD` once the
+  child is reaped. It narrows the race but cannot close it: the worker can still die between
+  the look and the `kill`, and `pidfd` does not tell which of two racing SIGKILLs ended it.
+- The shared fake had modelled a dead child as `ESRCH`, the same class of fake-versus-kernel
+  divergence as the SIGPIPE bug (§1.23). It now models the three states: running, zombie
+  (`child_exits`: signals succeed, `has_exited` is true), reaped (a reap delivered: `ESRCH`
+  and `ECHILD`). Its own tests are `tests/unit/platform/fake_syscalls_test.cpp`.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -1946,6 +1967,59 @@ decomposition, where the T6 comparison across decompositions needs one bound).
 **Left open:** the compression and dense-linear specifications carry no `kName` and say
 less about versions than these two. Bringing them level is a contract change of its own,
 between waves.
+
+### 2.30 EXT-01: an attempted signal is not an established cause
+
+*2026-10-20 19:30 UTC.* Context: §1.27. Review: `reviews/review-response-2026-10-20-0352-UTC.md`
+EXT-01; plan: `reviews/reaction-plan-external-review-2026-10-20-1230-UTC.md` item 1.
+
+**Chosen.**
+1. *The seam gains `has_exited(pid)`* (`waitid` with `WNOWAIT`, bare in `RealSyscalls`, the
+   decision in `exit_peek_result` above the seam). `Run::send` looks before every signal. A
+   worker already exited is **not signalled and no signal is recorded**; its report gets the
+   note "signal N not sent: the worker had already exited". A refused look (any errno,
+   `ECHILD` included) is a controller error at stage `signal`. An `ESRCH` from `kill` after
+   a look that said running cannot happen to an unreaped child; if it does it is tolerated
+   and **not recorded**.
+2. *`Evidence::signal_sent` is renamed `signal_attempted`*: the last signal sent to a
+   worker the look showed running. It is an attempt and nothing more.
+3. *Every SIGKILL death is an OOM candidate*, the controller's attempted SIGKILL included,
+   so the count is always consulted when a record is offered. The all-or-none rule of
+   `judge_oom_kills` is unchanged and now counts those deaths too; the note no longer says
+   "the controller did not send". `OomFinding` gains `ruled_out` (read at both ends, did not
+   rise); `Evidence` gains `oom_inconclusive` (consulted, neither attributed nor ruled out).
+4. *The verdict for a death by SIGKILL that matches an attempted SIGKILL:*
+   - the count rose enough: `kOomKilled` (the rise outranks the attempt);
+   - the count could not speak (unreadable, went back, rose by fewer than the deaths):
+     **`kKilled`, the provenance ambiguous**, the report keeping "SIGKILL sent" as the stop
+     step and the count's note as the reason;
+   - the count was read and did not move, or no record was offered: the controller's stop
+     or timeout, as before.
+
+**Why a flag-free reading of existing fates and not a new outcome.** `kKilled` already
+means "killed, with nothing to say who sent it". A new fate would reach every reporter and
+the contract for a state that is exactly that. The companion requirement (the controller's
+own kill of a running worker stays its stop) rules out calling every attempted SIGKILL
+ambiguous; the count is the one witness the kernel offers, and it is used.
+
+**Rejected.** Treating `ESRCH` differently alone (the review: a zombie kill succeeds).
+Reaping before signalling (reaping inside `send` would break the one-reap-loop design and
+still leave the race). A new `kProvenanceAmbiguous` fate (above). Using a separate candidate
+class for the controller's kills so the pure candidates keep their precision: it would let a
+partial rise attribute some deaths and not others, which is the inference the all-or-none
+rule exists to refuse.
+
+**What stays open, and is said so.** A SIGKILL from outside that lands between the look and
+the controller's own kill, with the OOM count unmoved, is reported as the controller's stop.
+The window is the gap between two system calls; no interface closes it. A mixed run (one
+controller kill, one OOM kill, count +1) now attributes neither: the cost of the all-or-none
+rule with more candidates.
+
+**Tests, each red before the fix** (run against the unfixed logic, 13 failures including the
+real-kernel one): `MisbehaviourCatalogue.AWorkerKilledFromOutsideBeforeTheControllersSigkillIsNotBlamedOnIt`
+(outside SIGKILL held unreaped with `WNOWAIT`, then escalated; the old controller reported
+`kStoppedByController`), its companion `TheControllersOwnKillOfARunningWorkerIsStillItsStop`,
+the fake-driven `ControllerExitedTest`, `ControllerOomTest` and `AttemptedKillTest` rows.
 
 ---
 
