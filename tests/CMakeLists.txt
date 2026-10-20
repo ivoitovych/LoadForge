@@ -24,6 +24,9 @@ add_executable(loadforge_unit_tests
   unit/topology/cpu_topology_test.cpp
   unit/topology/cache_test.cpp
   unit/topology/numa_test.cpp
+  unit/resources/cgroup_test.cpp
+  unit/resources/memory_budget_test.cpp
+  unit/resources/cgroup_oom_record_test.cpp
   unit/worker/ipc/heartbeat_test.cpp
   unit/worker/ipc/record_test.cpp
   unit/worker/scheduler_test.cpp
@@ -37,8 +40,8 @@ add_executable(loadforge_unit_tests
   unit/third_party/tomlplusplus_smoke_test.cpp
 )
 target_link_libraries(loadforge_unit_tests PRIVATE
-  loadforge_cli loadforge_config loadforge_platform loadforge_topology loadforge_worker
-  loadforge_controller GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
+  loadforge_cli loadforge_config loadforge_platform loadforge_topology loadforge_resources
+  loadforge_worker loadforge_controller GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
 # tests/ is on the include path so that support/ fakes resolve the same way
 # src/ headers do, rather than by relative path from wherever a test lives.
 target_include_directories(loadforge_unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
