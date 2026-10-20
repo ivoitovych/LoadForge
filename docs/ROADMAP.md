@@ -25,7 +25,7 @@ work continues.
 | 2 | Comprehensive review, reaction plan, ADR 0002, this roadmap | `reviews/` | done, #21 |
 | 3 | Seqlock writer: release fence after the odd store; correct the P5 argument | review R-01 | done, #24 |
 | 4 | Controller ignores SIGPIPE through the seam; test and catalogue row | review R-02 | done, this PR |
-| 5 | Kill the surviving drain-bound mutant with an exact assertion | review R-06 | |
+| 5 | Kill the surviving drain-bound mutant with an exact assertion | review R-06 | done, this PR |
 | 6 | Hygiene batch: linkage, torn-slot wording, drain bound by wall time, slot layout asserts, fixture references | review R-03..R-05, R-24, R-29 | |
 | 7 | Documentation reconciliation in one commit | review R-08..R-13, R-19, R-21, R-25, R-27, R-33 | |
 | 8 | Fake-worker executable with the misbehaviour catalogue; gate: no test-hook symbol in the shipped binary; gate: lock obligations in the ledger | IMPLEMENTATION §10 | |

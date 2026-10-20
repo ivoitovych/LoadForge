@@ -479,12 +479,17 @@ TEST(ControllerTest, AChannelHeldOpenAfterTheWorkerDiedIsTruncatedNotWaitedForFo
 TEST(ControllerTest, AChannelThatNeverEndsIsGivenABoundedNumberOfDrains) {
   Rig rig;
   rig.config.run.duration = core::Duration{1000};
+  int reads_when_last_reaped = 0;
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
-  rig.reporter.on_event = [&rig](const std::string& line) {
+  rig.reporter.on_event = [&rig, &reads_when_last_reaped](const std::string& line) {
+    // The last event of the run is the last reap; every read after it belongs
+    // to the final drain, which is what the bound governs.
+    reads_when_last_reaped = rig.syscalls.reads_of(kRecordRead1);
     if (starts_with(line, "spawned")) {
       rig.deliver(0, ipc::RecordType::kFinished, "done");
       rig.worker_exits(0, 0);
-      // Most of a large frame, a byte per read, from a writer that stays.
+      // Most of a large frame, a byte per read, from a writer that stays:
+      // more bytes than the bound allows drains, so only the bound stops it.
       const std::string big = frame_text(ipc::RecordType::kFinished, std::string(2000, 'x'));
       rig.syscalls.deliver_to_pipe(kRecordRead1, big.substr(0, 1500));
       rig.syscalls.limit_pipe_reads(1);
@@ -498,7 +503,11 @@ TEST(ControllerTest, AChannelThatNeverEndsIsGivenABoundedNumberOfDrains) {
   EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTruncatedEvidence);
   EXPECT_EQ(result.value().workers[1].records.back(),
             "record channel: held open after the worker died");
-  EXPECT_GT(rig.syscalls.read_count(), 1000) << "the bound, not the stream's end, stopped it";
+  // Exactly the bound: 1024 drains of one byte each, with bytes still waiting.
+  // A bound that only had to be "more than 1000" let a bound a thousand times
+  // larger pass, which is the same as no bound at all.
+  EXPECT_EQ(rig.syscalls.reads_of(kRecordRead1) - reads_when_last_reaped, 1024)
+      << "the bound, not the stream's end, stopped it";
 }
 
 TEST(ControllerTest,

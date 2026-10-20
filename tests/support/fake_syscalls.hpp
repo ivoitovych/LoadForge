@@ -79,6 +79,12 @@ class FakeSyscalls final : public platform::Syscalls {
   [[nodiscard]] int open_count() const { return open_count_; }
   [[nodiscard]] int close_count() const { return close_count_; }
   [[nodiscard]] int read_count() const { return read_count_; }
+  /// Reads issued on one descriptor, for a test that must tell one channel's
+  /// reads from another's.
+  [[nodiscard]] int reads_of(int fd) const {
+    const auto found = reads_by_fd_.find(fd);
+    return found == reads_by_fd_.end() ? 0 : found->second;
+  }
   [[nodiscard]] const std::string& last_path() const { return last_path_; }
 
   /// Every descriptor handed out was handed back.
@@ -102,6 +108,7 @@ class FakeSyscalls final : public platform::Syscalls {
   core::Result<std::size_t, platform::SyscallError> read(int fd, char* buffer,
                                                          std::size_t size) override {
     ++read_count_;
+    ++reads_by_fd_[fd];
     if (const auto pipe = pipe_readers_.find(fd); pipe != pipe_readers_.end()) {
       return read_pipe(fd, *pipe->second, buffer, size);
     }
@@ -974,6 +981,7 @@ class FakeSyscalls final : public platform::Syscalls {
   int open_count_ = 0;
   int close_count_ = 0;
   int read_count_ = 0;
+  std::map<int, int> reads_by_fd_;
   bool descriptor_open_ = false;
   std::string last_path_;
 
