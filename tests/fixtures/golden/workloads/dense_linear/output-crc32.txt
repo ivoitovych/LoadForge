@@ -1,0 +1,34 @@
+# Golden digests of the dense-linear workload's output: a tripwire, not an
+# oracle (docs/verification.md §4). CRC-32 (core/crc32.hpp) of unit 0's output
+# at seed 1, by kind of path and panel depth.
+#
+#   scalar  the scalar kernel: the same bits on x86-64 and on AArch64.
+#   fused   the AVX2 kernel on x86-64 and the NEON kernel on AArch64: both
+#           take fma(a, b, p) in increasing k from +0.0 (panel.hpp), so both
+#           give these bits.
+#
+# Produced by tests/determinism/workloads/dense_linear/determinism_test.cpp,
+# which prints every line it computes:
+#
+#   build/debug/tests/determinism/workloads/dense_linear/loadforge_determinism_workloads_dense_linear_tests \
+#     --gtest_filter='*Digest*'
+#
+# on 2026-10-20 11:14 UTC, on an x86-64 Intel Xeon @ 2.10GHz (GCC 13.3,
+# debug preset), giving the scalar and the fused (avx2) lines below; and the
+# same test cross-built with aarch64-linux-gnu-g++-13 and run under
+# qemu-aarch64 8.2 gave the identical scalar and fused (neon) lines. CI's
+# ARM64 runner checks the AArch64 half on real hardware on every run.
+#
+# A change to these lines is a change to the bits the workload produces, which
+# also changes the workload's version (kVersion, spec.hpp: a contract change)
+# and is reviewed as such.
+scalar 16 af65c959
+scalar 32 7bc6feea
+scalar 64 2ebcc7ae
+scalar 128 a5e38cda
+scalar 256 d39a845a
+fused 16 0ecdcd89
+fused 32 682c5b86
+fused 64 65d62005
+fused 128 5c5a33cf
+fused 256 4f23fbff
