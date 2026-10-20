@@ -7,10 +7,9 @@
 
 #include "controller/journal/file_ops.hpp"
 
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <unistd.h>
-
-#include <fcntl.h>
 
 #include <cerrno>
 #include <cstdlib>
@@ -26,7 +25,8 @@ namespace {
 class RealFileOpsTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    std::string pattern = (std::filesystem::temp_directory_path() / "loadforge-journal-XXXXXX").string();
+    std::string pattern =
+        (std::filesystem::temp_directory_path() / "loadforge-journal-XXXXXX").string();
     ASSERT_NE(::mkdtemp(pattern.data()), nullptr);
     directory_ = pattern;
   }

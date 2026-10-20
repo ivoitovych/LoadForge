@@ -16,12 +16,12 @@
 // _exit-less death (JOURNAL §1.9), so the same code is covered by the unit
 // tests in the parent; this test is about the process boundary.
 
-#include <gtest/gtest.h>
 #include <fcntl.h>
-#include <signal.h>
+#include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -82,7 +82,7 @@ class KilledWriter : public ::testing::Test {
 
   /// Runs a writer on `path`, kills it once `confirmed` entries are synced,
   /// and answers how many the parent had been told of.
-  std::size_t kill_after(const std::string& path, std::size_t confirmed) {
+  static std::size_t kill_after(const std::string& path, std::size_t confirmed) {
     int pipe_ends[2];
     EXPECT_EQ(::pipe2(pipe_ends, O_CLOEXEC), 0);
     const pid_t child = ::fork();
@@ -151,8 +151,8 @@ TEST_F(KilledWriter, ACleanlyClosedJournalFromAnotherProcessEndsCleanly) {
     RealFileOps ops;
     auto storage = FileStorage::open(ops, file);
     auto writer = open_writer(*storage.value());
-    const bool ok = writer.value()->append(expected(0)).has_value() &&
-                    writer.value()->close().has_value();
+    const bool ok =
+        writer.value()->append(expected(0)).has_value() && writer.value()->close().has_value();
     ::_exit(ok ? 0 : 1);
   }
   int status = 0;

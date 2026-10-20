@@ -13,15 +13,17 @@ namespace {
 constexpr unsigned kOptionalFields = 6;
 constexpr std::uint64_t kReservedBits = ~((std::uint64_t{1} << kOptionalFields) - 1);
 
-void put(std::vector<std::byte>& out, std::uint64_t value, unsigned bytes) {
-  for (unsigned at = 0; at < bytes; ++at) {
+template <unsigned Bytes>
+void put(std::vector<std::byte>& out, std::uint64_t value) {
+  for (unsigned at = 0; at < Bytes; ++at) {
     out.push_back(static_cast<std::byte>(value >> (8 * at)));
   }
 }
 
-std::uint64_t get(std::span<const std::byte> in, std::size_t at, unsigned bytes) {
+template <unsigned Bytes>
+std::uint64_t get(std::span<const std::byte> in, std::size_t at) {
   std::uint64_t value = 0;
-  for (unsigned byte = 0; byte < bytes; ++byte) {
+  for (unsigned byte = 0; byte < Bytes; ++byte) {
     value |= std::to_integer<std::uint64_t>(in[at + byte]) << (8 * byte);
   }
   return value;
@@ -32,7 +34,7 @@ std::uint32_t check(std::span<const std::byte> length_bytes, std::span<const std
 }
 
 void put_label(std::vector<std::byte>& out, const std::string& label) {
-  put(out, label.size(), 1);
+  put<1>(out, label.size());
   std::ranges::transform(label, std::back_inserter(out),
                          [](char c) { return static_cast<std::byte>(c); });
 }
@@ -63,9 +65,10 @@ class Cursor {
     return head;
   }
 
-  std::uint64_t number(unsigned bytes) {
-    const std::span<const std::byte> field = take(bytes);
-    return failed_ ? 0 : get(field, 0, bytes);
+  template <unsigned Bytes>
+  std::uint64_t number() {
+    const std::span<const std::byte> field = take(Bytes);
+    return failed_ ? 0 : get<Bytes>(field, 0);
   }
 
   [[nodiscard]] bool complete() const { return !failed_ && rest_.empty(); }
@@ -80,30 +83,30 @@ class Cursor {
 std::vector<std::byte> frame(std::span<const std::byte> payload) {
   std::vector<std::byte> out;
   out.reserve(kHeaderBytes + payload.size());
-  put(out, payload.size(), 4);
-  put(out, check(std::span(out), payload), 4);
+  put<4>(out, payload.size());
+  put<4>(out, check(std::span(out), payload));
   out.insert(out.end(), payload.begin(), payload.end());
   return out;
 }
 
 std::vector<std::byte> encode_entry(const Entry& entry) {
   std::vector<std::byte> out{kEntry};
-  put(out, static_cast<std::uint64_t>(entry.elapsed_ns), 8);
+  put<8>(out, static_cast<std::uint64_t>(entry.elapsed_ns));
   const std::array<std::optional<std::uint64_t>, kOptionalFields> optionals{
-      entry.last_verified_unit,   bits(entry.temperature_c), bits(entry.package_power_w),
-      bits(entry.frequency_hz),   entry.ecc_corrected,       entry.ecc_uncorrected};
+      entry.last_verified_unit, bits(entry.temperature_c), bits(entry.package_power_w),
+      bits(entry.frequency_hz), entry.ecc_corrected,       entry.ecc_uncorrected};
   std::uint64_t present = 0;
   for (unsigned field = 0; field < kOptionalFields; ++field) {
     present |= std::uint64_t{optionals.at(field).has_value()} << field;
   }
-  put(out, present, 1);
+  put<1>(out, present);
   put_label(out, entry.phase);
   put_label(out, entry.workload);
   for (const auto& optional : optionals) {
-    put(out, bits(optional), 8);
+    put<8>(out, bits(optional));
   }
-  put(out, entry.workers_alive, 4);
-  put(out, entry.workers_stale, 4);
+  put<4>(out, entry.workers_alive);
+  put<4>(out, entry.workers_stale);
   return out;
 }
 
@@ -113,30 +116,29 @@ std::optional<Entry> decode_entry(std::span<const std::byte> payload) {
   Cursor cursor(payload);
   Entry entry;
   static_cast<void>(cursor.take(1));  // the type, which the caller has read
-  entry.elapsed_ns = static_cast<std::int64_t>(cursor.number(8));
-  const std::uint64_t present = cursor.number(1);
+  entry.elapsed_ns = static_cast<std::int64_t>(cursor.number<8>());
+  const std::uint64_t present = cursor.number<1>();
   if ((present & kReservedBits) != 0) {
     return std::nullopt;
   }
   for (std::string* label : {&entry.phase, &entry.workload}) {
-    const std::uint64_t size = cursor.number(1);
+    const std::uint64_t size = cursor.number<1>();
     if (size > kMaxLabelBytes) {
       return std::nullopt;
     }
     const std::span<const std::byte> text = cursor.take(size);
     label->resize(text.size());
-    std::ranges::transform(text, label->begin(),
-                           [](std::byte b) { return static_cast<char>(b); });
+    std::ranges::transform(text, label->begin(), [](std::byte b) { return static_cast<char>(b); });
   }
   std::array<std::optional<std::uint64_t>, kOptionalFields> optionals;
   for (unsigned field = 0; field < kOptionalFields; ++field) {
-    const std::uint64_t value = cursor.number(8);
+    const std::uint64_t value = cursor.number<8>();
     if (((present >> field) & 1U) != 0) {
       optionals.at(field) = value;
     }
   }
-  entry.workers_alive = static_cast<std::uint32_t>(cursor.number(4));
-  entry.workers_stale = static_cast<std::uint32_t>(cursor.number(4));
+  entry.workers_alive = static_cast<std::uint32_t>(cursor.number<4>());
+  entry.workers_stale = static_cast<std::uint32_t>(cursor.number<4>());
   if (!cursor.complete()) {
     return std::nullopt;
   }
@@ -171,7 +173,7 @@ Replay scan(std::span<const std::byte> bytes) {
       replay.ending = Ending::kTornTail;
       return replay;
     }
-    const std::uint64_t length = get(rest, 0, 4);
+    const std::uint64_t length = get<4>(rest, 0);
     if (length == 0 || length > kMaxPayloadBytes) {
       replay.ending = Ending::kCorrupt;
       return replay;
@@ -181,7 +183,7 @@ Replay scan(std::span<const std::byte> bytes) {
       return replay;
     }
     const std::span<const std::byte> payload = rest.subspan(kHeaderBytes, length);
-    if (check(rest.first(4), payload) != get(rest, 4, 4)) {
+    if (check(rest.first(4), payload) != get<4>(rest, 4)) {
       replay.ending = Ending::kCorrupt;
       return replay;
     }

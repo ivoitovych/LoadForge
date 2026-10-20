@@ -49,7 +49,7 @@ core::Result<core::Ok, platform::SyscallError> sync_directory(FileOps& ops,
 }  // namespace
 
 core::Result<std::unique_ptr<FileStorage>, JournalError> FileStorage::open(FileOps& ops,
-                                                                         std::string path) {
+                                                                           std::string path) {
   auto opened = ops.open(path, FileOps::Mode::kAppend);
   if (!opened.has_value()) {
     return storage_fault(opened.error());

@@ -67,9 +67,9 @@ TEST(JournalFormat, EveryCombinationOfPresentFieldsRoundTrips) {
                                 ? std::optional<double>(std::numeric_limits<double>::denorm_min())
                                 : std::nullopt;
     entry.frequency_hz = (mask & 8U) != 0 ? std::optional<double>(3.6e9) : std::nullopt;
-    entry.ecc_corrected = (mask & 16U) != 0
-                              ? std::optional<std::uint64_t>(std::numeric_limits<std::uint64_t>::max())
-                              : std::nullopt;
+    entry.ecc_corrected =
+        (mask & 16U) != 0 ? std::optional<std::uint64_t>(std::numeric_limits<std::uint64_t>::max())
+                          : std::nullopt;
     entry.ecc_uncorrected = (mask & 32U) != 0 ? std::optional<std::uint64_t>(0) : std::nullopt;
     entry.elapsed_ns = std::numeric_limits<std::int64_t>::min();
     const auto payload = encode_entry(entry);

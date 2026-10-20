@@ -95,7 +95,8 @@ TEST_F(FileJournal, ACutAtAnyByteKeepsEveryWholeRecordBeforeIt) {
   std::size_t previous = 0;
   for (std::size_t cut = 0; cut < whole.size(); ++cut) {
     const Replay replayed = replay_bytes(
-        "cut", std::vector<std::byte>(whole.begin(), whole.begin() + static_cast<std::ptrdiff_t>(cut)));
+        "cut",
+        std::vector<std::byte>(whole.begin(), whole.begin() + static_cast<std::ptrdiff_t>(cut)));
     ASSERT_LE(replayed.entries.size(), all.size()) << cut;
     EXPECT_TRUE(std::equal(replayed.entries.begin(), replayed.entries.end(), all.begin())) << cut;
     EXPECT_GE(replayed.entries.size(), previous) << cut;

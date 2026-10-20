@@ -109,9 +109,9 @@ TEST(JournalSoak, AppendingForHoursGrowsTheFileAndNothingElse) {
   EXPECT_EQ(std::filesystem::file_size(file), appended_bytes)
       << "the file grew by exactly what was appended";
   EXPECT_EQ(open_descriptors(), descriptors_warm) << "no descriptor per append";
-  // Four pages of slack for the allocator and the page cache's accounting;
+  // 256 KiB of slack for the allocator and the page cache's accounting;
   // a leak of even one entry per append is 100 bytes x thousands, far above.
-  constexpr std::uint64_t kSlack = 256 * 1024;
+  constexpr std::uint64_t kSlack = std::uint64_t{256} * 1024;
   EXPECT_LE(resident_bytes(), resident_warm + kSlack)
       << "resident memory after " << entries << " appends against " << warm << " warm";
 

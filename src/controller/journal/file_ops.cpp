@@ -13,8 +13,7 @@ namespace {
 
 // Indexed by FileOps::Mode.
 constexpr std::array<int, 3> kOpenFlags{O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC,
-                                        O_RDONLY | O_CLOEXEC,
-                                        O_RDONLY | O_DIRECTORY | O_CLOEXEC};
+                                        O_RDONLY | O_CLOEXEC, O_RDONLY | O_DIRECTORY | O_CLOEXEC};
 constexpr mode_t kCreateMode = 0644;
 
 std::string describe_fd(int fd) { return "fd " + std::to_string(fd); }
@@ -41,7 +40,7 @@ core::Result<std::size_t, platform::SyscallError> RealFileOps::write(
 }
 
 core::Result<std::size_t, platform::SyscallError> RealFileOps::read(int fd,
-                                                                   std::span<std::byte> into) {
+                                                                    std::span<std::byte> into) {
   const ssize_t count = ::read(fd, into.data(), into.size());
   if (count < 0) {
     return platform::SyscallError{errno, "read", describe_fd(fd)};

@@ -4,13 +4,14 @@
 // brings its own Storage), and the writer and replay behaviours the suite
 // leaves to the implementation.
 
+#include "controller/journal/journal.hpp"
+
 #include <gtest/gtest.h>
 
 #include <memory>
 
 #include "contracts/journal/journal_contract.hpp"
 #include "controller/journal/format.hpp"
-#include "controller/journal/journal.hpp"
 
 namespace loadforge::journal {
 namespace {
@@ -28,8 +29,7 @@ struct Implementation {
 }  // namespace loadforge::journal
 
 namespace loadforge::contracts {
-INSTANTIATE_TYPED_TEST_SUITE_P(Journal, JournalContract,
-                               ::testing::Types<journal::Implementation>);
+INSTANTIATE_TYPED_TEST_SUITE_P(Journal, JournalContract, ::testing::Types<journal::Implementation>);
 }  // namespace loadforge::contracts
 
 namespace loadforge::journal {

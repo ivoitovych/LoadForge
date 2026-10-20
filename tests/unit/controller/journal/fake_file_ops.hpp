@@ -8,8 +8,9 @@
 // the next call of one kind; the script is consumed one step per call.
 
 #include <algorithm>
-#include <cstddef>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <string>
@@ -22,7 +23,7 @@ namespace loadforge::testing {
 
 class FakeFileOps final : public journal::FileOps {
  public:
-  enum class Call : std::size_t { kOpen, kWrite, kRead, kFsync, kClose };
+  enum class Call : std::uint8_t { kOpen, kWrite, kRead, kFsync, kClose };
 
   /// One scripted outcome. `error` non-zero fails the call with that errno;
   /// otherwise `limit` caps the bytes a write takes or a read gives.

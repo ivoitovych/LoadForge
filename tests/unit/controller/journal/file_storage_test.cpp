@@ -39,7 +39,7 @@ std::unique_ptr<FileStorage> opened(FakeFileOps& ops) {
 // The errnos each call documents that a test process cannot provoke on demand.
 const std::vector<int> kWriteErrors{ENOSPC, EIO, EDQUOT, EFBIG, EBADF, EPERM, ENOMEM};
 const std::vector<int> kFsyncErrors{EIO, ENOSPC, EDQUOT, EBADF, EROFS, EINVAL};
-const std::vector<int> kOpenErrors{EACCES, ENOENT, EISDIR, EROFS, EMFILE, ENFILE,
+const std::vector<int> kOpenErrors{EACCES, ENOENT,  EISDIR, EROFS,  EMFILE, ENFILE,
                                    ENOSPC, ENOTDIR, ELOOP,  ENOMEM, EDQUOT, EPERM};
 const std::vector<int> kReadErrors{EIO, EISDIR, EBADF, ENOMEM};
 const std::vector<int> kCloseErrors{EIO, EBADF, ENOSPC, EDQUOT};

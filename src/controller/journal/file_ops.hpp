@@ -10,6 +10,7 @@
 // says which call failed on what and why.
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 
@@ -23,7 +24,7 @@ class FileOps {
   /// How open() opens a path. kAppend is write-only, O_APPEND, created when
   /// missing; kRead is read-only; kDirectory is a directory, read-only, which
   /// is what fsync of a directory entry needs. All are close-on-exec.
-  enum class Mode : std::size_t { kAppend, kRead, kDirectory };
+  enum class Mode : std::uint8_t { kAppend, kRead, kDirectory };
 
   FileOps() = default;
   FileOps(const FileOps&) = delete;
