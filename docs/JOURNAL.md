@@ -1685,6 +1685,56 @@ the worker failed when the kernel said its controller had gone.
 until it has reaped that worker or found a bad frame on it, so a live controller never
 causes the EPIPE; a 124 from a worker it reaps is `kControllerLostReported` as before.
 
+### 2.28 The sort and Monte Carlo specifications
+
+*2026-10-20 12:34 UTC.* The wave-2 prerequisite (ADR 0004: a workload's specification
+lands before its wave). Each header names its workload (`kName`), states every range as
+the generator produces it, pins which failure is named when several occur and what
+`blocks_compared` counts, and says what a version change means: the lessons wave 1's
+streams recorded against the first two specifications.
+
+**Sort — chosen:** the output carries a witness, each key's input position beside it (a
+keys region, then a u32 index region), and the order is on (key, index), so the sort is
+stable and the output a function of the input alone: `BitExact`, `kExact`. The oracle
+checks in three steps, the first failure deciding: the indices are a permutation (first
+out-of-range or repeated index named, no difference); every key equals the input key its
+index names (a `Difference` over the keys' region, its expected bytes known exactly); the
+pairs strictly increase (first break named, no difference). Linear, no sort, and one
+flipped key bit is reported as one flipped bit, because the index check runs first and an
+index flip can only read as an index fault. The decomposition is a chunk count, which
+cannot change the output, so the T6 tier can vary it as `BitExact` requires.
+*Rejected:* keys alone, checked by a multiset hash (probabilistic, no expected bits), by
+binary-search counting (O(n log n), a scratch array, still no expected bits), or by a
+second sort (verification.md §3 forbids it); keys generated so that their rank is
+computable (the check becomes a bucket placement, and the data stops being uniform 64-bit
+keys); no decomposition at all, as compression has (the T6 sweep over decompositions would
+have nothing to vary).
+
+**Monte Carlo — chosen:** the estimate of pi/4 as the mean of sqrt(1 - x^2): one
+multiplication, one subtraction and one square root, each correctly rounded and unfused,
+so every f_k is the same double on every path and in the oracle. The input is one Philox
+key per batch, so the samples are drawn inside `compute()` and the input-integrity bracket
+still covers what they are drawn from. The decomposition is the chunk length of the
+per-batch sum, within which the order is the ISA path's. The tolerance is a rounding
+bound, derived in full in the header: two sums of the same S non-negative terms differ by
+at most 2a/(1-2a) of either, a = (S-1)u, which is at most 2Su = 2^-38 whenever
+2S(S-1) <= 2^53 (a compile-time assertion). The tolerance is therefore an exact
+power-of-two scaling, and Sterbenz's lemma makes the residual exact wherever the verdict
+could turn, so the (1 ± epsilon) tests decide the exact comparison.
+*Rejected:* a statistical bound (the oracle replays the same samples, so a bound of a few
+standard deviations, about 28.6 per batch, would pass nearly any corruption and
+false-alarm at its own significance level); a transcendental in the integrand, or normal
+variates by Box-Muller (`log`, `cos`: not reproducible, determinism.md §3); FMA in the
+integrand (x86-64's baseline has no FMA instruction, so the scalar path's `std::fma` would
+be a library call; unfused, every path's f_k is identical); random numbers stored in the
+input (the unit becomes a memory stream, and Philox, the load the brief names, leaves
+`compute()`); a tolerance that depends on the chunk length (tighter, but one per
+decomposition, where the T6 comparison across decompositions needs one bound).
+
+**Left open:** the compression and dense-linear specifications carry no `kName` and say
+less about versions than these two. Bringing them level is a contract change of its own,
+between waves.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned

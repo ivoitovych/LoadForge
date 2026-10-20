@@ -71,8 +71,8 @@ supervision, verification oracles, or a pattern every later stream copies.
 change (ADR 0004, "Changing a contract"):
 
 - before wave 2: the specification headers for sort and Monte Carlo
-  (`src/workloads/<name>/spec.hpp`), and any contract corrections wave 1's streams
-  recorded under "Contract questions";
+  (`src/workloads/<name>/spec.hpp`) -- landed in this PR (journal §2.28) -- and any
+  contract corrections wave 1's streams recorded under "Contract questions";
 - before M2a can exit (stream 11): M1 complete, which waits only on the first mutation
   sweep (item 10); the Mull pin, item 11, is in (#32);
 - before wave 3: the specification headers for FFT, stencil, sparse, graph and
