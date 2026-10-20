@@ -2,14 +2,48 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/adaptive_mesh and nothing else.
 
 [[module]]
-path    = "src/workloads/adaptive_mesh"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the adaptive mesh specification alone (spec.hpp, ADR 0004): the sizes \
-and offsets, the hotspot decoder, the mesh's integer predicate, the exact \
-pieces of a leaf's value, and the tolerance with its derivation checked on \
-both sides, tested in tests/contracts/workloads/. The adaptive mesh stream \
-takes this row over with the workload and owes what IMPLEMENTATION §3 lists \
-for it -- P4 and P5, and T3, T4, T5, T5b, T6 -- with provides = \
-["WorkloadContract"]."""
+path     = "src/workloads/adaptive_mesh"
+classes  = ["P1", "P3", "P5"]
+tiers    = ["T1", "T3", "T4", "T5", "T6"]
+fixtures = ["golden/workloads/adaptive_mesh/output-crc32.txt"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+The adaptive mesh workload (M4): a quadtree refined around 256 hotspots, its \
+leaves valued by a fixed sequence of binary64 operations and gathered into \
+16 x 16 coarse cells in whatever order the executor's slots finish; class \
+BoundedResidual. P1: each refusal at creation (a decomposition other than 0 \
+or 1, an ISA path other than scalar, a footprint without one unit), each \
+naming its value. P3: the footprint at either side of one and two units and \
+at its maximum; coordinates at the lattice edge (0, 511), just outside it \
+(512) and at the top of u32; one hotspot in a corner, one per coarse cell \
+(the leaf table exactly full at 4096), a cell crowded to hundreds of leaves, \
+the same hotspot repeated 256 times; the generated hotspots at both ends of \
+the input and for the largest unit index; guard bytes around every span. P5: \
+leaves are claimed by the executor's slots and added into per-slot partial \
+sums, which are combined in slot order after run() returns; no atomic, lock \
+or shared mutable word exists, each slot owning its piece of scratch; T6 \
+runs one unit at 1, 2, 3, 4 and 7 threads under dealt, shuffled and claiming \
+schedules and requires exact counts and integrals within the derived \
+tolerance, repeated runs of a reproducible schedule to repeat bits, two \
+groupings to differ in bits within twice the tolerance, and committed \
+digests of the input, the counts and the one-slot output. T3: every coarse \
+cell of generated and crowded units against a recursive mesh and a leaf-order \
+sum written in the tests from the specification's prose, with the tolerance \
+shown refusing one ulp past it and accepting one inside. T4: counts one \
+modulo three and at most 1024, integrals positive and bounded, hotspot order \
+changing no count and no integral beyond a derived bound, dropping a \
+hotspot never adding a leaf, reflection and transposition mirroring the \
+counts exactly and the integrals within the tolerance. T5: a coordinate \
+corrupted out of the lattice lowers its cell's count and is named by the \
+count check, a moved hotspot breaches the integral bound, a flipped output \
+count is seen, a flipped integral bit is seen except the lowest mantissa \
+bit of a cell of many leaves, NaN and infinity are seen, and compute is \
+total over all-zero, all-one and noise inputs. P4 and T5b, which \
+IMPLEMENTATION §3 lists for workloads, are removed: this module performs no \
+verification, so it has no outcome to classify and no check that can fail to \
+run. Its verification is the oracle stream's \
+(src/verification/oracle/adaptive_mesh), which owes them; the fault-injection \
+tier here shows what that oracle will be given. Provides WorkloadContract; \
+consumes ExecutorContract, run against this module's own executors (ADR \
+0003)."""
