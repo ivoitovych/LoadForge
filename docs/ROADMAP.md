@@ -43,6 +43,8 @@ work continues.
 | # | Item | Source | State |
 |---|------|--------|-------|
 | 11 | Pin a Mull release by verified SHA-256 and run the mutation gate end to end in CI; schedule it weekly on `main` | IMPLEMENTATION §4 M0, review R-31 | done, #32; the first full sweep over `src/` reports on its first scheduled run |
+| 11a | Shard the mutation sweep: one job per module under `src/`, each gated on its own (`--scope`), every mutant against the tests that create no process (`RealProcess*` left out and checked), a per-mutant timeout, and a verdict job. The first full run, as one job, was cancelled at six hours | journal §1.26, §2.28 | done, this PR; the first sharded run found 56 survivors in six shards (journal §2.28) |
+| 11b | Kill the 56 survivors of the first sharded run, or allowlist each equivalent one with its reason. Per module: `platform`, including moving the pid decisions in `fork_process` and `reap_any_nonblocking` above the seam; `controller` and `worker`; then `topology`, `resources` and `config`. M1 is formally complete when the weekly sweep passes | journal §2.28 | |
 | 12 | clang-tidy over tests and tools, or the scope documented; trust-chain linter versions pinned | review R-07, R-32 | |
 | 12a | Contracts first: the workload, verifier and telemetry-source contracts, each with the provider's own tests and the cross-execution harness that runs them against consumers' mocks. M2a to M4 then proceed as parallel streams, one component each | ADR 0003, ADR 0004 | done, this PR: twenty-one contract headers, their suites and references, the fragment mechanism, the stream plan below |
 
@@ -71,7 +73,7 @@ supervision, verification oracles, or a pattern every later stream copies.
 change (ADR 0004, "Changing a contract"):
 
 - before wave 2: the specification headers for sort and Monte Carlo
-  (`src/workloads/<name>/spec.hpp`) -- landed in this PR (journal §2.28) -- and any
+  (`src/workloads/<name>/spec.hpp`) -- landed in this PR (journal §2.29) -- and any
   contract corrections wave 1's streams recorded under "Contract questions";
 - before M2a can exit (stream 11): M1 complete, which waits only on the first mutation
   sweep (item 10); the Mull pin, item 11, is in (#32);
