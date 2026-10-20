@@ -1308,16 +1308,19 @@ the first two are correctness rather than taste:
 
 The path comes from `/proc/self/exe`, never `argv[0]`: `argv[0]` can be relative, can be
 changed by the caller, and the working directory may move. It is resolved and cached at
-startup, before any `chdir`, with a fallback for a live medium where `/proc` is not
-mounted.
+startup, before any `chdir`. Where `/proc` is not mounted there is no fallback: the run
+is refused, and an explicit override on the command line is the remedy.
 
 > *Implementation note (M1).* `platform::ExecutablePath` resolves `/proc/self/exe` and,
 > when it cannot, **refuses with no fallback** — not to `argv[0]`, which this section
 > already rules out, and not to anything else: a live medium without `/proc` is exactly
 > where a wrong worker binary would be hardest to notice, and the code's position is that
 > an explicit override belongs on the command line, where the user can see what they chose.
-> That override does not exist yet. Whether the fallback this paragraph promises stands,
-> or the explicit override replaces it, is an open owner decision (JOURNAL §6).
+> That override does not exist yet. *Decided 2026-10-20 (ADR 0002's rule: decide, record,
+> continue):* the refusal stands and the silent fallback is withdrawn. A fallback would pick
+> a binary on exactly the machine where a wrong pick is least visible; a refusal costs a
+> user one flag. The override, `--worker-executable PATH`, lands when a live-medium user
+> first needs it.
 
 #### The rule that makes multi-process safer rather than more dangerous
 
@@ -2071,6 +2074,7 @@ quietly assumed done:
 configured duration, honours limits, and survives a deliberately crashed worker
 while reporting it correctly.
 
-M1 is the first milestone that needs an answer to Q10 (worker process
-granularity); the recommendation stands at a single worker process, revisited at
-M5.
+Q10 (worker process granularity) is closed: multiple worker processes, one
+executable re-executed with an internal switch (§4.6, revision 14). The controller
+that runs them landed in #23. What remains of M1, in order, is the queue in
+[`ROADMAP.md`](ROADMAP.md).

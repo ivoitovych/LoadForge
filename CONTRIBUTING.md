@@ -2,8 +2,10 @@
 
 Contributions are welcome — issues, forks and pull requests alike.
 
-**Current status: M0 (foundation) is complete.** The build system, CI and the first core
-module are in place; workloads begin at M2a. The rules below apply to code now.
+**Current status: M0 is complete and M1 is nearly done.** The platform layer, topology
+discovery, configuration, the worker process and its IPC, and the controller that runs the
+null workload under supervision are on `main`; workloads begin at M2a. What comes next, in
+order, is [`docs/ROADMAP.md`](docs/ROADMAP.md). The rules below apply to code now.
 
 Review of [`docs/PLAN.md`](docs/PLAN.md) is still valuable, particularly the open
 questions at the end.

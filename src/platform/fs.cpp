@@ -40,8 +40,9 @@ core::Result<std::string, SyscallError> FileSystem::read_file(const std::string&
     if (!count.has_value()) {
       // EINTR is not a failure: a signal arrived before any byte was
       // transferred, and the read must simply be reissued. The controller
-      // installs handlers for SIGCHLD and the shutdown signals, so this is
-      // reached in normal operation rather than in some exotic corner.
+      // installs no signal handlers (a worker's death wakes its poll instead),
+      // but anything else in the process may, so this is a normal condition
+      // rather than an exotic corner.
       //
       // But the retry is BOUNDED. Retrying forever is what everyone writes and
       // it turns a signal storm into a hang, and a hung sampler is worse than a

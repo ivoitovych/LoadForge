@@ -34,7 +34,7 @@ into the released executable.
                pending a release pinned by verified SHA-256)
     Licence  : Apache-2.0  -- GPL-compatible
 
-No component is vendored under third_party/ yet.
+One component is vendored under third_party/: toml++, below.
 
 third_party/MANIFEST.toml is the authoritative record: name, version, immutable
 SHA, source, licence and whether it is linked into the binary. CI
