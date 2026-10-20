@@ -74,6 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: ./tests/tools/test_tooling.sh
+      - run: ./tests/tools/test_git_hooks.sh
       - run: ./tests/tools/test_runtime_deps.sh
       - name: Install linters
         # Ruff is pinned for the same reason gcovr is: its formatter's output
