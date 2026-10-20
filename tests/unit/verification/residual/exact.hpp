@@ -22,6 +22,17 @@
 namespace loadforge::verification::exact {
 
 __extension__ using Int128 = __int128;
+__extension__ using UInt128 = unsigned __int128;
+
+/// a * b, exactly: |a|, |b| <= 2^53, so the product is below 2^106 and the
+/// wrapped unsigned product, read back as signed, is the true one (C++20
+/// defines that conversion as modular). Multiplied unsigned because a signed
+/// 128-bit multiplication under -fsanitize=undefined calls __muloti4, which
+/// the ARM64 toolchain's runtime does not provide, and the link fails.
+inline Int128 product(std::int64_t a, std::int64_t b) {
+  return static_cast<Int128>(static_cast<UInt128>(static_cast<Int128>(a)) *
+                             static_cast<UInt128>(static_cast<Int128>(b)));
+}
 
 /// x as an integer count of 2^-52. x must be such a multiple with |x| < 2^11.
 inline std::int64_t scaled52(double x) {
@@ -39,9 +50,9 @@ struct Dot {
 inline Dot dot(std::span<const double> x, std::span<const double> y) {
   Dot result;
   for (std::size_t i = 0; i < x.size(); ++i) {
-    const Int128 product = Int128{scaled52(x[i])} * Int128{scaled52(y[i])};
-    result.value += product;
-    result.magnitude += product < 0 ? -product : product;
+    const Int128 term = product(scaled52(x[i]), scaled52(y[i]));
+    result.value += term;
+    result.magnitude += term < 0 ? -term : term;
   }
   return result;
 }

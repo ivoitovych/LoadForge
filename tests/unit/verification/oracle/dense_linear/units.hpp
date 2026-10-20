@@ -64,9 +64,9 @@ inline std::vector<double> exact_product(const std::vector<double>& a,
   for (std::size_t i = 0; i < kN; ++i) {
     std::fill(row.begin(), row.end(), exact::Int128{0});
     for (std::size_t k = 0; k < kN; ++k) {
-      const exact::Int128 aik = sa[i * kN + k];
+      const std::int64_t aik = sa[i * kN + k];
       for (std::size_t j = 0; j < kN; ++j) {
-        row[j] += aik * sb[k * kN + j];
+        row[j] += exact::product(aik, sb[k * kN + j]);
       }
     }
     for (std::size_t j = 0; j < kN; ++j) {
