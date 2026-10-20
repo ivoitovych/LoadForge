@@ -11,6 +11,7 @@
 #include "config/config.hpp"
 #include "core/version.hpp"
 #include "platform/syscalls.hpp"
+#include "topology/snapshot.hpp"
 
 namespace loadforge::cli {
 
@@ -35,13 +36,18 @@ inline constexpr std::string_view kVersion = core::kVersion;
 
 /// The stress command: loads the configuration, refuses a mode this build
 /// does not run, resolves the worker executable from `self_link` (always
-/// /proc/self/exe in `run`; a test names a link that does not resolve), and
-/// hands the run to run_stress.
+/// /proc/self/exe in `run`; a test names a link that does not resolve), takes
+/// the topology snapshot from `sysfs_root` (always /sys in `run`; a test names
+/// a tree that refuses), and hands the run to run_stress. A machine whose
+/// topology cannot be described is refused before any worker exists: the
+/// snapshot is the frame the run is reported against (docs/PLAN.md §4.1).
 [[nodiscard]] int stress(std::string_view config_path, const std::string& self_link,
-                         std::ostream& out, std::ostream& err);
+                         std::string_view sysfs_root, std::ostream& out, std::ostream& err);
 
 /// The stress command past its argument handling: a loaded configuration,
-/// the executable the workers will be, and the seam they run on. It reads the
+/// the executable the workers will be, the topology snapshot already taken,
+/// and the seam they run on. A reference, so no run can start without the
+/// machine described before its first fork. It reads the
 /// memory budget and opens the OOM-kill record through that seam, so the
 /// controller checks memory against a real ceiling and can tell an OOM kill
 /// from any other SIGKILL; memory is reported NOT ENFORCED only when the
@@ -51,7 +57,8 @@ inline constexpr std::string_view kVersion = core::kVersion;
 /// are driven with a fake; `run` calls it with the real seam and this
 /// executable, resolved from /proc/self/exe.
 [[nodiscard]] int run_stress(platform::Syscalls& syscalls, const config::Config& config,
-                             const std::string& executable, std::ostream& out, std::ostream& err);
+                             const std::string& executable, const topology::Snapshot& snapshot,
+                             std::ostream& out, std::ostream& err);
 
 }  // namespace loadforge::cli
 

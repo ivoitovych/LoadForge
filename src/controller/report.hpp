@@ -25,6 +25,9 @@ struct RunPlan {
   std::size_t workers = 0;
   std::string executable;
   std::vector<LimitStatus> limits;
+  /// The machine as the snapshot taken before the first fork describes it
+  /// (topology::describe), or a statement that no snapshot was offered.
+  std::string topology;
 
   [[nodiscard]] friend bool operator==(const RunPlan&, const RunPlan&) = default;
 };

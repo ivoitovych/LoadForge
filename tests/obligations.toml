@@ -140,8 +140,10 @@ path    = "src/controller"
 classes = ["P1", "P2", "P3", "P6"]
 tiers   = ["T1", "T2", "T7"]
 note    = """
-The supervisor. P6 is its whole subject: spawn, the controller's own beat \
-before the first fork, the deadline's stop request, the escalation ladder \
+The supervisor. P6 is its whole subject: the topology snapshot the stress \
+command takes before the run and the plan carries before the first fork \
+(START to RUNNING; refused by the command when /sys will not describe the \
+machine), spawn, the controller's own beat before the first fork, the deadline's stop request, the escalation ladder \
 (request, SIGTERM, SIGKILL, each after its grace), reap, drain, classify. \
 The classification table (supervision) is pure and tested row by row against \
 the misbehaviour catalogue of IMPLEMENTATION 4, including the pairs that must \
@@ -155,7 +157,9 @@ the control write, the release. T7 is tests/supervision: the shipped binary \
 as the worker, N >= 2 in every case -- two complete for the duration, one is \
 killed from outside while the other completes, and the controller itself is \
 killed and every orphan is reaped by the test as subreaper and found dead by \
-the parent-death signal within a bounded time. \
+the parent-death signal within a bounded time; and a real snapshot of this \
+machine's /sys is in the plan before the spawn of two real workers, its CPU \
+count checked against sysconf. \
 \
 The misbehaviour catalogue of IMPLEMENTATION 4 is tests/supervision/catalogue_test.cpp: \
 the controller runs tests/support/fake_worker, a second implementation of the \
@@ -325,6 +329,7 @@ fixture_builders = [
   "tests/unit/topology/cpu_topology_test.cpp",
   "tests/unit/topology/cache_test.cpp",
   "tests/unit/topology/numa_test.cpp",
+  "tests/unit/topology/snapshot_test.cpp",
 ]
 note             = """
 The sysfs CPU-list parser, and the Source that decides what a failed reading \
@@ -411,5 +416,10 @@ Source::lines(); the MemTotal parsing stays in numa.cpp until /proc/meminfo \
 at M3 gives it a second caller. Its size parser is its \
 own rather than core::parse_byte_size, which rejects the bare K sysfs writes \
 and accepts the percentages a cache size must never; a test pins that boundary \
-in both directions so nobody unifies them.\
+in both directions so nobody unifies them. \
+\
+The Snapshot takes the three together, once, for the controller to hold \
+before it forks (PLAN 4.1): whole or not taken, the first half to refuse is \
+the answer, and a layout the kernel does not publish is described as not \
+exposed, never as zero.\
 """

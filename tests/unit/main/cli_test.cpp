@@ -9,6 +9,8 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -19,8 +21,11 @@
 #include "core/byte_size.hpp"
 #include "core/duration.hpp"
 #include "platform/clock.hpp"
+#include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
 #include "support/fake_syscalls.hpp"
+#include "topology/cpu_topology.hpp"
+#include "topology/snapshot.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -248,12 +253,54 @@ TEST(Cli, StressRefusesToRunWhenItCannotNameTheWorkerExecutable) {
   std::ostringstream out;
   std::ostringstream err;
   EXPECT_EQ(stress(LOADFORGE_SOURCE_DIR "/tests/fixtures/config/short-stress.toml",
-                   LOADFORGE_SOURCE_DIR "/no-such-link", out, err),
+                   LOADFORGE_SOURCE_DIR "/no-such-link", topology::kDefaultSysfsRoot, out, err),
             1);
   EXPECT_NE(err.str().find("cannot resolve this executable for the workers: readlink("),
             std::string::npos)
       << err.str();
   EXPECT_TRUE(out.str().empty());
+}
+
+TEST(Cli, StressRefusesAMachineItCannotDescribeBeforeAnyWorkerStarts) {
+  // The topology snapshot is the frame the run is reported against, and it
+  // is taken before the first fork (docs/PLAN.md §4.1): a /sys that will not
+  // describe the machine refuses the run while no worker exists. A real
+  // executable link, so the snapshot is the only thing that can refuse.
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(stress(LOADFORGE_SOURCE_DIR "/tests/fixtures/config/short-stress.toml",
+                   "/proc/self/exe", LOADFORGE_SOURCE_DIR "/no-such-sysfs", out, err),
+            1);
+  EXPECT_NE(err.str().find("loadforge: cannot describe this machine before starting workers: " +
+                           std::string{LOADFORGE_SOURCE_DIR} +
+                           "/no-such-sysfs/devices/system/cpu/online"),
+            std::string::npos)
+      << err.str();
+  EXPECT_TRUE(out.str().empty()) << "no banner, so no run: " << out.str();
+}
+
+/// One online CPU on its own core, no caches, no NUMA layout: the smallest
+/// /sys a snapshot accepts, built once on disk for the runs over the fake.
+const topology::Snapshot& one_cpu_machine() {
+  static const topology::Snapshot machine = [] {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+                                       ("loadforge-cli-sysfs-" + std::to_string(::getpid()));
+    const std::filesystem::path cpu = root / "devices" / "system" / "cpu";
+    std::filesystem::create_directories(cpu / "cpu0" / "topology");
+    for (const auto& [file, text] :
+         {std::pair{cpu / "online", "0"}, std::pair{cpu / "cpu0" / "topology" / "core_id", "0"},
+          std::pair{cpu / "cpu0" / "topology" / "physical_package_id", "0"},
+          std::pair{cpu / "cpu0" / "topology" / "thread_siblings_list", "0"}}) {
+      std::ofstream(file) << text << "\n";
+    }
+    platform::RealSyscalls syscalls;
+    platform::FileSystem filesystem(syscalls);
+    auto taken = topology::take_snapshot(filesystem, root.string());
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    return std::move(taken).value();
+  }();
+  return machine;
 }
 
 /// Two null workloads for a short while, for driving run_stress over a fake.
@@ -273,7 +320,8 @@ TEST(Cli, RunStressReturnsAFailedWorkersExitCodeInTheChild) {
   syscalls.set_parent_pid(testing::FakeSyscalls::kFakePid);
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", out, err), 120);
+  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(), out, err),
+            120);
   EXPECT_TRUE(err.str().empty()) << err.str();
   EXPECT_EQ(syscalls.exec_count(), 1);
 }
@@ -284,7 +332,7 @@ TEST(Cli, RunStressReportsAControllerFailureAndTheUncleanRun) {
   failing.script_forks({{0, EAGAIN}});
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(failing, two_workloads(), "/opt/loadforge", out, err), 1);
+  EXPECT_EQ(run_stress(failing, two_workloads(), "/opt/loadforge", one_cpu_machine(), out, err), 1);
   EXPECT_NE(err.str().find("loadforge: spawn: fork(worker process): Resource temporarily"),
             std::string::npos)
       << err.str();
@@ -298,8 +346,13 @@ TEST(Cli, RunStressReportsAControllerFailureAndTheUncleanRun) {
       {{platform::Reaped{1001, 0}, 0}, {platform::Reaped{1002, 0}, 0}});
   std::ostringstream report;
   std::ostringstream quiet;
-  EXPECT_EQ(run_stress(unclean, two_workloads(), "/opt/loadforge", report, quiet), 3);
+  EXPECT_EQ(
+      run_stress(unclean, two_workloads(), "/opt/loadforge", one_cpu_machine(), report, quiet), 3);
   EXPECT_NE(report.str().find("0 of 2 worker(s) completed"), std::string::npos) << report.str();
+  EXPECT_NE(report.str().find("\n  topology: 1 logical CPU(s) on 1 core(s) in 1 package(s); "
+                              "caches not exposed; NUMA not exposed\n"),
+            std::string::npos)
+      << "the snapshot it was given reaches the banner: " << report.str();
   EXPECT_NE(report.str().find("evidence truncated"), std::string::npos) << report.str();
   EXPECT_TRUE(quiet.str().empty()) << quiet.str();
 }
@@ -333,7 +386,7 @@ TEST(Cli, RunStressChecksMemoryAgainstTheBudgetItReads) {
   serve_machine(two_quick_exits(syscalls, 0), "MemAvailable:   1048576 kB\n");
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", out, err), 3);
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), out, err), 3);
   EXPECT_NE(out.str().find("limit memory: enforced (checked at start against a ceiling of 1GiB)"),
             std::string::npos)
       << out.str();
@@ -343,7 +396,7 @@ TEST(Cli, RunStressChecksMemoryAgainstTheBudgetItReads) {
   serve_machine(two_quick_exits(refusing, 0), "MemAvailable:   1048576 kB\n");
   std::ostringstream quiet;
   std::ostringstream refusal;
-  EXPECT_EQ(run_stress(refusing, config, "/opt/loadforge", quiet, refusal), 1);
+  EXPECT_EQ(run_stress(refusing, config, "/opt/loadforge", one_cpu_machine(), quiet, refusal), 1);
   EXPECT_NE(refusal.str().find("loadforge: memory: workload.first: "), std::string::npos)
       << refusal.str();
   EXPECT_EQ(refusing.fork_count(), 0) << "refused before any worker started";
@@ -356,7 +409,7 @@ TEST(Cli, RunStressSaysWhyMemoryIsNotEnforcedWhenTheBudgetCannotBeRead) {
   serve_machine(two_quick_exits(syscalls, 0), "MemTotal:       16479424 kB\n");
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", out, err), 3);
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), out, err), 3);
   EXPECT_NE(out.str().find("limit memory: NOT ENFORCED (no memory budget could be read: "
                            "/proc/meminfo: not offered by this kernel (no MemAvailable line"),
             std::string::npos)
@@ -368,7 +421,8 @@ TEST(Cli, RunStressConsultsTheOomRecordForASigkillNobodySent) {
   serve_machine(two_quick_exits(syscalls, SIGKILL), "MemAvailable:   1048576 kB\n");
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", out, err), 3);
+  EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(), out, err),
+            3);
   EXPECT_NE(out.str().find("worker 0 (pid 1001): killed; killed by signal 9"), std::string::npos)
       << out.str();
   EXPECT_NE(out.str().find("not attributed to the OOM killer: the OOM-kill count could not be "

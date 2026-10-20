@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -16,6 +17,8 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <optional>
 #include <string>
@@ -29,9 +32,12 @@
 #include "controller/supervision.hpp"
 #include "core/byte_size.hpp"
 #include "core/duration.hpp"
+#include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
 #include "resources/oom_kill_record.hpp"
 #include "support/fake_syscalls.hpp"
+#include "topology/cpu_topology.hpp"
+#include "topology/snapshot.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -117,6 +123,45 @@ class ScriptedOomRecord final : public resources::OomKillRecord {
 
   std::deque<core::Result<std::uint64_t, std::string>> readings;
   int reads = 0;
+};
+
+/// The smallest sysfs a topology snapshot accepts, built on disk: one online
+/// CPU on its own core in package 0, no cache directories, no NUMA layout.
+/// The controller only carries a snapshot into its plan; what discovery reads
+/// is the topology module's business and its own tests'.
+class OneCpuSysfs {
+ public:
+  OneCpuSysfs()
+      : root_(std::filesystem::temp_directory_path() /
+              ("loadforge-controller-sysfs-" + std::to_string(::getpid()))) {
+    const std::filesystem::path cpu = root_ / "devices" / "system" / "cpu";
+    std::filesystem::create_directories(cpu / "cpu0" / "topology");
+    write(cpu / "online", "0");
+    write(cpu / "cpu0" / "topology" / "physical_package_id", "0");
+    write(cpu / "cpu0" / "topology" / "core_id", "0");
+    write(cpu / "cpu0" / "topology" / "thread_siblings_list", "0");
+  }
+  ~OneCpuSysfs() {
+    std::error_code ignored;
+    std::filesystem::remove_all(root_, ignored);
+  }
+  OneCpuSysfs(const OneCpuSysfs&) = delete;
+  OneCpuSysfs& operator=(const OneCpuSysfs&) = delete;
+  OneCpuSysfs(OneCpuSysfs&&) = delete;
+  OneCpuSysfs& operator=(OneCpuSysfs&&) = delete;
+
+  [[nodiscard]] core::Result<topology::Snapshot, topology::DiscoveryFailure> snapshot() const {
+    platform::RealSyscalls syscalls;
+    platform::FileSystem filesystem(syscalls);
+    return topology::take_snapshot(filesystem, root_.string());
+  }
+
+ private:
+  static void write(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream out(path);
+    out << text << "\n";
+  }
+  std::filesystem::path root_;
 };
 
 struct Rig {
@@ -268,8 +313,37 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   EXPECT_EQ(rig.reporter.plans[0].workers, 2U);
   EXPECT_EQ(rig.reporter.plans[0].executable, "/opt/loadforge");
   EXPECT_EQ(rig.reporter.plans[0].limits.size(), 1U);
+  EXPECT_EQ(rig.reporter.plans[0].topology, "no snapshot offered");
   ASSERT_EQ(rig.reporter.reports.size(), 1U);
   EXPECT_EQ(rig.reporter.reports[0], report);
+}
+
+TEST(ControllerTest, ThePlanDescribesTheSnapshotItWasGivenBeforeAnyWorkerExists) {
+  // The snapshot is taken by the caller before the run (docs/PLAN.md §4.1);
+  // the controller carries it into the plan, which reaches the reporter
+  // before the first fork.
+  const OneCpuSysfs tree;
+  auto snapshot = tree.snapshot();
+  ASSERT_TRUE(snapshot.has_value()) << topology::describe(snapshot.error());
+  Rig rig;
+  rig.options.topology = &snapshot.value();
+  int forks_at_start = -1;
+  rig.reporter.on_starting = [&rig, &forks_at_start] {
+    forks_at_start = rig.syscalls.fork_count();
+    rig.hold_worker_ends();
+  };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_EQ(rig.reporter.plans.size(), 1U);
+  EXPECT_EQ(rig.reporter.plans[0].topology,
+            "1 logical CPU(s) on 1 core(s) in 1 package(s); caches not exposed; NUMA not exposed");
+  EXPECT_EQ(forks_at_start, 0) << "the plan, and the snapshot in it, came before any fork";
 }
 
 TEST(ControllerTest, TheChildOfAFailedExecReturnsItsOwnExitCodeAndTouchesNothingElse) {
@@ -1311,6 +1385,12 @@ TEST(ControllerTest, ReportValuesCompareFieldByField) {
   ScriptedOomRecord record;
   p.oom_record = &record;
   EXPECT_NE(o, p);
+  p = o;
+  const OneCpuSysfs tree;
+  auto snapshot = tree.snapshot();
+  ASSERT_TRUE(snapshot.has_value());
+  p.topology = &snapshot.value();
+  EXPECT_NE(o, p);
 
   const RunPlan plan;
   RunPlan other = plan;
@@ -1328,6 +1408,9 @@ TEST(ControllerTest, ReportValuesCompareFieldByField) {
   EXPECT_NE(plan, other);
   other = plan;
   other.limits.push_back(LimitStatus{});
+  EXPECT_NE(plan, other);
+  other = plan;
+  other.topology = "x";
   EXPECT_NE(plan, other);
 
   const ControllerError e{"a", "b"};

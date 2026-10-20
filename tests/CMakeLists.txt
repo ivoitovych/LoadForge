@@ -24,6 +24,7 @@ add_executable(loadforge_unit_tests
   unit/topology/cpu_topology_test.cpp
   unit/topology/cache_test.cpp
   unit/topology/numa_test.cpp
+  unit/topology/snapshot_test.cpp
   unit/resources/cgroup_test.cpp
   unit/resources/memory_budget_test.cpp
   unit/resources/cgroup_oom_record_test.cpp
@@ -104,6 +105,12 @@ add_test(NAME cli_stress_enforces_memory
          COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress-memory.toml")
 set_tests_properties(cli_stress_enforces_memory PROPERTIES
                      PASS_REGULAR_EXPRESSION "limit memory: enforced \\(checked at start against a ceiling of")
+# The topology snapshot through the real binary on the real machine: taken
+# before the first fork and printed in the banner, which precedes the spawn.
+add_test(NAME cli_stress_describes_the_machine
+         COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress.toml")
+set_tests_properties(cli_stress_describes_the_machine PROPERTIES
+                     PASS_REGULAR_EXPRESSION "\n  topology: [0-9]+ logical CPU\\(s\\) on [0-9]+ core\\(s\\) in [0-9]+ package\\(s\\); [^\n]*\n  limit duration")
 add_test(NAME cli_stress_refuses_other_modes
          COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/benchmark-mode.toml")
 set_tests_properties(cli_stress_refuses_other_modes PROPERTIES WILL_FAIL TRUE)

@@ -1602,6 +1602,43 @@ none was available; the step fails loudly if it is wrong.
 against a worker killed by `kill -9` from the test. It needs no limit, only a count to
 read, so it runs under `ctest` wherever the machine keeps one, CI included.
 
+### 2.25 The topology snapshot before the fork: taken by the command, carried by the controller
+
+Found by the M1 exit review: the state machine's first transition, START to RUNNING, is
+labelled "topology snapshot taken (before fork)", PLAN §4.1 says the controller discovers
+topology once before it forks, and the module ledger said the rule was the controller's to
+honour. Nothing did: `loadforge stress` forked its workers without describing the machine
+at all.
+
+**Chosen:** `topology::take_snapshot` takes CPUs, caches and NUMA together, whole or not at
+all, the first half to refuse being the answer. The stress command takes it from `/sys`
+after resolving the worker executable and before the run, and refuses the run (exit 1,
+the reason in discovery's words) when `/sys` will not describe the machine: the snapshot
+is the frame every later report is attributed against, and a run on a machine described
+wrongly would attribute everything wrongly. `run_stress` takes it by reference, so no run
+reaches the controller without one; `RunOptions::topology` carries it, non-owning, and the
+plan describes it in one line, which the console prints in the banner, before the spawn.
+
+*Rejected:*
+
+- *The controller discovers it in `prepare`.* Every one of the controller's unit tests runs
+  over the system-call fake, whose reads are one script for every file; discovery inside
+  the loop would have made each of them script a `/sys`. The budget and the OOM record are
+  read by the command and handed in for the same reason (§2.23), and the snapshot follows
+  that precedent. The controller still holds it before it forks, which is the rule.
+- *A required field the controller refuses without.* The same cost to the controller's
+  tests, and the requirement is already a reference in `run_stress`, the one caller that
+  starts real runs. A run with no snapshot offered says so in its plan.
+- *Run on with "topology unknown", as with an unreadable memory budget.* The budget is a
+  limit, and NOT ENFORCED is a true statement about a run that can still be meaningful.
+  An undescribed machine is a run whose every later attribution has no frame.
+- *CPUs only.* PLAN §4.1's snapshot is the machine's topology, caches and NUMA included,
+  and each half is already discovered against the CPUs; a partial snapshot would be a
+  description nobody could tell was partial.
+
+At M1 nothing reads the snapshot but the banner; telemetry attribution, placement and the
+run fingerprint arrive from M3 and read it from there.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
