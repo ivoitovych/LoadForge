@@ -34,6 +34,7 @@ add_executable(loadforge_unit_tests
   unit/controller/orchestration_test.cpp
   unit/reporters/console_test.cpp
   unit/platform/real_syscalls_test.cpp
+  unit/platform/fake_syscalls_test.cpp
   unit/platform/result_instantiations_test.cpp
   unit/third_party/tomlplusplus_smoke_test.cpp
 )

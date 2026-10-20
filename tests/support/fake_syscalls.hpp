@@ -310,6 +310,18 @@ class FakeSyscalls final : public platform::Syscalls {
   /// stragglers that do not exist.
   void group_left_running(pid_t group) { groups_left_running_.push_back(group); }
 
+  /// The child has terminated and nobody has reaped it: a zombie. From here
+  /// has_exited answers true, and a signal to it still SUCCEEDS, as the
+  /// kernel's does (journal §1.27); only the reap that delivers it turns a
+  /// signal into ESRCH. A fake that answered ESRCH for a zombie hid EXT-01:
+  /// the controller's "a dead worker is ESRCH" never met the success that the
+  /// kernel gives. A pid never mentioned is a running child.
+  void child_exits(pid_t pid) { zombies_.insert(pid); }
+  [[nodiscard]] bool is_zombie(pid_t pid) const { return zombies_.contains(pid); }
+  [[nodiscard]] bool is_reaped(pid_t pid) const { return reaped_.contains(pid); }
+  void fail_has_exited(int error) { has_exited_error_ = error; }
+  [[nodiscard]] const std::vector<pid_t>& exit_peeks() const { return exit_peeks_; }
+
   [[nodiscard]] int wait_count() const { return wait_count_; }
   [[nodiscard]] const std::vector<std::pair<pid_t, int>>& signals_sent() const {
     return signals_sent_;
@@ -331,6 +343,7 @@ class FakeSyscalls final : public platform::Syscalls {
     if (step.error != 0) {
       return platform::SyscallError{step.error, "waitpid", "any child"};
     }
+    mark_reaped(step.reaped.pid);
     return step.reaped;
   }
 
@@ -358,7 +371,20 @@ class FakeSyscalls final : public platform::Syscalls {
     if (step.error != 0) {
       return platform::SyscallError{step.error, "waitpid", "any child, without waiting"};
     }
+    mark_reaped(step.reaped.pid);
     return std::optional<platform::Reaped>{step.reaped};
+  }
+
+  core::Result<bool, platform::SyscallError> has_exited(pid_t pid) override {
+    exit_peeks_.push_back(pid);
+    if (has_exited_error_ != 0) {
+      return platform::SyscallError{has_exited_error_, "waitid", "exit status, without reaping"};
+    }
+    // A reaped child is no longer ours to ask about: ECHILD, as waitid says.
+    if (reaped_.contains(pid)) {
+      return platform::SyscallError{ECHILD, "waitid", "exit status, without reaping"};
+    }
+    return zombies_.contains(pid);
   }
 
   /// Set what a given clock id reports. Unset clocks return a fixed value, so a
@@ -450,6 +476,11 @@ class FakeSyscalls final : public platform::Syscalls {
     }
     if (signal_error_ != 0) {
       return platform::SyscallError{signal_error_, "kill", "pid " + std::to_string(pid)};
+    }
+    // The kernel: a zombie takes the signal and discards it, and only a pid
+    // that has been reaped is ESRCH.
+    if (reaped_.contains(pid)) {
+      return platform::SyscallError{ESRCH, "kill", "pid " + std::to_string(pid)};
     }
     if (pid < 0 && std::find(groups_left_running_.begin(), groups_left_running_.end(), -pid) ==
                        groups_left_running_.end()) {
@@ -1037,6 +1068,16 @@ class FakeSyscalls final : public platform::Syscalls {
   std::deque<WaitStep> nonblocking_reaps_;
   int nonblocking_reap_error_ = 0;
   int nonblocking_reap_count_ = 0;
+
+  void mark_reaped(pid_t pid) {
+    zombies_.erase(pid);
+    reaped_.insert(pid);
+  }
+
+  std::set<pid_t> zombies_;
+  std::set<pid_t> reaped_;
+  int has_exited_error_ = 0;
+  std::vector<pid_t> exit_peeks_;
 
   int signal_error_ = 0;
   std::map<pid_t, int> signal_errors_;

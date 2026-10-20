@@ -413,6 +413,89 @@ TEST_F(RealProcessSyscallsTest, SignallingAReapedPidIsESRCH) {
   EXPECT_NE(sent.error().subject.find("pid "), std::string::npos);
 }
 
+TEST_F(RealProcessSyscallsTest, KillSucceedsOnAnUnreapedZombieAndOnlyTheReapMakesItESRCH) {
+  // The kernel fact behind EXT-01 (journal §1.27), pinned against the kernel
+  // so that no fake can drift from it: a child that has terminated and not
+  // been reaped is a zombie, kill(2) on it SUCCEEDS, and the signal changes
+  // nothing about how the child died. ESRCH comes only after the reap.
+  const auto forked = syscalls.fork_process();
+  ASSERT_TRUE(forked.has_value()) << describe(forked.error());
+  if (forked.value() == 0) {
+    ::_exit(0);
+  }
+  const pid_t child = forked.value();
+  // The barrier: the child has terminated, and WNOWAIT leaves it unreaped.
+  siginfo_t info{};
+  ASSERT_EQ(::waitid(P_PID, static_cast<id_t>(child), &info, WEXITED | WNOWAIT), 0);
+  ASSERT_EQ(info.si_pid, child);
+
+  const auto sent = syscalls.send_signal(child, SIGKILL);
+  EXPECT_TRUE(sent.has_value()) << (sent.has_value() ? "" : describe(sent.error()));
+
+  int raw = 0;
+  ASSERT_EQ(::waitpid(child, &raw, 0), child);
+  EXPECT_EQ(ExitStatus{raw}.termination(), Termination::kExited)
+      << "the SIGKILL did not change how it died";
+  EXPECT_EQ(ExitStatus{raw}.code(), 0);
+
+  const auto after = syscalls.send_signal(child, SIGKILL);
+  ASSERT_FALSE(after.has_value());
+  EXPECT_EQ(after.error().number, ESRCH);
+}
+
+TEST_F(RealProcessSyscallsTest, HasExitedSeesARunningChildAZombieWithoutReapingItAndThenECHILD) {
+  int fds[2] = {-1, -1};
+  ASSERT_EQ(::pipe(fds), 0);
+  const auto forked = syscalls.fork_process();
+  ASSERT_TRUE(forked.has_value()) << describe(forked.error());
+  if (forked.value() == 0) {
+    char byte = 0;
+    (void)::read(fds[0], &byte, 1);  // Held until the parent says go.
+    ::_exit(3);
+  }
+  const pid_t child = forked.value();
+  const auto running = syscalls.has_exited(child);
+  ASSERT_TRUE(running.has_value()) << describe(running.error());
+  EXPECT_FALSE(running.value());
+
+  ASSERT_EQ(::write(fds[1], "g", 1), 1);
+  siginfo_t info{};
+  ASSERT_EQ(::waitid(P_PID, static_cast<id_t>(child), &info, WEXITED | WNOWAIT), 0);
+  for (int peek = 0; peek < 2; ++peek) {
+    const auto zombie = syscalls.has_exited(child);
+    ASSERT_TRUE(zombie.has_value()) << describe(zombie.error());
+    EXPECT_TRUE(zombie.value()) << "asking does not reap, so it can be asked again";
+  }
+  int raw = 0;
+  ASSERT_EQ(::waitpid(child, &raw, 0), child) << "the peek left the child to be reaped";
+  EXPECT_EQ(ExitStatus{raw}.code(), 3);
+  ::close(fds[0]);
+  ::close(fds[1]);
+
+  const auto gone = syscalls.has_exited(child);
+  ASSERT_FALSE(gone.has_value());
+  EXPECT_EQ(gone.error().number, ECHILD);
+  EXPECT_EQ(gone.error().call, "waitid");
+}
+
+TEST(ExitPeekResultTest, ANegativeReturnIsTheFailureWithItsErrno) {
+  const auto failed = exit_peek_result(-1, 0, ECHILD);
+  ASSERT_FALSE(failed.has_value());
+  EXPECT_EQ(failed.error(), (SyscallError{ECHILD, "waitid", "exit status, without reaping"}));
+}
+
+TEST(ExitPeekResultTest, ZeroPidInTheSiginfoIsAChildStillRunning) {
+  const auto running = exit_peek_result(0, 0, 0);
+  ASSERT_TRUE(running.has_value());
+  EXPECT_FALSE(running.value());
+}
+
+TEST(ExitPeekResultTest, ThePidInTheSiginfoIsAChildThatHasTerminated) {
+  const auto exited = exit_peek_result(0, 4321, 0);
+  ASSERT_TRUE(exited.has_value());
+  EXPECT_TRUE(exited.value());
+}
+
 TEST_F(RealSyscallsTest, SignalZeroProbesALiveProcessWithoutDisturbingIt) {
   // Signal 0 is the documented existence check. Asserted against this very
   // process, which is definitely alive, so the success arm of send_signal is

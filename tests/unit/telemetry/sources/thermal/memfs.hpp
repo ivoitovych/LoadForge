@@ -174,6 +174,9 @@ class MemFs final : public platform::Syscalls {
   core::Result<platform::Reaped, platform::SyscallError> wait_any() override {
     return unsupported("wait", {});
   }
+  core::Result<bool, platform::SyscallError> has_exited(pid_t /*pid*/) override {
+    return unsupported("waitid", {});
+  }
   core::Result<core::Ok, platform::SyscallError> send_signal(pid_t /*pid*/,
                                                              int /*signal*/) override {
     return unsupported("kill", {});
