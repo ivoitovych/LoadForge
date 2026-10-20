@@ -7,7 +7,6 @@
 #include "controller/orchestration.hpp"
 
 #include <gtest/gtest.h>
-#include <time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -16,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -892,7 +892,7 @@ TEST(ControllerTest, AChannelThatNeverEndsIsGivenABoundedNumberOfDrains) {
   rig.config.run.duration = core::Duration{1000};
   // A stop grace far longer than 1024 drains take on the fake clock, so the
   // count is the bound that stops it; the time bound has its own test below.
-  rig.options.grace.stop_ns = 3600 * 1000 * kMs;
+  rig.options.grace.stop_ns = std::int64_t{3600} * 1000 * kMs;
   int reads_when_last_reaped = 0;
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
   rig.reporter.on_event = [&rig, &reads_when_last_reaped](const std::string& line) {
