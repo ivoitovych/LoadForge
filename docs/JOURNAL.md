@@ -1846,6 +1846,22 @@ test at the boundary, or allowlisted with a written reason if it is equivalent, 
 follow-up changes per module (ROADMAP item 11b). The sweep merges first: it is weekly and
 gates no pull request, so a red sweep holds nothing up and names exactly what is left.
 
+*The controller and worker shards' 18 survivors* (2026-10-20 12:59 UTC) are all gone, and
+none is allowlisted. Most fell to a test at the boundary: a memory total equal to
+`limits.memory`, an allowance equal to the interval, a region of `kMaxWorkers` attached, a
+frame of the largest payload read back. The fake's clocks start at zero, where `now - last`
+and `now + last` agree, so both torn-slot tests (controller and worker) also run with the
+clock a day past zero. The beat count, the poll timeout and the teardown's wait count are now
+asserted. A reap after the last worker meets a scripted `ECHILD`, as from the kernel. A pipe
+end numbered 0 (what the kernel hands out when standard input is closed) is closed by the
+teardown, through the fake's new `number_pipes_from`. The rest were equivalent and are gone
+from the code. The teardown's `live_ > 0` guard decided nothing that the wait loop did not.
+`put_u32` is unrolled, and `slot_at`'s span takes the region's length. The seqlock writer's
+two stores now both derive from the odd value, so a wrong sign leaves the sequence unchanged,
+and every reader sees that. The torn reader reports the attempts it made, so 65 no longer
+passes for 64. Each kill was proved by hand: mutate, build, and see the named test fail under
+`--gtest_filter=-RealProcess*`.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
