@@ -59,6 +59,6 @@ confirmed by reading the cited text, and its evidence is the diff that changed i
 
 | Finding | Verdict | Evidence |
 |---|---|---|
-| R-01 | CONFIRMED by derivation | The writer stored the odd sequence and then the fields with no fence between them, so a reader could see new fields under the old even sequence. A data race TSan cannot see, because the reader's retry hides it. Fixed with the release fence in #24; the P5 argument in the heartbeat test states what each fence orders. |
+| R-01 | CONFIRMED by derivation | The writer stored the odd sequence and then the fields with no fence between them, so the field stores could become visible before the odd sequence, and a reader could accept new fields under the old even sequence. TSan does not report it: every access is atomic, and the defect is an ordering, not a race. Fixed with the release fence in #24; the P5 argument in the heartbeat test states what each fence orders. |
 | R-02 | CONFIRMED by reproduction | On `main`, the real-binary stress test died by signal 13 in 2 runs of 12 (ADR 0003, journal §6). The supervision catalogue row (`tests/supervision/catalogue_test.cpp:391`) pins the fix, in #28. |
 | R-06 | CONFIRMED by the mutation run | The `read_count > 1000` assertion let the loop-bound mutant survive. The exact expectation kills it, in #28. |
