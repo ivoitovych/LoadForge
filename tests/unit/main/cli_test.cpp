@@ -191,7 +191,7 @@ TEST(Cli, TheWorkerSwitchRunsARealWorkerInThisProcess) {
   args.pacing = worker::Pacing{5'000'000'000, 10'000'000, 1'000'000'000};
   std::vector<std::string> argv = worker::argv_for("loadforge", args);
   argv.erase(argv.begin());  // The executable; run() takes what follows it.
-  std::vector<std::string_view> views(argv.begin(), argv.end());
+  const std::vector<std::string_view> views(argv.begin(), argv.end());
   const Outcome r = invoke(views);
   EXPECT_EQ(r.code, 0) << r.err;
   EXPECT_TRUE(r.err.empty()) << r.err;

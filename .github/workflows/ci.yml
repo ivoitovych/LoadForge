@@ -110,7 +110,7 @@ jobs:
         env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug
       - name: clang-tidy
-        # src/, and the fake worker: a second implementation of the worker
-        # contract, held to the product's bar rather than the tests' (the rest
-        # of tests/ is roadmap item 12).
-        run: find src tests/support/fake_worker -name '*.cpp' | xargs clang-tidy-18 -p build/debug
+        # src/ and tests/, minus the fixtures (sources the tools tests feed to
+        # other programs, not code of the project). tests/.clang-tidy lists
+        # the checks that do not apply to test code, and why.
+        run: find src tests -name '*.cpp' -not -path 'tests/tools/fixtures/*' | xargs clang-tidy-18 -p build/debug

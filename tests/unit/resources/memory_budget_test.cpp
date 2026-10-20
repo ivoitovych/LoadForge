@@ -193,7 +193,7 @@ class BudgetTest : public ::testing::Test {
 };
 
 TEST_F(BudgetTest, NoMemoryCgroupLeavesMemAvailableAlone) {
-  tree.meminfo(2 * 1024 * 1024);
+  tree.meminfo(2ULL * 1024 * 1024);
   tree.write("/proc/self/cgroup", "1:cpu:/\n");
   const config::MemoryBudget read = budget();
   EXPECT_EQ(read.available_bytes, 2 * kGiB);
@@ -216,7 +216,7 @@ TEST_F(BudgetTest, V1TakesTheKernelsHierarchicalLimitNotTheLeafsOwnFile) {
 }
 
 TEST_F(BudgetTest, V1InAContainerReadsTheMountItself) {
-  tree.meminfo(4 * 1024 * 1024);
+  tree.meminfo(4ULL * 1024 * 1024);
   tree.write("/proc/self/cgroup", "4:memory:/docker/ab12\n0::/\n");
   tree.write("/proc/self/mountinfo",
              "1234 1230 0:33 /docker/ab12 /sys/fs/cgroup/memory ro master:15 - cgroup cgroup "
@@ -226,7 +226,7 @@ TEST_F(BudgetTest, V1InAContainerReadsTheMountItself) {
 }
 
 TEST_F(BudgetTest, V2TakesTheLowestMemoryMaxFromTheCgroupUpToItsMount) {
-  tree.meminfo(8 * 1024 * 1024);
+  tree.meminfo(8ULL * 1024 * 1024);
   tree.v2("/a/b/c");
   tree.write("/sys/fs/cgroup/a/b/c/memory.max", "max\n");
   tree.write("/sys/fs/cgroup/a/b/memory.max", "1073741824\n");
@@ -248,7 +248,7 @@ TEST_F(BudgetTest, V2TakesTheLowestMemoryMaxFromTheCgroupUpToItsMount) {
 TEST_F(BudgetTest, V2LevelsWithoutMemoryMaxSetNoLimitThere) {
   // A cgroup whose parent does not enable the memory controller for it has no
   // memory.max; nor has the root. Neither is a failure.
-  tree.meminfo(8 * 1024 * 1024);
+  tree.meminfo(8ULL * 1024 * 1024);
   tree.v2("/a/b");
   tree.write("/sys/fs/cgroup/a/memory.max", "1073741824\n");
   EXPECT_EQ(budget().cgroup_limit_bytes, std::optional<std::uint64_t>{kGiB});

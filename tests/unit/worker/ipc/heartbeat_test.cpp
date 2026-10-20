@@ -352,7 +352,10 @@ TEST_F(HeartbeatRegionTest, MovingTransfersOwnershipSoTheRegionIsReleasedOnce) {
   HeartbeatRegion a = std::move(first).value();
   const int fd = a.fd();
   HeartbeatRegion b(std::move(a));
-  EXPECT_EQ(a.fd(), -1);  // NOLINT(bugprone-use-after-move): the moved-from state is the assertion
+  // This test inspects a moved-from object on purpose: what a moved-from
+  // HeartbeatRegion reports is the assertion.
+  // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+  EXPECT_EQ(a.fd(), -1);
   EXPECT_EQ(b.fd(), fd);
 
   auto second = HeartbeatRegion::create(syscalls, 1);

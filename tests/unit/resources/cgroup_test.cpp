@@ -169,7 +169,7 @@ TEST(MountEntryTest, ReadsTheLinesTheKernelWrites) {
 
 TEST(MountEntryTest, PathsAreUnescapedTheWayTheKernelEscapedThem) {
   auto entry =
-      parse_mount_entry("1 2 0:3 /a\\040b\\011c /mnt/x\\134y\\012z rw - cgroup2 cgroup2 rw");
+      parse_mount_entry(R"(1 2 0:3 /a\040b\011c /mnt/x\134y\012z rw - cgroup2 cgroup2 rw)");
   ASSERT_TRUE(entry.has_value()) << entry.error();
   EXPECT_EQ(entry.value().root, "/a b\tc");
   EXPECT_EQ(entry.value().mount_point, "/mnt/x\\y\nz");
