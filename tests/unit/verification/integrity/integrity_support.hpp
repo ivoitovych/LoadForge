@@ -30,7 +30,6 @@
 #include <variant>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
 #include "platform/syscalls.hpp"
 #include "primitives/rng/philox.hpp"
 #include "support/fake_syscalls.hpp"
@@ -138,21 +137,11 @@ class RotorWorkload final : public workloads::Workload {
     rng::fill_stream(seed_, index, input);
   }
 
+  // Defined once, in integrity_support.cpp (journal §1.22): an inline
+  // definition in this header would be one COMDAT copy per test unit, and the
+  // discarded copies of its executor lambda would read as never executed.
   void compute(std::uint64_t index, std::span<const std::byte> input, std::span<std::byte> output,
-               std::span<std::byte> scratch, worker::Executor& executor) const noexcept override {
-    const std::size_t chunks = plan_.decomposition;
-    const auto mask = static_cast<std::byte>(key(index));
-    auto chunk = [&](std::size_t which, std::size_t slot) noexcept {
-      const std::span<std::byte> mine = scratch.subspan(slot * kScratchBytes, kScratchBytes);
-      for (std::size_t at = which * input.size() / chunks; at < (which + 1) * input.size() / chunks;
-           ++at) {
-        const auto value = std::to_integer<std::uint8_t>(input[at]);
-        mine[at % kScratchBytes] = static_cast<std::byte>(std::rotl(value, 3));
-        output[at] = mine[at % kScratchBytes] ^ mask;
-      }
-    };
-    worker::for_each_index(executor, chunks, chunk);
-  }
+               std::span<std::byte> scratch, worker::Executor& executor) const noexcept override;
 
  private:
   RotorWorkload(std::uint64_t seed, const workloads::Plan& plan)
@@ -201,24 +190,9 @@ class MeanWorkload final : public workloads::Workload {
     rng::fill_stream(seed_, index, input);
   }
 
-  void compute(std::uint64_t /*index*/, std::span<const std::byte> input,
-               std::span<std::byte> output, std::span<std::byte> /*scratch*/,
-               worker::Executor& executor) const noexcept override {
-    std::array<std::uint64_t, 2> partial{};
-    auto half = [&](std::size_t which, std::size_t /*slot*/) noexcept {
-      std::uint64_t sum = 0;
-      for (std::size_t at = which * 32; at < (which + 1) * 32; ++at) {
-        sum += std::to_integer<std::uint64_t>(input[at]);
-      }
-      partial.at(which) = sum;
-    };
-    worker::for_each_index(executor, 2, half);
-    const double mean = static_cast<double>(partial[0] + partial[1]) / 64.0;
-    const auto bits = std::bit_cast<std::uint64_t>(mean);
-    for (std::size_t byte = 0; byte < 8; ++byte) {
-      output[byte] = static_cast<std::byte>(bits >> (8 * byte));
-    }
-  }
+  // Defined once, in integrity_support.cpp, for the reason RotorWorkload's is.
+  void compute(std::uint64_t index, std::span<const std::byte> input, std::span<std::byte> output,
+               std::span<std::byte> scratch, worker::Executor& executor) const noexcept override;
 
  private:
   MeanWorkload(std::uint64_t seed, const workloads::Plan& plan)
@@ -318,34 +292,6 @@ class MeanOracle final : public verification::Oracle {
                                          std::nullopt,      0,        1};
   }
 };
-
-/// The specifications' outputs, computed here a third way for the oracle
-/// suites' cases.
-inline contracts::OracleCase rotor_case(std::uint64_t seed, std::uint64_t index) {
-  contracts::OracleCase unit{index, Bytes(RotorWorkload::kInputBytes),
-                             Bytes(RotorWorkload::kOutputBytes)};
-  rng::fill_stream(seed, index, unit.input);
-  for (std::size_t at = 0; at < unit.input.size(); ++at) {
-    const auto value = std::to_integer<std::uint8_t>(unit.input[at]);
-    unit.output[at] = static_cast<std::byte>(
-        static_cast<std::uint8_t>((value << 3U) | (value >> 5U)) ^ RotorWorkload::key(index));
-  }
-  return unit;
-}
-
-inline contracts::OracleCase mean_case(std::uint64_t seed, std::uint64_t index, double shift) {
-  contracts::OracleCase unit{index, Bytes(MeanWorkload::kInputBytes), Bytes(8)};
-  rng::fill_stream(seed, index, unit.input);
-  std::uint64_t sum = 0;
-  for (const std::byte byte : unit.input) {
-    sum += std::to_integer<std::uint64_t>(byte);
-  }
-  const auto bits = std::bit_cast<std::uint64_t>(static_cast<double>(sum) / 64.0 + shift);
-  for (std::size_t byte = 0; byte < 8; ++byte) {
-    unit.output[byte] = static_cast<std::byte>(bits >> (8 * byte));
-  }
-  return unit;
-}
 
 // ---------------------------------------------------------------------------
 // Misbehaving doubles for the fault-injection tier. These break the workload

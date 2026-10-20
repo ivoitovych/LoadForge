@@ -24,6 +24,7 @@
 // reports a VerificationNotPerformed -- the run's failure, never the
 // machine's -- and every later run_slice() answers kFinished.
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -58,6 +59,20 @@ std::string bounded(std::string text) {
   return text;
 }
 
+/// A record built member by member from values the caller already made, one
+/// allocation per statement (journal §1.13): an aggregate whose members
+/// allocate as it is built carries a cleanup for the half-built record that
+/// no test can enter.
+VerificationNotPerformed not_performed(Provenance where, std::string what, std::string why,
+                                       std::uint64_t blocks) noexcept {
+  VerificationNotPerformed record;
+  record.provenance = std::move(where);
+  record.what = std::move(what);
+  record.why = std::move(why);
+  record.blocks_compared = blocks;
+  return record;
+}
+
 /// Everything one unit's steps share, decided by one vote.
 struct Unit {
   std::uint64_t index = 0;
@@ -73,7 +88,7 @@ struct Unit {
 class IntegrityRunner final : public SliceRunner {
  public:
   IntegrityRunner(const RunnerSetup& setup, const Layout& layout, platform::Mapping working_set,
-                  ControlState control) noexcept
+                  ControlState control)
       : workload_(setup.workload),
         oracle_(setup.oracle),
         executor_(setup.executor),
@@ -83,11 +98,16 @@ class IntegrityRunner final : public SliceRunner {
         working_set_(std::move(working_set)),
         control_(std::move(control)),
         next_index_(setup.first_index) {
+    // The workload's name is the setup's, and a record cannot carry one
+    // longer than kMaxTextBytes; it is cut here once rather than in every
+    // record.
+    if (base_.workload.has_value()) {
+      base_.workload = bounded(std::move(*base_.workload));
+    }
     // Line-aligned inside the one line of slack the layout leaves.
-    const auto start = reinterpret_cast<std::uintptr_t>(working_set_.address());
+    const auto start = std::bit_cast<std::uintptr_t>(working_set_.address());
     const std::uintptr_t aligned = (start + layout_.line_bytes - 1) & ~(layout_.line_bytes - 1);
     slack_ = aligned - start;
-    aligned_ = static_cast<std::byte*>(working_set_.address()) + slack_;
   }
 
   core::Result<SliceReport, RunnerError> run_slice(const SliceRequest& request) override {
@@ -117,21 +137,23 @@ class IntegrityRunner final : public SliceRunner {
     report.next_index = next_index_;
     const std::string& name = workload_->descriptor().name;
     if (total_.oracle_blocks == 0) {
-      report.records.emplace_back(VerificationNotPerformed{
-          run_provenance(), bounded("oracle over " + name + " units"),
-          bounded("no block was compared: an oracle period of " +
-                  std::to_string(duty_.oracle_period) + " over " +
-                  std::to_string(total_.units_computed) + " units computed gave " +
-                  std::to_string(total_.oracle_checked) + " to the oracle"),
-          0});
+      Provenance where = run_provenance();
+      std::string what = bounded("oracle over " + name + " units");
+      std::string why = bounded("no block was compared: an oracle period of " +
+                                std::to_string(duty_.oracle_period) + " over " +
+                                std::to_string(total_.units_computed) + " units computed gave " +
+                                std::to_string(total_.oracle_checked) + " to the oracle");
+      report.records.emplace_back(
+          not_performed(std::move(where), std::move(what), std::move(why), 0));
     }
     if (total_.integrity_checked == 0) {
-      report.records.emplace_back(VerificationNotPerformed{
-          run_provenance(), bounded("input-integrity bracket over " + name + " units"),
-          bounded("no unit was bracketed: an integrity period of " +
-                  std::to_string(duty_.integrity_period) + " over " +
-                  std::to_string(total_.units_computed) + " units computed"),
-          0});
+      Provenance where = run_provenance();
+      std::string what = bounded("input-integrity bracket over " + name + " units");
+      std::string why = bounded("no unit was bracketed: an integrity period of " +
+                                std::to_string(duty_.integrity_period) + " over " +
+                                std::to_string(total_.units_computed) + " units computed");
+      report.records.emplace_back(
+          not_performed(std::move(where), std::move(what), std::move(why), 0));
     }
     return report;
   }
@@ -152,7 +174,7 @@ class IntegrityRunner final : public SliceRunner {
                               InputIntegrity integrity) const {
     Provenance provenance = base_;
     provenance.iteration = unit.index;
-    provenance.buffer_address = reinterpret_cast<std::uintptr_t>(working_set_.address()) + offset;
+    provenance.buffer_address = std::bit_cast<std::uintptr_t>(working_set_.address()) + offset;
     provenance.buffer_offset = offset;
     provenance.seed = unit.seed;
     provenance.input_integrity = integrity;
@@ -162,9 +184,19 @@ class IntegrityRunner final : public SliceRunner {
 
   [[nodiscard]] ErrorRecord input_record(const Unit& unit, Difference difference,
                                          InputIntegrity integrity) const {
-    return ExactBitCorruption{at(unit, unit.input_offset, integrity), Side::kInput,
-                              "input against its regeneration", std::move(difference),
-                              unit.line_bytes};
+    ExactBitCorruption record;
+    record.provenance = at(unit, unit.input_offset, integrity);
+    record.side = Side::kInput;
+    record.check = "input against its regeneration";
+    record.difference = std::move(difference);
+    record.line_bytes = unit.line_bytes;
+    return record;
+  }
+
+  /// The whole mapping; every region is a subspan of it, at the slack plus
+  /// the region's offset in the layout.
+  [[nodiscard]] std::span<std::byte> memory() const noexcept {
+    return {static_cast<std::byte*>(working_set_.address()), layout_.mapping_bytes};
   }
 
   /// The decided control state as one unit's working values.
@@ -182,9 +214,8 @@ class IntegrityRunner final : public SliceRunner {
     const std::size_t slot = unit.index % layout_.units;
     unit.input_offset = slack_ + slot * layout_.input_stride;
     unit.output_offset = slack_ + layout_.outputs + slot * layout_.output_stride;
-    std::byte* const mapping = static_cast<std::byte*>(working_set_.address());
-    unit.input = std::span<std::byte>(mapping + unit.input_offset, layout_.input_bytes);
-    unit.output = std::span<std::byte>(mapping + unit.output_offset, layout_.output_bytes);
+    unit.input = memory().subspan(unit.input_offset, layout_.input_bytes);
+    unit.output = memory().subspan(unit.output_offset, layout_.output_bytes);
     return unit;
   }
 
@@ -201,8 +232,10 @@ class IntegrityRunner final : public SliceRunner {
     const bool bracketed =
         unit.duty.integrity_period != 0 && unit.index % unit.duty.integrity_period == 0;
     const bool sampled = unit.duty.oracle_period != 0 && unit.index % unit.duty.oracle_period == 0;
-    const std::span<std::byte> regenerated(aligned_ + layout_.regenerated, layout_.input_bytes);
-    const std::span<std::byte> scratch(aligned_ + layout_.scratch, layout_.scratch_bytes);
+    const std::span<std::byte> regenerated =
+        memory().subspan(slack_ + layout_.regenerated, layout_.input_bytes);
+    const std::span<std::byte> scratch =
+        memory().subspan(slack_ + layout_.scratch, layout_.scratch_bytes);
 
     // 1. write.
     workload_->generate(unit.index, unit.input);
@@ -260,8 +293,8 @@ class IntegrityRunner final : public SliceRunner {
   std::optional<ErrorRecord> check(const Unit& unit, Tally& tally) {
     ++tally.oracle_checked;
     const Provenance where = at(unit, unit.output_offset, InputIntegrity::kNotChecked);
-    const std::string what =
-        "oracle check of " + workload_->descriptor().name + " unit " + std::to_string(unit.index);
+    std::string what = bounded("oracle check of " + workload_->descriptor().name + " unit " +
+                               std::to_string(unit.index));
 
     // A tool failure inside a check is a check not made (runner.hpp), and
     // check() is the one call of the oracle's that is allowed to throw.
@@ -276,7 +309,8 @@ class IntegrityRunner final : public SliceRunner {
     }
     if (thrown.has_value()) {
       ++tally.oracle_not_performed;
-      return VerificationNotPerformed{where, bounded(what), bounded(std::move(*thrown)), 0};
+      std::string why = bounded(std::move(*thrown));
+      return not_performed(where, std::move(what), std::move(why), 0);
     }
 
     // A verdict that breaks the oracle contract cannot be believed either
@@ -285,11 +319,9 @@ class IntegrityRunner final : public SliceRunner {
     // not counted.
     if (!is_valid(verdict, oracle_->contract())) {
       ++tally.oracle_not_performed;
-      return VerificationNotPerformed{where, bounded(what),
-                                      "the oracle's verdict (alternative " +
-                                          std::to_string(verdict.index()) +
-                                          ") breaks the oracle contract",
-                                      0};
+      std::string why = "the oracle's verdict (alternative " + std::to_string(verdict.index()) +
+                        ") breaks the oracle contract";
+      return not_performed(where, std::move(what), std::move(why), 0);
     }
 
     tally.oracle_blocks += blocks_of(verdict);
@@ -328,9 +360,11 @@ class IntegrityRunner final : public SliceRunner {
     halted_ = true;
     const std::string why = integrity::describe(failure);
     halt_detail_ = "the run stopped before unit " + std::to_string(next_index_) + ": " + why;
-    report.records.emplace_back(VerificationNotPerformed{
-        run_provenance(), bounded("control state of the " + workload_->descriptor().name + " run"),
-        bounded(why + "; the run stops rather than pick a value"), 0});
+    Provenance where = run_provenance();
+    std::string what = bounded("control state of the " + workload_->descriptor().name + " run");
+    std::string stated = bounded(why + "; the run stops rather than pick a value");
+    report.records.emplace_back(
+        not_performed(std::move(where), std::move(what), std::move(stated), 0));
   }
 
   const workloads::Workload* workload_;
@@ -341,7 +375,6 @@ class IntegrityRunner final : public SliceRunner {
   Layout layout_;
   platform::Mapping working_set_;
   std::size_t slack_ = 0;
-  std::byte* aligned_ = nullptr;
   ControlState control_;
   Tally total_;
   /// The run's progress as last confirmed, for the report's next_index only;

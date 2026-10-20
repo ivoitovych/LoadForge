@@ -45,6 +45,10 @@ Checked round_up(Checked size, std::size_t line) noexcept {
 
 }  // namespace
 
+// The thread count and the line size are both sizes, each named where it is
+// declared; a struct for two arguments of a pure function would be one more
+// type.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 core::Result<Layout, RunnerError> plan_layout(const workloads::Plan& plan, std::size_t threads,
                                               std::uint32_t line_bytes) {
   if (line_bytes < 8 || !std::has_single_bit(line_bytes)) {

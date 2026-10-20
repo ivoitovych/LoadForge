@@ -368,6 +368,22 @@ TEST(RunnerRunTest, ARecordNamesTheSetupsProvenanceAndLeavesTheSeedAbsentWhenItW
   EXPECT_EQ(provenance.input_integrity, verification::InputIntegrity::kIntact);
 }
 
+TEST(RunnerRunTest, ASetupThatNamesNoWorkloadGivesRecordsThatNameNone) {
+  const auto workload = make_rotor();
+  const RotorOracle oracle;
+  SerialExecutor executor;
+  SteppedSyscalls syscalls;
+  verification::RunnerSetup setup = setup_for(*workload, oracle, executor, syscalls, {0, 0});
+  setup.base.workload.reset();
+  const auto runner = make_runner(setup);
+  ASSERT_NE(runner, nullptr);
+  const auto finished = runner->finish();
+  ASSERT_TRUE(finished.has_value());
+  ASSERT_EQ(finished.value().records.size(), 2U);
+  EXPECT_FALSE(verification::provenance_of(finished.value().records[0]).workload.has_value())
+      << "the runner does not fill in what the worker left unknown";
+}
+
 TEST(RunnerRunTest, FinishThenNothing) {
   const auto workload = make_rotor();
   const RotorOracle oracle;

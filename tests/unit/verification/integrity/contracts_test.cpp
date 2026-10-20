@@ -22,15 +22,40 @@
 namespace loadforge::contracts {
 namespace {
 
-using integrity_testing::mean_case;
 using integrity_testing::MeanOracle;
 using integrity_testing::MeanWorkload;
-using integrity_testing::rotor_case;
 using integrity_testing::rotor_config;
 using integrity_testing::RotorOracle;
 using integrity_testing::RotorWorkload;
 using integrity_testing::SerialExecutor;
 using integrity_testing::ThreadedExecutor;
+
+/// The specifications' outputs, computed here a third way for the oracle
+/// suites' cases.
+OracleCase rotor_case(std::uint64_t seed, std::uint64_t index) {
+  OracleCase unit{index, Bytes(RotorWorkload::kInputBytes), Bytes(RotorWorkload::kOutputBytes)};
+  rng::fill_stream(seed, index, unit.input);
+  for (std::size_t at = 0; at < unit.input.size(); ++at) {
+    const auto value = std::to_integer<std::uint8_t>(unit.input[at]);
+    unit.output[at] = static_cast<std::byte>(
+        static_cast<std::uint8_t>((value << 3U) | (value >> 5U)) ^ RotorWorkload::key(index));
+  }
+  return unit;
+}
+
+OracleCase mean_case(std::uint64_t seed, std::uint64_t index, double shift) {
+  OracleCase unit{index, Bytes(MeanWorkload::kInputBytes), Bytes(8)};
+  rng::fill_stream(seed, index, unit.input);
+  std::uint64_t sum = 0;
+  for (const std::byte byte : unit.input) {
+    sum += std::to_integer<std::uint64_t>(byte);
+  }
+  const auto bits = std::bit_cast<std::uint64_t>(static_cast<double>(sum) / 64.0 + shift);
+  for (std::size_t byte = 0; byte < 8; ++byte) {
+    unit.output[byte] = static_cast<std::byte>(bits >> (8 * byte));
+  }
+  return unit;
+}
 
 struct Provider {
   static core::Result<std::unique_ptr<verification::SliceRunner>, verification::RunnerError> make(
