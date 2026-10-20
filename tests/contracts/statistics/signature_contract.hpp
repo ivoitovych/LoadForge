@@ -82,8 +82,11 @@ class SummarizerContract : public ::testing::Test {
   static statistics::LoadSignature summarize(const telemetry::TimelineView& view,
                                              statistics::Window window) {
     const auto signature = Subject::make()->summarize(view, window);
-    EXPECT_TRUE(signature.has_value());
-    return signature.value_or(statistics::LoadSignature{});
+    if (!signature.has_value()) {
+      ADD_FAILURE() << signature.error().detail;
+      return statistics::LoadSignature{};
+    }
+    return signature.value();
   }
 };
 TYPED_TEST_SUITE_P(SummarizerContract);

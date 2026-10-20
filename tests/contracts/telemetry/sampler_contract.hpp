@@ -79,6 +79,9 @@ class Recording final : public telemetry::TimelineSink {
  public:
   core::Result<telemetry::SeriesId, telemetry::TimelineError> add_series(
       const Metric& metric) override {
+    if (refuse_series) {
+      return telemetry::TimelineError{telemetry::TimelineFault::kCapacity, "full"};
+    }
     series.push_back(metric);
     points.emplace_back();
     return static_cast<telemetry::SeriesId>(series.size() - 1);
@@ -94,6 +97,7 @@ class Recording final : public telemetry::TimelineSink {
   core::Result<core::Ok, telemetry::TimelineError> mark_phase(telemetry::PhaseMark) override {
     return core::Ok{};
   }
+  bool refuse_series = false;
   std::vector<Metric> series;
   std::vector<std::vector<telemetry::Point>> points;
 };
@@ -187,7 +191,16 @@ TYPED_TEST_P(SamplerContract, ATimelineRefusalEndsTheRound) {
   EXPECT_EQ(stale.error().fault, telemetry::TimelineFault::kOutOfOrder);
 }
 
-REGISTER_TYPED_TEST_SUITE_P(SamplerContract, TheProbeReportsEverySourceAndRegistersWhatIsPresent,
+TYPED_TEST_P(SamplerContract, ASeriesTheTimelineRefusesFailsTheProbe) {
+  this->build();
+  this->timeline_.refuse_series = true;
+  const auto report = this->sampler_->probe();
+  ASSERT_FALSE(report.has_value());
+  EXPECT_EQ(report.error().fault, telemetry::TimelineFault::kCapacity);
+}
+
+REGISTER_TYPED_TEST_SUITE_P(SamplerContract, ASeriesTheTimelineRefusesFailsTheProbe,
+                            TheProbeReportsEverySourceAndRegistersWhatIsPresent,
                             NothingIsReadBeforeTheProbe,
                             ARoundPutsEachReadingOnItsSeriesAtTheGivenTime,
                             ASourceThatBreaksItsContractNeverShiftsAnothersReadings,

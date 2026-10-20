@@ -112,8 +112,11 @@ class JournalContract : public ::testing::Test {
   static journal::Replay replayed(std::vector<std::byte> bytes) {
     const journal_suite::MemoryStorage storage(std::move(bytes));
     const auto replay = Subject::replay(storage);
-    EXPECT_TRUE(replay.has_value());
-    return replay.value_or(journal::Replay{});
+    if (!replay.has_value()) {
+      ADD_FAILURE() << replay.error().detail;
+      return journal::Replay{};
+    }
+    return replay.value();
   }
 
   static bool is_prefix(const std::vector<journal::Entry>& entries) {
