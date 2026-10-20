@@ -105,9 +105,12 @@ using Verdict = std::variant<Agreement, ExactMismatch, BoundedMismatch, NotCheck
            std::isfinite(bounded->tolerance) && bounded->tolerance > 0.0 &&
            !(bounded->residual <= bounded->tolerance);
   }
-  const auto* unchecked = std::get_if<NotChecked>(&verdict);
-  return !unchecked->what.empty() && !unchecked->why.empty() &&
-         unchecked->what.size() <= kMaxTextBytes && unchecked->why.size() <= kMaxTextBytes;
+  // The last alternative by std::get, not a dereferenced get_if: GCC at -O3 reports
+  // the latter as a possible null dereference once this is inlined into a consumer,
+  // which failed the static release build (journal fragment 02, question 9).
+  const auto& unchecked = std::get<NotChecked>(verdict);
+  return !unchecked.what.empty() && !unchecked.why.empty() &&
+         unchecked.what.size() <= kMaxTextBytes && unchecked.why.size() <= kMaxTextBytes;
 }
 
 /// The blocks a verdict says were compared.
@@ -121,7 +124,7 @@ using Verdict = std::variant<Agreement, ExactMismatch, BoundedMismatch, NotCheck
   if (const auto* bounded = std::get_if<BoundedMismatch>(&verdict)) {
     return bounded->blocks_compared;
   }
-  return std::get_if<NotChecked>(&verdict)->blocks_compared;
+  return std::get<NotChecked>(verdict).blocks_compared;  // see is_valid()
 }
 
 /// The independent check for one workload.
