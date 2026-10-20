@@ -1,6 +1,6 @@
 # Stream 30 — Workload: ray tracing
 
-**State:** not started  
+**State:** built and pushed on feature/workload-raytrace (2026-10-20 18:22 UTC); pull request to be opened by the manager  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 4  
 **Tier:** Tier A — a bounded component built against a written contract  

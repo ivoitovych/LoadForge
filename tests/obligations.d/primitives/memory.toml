@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/memory and nothing else.
+
+[[module]]
+path     = "src/primitives/memory"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T4", "T6"]
+consumes = ["ExecutorContract"]
+note     = """
+Streaming copy and read-back in caller-owned buffers. P1 is the pass loop \
+and the word loops at zero, one and many iterations. P3 is zero bytes (no \
+scratch at all), one word (half a generator block), one block, a block and a \
+half, a long buffer, a byte count that is not a whole number of words, scratch \
+one word short and exactly enough, and a rotation count that wraps past 64. The \
+digest is recomputed from the generator's definition, block by block, so the \
+source is regenerated, never stored (verification.md §4a). T4 draws \
+configurations and checks the prefix property; T6 is the BitExact sweep and \
+shows stale scratch cannot reach a digest. Consumes the Executor, run against \
+the module's own mocks."""
