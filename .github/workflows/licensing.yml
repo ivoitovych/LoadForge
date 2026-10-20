@@ -78,6 +78,16 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with: { fetch-depth: 0 }
+      - name: Every author and committer is admitted, nothing is signed, no trailer but the sign-off
+        # The check local hooks make, made where it cannot be skipped: a commit
+        # made or pushed with --no-verify is judged here all the same. Admission
+        # is an allowlist of emails in .github/commit-identities, so a
+        # contributor's first PR adds their own line and the repository never
+        # names an identity it refuses. The head SHA explicitly, never HEAD: on
+        # a pull_request event HEAD is GitHub's synthetic merge commit.
+        run: >-
+          ./tools/check-commit-identity.sh
+          "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: No commit carries a second author
         # Stated as a rule about SHAPE, not a list of names.
         #
