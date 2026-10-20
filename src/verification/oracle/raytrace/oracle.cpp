@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "core/result.hpp"
 #include "verification/oracle.hpp"
@@ -33,8 +34,8 @@ constexpr std::size_t kSampleEdge = spec::kWidth / kSampleTiling;
 using Item = std::array<std::byte, spec::kPixelBytes>;
 
 struct Scene {
-  std::array<spec::Sphere, spec::kSpheres> spheres;
-  std::array<spec::Triangle, spec::kTriangles> triangles;
+  std::vector<spec::Sphere> spheres = std::vector<spec::Sphere>(spec::kSpheres);
+  std::vector<spec::Triangle> triangles = std::vector<spec::Triangle>(spec::kTriangles);
 };
 
 std::uint64_t load_le64(std::span<const std::byte> bytes, std::size_t at) noexcept {
@@ -84,19 +85,21 @@ std::string describe_value(std::size_t which) {
   if (which < kSphereValues) {
     constexpr std::array<std::string_view, spec::kSphereDoubles> kNames = {"centre x", "centre y",
                                                                            "centre z", "radius"};
+    const std::span<const std::string_view> names(kNames);
     return "sphere " + std::to_string(which / spec::kSphereDoubles) + " " +
-           std::string(kNames[which % spec::kSphereDoubles]);
+           std::string(names[which % spec::kSphereDoubles]);
   }
   const std::size_t offset = which - kSphereValues;
   constexpr std::array<std::string_view, 3> kAxes = {"x", "y", "z"};
+  const std::span<const std::string_view> axes(kAxes);
   return "triangle " + std::to_string(offset / spec::kTriangleDoubles) + " vertex " +
-         std::to_string(offset % spec::kTriangleDoubles / 3) + " " + std::string(kAxes[offset % 3]);
+         std::to_string(offset % spec::kTriangleDoubles / 3) + " " + std::string(axes[offset % 3]);
 }
 
 /// Reads the scene out of the input. The index of the first value that is not
 /// finite or outside its range, if there is one (the scene is then partial).
-std::optional<std::size_t> read_scene(std::span<const std::byte> input, Scene& scene) noexcept {
-  std::array<double, kSceneDoubles> values{};
+std::optional<std::size_t> read_scene(std::span<const std::byte> input, Scene& scene) {
+  std::vector<double> values(kSceneDoubles);
   for (std::size_t which = 0; which < kSceneDoubles; ++which) {
     values[which] = std::bit_cast<double>(load_le64(input, which * sizeof(double)));
     if (!spec::contains(range_of(which), values[which])) {
@@ -156,7 +159,7 @@ bool well_formed(std::span<const std::byte> output, std::size_t p) noexcept {
   if (which == spec::kNoHit) {
     return bits == spec::kNoHitDistanceBits;
   }
-  const double t = std::bit_cast<double>(bits);
+  const auto t = std::bit_cast<double>(bits);
   return which < spec::kPrimitives && std::isfinite(t) && t > 0.0;
 }
 
@@ -189,6 +192,9 @@ TileSum sum_of_tile(std::span<const std::byte> output, std::uint32_t edge, std::
 /// The difference between an item's expected bytes and the stored ones, with
 /// offsets from the start of the output; none when they are equal.
 /// `offset` is the item's place in the output, a multiple of kWordBytes.
+// The expected and the stored bytes are named for what they are and passed in the order the
+// specification writes them.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::optional<Difference> item_difference(std::span<const std::byte> expected,
                                           std::span<const std::byte> output, std::size_t offset) {
   const std::size_t size = expected.size();

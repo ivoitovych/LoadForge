@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "core/result.hpp"
 #include "verification/oracle.hpp"
@@ -25,7 +26,7 @@ namespace spec = workloads::adaptive_mesh;
 constexpr std::string_view kWhat = "the integrals and leaf counts against a recursively built mesh";
 constexpr std::size_t kSampleWidth = spec::kCoarseCells / spec::kSampledCells;
 
-using Hotspots = std::array<spec::Hotspot, spec::kHotspots>;
+using Hotspots = std::vector<spec::Hotspot>;
 
 std::uint64_t load_le64(std::span<const std::byte> bytes, std::size_t at) noexcept {
   std::uint64_t value = 0;
@@ -45,16 +46,13 @@ std::uint32_t load_le32(std::span<const std::byte> bytes, std::size_t at) noexce
 
 /// The hotspots that lie inside a cell, in index order: the only ones that can
 /// make a cell under it split.
-struct Inside {
-  std::array<spec::Hotspot, spec::kHotspots> hotspots;
-  std::size_t count = 0;
-};
+using Inside = std::vector<spec::Hotspot>;
 
-Inside hotspots_in(const spec::Cell& cell, const Hotspots& all) noexcept {
+Inside hotspots_in(const spec::Cell& cell, const Hotspots& all) {
   Inside inside;
   for (const spec::Hotspot& hotspot : all) {
     if (spec::cell_contains(cell, hotspot)) {
-      inside.hotspots[inside.count++] = hotspot;
+      inside.push_back(hotspot);
     }
   }
   return inside;
@@ -62,15 +60,17 @@ Inside hotspots_in(const spec::Cell& cell, const Hotspots& all) noexcept {
 
 bool splits(const spec::Cell& cell, const Inside& inside) noexcept {
   return cell.level < spec::kMaxLevel &&
-         std::any_of(
-             inside.hotspots.begin(),
-             inside.hotspots.begin() + static_cast<std::ptrdiff_t>(inside.count),
-             [&cell](const spec::Hotspot& hotspot) { return spec::cell_contains(cell, hotspot); });
+         std::any_of(inside.begin(), inside.end(), [&cell](const spec::Hotspot& hotspot) {
+           return spec::cell_contains(cell, hotspot);
+         });
 }
 
 /// The leaves under `cell`, depth first, the children of a split cell in the
 /// order q = 0, 1, 2, 3; `visit` is called with each.
+// The recursion is bounded by kMaxLevel - kBaseLevel = 5 levels, and it is the
+// specification's own description of the leaf order.
 template <typename Visit>
+// NOLINTNEXTLINE(misc-no-recursion)
 void for_each_leaf(const spec::Cell& cell, const Inside& inside, Visit& visit) {
   if (!splits(cell, inside)) {
     visit(cell);
@@ -87,7 +87,7 @@ spec::Cell coarse_cell(std::size_t c) noexcept {
                     static_cast<std::uint32_t>(c / spec::kBaseCells)};
 }
 
-std::uint32_t leaf_count(std::size_t c, const Hotspots& all) noexcept {
+std::uint32_t leaf_count(std::size_t c, const Hotspots& all) {
   const spec::Cell cell = coarse_cell(c);
   const Inside inside = hotspots_in(cell, all);
   std::uint32_t leaves = 0;
@@ -97,7 +97,7 @@ std::uint32_t leaf_count(std::size_t c, const Hotspots& all) noexcept {
 }
 
 /// c': the leaves of the coarse cell added in leaf order, one by one, from +0.0.
-double integral(std::size_t c, const Hotspots& all) noexcept {
+double integral(std::size_t c, const Hotspots& all) {
   const spec::Cell cell = coarse_cell(c);
   const Inside inside = hotspots_in(cell, all);
   double total = 0.0;
@@ -159,7 +159,7 @@ Verdict AdaptiveMeshOracle::check(const UnitEvidence& evidence) const {
     why += std::to_string(spec::kOutputBytes);
     return NotChecked{std::string(kWhat), std::move(why), 0};
   }
-  Hotspots hotspots;
+  Hotspots hotspots(spec::kHotspots);
   for (std::size_t h = 0; h < spec::kHotspots; ++h) {
     hotspots[h] = spec::Hotspot{load_le32(evidence.input, h * spec::kHotspotBytes),
                                 load_le32(evidence.input, h * spec::kHotspotBytes + 4)};
@@ -176,7 +176,7 @@ Verdict AdaptiveMeshOracle::check(const UnitEvidence& evidence) const {
     }
   }
   const std::span<const std::byte> output = evidence.output;
-  std::array<std::uint32_t, spec::kCoarseCells> leaves{};
+  std::vector<std::uint32_t> leaves(spec::kCoarseCells);
   std::uint64_t compared = 0;
   for (std::size_t c = 0; c < spec::kCoarseCells; ++c) {
     ++compared;
@@ -198,7 +198,7 @@ Verdict AdaptiveMeshOracle::check(const UnitEvidence& evidence) const {
     const std::size_t c = sampled_cell(evidence.index, j);
     const double reference = integral(c, hotspots);
     const double tolerance = spec::cell_tolerance(leaves[c], reference);
-    const double stored = std::bit_cast<double>(load_le64(output, spec::integral_offset(c)));
+    const auto stored = std::bit_cast<double>(load_le64(output, spec::integral_offset(c)));
     const double residual = std::fabs(stored - reference);
     if (!(residual <= tolerance)) {
       return BoundedMismatch{
