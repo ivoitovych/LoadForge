@@ -56,6 +56,18 @@ constructor that throws: the constructor makes a `std::string`). Declaring the c
 `noexcept` removed them, which is §1.13's mechanism from the other side: the `bad_alloc` of the
 string now ends the process, as the allocation of the workload itself would.
 
+### The gate, as run
+
+Debug (GCC 13.3) 1127 of 1127 tests; coverage 100.0% lines (5696), functions (1239) and
+branches (4489) over all 38 source files, no exclusions; ASan+UBSan and TSan (Clang 18) clean on
+the five sparse test executables; the scalar-only preset and the static preset build, and the
+scalar-only tests pass; `RelWithDebInfo` reproduces the recorded digests; the unit, property and
+determinism executables pass 30 of 30 repeats in the release build, and the determinism
+executable 30 of 30 under TSan; clang-format-18, clang-tidy-18 (src and every test file here, from
+a Clang-configured tree), ruff, ShellCheck, the ledger gate (27 modules), the exclusion gate (0)
+and `tests/tools/test_tooling.sh` (158 passed). The container lacked `libclang-rt-18-dev` and
+ShellCheck; both were installed with apt.
+
 ## Decisions
 
 ### Scalar path only; the vector kernels are not here
