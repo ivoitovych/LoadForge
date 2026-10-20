@@ -73,17 +73,19 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install linters and strace
+        # Ruff is pinned for the same reason gcovr is: its formatter's output
+        # changes between releases, so an unpinned version would make
+        # 'ruff format --diff' fail on a tree nobody touched. strace is what
+        # tools/mutation-shard.py watches a test program with; its tests here
+        # fail rather than skip without it.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck strace
+          pip install --break-system-packages 'ruff==0.15.8'
       - run: ./tests/tools/test_tooling.sh
       - run: ./tests/tools/test_git_hooks.sh
       - run: ./tests/tools/test_runtime_deps.sh
-      - name: Install linters
-        # Ruff is pinned for the same reason gcovr is: its formatter's output
-        # changes between releases, so an unpinned version would make
-        # 'ruff format --diff' fail on a tree nobody touched.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          pip install --break-system-packages 'ruff==0.15.8'
       - name: ShellCheck
         # The C++ is compiled with -Werror and a long warning list; the shell
         # that decides whether the C++ may ship was, until now, unchecked. An
