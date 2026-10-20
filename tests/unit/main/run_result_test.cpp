@@ -400,8 +400,7 @@ TEST(SummaryTextTest, EveryFingerprintFieldTheMachineWouldNotGiveIsNamedWithItsR
   const results::RunResult result;
   results::FingerprintGap gap;
   gap.field = "microcode";
-  gap.why =
-      topology::Unavailable{topology::Availability::kAbsent, "/proc/cpuinfo", "no line"};
+  gap.why = topology::Unavailable{topology::Availability::kAbsent, "/proc/cpuinfo", "no line"};
   const std::string text = summary_text(result, report, timeline, summarizer, {gap});
   EXPECT_NE(text.find("fingerprint: microcode not recorded: "), std::string::npos) << text;
   EXPECT_NE(text.find("/proc/cpuinfo"), std::string::npos) << text;

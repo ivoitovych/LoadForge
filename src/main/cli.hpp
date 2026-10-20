@@ -18,6 +18,7 @@
 #include "platform/fpenv/fpenv.hpp"
 #include "platform/syscalls.hpp"
 #include "primitives/simd/dispatch.hpp"
+#include "statistics/signature.hpp"
 #include "topology/snapshot.hpp"
 
 namespace loadforge::cli {
@@ -71,6 +72,12 @@ struct StressOptions {
   /// record, which script the seam's reads in the order those readers make
   /// them, do.
   bool sample = true;
+  /// How the sources are made, and what summarises the timeline; the defaults
+  /// are the real ones (make_sources, CompensatedSummarizer). A test names
+  /// others to reach what the real ones never do: a probe the timeline
+  /// refuses, a window the summarizer refuses.
+  SourceFactory sources = make_sources;
+  const statistics::Summarizer* summarizer = nullptr;
 };
 
 /// The stress command's arguments after "stress": `--config FILE`, and

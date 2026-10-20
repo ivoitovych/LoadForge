@@ -2,6 +2,7 @@
 #include "main/result_files.hpp"
 
 #include <cerrno>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -16,18 +17,35 @@ namespace {
 constexpr std::string_view kKnownFormats = "json, csv";
 }
 
+core::Result<core::Ok, std::string> FileResultSink::prepare(const std::string& directory) {
+  std::error_code ignored;
+  if (!std::filesystem::is_directory(directory, ignored)) {
+    return "\"" + directory + "\" is not a directory";
+  }
+  // The only test that a directory can be written to is to write to it.
+  const std::string probe = directory + "/.loadforge-write-test";
+  {
+    std::ofstream file(probe, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+      return "cannot create a file in " + directory + ": " + std::strerror(errno);
+    }
+  }
+  std::filesystem::remove(probe, ignored);
+  return core::Ok{};
+}
+
 core::Result<core::Ok, std::string> FileResultSink::store(const std::string& path,
                                                           const std::string& bytes) {
   const std::string partial = path + ".partial";
   {
     std::ofstream file(partial, std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
-      return "cannot create " + partial;
+      return "cannot create " + partial + ": " + std::strerror(errno);
     }
     file << bytes;
     file.flush();
     if (!file.good()) {
-      return "cannot write " + partial;
+      return "cannot write " + partial + ": " + std::strerror(errno);
     }
   }
   std::error_code renamed;

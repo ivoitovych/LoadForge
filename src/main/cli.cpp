@@ -187,6 +187,16 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   resources::CgroupOomKillRecord oom_record(machine, resources::kMachineRoot);
   options.oom_record = &oom_record;
 
+  // The output is checked before the run, not after it.
+  FileResultSink files;
+  ResultSink& sink = stress_options.sink != nullptr ? *stress_options.sink : files;
+  if (!stress_options.formats.empty()) {
+    if (auto prepared = sink.prepare(stress_options.output_dir); !prepared.has_value()) {
+      err << "loadforge: cannot write the result: " << prepared.error() << "\n";
+      return kConfigRefused;
+    }
+  }
+
   // The telemetry, probed before the first fork: what the machine offers is
   // stated first, with the remedy for each source that cannot be read, and the
   // sources that hold descriptors hold them before any worker is born.
@@ -198,7 +208,8 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
                                 options.stale_after_ns;
     auto made = make_rig(syscalls, machine, stress_options.roots,
                          timeline_capacity(run_ns, options.sample_interval_ns,
-                                           series_bound(snapshot.cpus.logical_cpu_count())));
+                                           series_bound(snapshot.cpus.logical_cpu_count())),
+                         stress_options.sources);
     if (!made.has_value()) {
       err << "loadforge: cannot set up telemetry: " << telemetry::describe(made.error().fault)
           << ": " << made.error().detail << "\n";
@@ -230,7 +241,9 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   const int clean = controller::all_clean(report.value()) ? kOk : kRunNotClean;
 
   const HostFacts host = stress_options.host.has_value() ? *stress_options.host : read_host_facts();
-  const statistics::CompensatedSummarizer summarizer;
+  const statistics::CompensatedSummarizer real_summarizer;
+  const statistics::Summarizer& summarizer =
+      stress_options.summarizer != nullptr ? *stress_options.summarizer : real_summarizer;
   auto reading = results::read_fingerprint(
       machine, "",
       results::FingerprintContext{results::this_build(), host.fp_environment, host.isa_path});
@@ -252,8 +265,6 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   if (stress_options.formats.empty()) {
     return clean;
   }
-  FileResultSink files;
-  ResultSink& sink = stress_options.sink != nullptr ? *stress_options.sink : files;
   auto written =
       write_results(result.value(), stress_options.formats, stress_options.output_dir, sink);
   if (!written.has_value()) {

@@ -26,6 +26,7 @@
 #include "support/fake_syscalls.hpp"
 #include "topology/cpu_topology.hpp"
 #include "topology/snapshot.hpp"
+#include "unit/main/cli_support.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -294,30 +295,6 @@ TEST(Cli, StressRefusesAMachineItCannotDescribeBeforeAnyWorkerStarts) {
   EXPECT_TRUE(out.str().empty()) << "no banner, so no run: " << out.str();
 }
 
-/// One online CPU on its own core, no caches, no NUMA layout: the smallest
-/// /sys a snapshot accepts, built once on disk for the runs over the fake.
-const topology::Snapshot& one_cpu_machine() {
-  static const topology::Snapshot machine = [] {
-    const std::filesystem::path root = std::filesystem::temp_directory_path() /
-                                       ("loadforge-cli-sysfs-" + std::to_string(::getpid()));
-    const std::filesystem::path cpu = root / "devices" / "system" / "cpu";
-    std::filesystem::create_directories(cpu / "cpu0" / "topology");
-    for (const auto& [file, text] :
-         {std::pair{cpu / "online", "0"}, std::pair{cpu / "cpu0" / "topology" / "core_id", "0"},
-          std::pair{cpu / "cpu0" / "topology" / "physical_package_id", "0"},
-          std::pair{cpu / "cpu0" / "topology" / "thread_siblings_list", "0"}}) {
-      std::ofstream(file) << text << "\n";
-    }
-    platform::RealSyscalls syscalls;
-    platform::FileSystem filesystem(syscalls);
-    auto taken = topology::take_snapshot(filesystem, root.string());
-    std::error_code ignored;
-    std::filesystem::remove_all(root, ignored);
-    return std::move(taken).value();
-  }();
-  return machine;
-}
-
 /// The supervisor alone: these tests script the seam's reads in the order the
 /// budget and the OOM record make them, and a source probed first would take
 /// them. The telemetry is tested where its files are served by path.
@@ -328,16 +305,6 @@ const StressOptions& supervisor_only() {
     return only;
   }();
   return options;
-}
-
-/// Two null workloads for a short while, for driving run_stress over a fake.
-config::Config two_workloads() {
-  config::Config config;
-  config.run.mode = config::Mode::kStress;
-  config.run.duration = core::Duration{50};
-  config.workloads.push_back(config::Workload{"first", config::Threads::all(), true, {}});
-  config.workloads.push_back(config::Workload{"second", config::Threads::all(), true, {}});
-  return config;
 }
 
 TEST(Cli, RunStressReturnsAFailedWorkersExitCodeInTheChild) {

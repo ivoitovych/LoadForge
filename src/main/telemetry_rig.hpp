@@ -56,6 +56,12 @@ struct MachineRoots {
 /// for the machine-wide metrics, and a few per online CPU.
 [[nodiscard]] std::size_t series_bound(std::size_t cpus) noexcept;
 
+/// How the sources of a run are made. The command line uses make_sources; a
+/// test names one that makes sources it scripts.
+using SourceFactory = std::vector<std::unique_ptr<telemetry::Source>> (*)(platform::Syscalls&,
+                                                                          platform::FileSystem&,
+                                                                          const MachineRoots&);
+
 /// The sampler, its timeline, and what the probe found.
 struct Rig {
   explicit Rig(std::size_t capacity) : timeline(capacity) {}
@@ -69,7 +75,7 @@ struct Rig {
 /// are on the timeline. The refusal is the timeline's, when it refuses a series.
 [[nodiscard]] core::Result<std::unique_ptr<Rig>, telemetry::TimelineError> make_rig(
     platform::Syscalls& syscalls, platform::FileSystem& filesystem, const MachineRoots& roots,
-    std::size_t capacity);
+    std::size_t capacity, SourceFactory sources_for = make_sources);
 
 }  // namespace loadforge::cli
 

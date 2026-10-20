@@ -19,9 +19,12 @@
 #ifndef LOADFORGE_TESTS_INTEGRATION_M3_MACHINE_HPP
 #define LOADFORGE_TESTS_INTEGRATION_M3_MACHINE_HPP
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 
 #include "platform/syscalls.hpp"
 #include "support/fake_syscalls.hpp"
@@ -74,6 +77,37 @@ class Machine {
     fake_.add_file("/sys/devices/system/cpu/online", "0-1\n");
     fake_.add_file("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "2400000\n");
     fake_.add_file("/sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq", "2600000\n");
+  }
+
+  /// Everything except the named sources' files: "thermal", "fan", "frequency",
+  /// "memory", "power" or "edac". The performance counters are not files; a test
+  /// refuses them through the fake.
+  void install_everything_but(std::initializer_list<std::string_view> without) {
+    const auto skipped = [&](std::string_view source) {
+      return std::ranges::find(without, source) != without.end();
+    };
+    if (!skipped("thermal")) {
+      install_hwmon();
+      install_thermal_zone();
+    }
+    if (!skipped("fan")) {
+      install_fan();
+    }
+    if (!skipped("frequency")) {
+      install_cpufreq();
+      fake_.add_tree(fixtures() / "procfs" / "stat" / "present" / "proc", "/proc");
+    }
+    if (!skipped("memory")) {
+      fake_.add_tree(fixtures() / "procfs" / "meminfo" / "present" / "proc", "/proc");
+    }
+    if (!skipped("power")) {
+      fake_.add_tree(fixtures() / "sysfs" / "powercap" / "intel-two-packages" / "class",
+                     "/sys/class");
+    }
+    if (!skipped("edac")) {
+      fake_.add_tree(fixtures() / "sysfs" / "edac" / "two-controllers" / "devices", "/sys/devices");
+    }
+    fake_.add_file("/proc/sys/kernel/perf_event_paranoid", "1\n");
   }
 
   void set(const std::string& path, const std::string& content) {

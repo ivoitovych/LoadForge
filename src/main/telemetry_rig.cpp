@@ -56,9 +56,9 @@ std::size_t timeline_capacity(std::int64_t run_ns, std::int64_t interval_ns,
 
 core::Result<std::unique_ptr<Rig>, telemetry::TimelineError> make_rig(
     platform::Syscalls& syscalls, platform::FileSystem& filesystem, const MachineRoots& roots,
-    std::size_t capacity) {
+    std::size_t capacity, SourceFactory sources_for) {
   auto rig = std::make_unique<Rig>(capacity);
-  rig->sampler = telemetry::make_sampler(make_sources(syscalls, filesystem, roots), rig->timeline);
+  rig->sampler = telemetry::make_sampler(sources_for(syscalls, filesystem, roots), rig->timeline);
   auto report = rig->sampler->probe();
   if (!report.has_value()) {
     return report.error();

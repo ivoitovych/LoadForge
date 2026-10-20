@@ -25,6 +25,12 @@ class ResultSink {
   ResultSink& operator=(ResultSink&&) = delete;
   virtual ~ResultSink() = default;
 
+  /// Whether results can be written into `directory`, found out before the run
+  /// and not after it: a run of hours that finds its output directory missing
+  /// only when it ends has lost its result.
+  [[nodiscard]] virtual core::Result<core::Ok, std::string> prepare(
+      const std::string& directory) = 0;
+
   /// All of `bytes` at `path`, or nothing there: a result that is half written
   /// is worse than none, so the real sink writes a sibling and renames it.
   [[nodiscard]] virtual core::Result<core::Ok, std::string> store(const std::string& path,
@@ -33,6 +39,7 @@ class ResultSink {
 
 class FileResultSink final : public ResultSink {
  public:
+  [[nodiscard]] core::Result<core::Ok, std::string> prepare(const std::string& directory) override;
   [[nodiscard]] core::Result<core::Ok, std::string> store(const std::string& path,
                                                           const std::string& bytes) override;
 };

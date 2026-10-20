@@ -54,6 +54,13 @@ std::string slurp(const fs::path& path) {
 /// A sink that keeps what it is given and refuses on request.
 class RecordingSink final : public ResultSink {
  public:
+  core::Result<core::Ok, std::string> prepare(const std::string& directory) override {
+    prepared.push_back(directory);
+    if (refuse_directory) {
+      return std::string{"refused " + directory};
+    }
+    return core::Ok{};
+  }
   core::Result<core::Ok, std::string> store(const std::string& path,
                                             const std::string& bytes) override {
     if (!refuse_path.empty() && path == refuse_path) {
@@ -63,6 +70,8 @@ class RecordingSink final : public ResultSink {
     return core::Ok{};
   }
   std::string refuse_path;
+  bool refuse_directory = false;
+  std::vector<std::string> prepared;
   std::vector<std::pair<std::string, std::string>> stored;
 };
 
@@ -157,6 +166,35 @@ TEST(ResultFilesTest, ASinkThatRefusesStopsTheWritingAtThatFile) {
   EXPECT_EQ(sink.stored.size(), 1U);
 }
 
+TEST(FileResultSinkTest, ADirectoryThatCanBeWrittenToIsReadyAndLeavesNothingBehind) {
+  const ScratchDirectory directory;
+  FileResultSink sink;
+  ASSERT_TRUE(sink.prepare(directory.path().string()).has_value());
+  EXPECT_TRUE(fs::is_empty(directory.path())) << "the probe file is removed";
+}
+
+TEST(FileResultSinkTest, ADirectoryThatDoesNotExistIsRefusedBeforeTheRun) {
+  const ScratchDirectory directory;
+  FileResultSink sink;
+  const std::string missing = (directory.path() / "missing").string();
+  const auto prepared = sink.prepare(missing);
+  ASSERT_FALSE(prepared.has_value());
+  EXPECT_EQ(prepared.error(), "\"" + missing + "\" is not a directory");
+  // A file is not a directory either.
+  const std::string file = (directory.path() / "file").string();
+  std::ofstream{file} << "x";
+  EXPECT_FALSE(sink.prepare(file).has_value());
+}
+
+TEST(FileResultSinkTest, ADirectoryThatCannotBeWrittenToIsRefusedWithTheKernelsReason) {
+  // /proc is a directory no file can be created in, for any user.
+  FileResultSink sink;
+  const auto prepared = sink.prepare("/proc");
+  ASSERT_FALSE(prepared.has_value());
+  EXPECT_NE(prepared.error().find("cannot create a file in /proc: "), std::string::npos)
+      << prepared.error();
+}
+
 TEST(FileResultSinkTest, TheBytesArriveWholeAndNoPartialFileIsLeftBehind) {
   const ScratchDirectory directory;
   FileResultSink sink;
@@ -176,8 +214,9 @@ TEST(FileResultSinkTest, ADirectoryThatDoesNotExistIsAnErrorNamingTheFile) {
   const std::string path = (directory.path() / "missing" / "run.json").string();
   const auto stored = sink.store(path, "bytes");
   ASSERT_FALSE(stored.has_value());
-  EXPECT_NE(stored.error().find("cannot create " + path + ".partial"), std::string::npos)
+  EXPECT_NE(stored.error().find("cannot create " + path + ".partial: "), std::string::npos)
       << stored.error();
+  EXPECT_NE(stored.error().find("No such file or directory"), std::string::npos) << stored.error();
 }
 
 TEST(FileResultSinkTest, ADeviceThatIsFullIsAnErrorAndNotAShortFile) {
