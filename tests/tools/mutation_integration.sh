@@ -24,13 +24,19 @@
 #   3. the gate fails on it;
 #   4. the exact reviewed key permits that mutant and only that mutant;
 #   5. a key naming a DIFFERENT operator at the SAME line and column does not
-#      excuse it.
+#      excuse it;
+#   6. the test program's argument reaches it through Mull's "--", as the
+#      project's run passes its test filter;
+#   7. a mutant that hangs the program is killed by Mull's timeout and reported
+#      as killed, not left to stall the job;
+#   8. judged as a shard, the run is accepted under its own scope and refused
+#      under another.
 #
 # Point 5 is the one that was silently broken, and it is why this file exists.
 #
-# It is not part of the ordinary CI run because Mull is not pinned yet (see
-# docs/PLAN.md §11). The mutation workflow runs it once Mull is installed, before
-# the gate is used on the project's own tests. It hard-fails rather than skips
+# It is not part of the ordinary CI run, because only the mutation workflow
+# installs Mull; every shard of that workflow runs it before the gate is used on
+# the project's own tests. It hard-fails rather than skips
 # when Mull is absent: a test that reports success without running is the same
 # defect this whole pass is about.
 set -uo pipefail
@@ -70,13 +76,15 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work" || exit 1
 
-# Restricting the mutator set keeps the expected outcome exact. Both operators
-# below rewrite the SAME '>=' at the same line and column, which is what makes
-# this a real test of the survivor key rather than of the happy path.
+# Restricting the mutator set keeps the expected outcome exact. The first two
+# operators rewrite the SAME '>=' at the same line and column, which is what
+# makes this a real test of the survivor key rather than of the happy path. The
+# third turns a loop that ends into one that does not.
 cat > mull.yml <<'EOF'
 mutators:
   - cxx_ge_to_gt
   - cxx_ge_to_lt
+  - cxx_pre_inc_to_pre_dec
 quiet: false
 EOF
 
@@ -84,13 +92,29 @@ EOF
 #   cxx_ge_to_gt  ->  (n > 10)  ->  still 0  ->  test still passes  ->  SURVIVES
 #   cxx_ge_to_lt  ->  (n < 10)  ->  now 1    ->  test fails         ->  KILLED
 # One survivor, one killed, both at the same source position.
+#   cxx_pre_inc_to_pre_dec  ->  --i  ->  i never reaches 3  ->  HANGS  ->  KILLED
+# by the timeout. And the program refuses to run without the argument the gate
+# is told to pass it, so a Mull that dropped it would fail its own warm-up run.
 cat > subject.cpp <<'EOF'
 int classify(int n) {
   return (n >= 10) ? 1 : 0;
 }
 
-int main() {
-  return classify(5) == 0 ? 0 : 1;
+#include <cstring>
+
+long long settle(long long steps) {
+  long long i = 0;
+  while (i != steps) {
+    ++i;
+  }
+  return i;
+}
+
+int main(int argc, char** argv) {
+  if (argc != 2 || std::strcmp(argv[1], "--subject-check") != 0) {
+    return 2;
+  }
+  return (classify(5) == 0 && settle(3) == 3) ? 0 : 1;
 }
 EOF
 
@@ -105,10 +129,17 @@ echo "mutation integration (Mull: $("$RUNNER" --version 2>&1 | head -n 1))"
 # The first call runs Mull and leaves both reports under build/mutation; every
 # later call re-judges those same reports, so the four assertions below are all
 # about one real mutation run rather than four separate ones.
-OUT="$(python3 "$GATE" ./subject --runner "$RUNNER" --allowlist /dev/null --root "$work" 2>&1)"
+OUT="$(python3 "$GATE" ./subject --runner "$RUNNER" --allowlist /dev/null --root "$work" \
+       --test-arg=--subject-check 2>&1)"
 rc=$?
 check "real Mull output parses and the survivor is unexplained" 1 $rc "UNEXPLAINED SURVIVOR" "$OUT"
 check "the exact mutator identifier is parsed, not the word 'Replaced'" 1 $rc "cxx_ge_to_gt" "$OUT"
+# These two read the report itself, because the gate prints survivors, not kills.
+REPORT="$(cat build/mutation/mutation.txt 2>/dev/null)"
+check "the test argument reached the program (its warm-up passed)" 0 0 \
+      "Killed: .*\[cxx_ge_to_lt\]" "$REPORT"
+check "a mutant that hangs the program is killed by the timeout" 0 0 \
+      "Killed: .*\[cxx_pre_inc_to_pre_dec\]" "$REPORT"
 
 key="$(grep -oE 'subject\.cpp:[0-9]+:[0-9]+:cxx_ge_to_gt' <<< "$OUT" | head -n 1)"
 if [ -z "$key" ]; then
@@ -131,6 +162,15 @@ else
   wrong_rc=$?
   check "a different operator at the same location does NOT excuse it" 1 "$wrong_rc" "UNEXPLAINED SURVIVOR" "$OUT"
   check "and the wrong entry is reported as stale" 1 "$wrong_rc" "STALE ALLOWLIST ENTRY" "$OUT"
+
+  # The same real report judged as a shard: whole under its own scope, and
+  # refused under a scope that does not hold the file Mull mutated.
+  OUT="$(python3 "$GATE" --report-dir build/mutation --allowlist allow-exact.txt --root "$work" \
+         --scope subject.cpp 2>&1)"
+  check "judged as a shard, the run is whole under its own scope" 0 $? "all in scope" "$OUT"
+  OUT="$(python3 "$GATE" --report-dir build/mutation --allowlist allow-exact.txt --root "$work" \
+         --scope src 2>&1)"
+  check "and refused under a scope that does not hold its mutants" 1 $? "outside this shard" "$OUT"
 fi
 
 echo; echo "  mutation integration: $pass passed, $fail failed"

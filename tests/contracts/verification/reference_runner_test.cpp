@@ -143,7 +143,7 @@ class ReferenceRunner final : public verification::SliceRunner {
   }
 
   void unit(std::uint64_t index, SliceReport& report) {
-    const std::size_t slot = static_cast<std::size_t>(index % plan_.units);
+    const auto slot = static_cast<std::size_t>(index % plan_.units);
     const std::span<std::byte> input(inputs_.get() + slot * in_stride_, plan_.input_bytes);
     const std::span<std::byte> output(outputs_.get() + slot * out_stride_, plan_.output_bytes);
     const bool bracketed =

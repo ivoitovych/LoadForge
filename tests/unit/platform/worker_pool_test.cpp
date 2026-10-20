@@ -38,7 +38,7 @@ constexpr pid_t kSecond = 102;
 constexpr pid_t kThird = 103;
 
 /// Status words in the encoding the kernel actually uses -- confirmed by the
-/// RealWaitStatus tier in exit_status_test.cpp, not recalled.
+/// RealProcessWaitStatus tier in exit_status_test.cpp, not recalled.
 constexpr int exited(int code) { return (code & 0xff) << 8; }
 constexpr int signalled(int sig) { return sig; }
 
@@ -71,7 +71,7 @@ struct RunningPool {
 // --- spawning ----------------------------------------------------------------
 
 TEST(WorkerPoolTest, SpawningTwoWorkersLeavesTheSupervisorHoldingBothPids) {
-  RunningPool fixture{2};
+  const RunningPool fixture{2};
   ASSERT_TRUE(fixture.spawned);
 
   EXPECT_EQ(fixture.pool.live_count(), 2U);
@@ -280,6 +280,7 @@ TEST(WorkerPoolTest, ASuccessfulReapClearsTheInterruptRun) {
   // meaning the supervisor is stuck, and a total bound would end such a run.
   RunningPool fixture{2};
   std::vector<WaitStep> steps;
+  steps.reserve(2 * static_cast<std::size_t>(WorkerPool::kMaxConsecutiveInterrupts));
   for (int i = 0; i < WorkerPool::kMaxConsecutiveInterrupts - 1; ++i) {
     steps.push_back(WaitStep{{}, EINTR});
   }
@@ -393,14 +394,14 @@ TEST(WorkerPoolTest, SignallingAnEmptyPoolSucceedsWithoutTouchingAnything) {
 // --- accessors ----------------------------------------------------------------
 
 TEST(WorkerPoolTest, PidAtOutOfRangeIsZeroRatherThanUndefined) {
-  RunningPool fixture{2};
+  const RunningPool fixture{2};
   EXPECT_EQ(fixture.pool.pid_at(2), 0);
   EXPECT_EQ(fixture.pool.pid_at(9999), 0);
 }
 
 // --- T8: two real processes, two real deaths ---------------------------------
 
-TEST(RealWorkerPool, TwoRealWorkersAreSpawnedReapedAndToldApart) {
+TEST(RealProcessWorkerPool, TwoRealWorkersAreSpawnedReapedAndToldApart) {
   // The whole thing against a real kernel: two children that exit with
   // DIFFERENT codes, so the test can prove the pool matched each status to the
   // right slot rather than merely counting deaths.
@@ -434,7 +435,7 @@ TEST(RealWorkerPool, TwoRealWorkersAreSpawnedReapedAndToldApart) {
   EXPECT_EQ(nothing_left.error().number, ECHILD);
 }
 
-TEST(RealWorkerPool, RealWorkersAreKilledBySignalAllAndClassifiedAsSignalled) {
+TEST(RealProcessWorkerPool, RealWorkersAreKilledBySignalAllAndClassifiedAsSignalled) {
   // Proves the signal actually lands and that the death reads back as a signal
   // rather than an exit -- the distinction the whole classifier exists for.
   RealSyscalls syscalls;

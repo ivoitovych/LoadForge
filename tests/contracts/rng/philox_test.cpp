@@ -41,9 +41,15 @@ std::vector<Vector> published_vectors() {
     int rounds = 0;
     fields >> name >> std::dec >> rounds >> std::hex;
     Vector vector{};
-    for (auto& word : vector.counter) fields >> word;
-    for (auto& word : vector.key) fields >> word;
-    for (auto& word : vector.expected) fields >> word;
+    for (auto& word : vector.counter) {
+      fields >> word;
+    }
+    for (auto& word : vector.key) {
+      fields >> word;
+    }
+    for (auto& word : vector.expected) {
+      fields >> word;
+    }
     EXPECT_EQ(name, "philox4x32");
     EXPECT_EQ(rounds, kPhiloxRounds);
     EXPECT_FALSE(fields.fail()) << line;
@@ -112,7 +118,7 @@ TEST(PhiloxFillStream, APrefixOfTheStreamIsThePrefixOfALongerFill) {
 }
 
 TEST(PhiloxFillStream, AnEmptySpanIsFilledWithNothing) {
-  std::span<std::byte> nothing;
+  const std::span<std::byte> nothing;
   fill_stream(1, 2, nothing);
   EXPECT_TRUE(nothing.empty());
 }

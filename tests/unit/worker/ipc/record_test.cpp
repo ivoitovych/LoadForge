@@ -336,7 +336,7 @@ TEST(RecordReaderTest, EverySingleByteCorruptionOfAValidStreamIsCaughtAndNeverYi
   std::vector<std::vector<std::byte>> frames;
   std::vector<std::byte> stream;
   for (std::uint16_t index = 0; index < 5; ++index) {
-    std::string payload(static_cast<std::size_t>(index) * 7, static_cast<char>('a' + index));
+    const std::string payload(static_cast<std::size_t>(index) * 7, static_cast<char>('a' + index));
     frames.push_back(frame_of(index, payload));
     stream.insert(stream.end(), frames.back().begin(), frames.back().end());
   }
@@ -634,7 +634,7 @@ TEST(RecordSourceTest, ReadFailuresAreReportedAndInterruptionsRetriedUpToTheBoun
 
 // --- the pipe, really ------------------------------------------------------------
 
-TEST(RecordChannelRealTest, AChildWritesRecordsThroughARealPipeAndTheParentReadsThemToTheEnd) {
+TEST(RealProcessRecordChannel, AChildWritesRecordsThroughARealPipeAndTheParentReadsThemToTheEnd) {
   // The round trip the controller/worker split rests on, against the kernel:
   // the child holds the write end, sends three records and exits; the parent
   // closes its copy of the write end, so the child's exit is the end of the
