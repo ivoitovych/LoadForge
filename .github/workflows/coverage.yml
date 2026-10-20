@@ -4,6 +4,13 @@ on:
   push: { branches: [main] }
   pull_request:
 
+# A newer push to the same pull request makes this run's verdict moot; cancel
+# it rather than let superseded runs hold the shared runner queue (ci.yml does
+# the same).
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   gate:
     # On both architectures: each one compiles kernels the other cannot
