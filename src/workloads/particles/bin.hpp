@@ -45,7 +45,7 @@ void sort_into_cells(std::span<const std::byte> input, const Grid& grid,
 [[nodiscard]] std::size_t collect_runs(const Grid& grid, const RowTable& rows,
                                        std::span<const std::uint32_t> cell_start, std::uint32_t ix,
                                        std::uint32_t iy, std::uint32_t iz,
-                                       std::array<Run, kMaxRows>& runs) noexcept;
+                                       std::array<NeighbourRun, kMaxRows>& runs) noexcept;
 
 /// Writes the force at sorted position k to the output slot of particle
 /// order[k]: every output byte is written once.

@@ -43,7 +43,7 @@ void sum_row(void* context, std::size_t row, std::size_t /*slot*/) noexcept {
   const std::uint32_t edge = sum.grid->edge;
   const auto iz = static_cast<std::uint32_t>(row / edge);
   const auto iy = static_cast<std::uint32_t>(row % edge);
-  std::array<Run, kMaxRows> runs{};
+  std::array<NeighbourRun, kMaxRows> runs{};
   for (std::uint32_t ix = 0; ix < edge; ++ix) {
     const std::size_t cell = (static_cast<std::size_t>(iz) * edge + iy) * edge + ix;
     const std::uint32_t first = binned.cell_start[cell];

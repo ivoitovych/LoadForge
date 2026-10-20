@@ -96,7 +96,7 @@ void sort_into_cells(std::span<const std::byte> input, const Grid& grid,
 std::size_t collect_runs(const Grid& grid, const RowTable& rows,
                          std::span<const std::uint32_t> cell_start, std::uint32_t ix,
                          std::uint32_t iy, std::uint32_t iz,
-                         std::array<Run, kMaxRows>& runs) noexcept {
+                         std::array<NeighbourRun, kMaxRows>& runs) noexcept {
   const auto edge = static_cast<std::int32_t>(grid.edge);
   std::size_t count = 0;
   for (std::size_t r = 0; r < rows.count; ++r) {
@@ -114,7 +114,7 @@ std::size_t collect_runs(const Grid& grid, const RowTable& rows,
     if (begin == end) {
       continue;
     }
-    runs[count] = Run{begin, end};
+    runs[count] = NeighbourRun{begin, end};
     ++count;
   }
   return count;

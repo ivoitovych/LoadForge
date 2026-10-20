@@ -36,7 +36,7 @@ inline constexpr std::size_t kMaxLanes = 4;
 
 /// A half-open range of sorted particles: all of them lie in cells within the
 /// cutoff of the cell being summed.
-struct Run {
+struct NeighbourRun {
   std::uint32_t begin = 0;
   std::uint32_t end = 0;
 };
@@ -51,7 +51,7 @@ struct CellJob {
   const double* x = nullptr;
   const double* y = nullptr;
   const double* z = nullptr;
-  const Run* runs = nullptr;
+  const NeighbourRun* runs = nullptr;
   std::size_t run_count = 0;
   std::uint32_t first = 0;
   std::uint32_t last = 0;

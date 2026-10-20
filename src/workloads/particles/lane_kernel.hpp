@@ -44,16 +44,19 @@ struct Lanes2 {
   using Real = double __attribute__((vector_size(16)));
   using Mask = decltype(Real{} <= Real{});
   static constexpr std::uint32_t kLanes = 2;
-  static Mask index() noexcept { return Mask{0, 1}; }
-  static double sum(Real v) noexcept { return v[0] + v[1]; }
+  static constexpr Mask kIndex = {0, 1};
+  static double sum(const Real& v) noexcept { return v[0] + v[1]; }
 };
 
 struct Lanes4 {
   using Real = double __attribute__((vector_size(32)));
   using Mask = decltype(Real{} <= Real{});
   static constexpr std::uint32_t kLanes = 4;
-  static Mask index() noexcept { return Mask{0, 1, 2, 3}; }
-  static double sum(Real v) noexcept { return (v[0] + v[1]) + (v[2] + v[3]); }
+  static constexpr Mask kIndex = {0, 1, 2, 3};
+  // Vectors are passed by reference and constant: a 32-byte vector by value
+  // changes the calling convention of a unit built without AVX, which the
+  // tests' units are.
+  static double sum(const Real& v) noexcept { return (v[0] + v[1]) + (v[2] + v[3]); }
 };
 
 template <typename Lanes>
@@ -64,7 +67,6 @@ void lane_cell_kernel(const CellJob& job) noexcept {
   const Real one = Real{} + 1.0;
   const Real quarter = Real{} + 0.25;
   const Real zero = Real{};
-  const Mask index = Lanes::index();
   for (std::uint32_t i = job.first; i < job.last; ++i) {
     const Real xi = Real{} + job.x[i];
     const Real yi = Real{} + job.y[i];
@@ -90,7 +92,7 @@ void lane_cell_kernel(const CellJob& job) noexcept {
         Mask keep = ~(t <= zero);
         const std::uint32_t remaining = end - j;
         if (remaining < kLanes) {
-          keep &= index < (Mask{} + static_cast<std::int64_t>(remaining));
+          keep &= Lanes::kIndex < (Mask{} + static_cast<std::int64_t>(remaining));
         }
         const Real w = t * t;
         const Real tx = w * dx;
