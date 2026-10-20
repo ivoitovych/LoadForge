@@ -48,3 +48,17 @@
 - No architecture change: every defect is local.
 - No coverage exclusion: R-01 and R-02 are both reachable from the fake.
 - No allowlisting of the R-06 mutant.
+
+## Verification evidence (added 2026-10-20 23:55 UTC)
+
+Added under the rule of 2026-10-20 18:50 UTC (journal §4.13): a finding is reproduced or
+disproved before it is fixed, and the plan records the verdict with its evidence. This plan
+predates the rule. The three correctness findings carry their evidence here. The hygiene and
+documentation findings (Phases 2 to 4) are statements about wording or layout. Each was
+confirmed by reading the cited text, and its evidence is the diff that changed it.
+
+| Finding | Verdict | Evidence |
+|---|---|---|
+| R-01 | CONFIRMED by derivation | The writer stored the odd sequence and then the fields with no fence between them, so a reader could see new fields under the old even sequence. A data race TSan cannot see, because the reader's retry hides it. Fixed with the release fence in #24; the P5 argument in the heartbeat test states what each fence orders. |
+| R-02 | CONFIRMED by reproduction | On `main`, the real-binary stress test died by signal 13 in 2 runs of 12 (ADR 0003, journal §6). The supervision catalogue row (`tests/supervision/catalogue_test.cpp:391`) pins the fix, in #28. |
+| R-06 | CONFIRMED by the mutation run | The `read_count > 1000` assertion let the loop-bound mutant survive. The exact expectation kills it, in #28. |

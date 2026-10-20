@@ -33,3 +33,19 @@
 | W1-03, W1-04 | PR #47 (repository hooks): shared predicate for hooks and CI, throwaway-repository tests against the real scripts | in progress |
 
 Each fix lands in the pull request the review read, before that pull request merges. The review's last point is that tests, sanitizers and real-kernel checks must be run against the integrated heads, ARM64 included. CI does that on every pull request and on main after each merge; the logs are on each PR's checks page.
+
+## Verification evidence (added 2026-10-20 23:50 UTC)
+
+Added under the rule of 2026-10-20 18:50 UTC (journal §4.13): a finding is reproduced or
+disproved before it is fixed, and the plan records the verdict with its evidence. This plan
+predates the rule. The assessment above was made by reading the cited source. The evidence
+below is what now pins each verdict in the tree, so that the verdict can be checked without
+trusting this text.
+
+| Finding | Verdict | Evidence |
+|---|---|---|
+| W1-01 | CONFIRMED | `RecordCodecNumericalFailure.AResidualInsideTheToleranceIsACheckThatPassedAndDoesNotDecode` and `.ANanOrAResidualPastTheToleranceDecodesAndIsAWrongResult` (`tests/unit/verification/record/codec_test.cpp`); the record contract's case at `tests/contracts/verification/record_contract.hpp:230`; the fuzz oracle at `tests/fault_injection/verification/record/decode_fuzz_test.cpp:282`. Merged in #39. |
+| W1-02 | CONFIRMED | `DenseLinearOracleVerdict.DocumentedLimitationADamagedBlockAvoidingTheSampleIsAgreement` reproduces the miss the review computed: a 4 x 8 block wrong by 1.0 that avoids the sampled entry is agreement. `.TheSameDamagedBlockIsCaughtAtFullGrid` is the control (`tests/unit/verification/oracle/dense_linear/oracle_test.cpp`). Merged in #42. |
+| W1-03 | CONFIRMED | `tests/tools/test_git_hooks.sh`: "a forged GitHub merge adding content is refused", built with plumbing so that the committer and the parent count are the forger's; and `tests/tools/test_tooling.sh` (`mk_merge`) for the CI script. Merged in #47. |
+| W1-04 | CONFIRMED | `tests/tools/test_git_hooks.sh`: "a sign-off for someone else is refused" (commit-msg), "a sign-off with another email is refused" and "a commit with no sign-off is refused" (pre-push), all through the one predicate in `tools/lib/commit-policy.sh`. Merged in #47. |
+| W1-05 | CONFIRMED | `RecordCodecDifferenceWindow.AClaimedFirstDifferenceThatTheWindowShowsIdenticalDoesNotDecode`, which is the review's own counterexample (popcount 1, offsets 0, identical windows), and `.ADifferenceElsewhereInTheWindowDoesNotStandInForTheFirstOffset` (`tests/unit/verification/record/codec_test.cpp`); the contract case at `record_contract.hpp:239`. Merged in #39. |

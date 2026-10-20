@@ -43,3 +43,19 @@ Each lands as its own PR with a regression test that is red before the fix and g
    - State in `docs/verification.md` that a hardware verdict comes only from verification and isolation.
 
 Order: EXT-01, EXT-02, EXT-03, as the review advises. Items 1 and 2 both change `src/controller/orchestration.cpp`, so they land one after the other, in one working branch each.
+
+## Verification evidence (added 2026-10-20 23:50 UTC)
+
+Added under the rule of 2026-10-20 18:50 UTC (journal §4.13): a finding is reproduced or
+disproved before it is fixed, and the plan records the verdict with its evidence. Each
+premise was re-checked at the reviewed commit, `c7e862f`, and each fix carries a test of
+the premise itself, not only of the repaired behaviour.
+
+| Finding | Verdict | Evidence |
+|---|---|---|
+| EXT-01 | CONFIRMED | **The kernel fact, reproduced:** `RealProcessSyscallsTest.KillSucceedsOnAnUnreapedZombieAndOnlyTheReapMakesItESRCH` (`tests/unit/platform/real_syscalls_test.cpp`). **The consequence, reproduced against the real binary:** `MisbehaviourCatalogue.AWorkerKilledFromOutsideBeforeTheControllersSigkillIsNotBlamedOnIt`, with `.TheControllersOwnKillOfARunningWorkerIsStillItsStop` as the control (`tests/supervision/catalogue_test.cpp`). **The fake's divergence:** at `c7e862f` the tests modelled a vanished worker by making `kill` answer ESRCH (`tests/support/fake_syscalls.hpp:301`), where the kernel answers success until the reap. Fix in #79. |
+| EXT-02 | CONFIRMED | **At `c7e862f`:** `started_` is taken and beaten once in `prepare()` (`src/controller/orchestration.cpp:218`), before the loop that forks every worker. **Reproduced through the seam** with a delay at the fork boundary longer than the staleness allowance: `ControllerStartupTest.AWorkerAlreadyRunningNeverFindsTheControllersBeatStaleWhileItForks`, `.AWorkerForkedLateIsGivenItsAllowanceFromItsOwnLaunch` and `.TheDurationCountsFromTheLastLaunchNotFromPreparation` (`tests/unit/controller/orchestration_test.cpp`). Fix in #80. |
+| EXT-03 | CONFIRMED | **At `c7e862f`:** `src/controller/supervision.hpp:20` reads "one killed by SIGBUS is a hardware" event. **Reproduced:** two software faults, `abort()` and a read past a truncated mapping, give SIGABRT and SIGBUS from a real worker: `RealProcessCatalogue/RealProcessSoftwareFault.IsAFaultWithTheRawSignalAndNoHardwareAttribution` (`tests/supervision/catalogue_test.cpp`). Fix in #81. |
+
+The test names for EXT-01 to EXT-03 are those on the open pull requests at the time of
+writing.
