@@ -6,6 +6,9 @@ on:
   # gate it enforces is about the tests' strength, which changes slowly.
   schedule:
     - cron: '17 3 * * 1'
+  # Validation branch only, never merged: a push here runs the gate.
+  push:
+    branches: [chore/mull-pin-discovery]
   workflow_dispatch:
     inputs:
       discover_pin:
