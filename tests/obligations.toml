@@ -130,7 +130,21 @@ as the worker, N >= 2 in every case -- two complete for the duration, one is \
 killed from outside while the other completes, and the controller itself is \
 killed and every orphan is reaped by the test as subreaper and found dead by \
 the parent-death signal within a bounded time. The catalogue's remaining rows \
-need the fake-worker executable, which lands next."""
+need the fake-worker executable, which lands next. \
+\
+OOM is told from a fault and from a plain kill by the kernel's own record: \
+a SIGKILL the controller did not send is kOomKilled only when the workers' \
+cgroup's OOM-kill count, read before the first fork and after the last reap, \
+rose by at least as many as there are such deaths; otherwise every one stays \
+kKilled and its report says why. The table row, the candidate rule and the \
+judgement (every outcome: enough, none, too few, a count that went back, \
+unreadable at either end) are pure and tested row by row; the loop is driven \
+against the controller's own fake of the record's contract \
+(resources/oom_kill_record.hpp), never the reader's tests (docs/adr/0003). \
+The real OOM kill of a real worker is a T7 row that waits for the fake \
+worker; the kernel's side of it -- a child really OOM-killed moves its \
+cgroup's count by one, and a kill -9 moves it by none -- is the reader's \
+T8, in tests/unit/resources."""
 
 [[module]]
 path             = "src/resources"

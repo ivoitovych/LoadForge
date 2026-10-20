@@ -58,10 +58,12 @@ struct LimitStatus {
 
 /// The limits a run states, each with its enforcement. The duration is always
 /// enforced (it is the controller's deadline); memory is enforced against a
-/// budget when one is known, and reported unenforced when none can be read;
-/// temperature waits for telemetry.
+/// budget when one is known, and reported unenforced when none can be read,
+/// with `unread` -- the reader's reason -- when it gave one; temperature waits
+/// for telemetry.
 [[nodiscard]] std::vector<LimitStatus> limit_statuses(
-    const config::Config& config, const std::optional<config::MemoryBudget>& budget);
+    const config::Config& config, const std::optional<config::MemoryBudget>& budget,
+    std::string_view unread);
 
 /// Refuses a run whose configured footprints exceed the budget, before any
 /// worker starts. With no budget there is nothing to check against, and the

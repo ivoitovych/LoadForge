@@ -61,7 +61,8 @@ bool any_memory_configured(const config::Config& config) {
 }  // namespace
 
 std::vector<LimitStatus> limit_statuses(const config::Config& config,
-                                        const std::optional<config::MemoryBudget>& budget) {
+                                        const std::optional<config::MemoryBudget>& budget,
+                                        std::string_view unread) {
   // Each status is built in a named local and moved in: a temporary with two
   // allocating members inside push_back leaves a cleanup edge no test can
   // take (journal §1.13).
@@ -73,6 +74,10 @@ std::vector<LimitStatus> limit_statuses(const config::Config& config,
   statuses.push_back(std::move(duration));
   if (any_memory_configured(config)) {
     std::string memory_note = "no memory budget could be read";
+    if (!unread.empty()) {
+      memory_note += ": ";
+      memory_note += unread;
+    }
     if (budget.has_value()) {
       memory_note = "checked at start against a ceiling of ";
       memory_note += core::to_string(core::ByteSize::bytes(config::ceiling_of(*budget)));

@@ -115,15 +115,16 @@ loadforge_enable_coverage(loadforge_resources)
 # ---- controller -------------------------------------------------------------
 # The supervisor: spawns the workers, judges their beats and their records,
 # stops them at the deadline and classifies what became of each. Depends on
-# worker (the IPC and the argv it execs workers with) and config; the console
-# reporter is the one voice it has at M1.
+# worker (the IPC and the argv it execs workers with) and config, and on the
+# OOM-kill record's contract in resources; the console reporter is the one
+# voice it has at M1.
 add_library(loadforge_controller STATIC
   src/controller/supervision.cpp
   src/controller/safety.cpp
   src/controller/orchestration.cpp
   src/reporters/console.cpp
 )
-target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config)
+target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config loadforge_resources)
 loadforge_set_warnings(loadforge_controller)
 loadforge_set_fp_contract(loadforge_controller)
 loadforge_enable_sanitizers(loadforge_controller)

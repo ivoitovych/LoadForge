@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <optional>
 #include <string>
@@ -29,6 +30,7 @@
 #include "core/byte_size.hpp"
 #include "core/duration.hpp"
 #include "platform/syscalls.hpp"
+#include "resources/oom_kill_record.hpp"
 #include "support/fake_syscalls.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
@@ -95,6 +97,27 @@ std::string frame_text(ipc::RecordType type, std::string_view payload) {
   }
   return text;
 }
+
+/// The OOM-kill record as this controller reads its contract: a count, read
+/// on demand, that answers from a script and remembers how often it was asked.
+/// The controller's own fake (docs/adr/0003); the reader's real one is tested
+/// against the kernel in tests/unit/resources.
+class ScriptedOomRecord final : public resources::OomKillRecord {
+ public:
+  [[nodiscard]] std::string scope() const override { return "the scripted count"; }
+  core::Result<std::uint64_t, std::string> kills() override {
+    ++reads;
+    if (readings.empty()) {
+      return std::string{"read more often than scripted"};
+    }
+    auto next = readings.front();
+    readings.pop_front();
+    return next;
+  }
+
+  std::deque<core::Result<std::uint64_t, std::string>> readings;
+  int reads = 0;
+};
 
 struct Rig {
   FakeSyscalls syscalls;
@@ -424,6 +447,197 @@ TEST(ControllerTest, AFaultIsReportedWithTheRecordsThatArrivedBeforeIt) {
                           {"started: slot 0 pid 1001", "error: about to crash"}}));
   EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kCompleted);
   EXPECT_EQ(clean_count(result.value()), 1U);
+}
+
+// --- the OOM killer, from the kernel's record ---------------------------------------
+
+/// Worker 0 dies of a SIGKILL nobody here sent; worker 1 completes.
+void one_killed_one_completes(Rig& rig) {
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kStarted, "slot 0 pid 1001");
+      rig.worker_exits(0, SIGKILL);
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(1, 0);
+    }
+  };
+}
+
+TEST(ControllerOomTest, ASigkillTheCountAccountsForIsAnOomKillAndTheOtherWorkerCompletes) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{3}, std::uint64_t{4}};
+  rig.options.oom_record = &record;
+  one_killed_one_completes(rig);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0],
+            (WorkerReport{0,
+                          kFirstPid,
+                          WorkerFate::kOomKilled,
+                          "killed by signal 9",
+                          "running",
+                          0,
+                          {"started: slot 0 pid 1001",
+                           "OOM kill: the scripted count counted 1 during the run, one or more for "
+                           "each of the 1 worker(s) killed by a SIGKILL the controller did not "
+                           "send"}}));
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(result.value().workers[1].records, (std::vector<std::string>{"finished: done"}))
+      << "a worker the count does not concern carries no word about it";
+  EXPECT_EQ(record.reads, 2) << "once before the first fork, once after the last reap";
+  EXPECT_FALSE(all_clean(result.value())) << "an OOM kill is not a completion";
+}
+
+TEST(ControllerOomTest, TheCountIsReadBeforeTheFirstFork) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}};
+  rig.options.oom_record = &record;
+  rig.reporter.on_starting = [&rig, &record] {
+    EXPECT_EQ(record.reads, 1) << "read before the run was announced";
+    EXPECT_EQ(rig.syscalls.fork_count(), 0);
+    rig.hold_worker_ends();
+  };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "deadline")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_TRUE(all_clean(result.value()));
+  EXPECT_EQ(record.reads, 1) << "nobody died of SIGKILL, so the count is not read again";
+}
+
+TEST(ControllerOomTest, ASigkillTheCountDoesNotAccountForStaysAKillAndSaysWhy) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{3}, std::uint64_t{3}};
+  rig.options.oom_record = &record;
+  one_killed_one_completes(rig);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kKilled);
+  EXPECT_EQ(result.value().workers[0].records.back(),
+            "not attributed to the OOM killer: the scripted count counted no OOM kill during the "
+            "run");
+}
+
+TEST(ControllerOomTest, ACountUnreadableAtEitherEndLeavesAKillWithTheReason) {
+  {
+    Rig rig;
+    ScriptedOomRecord record;
+    record.readings = {std::string{"no count before"}, std::uint64_t{9}};
+    rig.options.oom_record = &record;
+    one_killed_one_completes(rig);
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << describe(result.error());
+    EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kKilled)
+        << "a count the run could not read first is no reason to refuse the run";
+    EXPECT_EQ(result.value().workers[0].records.back(),
+              "not attributed to the OOM killer: the OOM-kill count could not be read before the "
+              "run: no count before");
+  }
+  {
+    Rig rig;
+    ScriptedOomRecord record;
+    record.readings = {std::uint64_t{0}, std::string{"no count after"}};
+    rig.options.oom_record = &record;
+    one_killed_one_completes(rig);
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << describe(result.error());
+    EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kKilled);
+    EXPECT_EQ(result.value().workers[0].records.back(),
+              "not attributed to the OOM killer: the OOM-kill count could not be read after the "
+              "run: no count after");
+  }
+}
+
+TEST(ControllerOomTest, TwoSigkillsAndOneCountedKillAttributeNeither) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}, std::uint64_t{1}};
+  rig.options.oom_record = &record;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.worker_exits(0, SIGKILL);
+    } else if (starts_with(line, "worker 0 (pid")) {
+      rig.worker_exits(1, SIGKILL);  // Reaped after worker 0's death was told.
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const std::string note =
+      "not attributed to the OOM killer: the scripted count counted 1 OOM kill(s) during the run "
+      "for 2 workers killed by a SIGKILL the controller did not send, and a count does not say "
+      "which";
+  for (const WorkerReport& worker : result.value().workers) {
+    EXPECT_EQ(worker.fate, WorkerFate::kKilled) << worker.slot;
+    EXPECT_EQ(worker.records, (std::vector<std::string>{note})) << worker.slot;
+  }
+  EXPECT_EQ(record.reads, 2);
+}
+
+TEST(ControllerOomTest, TheControllersOwnSigkillIsNeverAskedAbout) {
+  // Both workers stale, both escalated to SIGKILL by the controller: their
+  // deaths have a cause already, and the count is not read again.
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}};
+  rig.options.oom_record = &record;
+  rig.config.run.duration = core::Duration{1000};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(record.reads, 1);
+}
+
+TEST(ControllerOomTest, WithNoRecordOfferedASigkillIsAKillAndNothingIsSaidAboutOom) {
+  Rig rig;
+  one_killed_one_completes(rig);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kKilled);
+  EXPECT_EQ(result.value().workers[0].records,
+            (std::vector<std::string>{"started: slot 0 pid 1001"}));
+}
+
+TEST(ControllerOomTest, ABudgetThatCouldNotBeReadIsNotEnforcedAndTheBannerSaysWhy) {
+  Rig rig;
+  rig.config.limits.memory = core::ByteSize::bytes(std::uint64_t{1} << 30U);
+  rig.options.budget_unread = "/proc/meminfo: not permitted (open: Permission denied)";
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_EQ(rig.reporter.plans.size(), 1U);
+  ASSERT_EQ(rig.reporter.plans[0].limits.size(), 2U);
+  EXPECT_EQ(rig.reporter.plans[0].limits[1],
+            (LimitStatus{"memory", false,
+                         "no memory budget could be read: /proc/meminfo: not permitted (open: "
+                         "Permission denied)"}));
 }
 
 TEST(ControllerTest, ACorruptFrameAndATruncatedStreamAreEachReportedAsSuch) {
@@ -966,6 +1180,13 @@ TEST(ControllerTest, ReportValuesCompareFieldByField) {
   config::MemoryBudget budget;
   budget.available_bytes = 1;
   p.budget = budget;
+  EXPECT_NE(o, p);
+  p = o;
+  p.budget_unread = "x";
+  EXPECT_NE(o, p);
+  p = o;
+  ScriptedOomRecord record;
+  p.oom_record = &record;
   EXPECT_NE(o, p);
 
   const RunPlan plan;
