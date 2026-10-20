@@ -48,9 +48,8 @@ TYPED_TEST_P(SelectPathContract, ARequestedPathThatIsCompiledAndSupportedIsUsed)
 }
 
 TYPED_TEST_P(SelectPathContract, ARequestedPathNotCompiledIsRefusedAsSuch) {
-  const auto chosen =
-      TypeParam::select(IsaPath::kAvx2, IsaSet{IsaPath::kScalar, IsaPath::kAvx2},
-                        IsaSet{IsaPath::kScalar, IsaPath::kNeon});
+  const auto chosen = TypeParam::select(IsaPath::kAvx2, IsaSet{IsaPath::kScalar, IsaPath::kAvx2},
+                                        IsaSet{IsaPath::kScalar, IsaPath::kNeon});
   ASSERT_FALSE(chosen.has_value());
   EXPECT_EQ(chosen.error().fault, DispatchFault::kNotCompiled);
   EXPECT_EQ(chosen.error().requested, IsaPath::kAvx2);
@@ -59,16 +58,15 @@ TYPED_TEST_P(SelectPathContract, ARequestedPathNotCompiledIsRefusedAsSuch) {
 
 TYPED_TEST_P(SelectPathContract, NotCompiledIsReportedBeforeNotSupported) {
   // Neither set holds it: the build's lack is the first thing to fix.
-  const auto chosen = TypeParam::select(IsaPath::kAvx512, IsaSet{IsaPath::kScalar},
-                                        IsaSet{IsaPath::kScalar});
+  const auto chosen =
+      TypeParam::select(IsaPath::kAvx512, IsaSet{IsaPath::kScalar}, IsaSet{IsaPath::kScalar});
   ASSERT_FALSE(chosen.has_value());
   EXPECT_EQ(chosen.error().fault, DispatchFault::kNotCompiled);
 }
 
 TYPED_TEST_P(SelectPathContract, ARequestedPathTheMachineLacksIsRefusedNeverReplaced) {
-  const auto chosen =
-      TypeParam::select(IsaPath::kAvx512, IsaSet{IsaPath::kScalar, IsaPath::kAvx2},
-                        IsaSet{IsaPath::kScalar, IsaPath::kAvx2, IsaPath::kAvx512});
+  const auto chosen = TypeParam::select(IsaPath::kAvx512, IsaSet{IsaPath::kScalar, IsaPath::kAvx2},
+                                        IsaSet{IsaPath::kScalar, IsaPath::kAvx2, IsaPath::kAvx512});
   ASSERT_FALSE(chosen.has_value()) << "a request is used or refused, never silently replaced";
   EXPECT_EQ(chosen.error().fault, DispatchFault::kNotSupported);
   EXPECT_EQ(chosen.error().requested, IsaPath::kAvx512);

@@ -102,8 +102,8 @@ TYPED_TEST_P(FpControlContract, WhatIsWrittenIsWhatIsReadBack) {
   this->control_->write(this->required());
   EXPECT_EQ(this->control_->read(), this->required());
 
-  for (const Rounding rounding : {Rounding::kTowardZero, Rounding::kUpward, Rounding::kDownward,
-                                  Rounding::kToNearestEven}) {
+  for (const Rounding rounding :
+       {Rounding::kTowardZero, Rounding::kUpward, Rounding::kDownward, Rounding::kToNearestEven}) {
     FpState state = this->required();
     state.rounding = rounding;
     this->control_->write(state);
