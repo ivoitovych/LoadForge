@@ -2,13 +2,34 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/raytrace and nothing else.
 
 [[module]]
-path    = "src/workloads/raytrace"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the ray tracing specification alone (spec.hpp, ADR 0004): the sizes and \
-offsets, the decoders of the generator's draws at both ends of every range, \
-the camera, and the two intersection tests with each of their branches, \
-tested in tests/contracts/workloads/. The ray tracing stream takes this row \
-over with the workload and owes what IMPLEMENTATION §3 lists for it -- P4 \
-and P5, and T3, T4, T5, T5b, T6 -- with provides = ["WorkloadContract"]."""
+path     = "src/workloads/raytrace"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+fixtures = ["workloads/raytrace"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+P1: every decision of the build of the hierarchy (leaf or split, the tie on a \
+sort key), of the slab test and of the nearest-hit rule, in both kernels, and \
+the factory's three refusals. P3: the boundaries of the input -- a NaN, an \
+infinity, a negative radius, a triangle edge-on or degenerate, a primitive \
+behind the eye or the eye inside a sphere, an equal distance from two \
+primitives, every byte value for the whole input -- and of the tile edges and \
+the footprint of exactly one unit. P4: the workload's output is what the \
+verification judges; its failure modes are injected and named by the item that \
+holds them (T5: a dropped task, boxes too small, a flipped bit in a record, \
+its padding or a tile sum) and the comparison that cannot be made is never a \
+pass (T5b: a buffer of the wrong size, a tile edge not the plan's). The \
+oracle itself is another stream's; the comparison here is brute force over the \
+specification's arithmetic in the workload's own tests. T3: brute force, every \
+primitive for every pixel, for every path this machine runs, every tile edge, \
+and inputs with a value replaced or a bit flipped. T4: the hit fraction the \
+specification states, the record format, the nearest distance, and \
+metamorphic relations (a primitive taken out of sight, the spheres permuted, \
+a copy at a higher index). T6: BitExactFixedDecomposition checked against \
+the digests of an independent Python model (tests/fixtures/workloads/raytrace), \
+at 1 to 100 threads, on every path, and across runs. P5 is not claimed: the \
+workload holds no atomic, lock or thread -- the executor runs its tasks, each \
+writing its own row -- and the mocks' atomics in the tests are seq_cst. \
+The row for this module in IMPLEMENTATION §3 lists P5 as every M4 workload \
+does; there is none to declare here."""
