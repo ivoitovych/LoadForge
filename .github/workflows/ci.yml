@@ -84,13 +84,14 @@ jobs:
           sudo apt-get install -y -qq shellcheck strace
           pip install --break-system-packages 'ruff==0.15.8'
       - run: ./tests/tools/test_tooling.sh
+      - run: ./tests/tools/test_git_hooks.sh
       - run: ./tests/tools/test_runtime_deps.sh
       - name: ShellCheck
         # The C++ is compiled with -Werror and a long warning list; the shell
         # that decides whether the C++ may ship was, until now, unchecked. An
         # unquoted expansion or a masked exit status in these scripts is a
         # verification failure, not a style complaint.
-        run: shellcheck --severity=warning tools/*.sh tests/tools/*.sh
+        run: shellcheck --severity=warning tools/*.sh tools/lib/*.sh tests/tools/*.sh
       - name: Ruff
         # Rule selection and line length live in ruff.toml, so a local run and
         # CI cannot drift apart.
