@@ -26,20 +26,26 @@
 # A pull request merged on GitHub produces a merge commit whose committer is
 # GitHub, signed with GitHub's key, whose author is whoever pressed the button,
 # and whose body begins with the PR title, which git may parse as a trailer
-# ("Config: a typo is a refusal"). For exactly that shape, two parents and a
-# GitHub committer, the author must still be admitted; the committer, the
-# signature and the trailers belong to GitHub and are not judged. A GitHub
-# committer on any other commit is not that shape and fails.
+# ("Config: a typo is a refusal"). For exactly that shape -- two parents, a
+# GitHub committer, and a tree equal to the clean automatic merge of the
+# parents, so that it adds no content -- the author must still be admitted; the
+# committer, the signature, the trailers and the sign-off are not judged.
+# Parent count and committer are forgeable fields; the tree is not, which is
+# why it is the deciding test (tools/lib/commit-policy.sh). A GitHub committer
+# on any other commit, or any other merge, is judged in full.
 set -uo pipefail
 
-HEAD_REF="${1:?usage: check-commit-identity.sh <head-ref> [repo] [identities-file] [exclude-spec]}"
+HEAD_REF="${1:?usage: check-commit-identity.sh <head-ref> [repo] [identities-file] [exclude-spec] [signoff-baseline]}"
 REPO="${2:-.}"
 IDENTITIES="${3:-.github/commit-identities}"
 # Optional: a rev-list exclusion such as --remotes=origin, so that the pre-push
 # hook judges only the commits a push introduces. CI passes none and walks the
 # whole history.
 EXCLUDE="${4:-}"
-GITHUB_COMMITTER="noreply@github.com"
+# Commits already in history that predate the sign-off rule; see the file.
+BASELINE="${5:-$(dirname "$IDENTITIES")/signoff-baseline}"
+# shellcheck source=tools/lib/commit-policy.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/commit-policy.sh" || exit 1
 
 cd "$REPO" || { echo "check-commit-identity: no repository at $REPO" >&2; exit 1; }
 
@@ -58,6 +64,9 @@ if [ "${#admitted[@]}" -eq 0 ]; then
   echo "check-commit-identity: $IDENTITIES admits nobody; every commit would fail." >&2
   exit 1
 fi
+
+baseline=""
+[ -r "$BASELINE" ] && baseline="$(grep -vE '^\s*(#|$)' "$BASELINE" | awk '{print $1}')"
 
 is_admitted() { # email
   local wanted
@@ -78,18 +87,21 @@ report() { echo "  REFUSED $(git log -1 --format='%h %s' "$1"): $2" >&2; bad=$((
 for c in "${commits[@]}"; do
   author="$(git log -1 --format='%ae' "$c")"
   committer="$(git log -1 --format='%ce' "$c")"
-  parents="$(git log -1 --format='%p' "$c" | wc -w)"
 
   is_admitted "$author" || report "$c" "author <$author> is not in $IDENTITIES"
 
-  if [ "$committer" = "$GITHUB_COMMITTER" ] && [ "$parents" -eq 2 ]; then
-    continue  # GitHub's merge commit: only the author is ours to judge.
+  if cp_is_github_merge "$c"; then
+    continue  # GitHub's clean merge: adds no content; only the author is ours to judge.
   fi
 
   is_admitted "$committer" || report "$c" "committer <$committer> is not in $IDENTITIES"
 
   git cat-file commit "$c" | sed '/^$/q' | grep -q '^gpgsig' &&
     report "$c" "signed; commits here are unsigned"
+
+  grep -qxF "$c" <<< "$baseline" ||
+    git log -1 --format='%B' "$c" | cp_signoff_matches "$author" ||
+    report "$c" "no Signed-off-by for <$author>; every commit is signed off by its author"
 
   while IFS= read -r key; do
     [ -z "$key" ] || [ "$key" = "Signed-off-by" ] || report "$c" "trailer '$key'; only Signed-off-by is allowed"

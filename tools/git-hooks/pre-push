@@ -3,7 +3,8 @@
 # LOADFORGE-REPO-HOOK
 #
 # Push gate: every commit this push introduces passes exactly the checks of
-# tools/check-commit-identity.sh (which CI runs on the whole history), and the
+# tools/check-commit-identity.sh (which CI runs on the whole history), sign-off
+# included, and the
 # branch name follows the convention in CONTRIBUTING.md. Skippable with
 # --no-verify; CI is not.
 set -uo pipefail

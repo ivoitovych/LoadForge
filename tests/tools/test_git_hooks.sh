@@ -36,7 +36,7 @@ mkrepo() { # name
   mkdir -p "$r/.github" "$r/tools"
   printf '# admitted\n%s\n' "$OWNER_E" > "$r/.github/commit-identities"
   cp "$ROOT/tools/check-commit-identity.sh" "$ROOT/tools/install-git-hooks.sh" "$r/tools/"
-  cp -r "$ROOT/tools/git-hooks" "$r/tools/"
+  cp -r "$ROOT/tools/git-hooks" "$ROOT/tools/lib" "$r/tools/"
   git -C "$r" config user.name "$OWNER_N"
   git -C "$r" config user.email "$OWNER_E"
   git -C "$r" config commit.gpgsign false
@@ -109,6 +109,64 @@ git -C "$r" checkout -q -b fix/new
 commit "$r" "seven$SOB"
 out="$(git -C "$r" push -q origin fix/new 2>&1)"
 expect "a new branch is judged on its own commits"             0 $? "" "$out"
+
+echo "pre-push: sign-off and merges, hooks bypassed with --no-verify"
+r="$(mkrepo e)"
+commit "$r" "base$SOB"
+git -C "$r" push -q origin main 2>/dev/null
+GH=noreply@github.com
+nv() { # message : a commit made past the commit hooks
+  echo "$RANDOM" >> "$r/f"; git -C "$r" add f
+  git -C "$r" commit -q --no-verify -m "$1"
+}
+try() { git -C "$r" push -q origin "HEAD:refs/heads/$1" 2>&1; }
+git -C "$r" checkout -q -B fix/nosob main
+nv "no sign-off"
+out="$(try fix/nosob)"
+expect "a commit with no sign-off is refused"                  1 $? "no Signed-off-by" "$out"
+git -C "$r" checkout -q -B fix/othersob main
+nv $'other\n\nSigned-off-by: Other <other@example.invalid>'
+out="$(try fix/othersob)"
+expect "a sign-off with another email is refused"              1 $? "no Signed-off-by for <owner@example.invalid>" "$out"
+git -C "$r" checkout -q -B fix/goodsob main
+nv "right$SOB"
+out="$(try fix/goodsob)"
+expect "a correct sign-off is accepted"                        0 $? "" "$out"
+
+# Merges: build the two sides, then commits with every field set by hand.
+git -C "$r" checkout -q -B side-a main; nv "a$SOB"; a="$(git -C "$r" rev-parse HEAD)"
+git -C "$r" checkout -q -B side-b main
+echo b > "$r/g"; git -C "$r" add g; git -C "$r" commit -q --no-verify -m "b$SOB"; b="$(git -C "$r" rev-parse HEAD)"
+mkmerge() { # author-email committer-email message [extra-file]
+  local tree idx
+  tree="$(git -C "$r" merge-tree --write-tree "$a" "$b" | head -1)"
+  if [ -n "${4-}" ]; then
+    idx="$(mktemp -u)"; GIT_INDEX_FILE="$idx" git -C "$r" read-tree "$tree"
+    GIT_INDEX_FILE="$idx" git -C "$r" update-index --add --cacheinfo \
+      "100644,$(echo smuggled | git -C "$r" hash-object -w --stdin),$4"
+    tree="$(GIT_INDEX_FILE="$idx" git -C "$r" write-tree)"; rm -f "$idx"
+  fi
+  GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL="$1" GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL="$2" \
+    git -C "$r" commit-tree "$tree" -p "$a" -p "$b" -m "$3"
+}
+push_sha() { git -C "$r" push -q origin "$1:refs/heads/$2" 2>&1; }
+
+sha="$(mkmerge "$OWNER_E" "$GH" $'Merge pull request #9\n\nCo-authored-by: Someone <s@example.invalid>' smuggled.txt)"
+out="$(push_sha "$sha" fix/forged)"
+expect "a forged GitHub merge adding content is refused"       1 $? "Co-authored-by" "$out"
+expect "  ... also for want of a sign-off"                     1 1 "no Signed-off-by" "$out"
+sha="$(mkmerge "$OWNER_E" "$GH" "Merge pull request #9")"
+out="$(push_sha "$sha" fix/genuine)"
+expect "a genuine clean GitHub merge with no trailers is accepted" 0 $? "" "$out"
+sha="$(mkmerge "$OWNER_E" other@example.invalid "Merge x$SOB" extra.txt)"
+out="$(push_sha "$sha" fix/unadmitted)"
+expect "a merge with an unadmitted committer and content is refused" 1 $? "committer <other@example.invalid>" "$out"
+sha="$(mkmerge "$OWNER_E" "$OWNER_E" "Merge main$SOB")"
+out="$(push_sha "$sha" fix/human)"
+expect "a human merge with a sign-off is accepted"             0 $? "" "$out"
+sha="$(mkmerge "$OWNER_E" "$OWNER_E" "Merge main")"
+out="$(push_sha "$sha" fix/humannosob)"
+expect "a human merge without a sign-off is refused"           1 $? "no Signed-off-by" "$out"
 
 echo "install-git-hooks.sh"
 r="$(mkrepo b)"

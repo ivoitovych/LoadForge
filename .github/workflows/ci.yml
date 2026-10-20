@@ -91,7 +91,7 @@ jobs:
         # that decides whether the C++ may ship was, until now, unchecked. An
         # unquoted expansion or a masked exit status in these scripts is a
         # verification failure, not a style complaint.
-        run: shellcheck --severity=warning tools/*.sh tests/tools/*.sh
+        run: shellcheck --severity=warning tools/*.sh tools/lib/*.sh tests/tools/*.sh
       - name: Ruff
         # Rule selection and line length live in ruff.toml, so a local run and
         # CI cannot drift apart.
