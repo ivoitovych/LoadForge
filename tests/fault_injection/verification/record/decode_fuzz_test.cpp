@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -25,7 +26,6 @@
 #include <vector>
 
 #include "contracts/verification/record_contract.hpp"
-#include "primitives/rng/philox.hpp"
 #include "verification/record.hpp"
 #include "verification/record/codec.hpp"
 
@@ -189,27 +189,130 @@ TEST(RecordDecodeFaultInjection, MisalignedBoundariesAreAnsweredNeverCrashedOn) 
   EXPECT_GT(answered, stream.bytes.size() / 3);
 }
 
-TEST(RecordDecodeFaultInjection, RandomBytesUnderAValidHeaderAreNeverAGuess) {
-  // The contract suite's noise, deeper: every kind, lengths up to one record,
-  // and the canonical property rather than validity alone.
-  std::size_t decoded = 0;
-  for (std::uint64_t stream = 0; stream < 20000; ++stream) {
-    Bytes bytes(2 + stream % 150);
-    rng::fill_stream(0xC0DEC, stream, bytes);
-    bytes[0] = std::byte{kRecordFormatVersion};
-    bytes[1] = static_cast<std::byte>(1 + stream % 3);
-    // Bias the presence flags towards 0 and 1, or nothing gets past them.
-    for (std::size_t at = 2; at < bytes.size() && at < 14; ++at) {
-      bytes[at] &= std::byte{0x01};
+/// A random valid record: every field present or absent at random, random
+/// values, texts and windows of random lengths, every kind and enumerator.
+ErrorRecord random_record(std::mt19937_64& random) {
+  const auto coin = [&random] { return (random() & 1U) != 0; };
+  const auto text = [&random](std::size_t longest) {
+    std::string value(random() % (longest + 1), ' ');
+    for (char& c : value) {
+      c = static_cast<char>(random() % 256);
     }
-    const auto result = decode(bytes);
-    if (result.has_value()) {
-      ++decoded;
-      EXPECT_TRUE(is_valid(result.value()));
-      EXPECT_EQ(encode(result.value()), bytes) << "stream " << stream;
+    return value;
+  };
+  Provenance provenance;
+  if (coin()) {
+    provenance.logical_cpu = static_cast<std::uint32_t>(random());
+  }
+  if (coin()) {
+    provenance.physical_core = static_cast<std::uint32_t>(random());
+  }
+  if (coin()) {
+    provenance.numa_node = static_cast<std::uint32_t>(random());
+  }
+  if (coin()) {
+    provenance.buffer_address = random();
+  }
+  if (coin()) {
+    provenance.buffer_offset = random();
+  }
+  if (coin()) {
+    provenance.iteration = random();
+  }
+  if (coin()) {
+    provenance.workload = text(40);
+  }
+  if (coin()) {
+    provenance.workload_version = static_cast<std::uint32_t>(random());
+  }
+  if (coin()) {
+    provenance.seed = random();
+  }
+  if (coin()) {
+    provenance.isa = static_cast<simd::IsaPath>(random() % simd::kIsaPathCount);
+  }
+  if (coin()) {
+    provenance.input_integrity = static_cast<InputIntegrity>(random() % 4);
+  }
+  if (coin()) {
+    provenance.duty =
+        DutyCycle{static_cast<std::uint32_t>(random()), static_cast<std::uint32_t>(random())};
+  }
+  switch (random() % 3) {
+    case 0: {
+      ExactBitCorruption record;
+      record.provenance = provenance;
+      record.side = static_cast<Side>(random() % 2);
+      record.check = "c" + text(40);
+      record.line_bytes = 1U << (3 + random() % 10);
+      if (coin()) {
+        Difference difference;
+        difference.domain = static_cast<Domain>(random() % 2);
+        difference.first_offset = random() >> 8U;
+        difference.last_offset = difference.first_offset + random() % 5000;
+        difference.popcount = 1 + random() % 100;
+        difference.window_offset = difference.first_offset / kWordBytes * kWordBytes;
+        const std::size_t window = 1 + random() % kMaxWindowBytes;
+        for (std::size_t at = 0; at < window; ++at) {
+          difference.expected.push_back(static_cast<std::byte>(random()));
+          difference.actual.push_back(static_cast<std::byte>(random()));
+        }
+        record.difference = difference;
+      }
+      return record;
+    }
+    case 1: {
+      NumericalVerificationFailure record;
+      record.provenance = provenance;
+      record.check = text(40);
+      record.residual = std::bit_cast<double>(random());
+      record.tolerance = 1e-300 + static_cast<double>(random() % 1000000);
+      if (coin()) {
+        record.condition_number = std::bit_cast<double>(random());
+      }
+      if (coin()) {
+        record.element = random();
+      }
+      return record;
+    }
+    default: {
+      VerificationNotPerformed record;
+      record.provenance = provenance;
+      record.what = text(40);
+      record.why = text(40);
+      record.blocks_compared = random();
+      return record;
     }
   }
-  RecordProperty("decoded", static_cast<int>(decoded));
+}
+
+TEST(RecordDecodeFaultInjection, RandomRecordsRoundTripAndTheirCorruptionsAreNeverAGuess) {
+  std::mt19937_64 random(20261020);
+  std::size_t refused = 0;
+  std::size_t decoded = 0;
+  for (int round = 0; round < 5000; ++round) {
+    const ErrorRecord record = random_record(random);
+    ASSERT_TRUE(is_valid(record)) << round;
+    const Bytes bytes = encode(record);
+    const auto back = decode(bytes);
+    ASSERT_TRUE(back.has_value()) << round << ": " << describe(back.error());
+    EXPECT_TRUE(contracts::record_samples::same(back.value(), record)) << round;
+    // Then one byte, anywhere, overwritten with anything.
+    Bytes corrupted = bytes;
+    corrupted[random() % corrupted.size()] = static_cast<std::byte>(random());
+    const auto answer = decode(corrupted);
+    if (!answer.has_value()) {
+      ++refused;
+      continue;
+    }
+    ++decoded;
+    EXPECT_TRUE(is_valid(answer.value())) << round;
+    EXPECT_EQ(encode(answer.value()), corrupted) << round << ": a guess";
+  }
+  EXPECT_GT(refused, 0U);
+  EXPECT_GT(decoded, 0U);
+  RecordProperty("refused", static_cast<int>(refused));
+  RecordProperty("decoded_to_their_own_bytes", static_cast<int>(decoded));
 }
 
 }  // namespace

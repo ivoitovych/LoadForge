@@ -98,7 +98,7 @@ void put_provenance(Writer& writer, const Provenance& provenance) {
   }
 }
 
-void put_exact(Writer& writer, const ExactBitCorruption& record) {
+void put_kind(Writer& writer, const ExactBitCorruption& record) {
   writer.u8(static_cast<std::uint8_t>(record.side));
   writer.text(record.check);
   writer.u32(record.line_bytes);
@@ -115,7 +115,7 @@ void put_exact(Writer& writer, const ExactBitCorruption& record) {
   }
 }
 
-void put_numerical(Writer& writer, const NumericalVerificationFailure& record) {
+void put_kind(Writer& writer, const NumericalVerificationFailure& record) {
   writer.text(record.check);
   writer.f64(record.residual);
   writer.f64(record.tolerance);
@@ -126,7 +126,7 @@ void put_numerical(Writer& writer, const NumericalVerificationFailure& record) {
   put_optional_u64(writer, record.element);
 }
 
-void put_not_performed(Writer& writer, const VerificationNotPerformed& record) {
+void put_kind(Writer& writer, const VerificationNotPerformed& record) {
   writer.text(record.what);
   writer.text(record.why);
   writer.u64(record.blocks_compared);
@@ -445,7 +445,7 @@ std::optional<std::string> broken_difference_rule(const Difference& difference) 
   return std::nullopt;
 }
 
-std::optional<std::string> broken_exact_rule(const ExactBitCorruption& record) {
+std::optional<std::string> broken_kind_rule(const ExactBitCorruption& record) {
   if (record.side > Side::kInput) {
     return "side " + std::to_string(static_cast<unsigned>(record.side)) +
            " is neither output nor input";
@@ -469,7 +469,7 @@ std::optional<std::string> broken_exact_rule(const ExactBitCorruption& record) {
   return std::nullopt;
 }
 
-std::optional<std::string> broken_numerical_rule(const NumericalVerificationFailure& record) {
+std::optional<std::string> broken_kind_rule(const NumericalVerificationFailure& record) {
   if (record.check.size() > kMaxTextBytes) {
     return longer_than_allowed("check", record.check.size());
   }
@@ -482,7 +482,7 @@ std::optional<std::string> broken_numerical_rule(const NumericalVerificationFail
   return std::nullopt;
 }
 
-std::optional<std::string> broken_not_performed_rule(const VerificationNotPerformed& record) {
+std::optional<std::string> broken_kind_rule(const VerificationNotPerformed& record) {
   if (record.what.size() > kMaxTextBytes) {
     return longer_than_allowed("what", record.what.size());
   }
@@ -509,13 +509,9 @@ std::optional<std::string> broken_rule(const ErrorRecord& record) {
     return "input integrity " + std::to_string(static_cast<unsigned>(*provenance.input_integrity)) +
            " is none of its four values";
   }
-  if (const auto* exact = std::get_if<ExactBitCorruption>(&record)) {
-    return broken_exact_rule(*exact);
-  }
-  if (const auto* numerical = std::get_if<NumericalVerificationFailure>(&record)) {
-    return broken_numerical_rule(*numerical);
-  }
-  return broken_not_performed_rule(*std::get_if<VerificationNotPerformed>(&record));
+  // std::visit rather than a chain of get_if: at -O3, GCC's -Wnull-dereference
+  // cannot see that the last alternative is held when the others are not.
+  return std::visit([](const auto& kind) { return broken_kind_rule(kind); }, record);
 }
 
 std::string describe(const DecodeError& error) {
@@ -532,13 +528,7 @@ std::vector<std::byte> encode(const ErrorRecord& record) {
   writer.u8(kRecordFormatVersion);
   writer.u8(static_cast<std::uint8_t>(record.index() + 1));
   put_provenance(writer, provenance_of(record));
-  if (const auto* exact = std::get_if<ExactBitCorruption>(&record)) {
-    put_exact(writer, *exact);
-  } else if (const auto* numerical = std::get_if<NumericalVerificationFailure>(&record)) {
-    put_numerical(writer, *numerical);
-  } else {
-    put_not_performed(writer, *std::get_if<VerificationNotPerformed>(&record));
-  }
+  std::visit([&writer](const auto& kind) { put_kind(writer, kind); }, record);
   return writer.take();
 }
 

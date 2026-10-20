@@ -118,7 +118,7 @@ std::string bytes_line(std::span<const std::byte> bytes) {
   return text;
 }
 
-void put_exact(std::string& out, const ExactBitCorruption& record) {
+void put_kind(std::string& out, const ExactBitCorruption& record) {
   out += "ExactBitCorruption: the ";
   out += describe(record.side);
   out += " was found corrupt\n";
@@ -149,7 +149,7 @@ void put_exact(std::string& out, const ExactBitCorruption& record) {
   out += "    xor     " + bytes_line(xor_delta(difference)) + "\n";
 }
 
-void put_numerical(std::string& out, const NumericalVerificationFailure& record) {
+void put_kind(std::string& out, const NumericalVerificationFailure& record) {
   out += "NumericalVerificationFailure: a bounded check exceeded its derived tolerance\n";
   out += "  check: " + escaped(record.check) + "\n";
   out += "  residual: " + shortest(record.residual) + "\n";
@@ -160,7 +160,7 @@ void put_numerical(std::string& out, const NumericalVerificationFailure& record)
   out += "  bit fields: not applicable -- a bounded check has no expected bit pattern\n";
 }
 
-void put_not_performed(std::string& out, const VerificationNotPerformed& record) {
+void put_kind(std::string& out, const VerificationNotPerformed& record) {
   out +=
       "VerificationNotPerformed: the check could not be made -- a failure of the run, not a "
       "pass, and no finding about the hardware\n";
@@ -179,13 +179,7 @@ void put_not_performed(std::string& out, const VerificationNotPerformed& record)
 
 std::string render(const ErrorRecord& record) {
   std::string out;
-  if (const auto* exact = std::get_if<ExactBitCorruption>(&record)) {
-    put_exact(out, *exact);
-  } else if (const auto* numerical = std::get_if<NumericalVerificationFailure>(&record)) {
-    put_numerical(out, *numerical);
-  } else {
-    put_not_performed(out, *std::get_if<VerificationNotPerformed>(&record));
-  }
+  std::visit([&out](const auto& kind) { put_kind(out, kind); }, record);
   put_provenance(out, provenance_of(record));
   return out;
 }
