@@ -13,6 +13,6 @@ the images, not just the octant.
 The golden digests in `tests/determinism/workloads/fft/determinism_test.cpp`
 are FNV-1a 64-bit digests of the generated input and of the computed output
 for seed 20261020, units 0 and 1234567, both radices, scalar path, taken on
-x86-64 Linux with GCC 13 and then re-taken with Clang 18 and at -O0 and -O3
+x86-64 Linux with GCC 13 at -O0 and re-taken at -O2 with GCC 13 and with Clang 18
 (they agree). They pin bits already shown right by the oracle tier; they are a
 tripwire, not an oracle.

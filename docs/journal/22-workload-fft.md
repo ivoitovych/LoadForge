@@ -46,12 +46,31 @@ transform, or relax epsilon for that check. Recorded under Contract questions.
 ### The scalar digests
 
 The committed digests (FNV-1a 64 of generated input and computed output) are the same at
--O0 (debug preset) and -O3 (release), and with Clang. See the numbers in
+-O0 (debug preset) and -O2 (the release preset, RelWithDebInfo), with GCC 13 and with Clang 18. See the numbers in
 `determinism/determinism_test.cpp`. ARM64 is not available in this container; the claim
 that the scalar path matches there rests on the table being the same bits and every
 operation being a single IEEE operation under `-ffp-contract=off` (no fused multiply-add,
 no libm, no x87 since the target is x86-64 SSE2). The ARM64 CI job runs the same digests
 and will say if that reading is wrong.
+
+### The gates, run on this change (2026-10-20, x86-64, GCC 13.3 and Clang 18)
+
+* Debug build and `ctest`: 1134 of 1134 pass. Release (GCC and Clang) and the scalar-only
+  preset: pass. The static build links.
+* Coverage: lines 100.0% (5622 of 5622), functions 100.0% (1227 of 1227), branches 100.0%
+  (4494 of 4494), all 38 source files in the report, exit 0. The first run was 99.9%: a
+  temporary `Descriptor` (a `std::string` inside it) alive across `make_unique`'s
+  allocation left two never-executed cleanup branches (journal 1.13's mechanism), and
+  `kernel_at` instantiated for this module's table had its out-of-enumeration return
+  uncovered (the contract tests cover only their own instantiation). The descriptor is
+  now built inside the workload's constructor, and a test asks the table for a path
+  outside the enumeration.
+* ASan+UBSan and TSan with Clang 18, over this module's five test binaries (125 tests):
+  clean. The container lacked `libclang-rt-18-dev`; installed it.
+* Each of the five test binaries, repeated 30 times in the debug build: 30 of 30 passes.
+* clang-tidy-18 over the module's sources and all its test files from a Clang-configured
+  tree: clean. clang-format-18, Ruff, the ledger gate, `tests/tools/test_tooling.sh` (158
+  of 158): pass. ShellCheck is not installed here and no shell script was added.
 
 ## Decisions
 
