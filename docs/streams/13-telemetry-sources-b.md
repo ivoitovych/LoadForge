@@ -1,6 +1,6 @@
 # Stream 13 — Telemetry sources: power, performance counters, EDAC
 
-**State:** not started  
+**State:** built on `feature/telemetry-sources-b`, awaiting its pull request (2026-10-20 16:27 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier A — a bounded component built against a written contract  
