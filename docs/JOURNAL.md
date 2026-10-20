@@ -630,6 +630,12 @@ Established while building the fake worker (§2.19) and its T7 tests:
   grandchildren as subreaper, and the controller's own `waitpid(-1)` can meet one first and
   skip it as not a worker. The first version of the test waited its whole bound for each
   grandchild it could no longer reap; `ECHILD` is an ending too.
+- **An instrumented test executable reports its template instantiations as `src/` lines.**
+  The fake worker uses `core::Result` over its own types; compiled with `--coverage`, those
+  instantiations of `src/core/result.hpp` entered the report, and the error constructor and
+  `error()` of each showed as never executed: 99.8% of lines over code no test of `src/` is
+  meant to reach. The fake is now linked with the coverage runtime, which the instrumented
+  libraries it links need, and not compiled with instrumentation itself.
 
 ---
 

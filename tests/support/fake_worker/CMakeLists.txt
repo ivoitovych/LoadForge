@@ -14,4 +14,11 @@ target_link_libraries(loadforge_fake_worker PRIVATE loadforge_ipc)
 loadforge_set_warnings(loadforge_fake_worker)
 loadforge_set_fp_contract(loadforge_fake_worker)
 loadforge_enable_sanitizers(loadforge_fake_worker)
-loadforge_enable_coverage(loadforge_fake_worker)
+# Linked against the coverage runtime, because the libraries it links are
+# instrumented, but not compiled with instrumentation itself: its own template
+# instantiations of src/ headers (core::Result over its own types) would
+# otherwise enter the coverage report as src/ lines that no test of src/ is
+# meant to reach. The gate measures src/ by the tests of src/.
+if(LOADFORGE_COVERAGE)
+  target_link_options(loadforge_fake_worker PRIVATE --coverage)
+endif()
