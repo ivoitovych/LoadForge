@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -294,13 +295,13 @@ std::vector<Cache> deduplicate(const std::vector<Reading>& readings) {
 /// Data and L1 Instruction sit together and in a fixed order. `shared_with` is
 /// never empty here: read_index refused any cache not containing its own CPU.
 bool ordered_before(const Cache& lhs, const Cache& rhs) {
-  if (lhs.kind.level != rhs.kind.level) {
-    return lhs.kind.level < rhs.kind.level;
-  }
-  if (lhs.shared_with.ids().front() != rhs.shared_with.ids().front()) {
-    return lhs.shared_with.ids().front() < rhs.shared_with.ids().front();
-  }
-  return static_cast<std::uint8_t>(lhs.kind.type) < static_cast<std::uint8_t>(rhs.kind.type);
+  // One lexicographic comparison rather than a chain of "differs, so order by
+  // it" steps: in such a chain the order test after a difference test can
+  // never be told from its non-strict twin.
+  return std::make_tuple(lhs.kind.level, lhs.shared_with.ids().front(),
+                         static_cast<std::uint8_t>(lhs.kind.type)) <
+         std::make_tuple(rhs.kind.level, rhs.shared_with.ids().front(),
+                         static_cast<std::uint8_t>(rhs.kind.type));
 }
 
 }  // namespace
@@ -328,10 +329,9 @@ core::Result<std::uint64_t, std::string_view> parse_cache_size(std::string_view 
   // core::split_number_and_suffix, which would also accept the leading
   // whitespace and '+' that its configuration callers want and the kernel never
   // writes.
-  std::size_t digits = 0;
-  while (digits < text.size() && text[digits] >= '0' && text[digits] <= '9') {
-    ++digits;
-  }
+  // find_first_not_of answers npos for "all digits"; the smaller of that and
+  // the length is the whole text.
+  const std::size_t digits = std::min(text.find_first_not_of("0123456789"), text.size());
   if (digits == 0) {
     return std::string_view{"a cache size must begin with a digit"};
   }

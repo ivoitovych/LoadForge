@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry/sampler and nothing else.
+
+[[module]]
+path     = "src/telemetry/sampler"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T2"]
+provides = ["SamplerContract"]
+consumes = ["SourceContract"]
+note     = """
+Every source read in rounds onto the timeline, driven by the caller: no \
+thread, no clock. \
+\
+P1: probe in source order, registering present metrics only, a second probe \
+answering the same report without probing again; a round appending every \
+reading at the given time, in source order. A probe that the timeline \
+refuses is remembered: the same refusal answers every later probe, the \
+sources are not probed twice, and rounds read nothing. P3: no sources, a \
+source with nothing present, a timeline that fills at a round's first, \
+middle and last point. \
+\
+T2 is the contained breach: a source that appends more readings than it \
+has present metrics, fewer, none, or any at all with nothing present has \
+none of its readings used, each of its series receives a kMalformed \
+Unavailable naming the source and both counts, and the next source's \
+readings land on its own series untouched. The consumed SourceContract is \
+run against this file's own mock source in three states (present, all \
+absent, vanishing). No P5: the sampler starts no thread (sampler.hpp)."""

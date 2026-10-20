@@ -399,6 +399,16 @@ TEST(WorkerPoolTest, PidAtOutOfRangeIsZeroRatherThanUndefined) {
   EXPECT_EQ(fixture.pool.pid_at(9999), 0);
 }
 
+TEST(WorkerPoolTest, APoolThatSpawnedNothingHasNoPidEvenInSlotZero) {
+  // The bound at its lowest: with no workers, slot 0 is already one past the
+  // end. Reading it rather than answering 0 would touch storage that was never
+  // allocated.
+  FakeSyscalls syscalls;
+  WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+  const WorkerPool pool{syscalls, launcher};
+  EXPECT_EQ(pool.pid_at(0), 0);
+}
+
 // --- T8: two real processes, two real deaths ---------------------------------
 
 TEST(RealProcessWorkerPool, TwoRealWorkersAreSpawnedReapedAndToldApart) {

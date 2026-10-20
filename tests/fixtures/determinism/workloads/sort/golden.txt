@@ -1,0 +1,13 @@
+# Digests of the sort workload's input and output (FNV-1a, 64 bit), made
+# without any code from the workload: tests/fixtures/determinism/workloads/sort/
+# make_golden.py, a Philox4x32-10 written from Random123 and Python's stable
+# sorted() on (key, input position).
+# Python 3.13.16 on x86_64, Linux.
+# This pins the bits (determinism.md §2); it is a tripwire, not the oracle.
+#
+# Columns: seed unit input_fnv1a64 output_fnv1a64
+0000000000000000 0000000000000000 954d3bc9b33b52dd a6d1b24a5eab7369
+0000000000000001 0000000000000000 4503d66360d7338a f21a9d5f7a93bb8e
+0000000000000001 0000000000000001 02e2d9ca2c70821b 8acf86d46a44ed2b
+deadbeefcafef00d 0000000000000005 a95266f3994c217d ada3e198f0e007e1
+ffffffffffffffff ffffffffffffffff 9acee6806d78dc5a 0a1b6ac5dac0760a
