@@ -24,6 +24,18 @@
 - `tools/install-git-hooks.sh`, named in the stream instructions, does not
   exist in this tree; nothing was installed.
 
+- **Gate run (x86-64, GCC 13.3 and Clang 18):** debug 1060/1060; coverage 100.0%
+  line, branch and function over all 38 files of `src/`; ASan+UBSan and TSan
+  (Clang) clean on all five suites; scalar-only build passes; static build
+  links; each of the five suites passed 30 of 30 repeated runs; clang-tidy
+  clean on the module and its tests; the ARM64 branch of `kernels.cpp` was only
+  syntax-checked here (no ARM host), so its first real run is the ARM CI job.
+- Two coverage findings: a loop over lanes 1 and up is never entered by the
+  1-lane instantiation (each instantiation counts alone), so the combine
+  starts from +0.0 and enters it for every lane count; and
+  `simd::kernel_at<ChunkKernel>` counts its own switch, so the table's
+  out-of-enumeration answer is tested.
+
 ## Decisions
 
 1. **No AVX-512 kernel (descriptor paths are scalar plus the build's one
