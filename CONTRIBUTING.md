@@ -129,6 +129,22 @@ In your first pull request, also add the email you commit with to
 new identity is admitted by a reviewed one-line change. Commits are unsigned, and carry no
 trailer but `Signed-off-by`: one author per commit, no co-authors.
 
+### Git hooks
+
+The repository ships hooks that refuse, at commit and push time, what CI would refuse
+after the push: an identity not in `.github/commit-identities`, a signature, a trailer
+other than `Signed-off-by`, a missing sign-off, and a branch name other than `main` or
+`feature|fix|docs|chore|refactor/<slug>` (lowercase letters, digits, `.`, `_`, `-`).
+Install them once per clone, which covers its linked worktrees:
+
+```bash
+tools/install-git-hooks.sh
+```
+
+The installer is idempotent, changes no git configuration, and leaves alone any hook of
+yours it did not install. Hooks can be skipped with `--no-verify`; CI enforces the same
+rules regardless.
+
 ## Licensing
 
 LoadForge is **GPL-3.0-or-later**. By contributing you agree your work is licensed the
@@ -214,6 +230,11 @@ Non-negotiable review standards:
   gate's entire fixture suite passed while the parser misread every mutator identifier,
   because the fixtures encoded the same wrong assumption. A model of an external tool
   cannot falsify itself.
+- A unit test that creates a process — `fork`, a real launcher or pool — goes in a
+  suite named `RealProcess*`. Every mutant of the mutation sweep runs the unit tests
+  without them, because a child a mutant leaves alive is beyond Mull's timeout, and the
+  mutation workflow checks the name against what each test really does, both ways
+  (`tools/mutation-shard.py check-processes`).
 - External dependencies are fetched **only** from `cmake/Dependencies.cmake`. Adding a
   `FetchContent_Declare` elsewhere fails `tools/check-fetch-centralization.sh`, because
   the manifest cross-check cannot reconcile a pin it does not know to look for.

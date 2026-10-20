@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Commits already in the history of main that carry no Signed-off-by by their
+# author. History cannot be rewritten, so these exact commits (full SHA, one
+# per line, text after the SHA is a note) are excused from the sign-off check
+# of tools/check-commit-identity.sh and from nothing else: author, committer,
+# signature and trailers are still judged. The list is closed: a commit made
+# after it was written is never added here.
+5782b0f3097691f095afb53d39bbf1e95e573e79 docs(review): add independent response to 2026-10-20 review request
+1441e81ec9e7e9b401189b778cdfee5d354891a7 Merge remote-tracking branch 'origin/main' into feature/process-supervision
+5622d6effe48242436bea5600e09921d9f9b3751 Merge remote-tracking branch 'origin/main' into feature/process-supervision
+4da48ba676a7a899a1c7fdf6bc41cc37b32f7fda Add GPL-3.0 license; fix toolchain baseline and architecture scope
+37d2ae826c471f401a93bdbb5ccac466b67cef4f Revise plan after maintainer review; move design draft into docs/
+6783c8ebd534e26acad90779756619780c330cbd Add README and development plan
+d0a894003b67c0d423699ca093f5b40b56f90a00 Add LoadForge project design document
