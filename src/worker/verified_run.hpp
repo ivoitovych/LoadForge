@@ -64,6 +64,7 @@ inline constexpr std::uint64_t kMaxSliceUnits = std::uint64_t{1} << 20U;
 /// that would have taken `target_ns`, at most double the last (a slice that
 /// happened to be fast does not license a burst) and at least one unit. A slice
 /// that measured no time at all doubles.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 [[nodiscard]] std::uint64_t next_slice_units(std::uint64_t last_units, std::int64_t took_ns,
                                              std::int64_t target_ns) noexcept;
 
@@ -98,12 +99,15 @@ struct Prepared {
 
 class VerifiedRun {
  public:
+  /// `workload` is `args.workload`, which the caller has found present.
   VerifiedRun(platform::Syscalls& syscalls, ipc::RecordWriter& records, Session session,
-              const WorkerArgs& args, const Services& services) noexcept
+              const WorkerArgs& args, const WorkloadArgs& workload,
+              const Services& services) noexcept
       : syscalls_(&syscalls),
         records_(&records),
         session_(session),
         args_(&args),
+        workload_(&workload),
         services_(&services) {}
 
   /// Runs until the duration elapses, the controller asks for a stop or goes,
@@ -116,6 +120,7 @@ class VerifiedRun {
   ipc::RecordWriter* records_;
   Session session_;
   const WorkerArgs* args_;
+  const WorkloadArgs* workload_;
   const Services* services_;
 };
 

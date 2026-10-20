@@ -78,7 +78,7 @@ std::vector<std::string> BuiltinOracleRegistry::names() const {
 core::Result<std::unique_ptr<Oracle>, OracleError> BuiltinOracleRegistry::create(
     std::string_view name, const workloads::WorkloadConfig& config,
     const workloads::Plan& plan) const {
-  const auto found = std::ranges::find(kEntries, name, &Entry::name);
+  const auto* const found = std::ranges::find(kEntries, name, &Entry::name);
   if (found == kEntries.end()) {
     OracleError unknown;
     unknown.fault = OracleFault::kUnknownWorkload;

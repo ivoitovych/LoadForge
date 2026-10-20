@@ -149,11 +149,18 @@ core::Result<std::vector<std::uint32_t>, std::string> cpus_of(std::string_view t
 
 using Values = std::map<std::string_view, std::string_view>;
 
+/// The keys a command line may carry: the ones it must, and the ones it may.
+struct Keys {
+  std::span<const std::string_view> required;
+  std::span<const std::string_view> optional;
+};
+
 /// The key/value pairs, each key known and given once, every required key
 /// present. The shape of the command line, before any value is read.
 core::Result<Values, std::string> collect(std::span<const std::string_view> args,
-                                          std::span<const std::string_view> required,
-                                          std::span<const std::string_view> optional) {
+                                          const Keys& keys) {
+  const std::span<const std::string_view> required = keys.required;
+  const std::span<const std::string_view> optional = keys.optional;
   Values values;
   for (std::size_t index = 0; index < args.size(); index += 2) {
     const std::string_view key = args[index];
@@ -287,14 +294,11 @@ core::Result<WorkloadArgs, std::string> workload_of(Values& values, bool with_du
 
 }  // namespace
 
-core::Result<WorkerArgs, std::string> parse_args(std::span<const std::string_view> args) {
-  auto collected = collect(args, kRequired, kWorkerOptional);
-  if (!collected.has_value()) {
-    return collected.error();
-  }
-  Values values = collected.value();
+namespace {
 
-  WorkerArgs parsed;
+/// Where the worker sits among the others and what it holds from the
+/// controller: its slot, the descriptors it was handed, the supervisor's pid.
+std::optional<std::string> parse_endpoints(Values& values, WorkerArgs& parsed) {
   auto workers = number_at_most(kWorkers, values[kWorkers], ipc::kMaxWorkers);
   if (!workers.has_value()) {
     return workers.error();
@@ -328,7 +332,51 @@ core::Result<WorkerArgs, std::string> parse_args(std::span<const std::string_vie
     return refusal(kSupervisorPid, "must be at least 1");
   }
   parsed.supervisor_pid = static_cast<pid_t>(pid.value());
+  return std::nullopt;
+}
 
+/// The work: all of its keys with --workload, none without it.
+std::optional<std::string> parse_work(Values& values, WorkerArgs& parsed) {
+  const bool has_workload = values.contains(kWorkload);
+  if (!has_workload) {
+    for (const std::string_view key : kWorkloadRequired) {
+      if (values.contains(key)) {
+        return refusal(key, "needs --workload");
+      }
+    }
+    for (const std::string_view key : kWorkloadOptional) {
+      if (values.contains(key)) {
+        return refusal(key, "needs --workload");
+      }
+    }
+    return std::nullopt;
+  }
+  for (const std::string_view key : kWorkloadRequired) {
+    if (!values.contains(key)) {
+      return refusal(key, "required with --workload");
+    }
+  }
+  auto workload = workload_of(values, true);
+  if (!workload.has_value()) {
+    return workload.error();
+  }
+  parsed.workload = std::move(workload).value();
+  return std::nullopt;
+}
+
+}  // namespace
+
+core::Result<WorkerArgs, std::string> parse_args(std::span<const std::string_view> args) {
+  auto collected = collect(args, Keys{kRequired, kWorkerOptional});
+  if (!collected.has_value()) {
+    return collected.error();
+  }
+  Values values = collected.value();
+
+  WorkerArgs parsed;
+  if (auto refused = parse_endpoints(values, parsed); refused.has_value()) {
+    return *refused;
+  }
   auto pacing = pacing_of(values);
   if (!pacing.has_value()) {
     return pacing.error();
@@ -342,36 +390,14 @@ core::Result<WorkerArgs, std::string> parse_args(std::span<const std::string_vie
     }
     parsed.cpus = std::move(cpus).value();
   }
-
-  // The work: all of its keys with --workload, none without it.
-  if (!values.contains(kWorkload)) {
-    for (const std::string_view key : kWorkloadRequired) {
-      if (values.contains(key)) {
-        return refusal(key, "needs --workload");
-      }
-    }
-    for (const std::string_view key : kWorkloadOptional) {
-      if (values.contains(key)) {
-        return refusal(key, "needs --workload");
-      }
-    }
-    return parsed;
+  if (auto refused = parse_work(values, parsed); refused.has_value()) {
+    return *refused;
   }
-  for (const std::string_view key : kWorkloadRequired) {
-    if (!values.contains(key)) {
-      return refusal(key, "required with --workload");
-    }
-  }
-  auto workload = workload_of(values, true);
-  if (!workload.has_value()) {
-    return workload.error();
-  }
-  parsed.workload = std::move(workload).value();
   return parsed;
 }
 
 core::Result<RerunArgs, std::string> parse_rerun_args(std::span<const std::string_view> args) {
-  auto collected = collect(args, kRerunRequired, {});
+  auto collected = collect(args, Keys{kRerunRequired, {}});
   if (!collected.has_value()) {
     return collected.error();
   }
@@ -605,7 +631,7 @@ int run(platform::Syscalls& syscalls, std::span<const std::string_view> args, st
   Outcome result;
   std::string detail;
   if (worker.workload.has_value()) {
-    VerifiedRun verified(syscalls, *records, session, worker, services);
+    VerifiedRun verified(syscalls, *records, session, worker, *worker.workload, services);
     auto done = verified.run();
     if (!done.has_value()) {
       return give_up(err, records, describe(done.error()), WorkerExit::kSetupFailed);

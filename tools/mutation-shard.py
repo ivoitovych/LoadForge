@@ -42,6 +42,7 @@ path to exit 0 mid-suite. Neither is a measurement of anything.
 Subcommands:
     plan                    the shards, as a JSON list for a CI matrix
     scope SHARD             the shard's repository-relative paths, one per line
+    targets SHARD           the test executables that hold the shard's tests, one per line
     mull-config SHARD       the shard's mull.yml, on standard output
     gtest-filter            the filter every mutant's test run is given
     check-processes BINARY  run the test binary and check the filter against it
@@ -180,6 +181,70 @@ def mull_config(root: pathlib.Path, name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ---- targets -------------------------------------------------------------------
+
+# Test directories the sweep does not run. The supervision and integration tiers
+# start processes and talk to the real kernel by design (the header says why a
+# mutant must not run those), the soak tier runs for as long as a soak runs, and
+# the rest hold no tests of a module of their own.
+NOT_MODULE_TESTS = (
+    "supervision",
+    "integration",
+    "soak",
+    "support",
+    "tools",
+    "fixtures",
+    "contracts",
+)
+UNIT_TESTS_TARGET = "loadforge_unit_tests"
+SUITE_RE = re.compile(r"\bloadforge_test_suite\(\s*(?P<name>\w+)")
+
+
+def targets(root: pathlib.Path, name: str) -> list[str]:
+    """The test executables whose tests exercise a shard's code, by CMake target.
+
+    A mutant is compiled into every executable that links the code it sits in,
+    and killed by whichever executable's tests detect it, so the sweep of a
+    shard runs every executable that holds tests of the shard's modules, not
+    the one binary M1 had (M2a exit criterion 6). A test belongs to a module by
+    where it lives: tests/<tier>/<module>/..., whose CMakeLists.txt defines a
+    suite (loadforge_test_suite) or adds sources to the unit-test executable
+    (target_sources), and tests/CMakeLists.txt's own list of unit/<module>/
+    sources for the modules that predate fragments. An executable that is not
+    returned has no test of this shard's, and would have no mutant to run.
+    """
+    paths = shard(root, name)
+    modules_of_shard = {path.removeprefix("src/") for path in paths}
+    found: list[str] = []
+
+    def add(target: str) -> None:
+        if target not in found:
+            found.append(target)
+
+    tests = root / "tests"
+    for cmake in sorted(tests.rglob("CMakeLists.txt")):
+        parts = cmake.relative_to(tests).parts[:-1]
+        if len(parts) < 2 or parts[0] in NOT_MODULE_TESTS or parts[1] not in modules_of_shard:
+            continue
+        text = cmake.read_text(encoding="utf-8")
+        for match in SUITE_RE.finditer(text):
+            add(match["name"])
+        if f"target_sources({UNIT_TESTS_TARGET}" in text:
+            add(UNIT_TESTS_TARGET)
+    top = tests / "CMakeLists.txt"
+    if top.exists():
+        listed = top.read_text(encoding="utf-8")
+        for module in modules_of_shard:
+            if re.search(rf"^\s*unit/{re.escape(module)}/", listed, re.M):
+                add(UNIT_TESTS_TARGET)
+    if not found:
+        raise ShardFailure(
+            f"no test executable holds a test of the {name!r} shard ({', '.join(paths)}); "
+            "every mutant in it would be run against nothing and survive."
+        )
+    return found
+
+
 # ---- check-processes -----------------------------------------------------------
 
 PROCESS_CALL_RE = re.compile(r"^\d+\s+(?P<call>fork|vfork|clone|clone3)\(")
@@ -314,6 +379,8 @@ def main() -> int:
     scope_parser.add_argument("shard")
     config_parser = sub.add_parser("mull-config", help="a shard's mull.yml")
     config_parser.add_argument("shard")
+    targets_parser = sub.add_parser("targets", help="a shard's test executables, one target a line")
+    targets_parser.add_argument("shard")
     sub.add_parser("gtest-filter", help="the filter every mutant's tests run with")
     check_parser = sub.add_parser("check-processes", help="check the filter against a binary")
     check_parser.add_argument("binary")
@@ -336,6 +403,8 @@ def main() -> int:
             print("\n".join(shard(root, args.shard)))
         elif args.command == "mull-config":
             sys.stdout.write(mull_config(root, args.shard))
+        elif args.command == "targets":
+            print("\n".join(targets(root, args.shard)))
         elif args.command == "gtest-filter":
             print(GTEST_FILTER)
         else:

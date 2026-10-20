@@ -63,7 +63,7 @@ struct WorkerWork {
   std::uint32_t line_bytes = 0;
 };
 
-[[nodiscard]] bool operator==(const WorkerWork& lhs, const WorkerWork& rhs) noexcept;
+[[nodiscard]] bool operator==(const WorkerWork& lhs, const WorkerWork& rhs);
 
 /// A record a worker sent, as the controller holds it: the record, and what
 /// fault isolation made of it. A record that is not a wrong result is never
@@ -76,7 +76,7 @@ struct FindingReport {
   std::string not_isolated;
 };
 
-[[nodiscard]] bool operator==(const FindingReport& lhs, const FindingReport& rhs) noexcept;
+[[nodiscard]] bool operator==(const FindingReport& lhs, const FindingReport& rhs);
 
 /// One worker's story, as the controller will tell it.
 struct WorkerReport {
@@ -93,9 +93,14 @@ struct WorkerReport {
   verification::Tally tally{};
   bool tally_seen = false;
   /// What this worker ran, when it ran a real workload.
+  // The braces are not redundant to the compiler that checks them: a member
+  // with none is a missing initializer to every aggregate initialisation that
+  // names the members before it (-Wmissing-field-initializers).
+  // NOLINTNEXTLINE(readability-redundant-member-init)
   std::optional<WorkerWork> work{};
   /// Every error record it sent, in order, up to kMaxFindingsKept; the counts
   /// below continue past that.
+  // NOLINTNEXTLINE(readability-redundant-member-init)
   std::vector<FindingReport> findings{};
   std::uint64_t wrong_results = 0;
   std::uint64_t not_performed = 0;

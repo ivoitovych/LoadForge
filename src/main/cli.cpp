@@ -2,6 +2,7 @@
 #include "main/cli.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -50,7 +51,6 @@ namespace {
 constexpr int kOk = 0;
 constexpr int kConfigRefused = 1;  ///< Also: a run that could not start.
 constexpr int kUsageError = 2;
-constexpr int kRunNotClean = 3;  ///< The run ended and at least one worker did not complete.
 
 /// How long a `--test` runs when it is not told.
 constexpr std::int64_t kDefaultTestMilliseconds = 10'000;
@@ -111,6 +111,76 @@ core::Result<std::uint64_t, std::string> whole_number(std::string_view key, std:
   return split.value().value;
 }
 
+/// An option as it was written: its key and the value after it. One argument
+/// where two string views would be swapped by mistake.
+struct Written {
+  std::string_view key;
+  std::string_view value;
+};
+
+std::optional<std::string> take_duration(const Written& option, TestArgs& out) {
+  auto duration = core::parse_duration(option.value);
+  if (!duration.has_value()) {
+    return refused(option.key, std::string{core::describe(duration.error())});
+  }
+  out.duration = duration.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_workers(const Written& option, TestArgs& out) {
+  auto count = whole_number(option.key, option.value);
+  if (!count.has_value()) {
+    return count.error();
+  }
+  if (count.value() == 0) {
+    return refused(option.key, "must be at least 1");
+  }
+  out.workers = count.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_footprint(const Written& option, TestArgs& out) {
+  auto size = core::parse_byte_size(option.value);
+  if (!size.has_value()) {
+    return refused(option.key, std::string{core::describe(size.error())});
+  }
+  out.footprint = size.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_isa(const Written& option, TestArgs& out) {
+  out.isa = simd::parse_isa_path(option.value);
+  if (!out.isa.has_value()) {
+    return refused(option.key,
+                   "'" + std::string{option.value} + "' is none of scalar, avx2, avx512, neon");
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> take_seed(const Written& option, TestArgs& out) {
+  auto seed = whole_number(option.key, option.value);
+  if (!seed.has_value()) {
+    return seed.error();
+  }
+  out.seed = seed.value();
+  return std::nullopt;
+}
+
+/// Each option of `stress --test`: how it is read, and whether it has been.
+struct Option {
+  std::string_view key;
+  std::optional<std::string> (*take)(const Written&, TestArgs&);
+  bool (*given)(const TestArgs&);
+};
+
+constexpr std::array<Option, 5> kOptions{{
+    {"--duration", &take_duration, [](const TestArgs& a) { return a.duration.has_value(); }},
+    {"--workers", &take_workers, [](const TestArgs& a) { return a.workers.has_value(); }},
+    {"--footprint", &take_footprint, [](const TestArgs& a) { return a.footprint.has_value(); }},
+    {"--isa", &take_isa, [](const TestArgs& a) { return a.isa.has_value(); }},
+    {"--seed", &take_seed, [](const TestArgs& a) { return a.seed.has_value(); }},
+}};
+
 /// The options after `--test`: its name, then any of the options in any order,
 /// each once. A refusal names the option.
 core::Result<TestArgs, std::string> parse_test_args(std::span<const std::string_view> args) {
@@ -121,42 +191,12 @@ core::Result<TestArgs, std::string> parse_test_args(std::span<const std::string_
     if (index + 1 >= args.size()) {
       return refused(key, "missing its value");
     }
-    const std::string_view value = args[index + 1];
-    if (key == "--duration" && !parsed.duration.has_value()) {
-      auto duration = core::parse_duration(value);
-      if (!duration.has_value()) {
-        return refused(key, std::string{core::describe(duration.error())});
-      }
-      parsed.duration = duration.value();
-    } else if (key == "--workers" && !parsed.workers.has_value()) {
-      auto count = whole_number(key, value);
-      if (!count.has_value()) {
-        return count.error();
-      }
-      if (count.value() == 0) {
-        return refused(key, "must be at least 1");
-      }
-      parsed.workers = count.value();
-    } else if (key == "--footprint" && !parsed.footprint.has_value()) {
-      auto size = core::parse_byte_size(value);
-      if (!size.has_value()) {
-        return refused(key, std::string{core::describe(size.error())});
-      }
-      parsed.footprint = size.value();
-    } else if (key == "--isa" && !parsed.isa.has_value()) {
-      const std::optional<simd::IsaPath> path = simd::parse_isa_path(value);
-      if (!path.has_value()) {
-        return refused(key, "'" + std::string{value} + "' is none of scalar, avx2, avx512, neon");
-      }
-      parsed.isa = path;
-    } else if (key == "--seed" && !parsed.seed.has_value()) {
-      auto seed = whole_number(key, value);
-      if (!seed.has_value()) {
-        return seed.error();
-      }
-      parsed.seed = seed.value();
-    } else {
+    const auto* const option = std::ranges::find(kOptions, key, &Option::key);
+    if (option == kOptions.end() || option->given(parsed)) {
       return refused(key, "not an option of stress --test, or given twice");
+    }
+    if (auto refusal = option->take(Written{key, args[index + 1]}, parsed); refusal.has_value()) {
+      return *refusal;
     }
   }
   return parsed;
@@ -322,9 +362,10 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   telemetry::FrequencySource frequency(machine);
   telemetry::MemorySource memory(machine);
   const std::vector<std::string> registered = registry.names();
-  const bool verifying = std::ranges::any_of(config.workloads, [&registered](const config::Workload& w) {
-    return w.enabled && std::ranges::find(registered, w.name) != registered.end();
-  });
+  const bool verifying =
+      std::ranges::any_of(config.workloads, [&registered](const config::Workload& w) {
+        return w.enabled && std::ranges::find(registered, w.name) != registered.end();
+      });
   if (verifying) {
     options.stale_after_ns = std::max(options.stale_after_ns, kVerifyingStaleAfterNs);
   }

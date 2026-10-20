@@ -174,7 +174,26 @@ jobs:
           echo "MULL_CONFIG=$config" >> "$GITHUB_ENV"
       - env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug -DCMAKE_CXX_FLAGS="-fpass-plugin=/usr/lib/mull-ir-frontend-18 -g -grecord-command-line"
-      - run: cmake --build --preset debug --target loadforge_unit_tests
+      - name: This shard's test executables
+        # Every executable that holds a test of the shard's modules, not the one
+        # binary M1 had (M2a exit criterion 6): a mutant is compiled into each
+        # executable that links the code it sits in, and is killed when the
+        # tests of any of them detect it (tools/mutation-gate.py merges the
+        # runs). Which executables those are follows from where the shard's
+        # tests live (tools/mutation-shard.py targets).
+        run: |
+          set -euo pipefail
+          targets="$(./tools/mutation-shard.py targets "$SHARD")"
+          echo "$targets"
+          # Word splitting on purpose: one CMake target per word.
+          cmake --build --preset debug --target $targets
+          binaries=()
+          for target in $targets; do
+            path="$(find build/debug -type f -perm -u+x -name "$target" | head -n 1)"
+            [ -n "$path" ] || { echo "no executable was built for $target" >&2; exit 1; }
+            binaries+=("$path")
+          done
+          printf '%s\n' "${binaries[@]}" > "$RUNNER_TEMP/binaries-$SHARD.txt"
       - name: The gate agrees with the real Mull
         # Compiles a known-surviving mutant, runs Mull, and checks that the gate
         # parses the exact mutator identifier and that a reviewed key for one
@@ -188,7 +207,12 @@ jobs:
         # (tools/mutation-shard.py). This checks the name against what each
         # test really does, on this binary: the rest create no process, and
         # each RealProcess* test creates one.
-        run: ./tools/mutation-shard.py check-processes ./build/debug/tests/loadforge_unit_tests
+        run: |
+          set -euo pipefail
+          while read -r binary; do
+            echo "== $binary"
+            ./tools/mutation-shard.py check-processes "$binary"
+          done < "$RUNNER_TEMP/binaries-$SHARD.txt"
       - name: Run mutants and enforce the gate
         run: |
           set -euo pipefail
@@ -196,7 +220,8 @@ jobs:
           scopes="$(./tools/mutation-shard.py scope "$SHARD")"
           for path in $scopes; do scope_args+=(--scope "$path"); done
           filter="$(./tools/mutation-shard.py gtest-filter)"
-          ./tools/mutation-gate.py ./build/debug/tests/loadforge_unit_tests \
+          mapfile -t binaries < "$RUNNER_TEMP/binaries-$SHARD.txt"
+          ./tools/mutation-gate.py "${binaries[@]}" \
             "${scope_args[@]}" --test-arg="--gtest_filter=$filter" 2>&1 | tee "$RUNNER_TEMP/gate.log"
       - name: Report the verdict
         if: always()

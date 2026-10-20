@@ -11,12 +11,13 @@
 
 #include <gtest/gtest.h>
 #include <sched.h>
-#include <stdlib.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "config/config.hpp"
@@ -46,6 +47,7 @@ class Quiet final : public Reporter {
 
 struct Scenario {
   RunReport report;
+  config::Config config;
   IsolationSummary summary;
   std::vector<std::uint32_t> cpus;
 };
@@ -53,7 +55,8 @@ struct Scenario {
 /// Two workers of `threads` threads each on `cpus`, run for a moment with the
 /// fault the environment names, then isolated.
 std::optional<Scenario> run_scenario(const std::string& fault, std::uint32_t threads,
-                                     std::size_t cpu_count) {
+                                     std::size_t cpu_count,
+                                     const std::string& workload = "compression") {
   platform::RealSyscalls syscalls;
   platform::Affinity affinity(syscalls);
   auto permitted = affinity.permitted();
@@ -91,7 +94,7 @@ std::optional<Scenario> run_scenario(const std::string& fault, std::uint32_t thr
   config.run.duration = core::Duration{1500};
   for (int worker = 0; worker < 2; ++worker) {
     config.workloads.push_back(
-        config::Workload{"compression", config::Threads::count(threads), true, {}});
+        config::Workload{workload, config::Threads::count(threads), true, {}});
   }
   Quiet reporter;
   Controller controller(syscalls, reporter);
@@ -102,6 +105,7 @@ std::optional<Scenario> run_scenario(const std::string& fault, std::uint32_t thr
   }
   Scenario scenario;
   scenario.report = ran.value();
+  scenario.config = config;
   scenario.cpus = allowed;
   verification::isolation::LadderIsolator isolator;
   RealRerunner rerunner(syscalls, LOADFORGE_FAULTY_WORKER, RerunOptions{});
@@ -173,6 +177,50 @@ TEST(IsolationLadder, ACorruptionOfSeveralThreadsOnlyIsConcurrencyDependent) {
     ASSERT_NE(report, nullptr) << "worker " << slot;
     EXPECT_EQ(report->finding, verification::Finding::kConcurrencyDependent);
     EXPECT_EQ(report->answers.single_thread, verification::Answer::kNo);
+  }
+}
+
+TEST(IsolationLadder, AnInputThatChangesBetweenGenerationsIsReportedOnTheInputSideNotIsolated) {
+  const auto scenario = run_scenario("input", 1, 2);
+  if (!scenario.has_value()) {
+    GTEST_SKIP() << "needs two CPUs this process may use";
+  }
+  for (std::size_t slot = 0; slot < 2; ++slot) {
+    const WorkerReport& worker = scenario->report.workers[slot];
+    ASSERT_GT(worker.wrong_results, 0U) << "worker " << slot;
+    const auto* found = std::get_if<verification::ExactBitCorruption>(&worker.findings[0].record);
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(found->side, verification::Side::kInput);
+    ASSERT_TRUE(found->provenance.input_integrity.has_value());
+    EXPECT_EQ(*found->provenance.input_integrity,
+              verification::InputIntegrity::kCorruptBeforeConsumption);
+  }
+}
+
+TEST(IsolationLadder, AnOracleThatJudgesNothingLeavesTheRunNotVerifiedAndIsolatesNothing) {
+  const auto scenario = run_scenario("unchecked", 1, 2);
+  if (!scenario.has_value()) {
+    GTEST_SKIP() << "needs two CPUs this process may use";
+  }
+  for (std::size_t slot = 0; slot < 2; ++slot) {
+    const WorkerReport& worker = scenario->report.workers[slot];
+    EXPECT_GT(worker.not_performed, 0U) << "worker " << slot;
+    EXPECT_EQ(worker.wrong_results, 0U) << "worker " << slot;
+    EXPECT_EQ(isolated(*scenario, slot), nullptr) << "nothing was found to isolate";
+  }
+  EXPECT_EQ(cli::exit_code_for(scenario->report, scenario->config), cli::kExitNotVerified);
+}
+
+TEST(IsolationLadder, ABoundedCorruptionIsANumericalFailureWithNoBitPatternToIsolate) {
+  const auto scenario = run_scenario("dense", 1, 2, "dense_linear");
+  if (!scenario.has_value()) {
+    GTEST_SKIP() << "needs two CPUs this process may use";
+  }
+  for (std::size_t slot = 0; slot < 2; ++slot) {
+    const WorkerReport& worker = scenario->report.workers[slot];
+    ASSERT_GT(worker.wrong_results, 0U) << "worker " << slot;
+    EXPECT_NE(std::get_if<verification::NumericalVerificationFailure>(&worker.findings[0].record),
+              nullptr);
   }
 }
 

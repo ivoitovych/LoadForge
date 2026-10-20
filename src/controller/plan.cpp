@@ -71,8 +71,9 @@ std::vector<std::uint32_t> assign_cpus(std::size_t slot, std::size_t threads,
 }
 
 core::Result<simd::IsaPath, simd::DispatchError> choose_isa(std::optional<simd::IsaPath> requested,
-                                                    simd::IsaSet supported, simd::IsaSet compiled,
-                                                    simd::IsaSet workload_paths) {
+                                                            simd::IsaSet supported,
+                                                            simd::IsaSet compiled,
+                                                            simd::IsaSet workload_paths) {
   if (!requested.has_value()) {
     // select_path answers an unrequested call with a path always (dispatch.hpp:
     // "the unrequested call never fails"), so value() is its answer and not a

@@ -59,8 +59,8 @@ class ModelRunner final : public verification::SliceRunner {
   explicit ModelRunner(const verification::RunnerSetup& setup)
       : setup_(setup), next_(setup.first_index) {
     const workloads::Plan& plan = setup.workload->plan();
-    stride_ = (plan.input_bytes + plan.output_bytes + 2 * setup.line_bytes + setup.line_bytes - 1) /
-              setup.line_bytes * setup.line_bytes;
+    const std::uint64_t line = setup.line_bytes;
+    stride_ = (plan.input_bytes + plan.output_bytes + 3 * line - 1) / line * line;
     store_.assign(stride_ * plan.units + setup.line_bytes, std::byte{0});
     scratch_.assign(plan.scratch_bytes * setup.executor->threads(), std::byte{0});
   }
@@ -87,13 +87,12 @@ class ModelRunner final : public verification::SliceRunner {
     verification::SliceReport report;
     const std::string name = setup_.workload->descriptor().name;
     if (total_.oracle_blocks == 0) {
-      report.records.emplace_back(not_performed(
-          setup_.base, "oracle over " + name + " units", "no block compared", 0));
+      report.records.emplace_back(
+          not_performed(setup_.base, "oracle over " + name + " units", "no block compared", 0));
     }
     if (total_.integrity_checked == 0) {
-      report.records.emplace_back(
-          not_performed(setup_.base, "input-integrity bracket over " + name + " units",
-                        "no unit bracketed", 0));
+      report.records.emplace_back(not_performed(
+          setup_.base, "input-integrity bracket over " + name + " units", "no unit bracketed", 0));
     }
     report.next_index = next_;
     return report;
@@ -124,7 +123,7 @@ class ModelRunner final : public verification::SliceRunner {
     verification::Difference difference;
     bool any = false;
     for (std::size_t at = 0; at < expected.size(); ++at) {
-      const unsigned delta = std::to_integer<unsigned>(expected[at] ^ actual[at]);
+      const auto delta = std::to_integer<unsigned>(expected[at] ^ actual[at]);
       if (delta == 0) {
         continue;
       }
@@ -136,10 +135,11 @@ class ModelRunner final : public verification::SliceRunner {
       difference.popcount += static_cast<std::uint64_t>(std::popcount(delta));
     }
     difference.window_offset = difference.first_offset / 8 * 8;
-    const std::size_t end = std::min<std::size_t>(expected.size(),
-                                                  difference.window_offset + verification::kMaxWindowBytes);
-    difference.expected.assign(expected.begin() + static_cast<std::ptrdiff_t>(difference.window_offset),
-                               expected.begin() + static_cast<std::ptrdiff_t>(end));
+    const std::size_t end = std::min<std::size_t>(
+        expected.size(), difference.window_offset + verification::kMaxWindowBytes);
+    difference.expected.assign(
+        expected.begin() + static_cast<std::ptrdiff_t>(difference.window_offset),
+        expected.begin() + static_cast<std::ptrdiff_t>(end));
     difference.actual.assign(actual.begin() + static_cast<std::ptrdiff_t>(difference.window_offset),
                              actual.begin() + static_cast<std::ptrdiff_t>(end));
     return difference;
@@ -151,8 +151,8 @@ class ModelRunner final : public verification::SliceRunner {
     const std::uint64_t slot = k % plan.units;
     std::byte* base = aligned_base() + slot * stride_;
     const std::span<std::byte> input{base, plan.input_bytes};
-    const std::size_t output_at = (plan.input_bytes + setup_.line_bytes - 1) / setup_.line_bytes *
-                                  setup_.line_bytes;
+    const std::size_t output_at =
+        (plan.input_bytes + setup_.line_bytes - 1) / setup_.line_bytes * setup_.line_bytes;
     const std::span<std::byte> output{base + output_at, plan.output_bytes};
     const bool sampled = setup_.duty.oracle_period != 0 && k % setup_.duty.oracle_period == 0;
     const bool bracketed =
@@ -199,7 +199,8 @@ class ModelRunner final : public verification::SliceRunner {
       ++report.tally.oracle_checked;
       const verification::Verdict verdict =
           setup_.oracle->check(verification::UnitEvidence{k, input, output});
-      report.tally.oracle_blocks += std::visit([](const auto& held) { return held.blocks_compared; }, verdict);
+      report.tally.oracle_blocks +=
+          std::visit([](const auto& held) { return held.blocks_compared; }, verdict);
       if (const auto* mismatch = std::get_if<verification::ExactMismatch>(&verdict)) {
         verification::ExactBitCorruption record;
         record.provenance = where;

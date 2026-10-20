@@ -62,7 +62,8 @@ TEST(NextSliceUnits, ASliceThatMeasuredNoTimeDoublesAndNothingExceedsTheCap) {
   EXPECT_EQ(next_slice_units(kMaxSliceUnits, 1, 10 * kMs), kMaxSliceUnits);
   EXPECT_EQ(next_slice_units(kMaxSliceUnits, 0, 10 * kMs), kMaxSliceUnits);
   EXPECT_EQ(next_slice_units(kMaxSliceUnits / 2 + 1, 1, 10 * kMs), kMaxSliceUnits);
-  EXPECT_EQ(next_slice_units(8, 1 * kMs, 0), 1U) << "a target of nothing is a target of a nanosecond";
+  EXPECT_EQ(next_slice_units(8, 1 * kMs, 0), 1U)
+      << "a target of nothing is a target of a nanosecond";
 }
 
 TEST(PlacementsFor, OneThreadPerCpuCyclingAndNoneWhenNoCpusAreNamed) {
@@ -163,31 +164,36 @@ struct Script {
   std::vector<std::uint64_t> asked;
   std::optional<verification::RunnerSetup> setup;
 };
-Script* g_script = nullptr;
+/// The script the factory's runners follow: a RunnerFactory is a plain function,
+/// so the state it reads cannot be a capture.
+Script*& current_script() {
+  static Script* script = nullptr;
+  return script;
+}
 
 class ScriptedRunner final : public verification::SliceRunner {
  public:
   core::Result<verification::SliceReport, verification::RunnerError> run_slice(
       const verification::SliceRequest& request) override {
-    g_script->asked.push_back(request.units);
-    ++g_script->slices_run;
-    if (g_script->slice_fails) {
+    current_script()->asked.push_back(request.units);
+    ++current_script()->slices_run;
+    if (current_script()->slice_fails) {
       return verification::RunnerError{verification::RunnerFault::kFinished, "scripted halt"};
     }
     verification::SliceReport report;
-    if (!g_script->slices.empty()) {
-      const auto at = static_cast<std::size_t>(g_script->slices_run - 1);
-      report = g_script->slices[std::min(at, g_script->slices.size() - 1)];
+    if (!current_script()->slices.empty()) {
+      const auto at = static_cast<std::size_t>(current_script()->slices_run - 1);
+      report = current_script()->slices[std::min(at, current_script()->slices.size() - 1)];
     }
     total_ = total_ + report.tally;
     return report;
   }
   core::Result<verification::SliceReport, verification::RunnerError> finish() override {
-    ++g_script->finishes;
-    if (g_script->finish_fails) {
+    ++current_script()->finishes;
+    if (current_script()->finish_fails) {
       return verification::RunnerError{verification::RunnerFault::kFinished, "scripted finish"};
     }
-    return g_script->final_report.value_or(verification::SliceReport{});
+    return current_script()->final_report.value_or(verification::SliceReport{});
   }
   [[nodiscard]] const verification::Tally& total() const noexcept override { return total_; }
 
@@ -195,10 +201,10 @@ class ScriptedRunner final : public verification::SliceRunner {
   verification::Tally total_;
 };
 
-core::Result<std::unique_ptr<verification::SliceRunner>, verification::RunnerError>
-make_scripted(const verification::RunnerSetup& setup) {
-  g_script->setup = setup;
-  if (g_script->factory_fails) {
+core::Result<std::unique_ptr<verification::SliceRunner>, verification::RunnerError> make_scripted(
+    const verification::RunnerSetup& setup) {
+  current_script()->setup = setup;
+  if (current_script()->factory_fails) {
     return verification::RunnerError{verification::RunnerFault::kResources, "scripted refusal"};
   }
   std::unique_ptr<verification::SliceRunner> runner = std::make_unique<ScriptedRunner>();
@@ -239,7 +245,7 @@ struct Rig {
   WorkerArgs worker;
 
   Rig() {
-    g_script = &script;
+    current_script() = &script;
     auto created = HeartbeatRegion::create(syscalls, 2);
     EXPECT_TRUE(created.has_value());
     region.emplace(std::move(created).value());
@@ -261,7 +267,11 @@ struct Rig {
     unit.threads = 1;
     worker.workload = unit;
   }
-  ~Rig() { g_script = nullptr; }
+  ~Rig() { current_script() = nullptr; }
+  Rig(const Rig&) = delete;
+  Rig& operator=(const Rig&) = delete;
+  Rig(Rig&&) = delete;
+  Rig& operator=(Rig&&) = delete;
 
   [[nodiscard]] Services services(RunnerFactory factory = &make_scripted) {
     Services services;
@@ -274,12 +284,14 @@ struct Rig {
     return services;
   }
 
-  [[nodiscard]] Session session() { return Session{&*region, worker.slot, control.read_fd, worker.pacing}; }
+  [[nodiscard]] Session session() {
+    return Session{&*region, worker.slot, control.read_fd, worker.pacing};
+  }
 
   core::Result<VerifiedOutcome, WorkerError> run(RunnerFactory factory = &make_scripted) {
     ipc::RecordWriter writer(syscalls, records.write_fd);
     const Services wired = services(factory);
-    VerifiedRun verified(syscalls, writer, session(), worker, wired);
+    VerifiedRun verified(syscalls, writer, session(), worker, *worker.workload, wired);
     return verified.run();
   }
 
@@ -377,7 +389,8 @@ TEST(Prepare, EveryRefusalNamesItsStage) {
   const auto stage = [](Rig& rig) {
     auto prepared = prepare(rig.syscalls, *rig.worker.workload, {}, 0, rig.services());
     EXPECT_FALSE(prepared.has_value());
-    return prepared.has_value() ? std::string{} : prepared.error().stage + ": " + prepared.error().detail;
+    return prepared.has_value() ? std::string{}
+                                : prepared.error().stage + ": " + prepared.error().detail;
   };
   {
     Rig rig;
@@ -405,8 +418,7 @@ TEST(Prepare, EveryRefusalNamesItsStage) {
   {
     Rig rig;
     rig.oracles.refuse = true;
-    EXPECT_EQ(stage(rig),
-              "oracle: configuration outside the specification: scripted");
+    EXPECT_EQ(stage(rig), "oracle: configuration outside the specification: scripted");
   }
   {
     Rig rig;
@@ -456,7 +468,8 @@ TEST(VerifiedRunLoop, RunsSlicesUntilTheDurationAndSendsTheTallyAfterEach) {
   EXPECT_EQ(outcome.value().outcome.reason, StopReason::kDurationElapsed);
   EXPECT_GE(rig.script.slices_run, 3);
   EXPECT_EQ(rig.script.finishes, 1);
-  EXPECT_EQ(outcome.value().tally.units_computed, static_cast<std::uint64_t>(rig.script.slices_run));
+  EXPECT_EQ(outcome.value().tally.units_computed,
+            static_cast<std::uint64_t>(rig.script.slices_run));
   EXPECT_EQ(outcome.value().outcome.progress, outcome.value().tally.units_computed);
   EXPECT_TRUE(outcome.value().note.empty());
   const std::vector<verification::Tally> tallies = rig.tallies();

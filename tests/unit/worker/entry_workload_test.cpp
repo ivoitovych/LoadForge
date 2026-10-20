@@ -42,6 +42,7 @@ constexpr std::int64_t kMs = 1'000'000;
 
 std::vector<std::string_view> views_of(const std::vector<std::string>& strings) {
   std::vector<std::string_view> views;
+  views.reserve(strings.size());
   for (const std::string& s : strings) {
     views.emplace_back(s);
   }
@@ -151,9 +152,9 @@ TEST(WorkloadArgsTest, EveryKeyOfTheUnitIsRequiredWithTheWorkloadAndRefusedWitho
   }
   std::vector<std::string> no_workload = without(argv, "--workload");
   EXPECT_EQ(refusal_of(no_workload), "--seed: needs --workload");
-  for (const std::string_view key : {"--seed", "--footprint-bytes", "--threads", "--decomposition",
-                                     "--isa", "--oracle-period", "--integrity-period",
-                                     "--line-bytes"}) {
+  for (const std::string_view key :
+       {"--seed", "--footprint-bytes", "--threads", "--decomposition", "--isa", "--oracle-period",
+        "--integrity-period", "--line-bytes"}) {
     no_workload = without(no_workload, key);
   }
   EXPECT_EQ(refusal_of(no_workload), "--physical-core: needs --workload");
@@ -167,7 +168,8 @@ TEST(WorkloadArgsTest, EveryValueHasADomainAndItsBoundaryIsRefusedByName) {
             "--workload: 'Compression' is not a workload name");
   EXPECT_NE(refusal_of(with(argv, "--seed", "-1")).find("--seed: expected a whole non-negative"),
             std::string::npos);
-  EXPECT_EQ(refusal_of(with(argv, "--footprint-bytes", "0")), "--footprint-bytes: must be at least 1");
+  EXPECT_EQ(refusal_of(with(argv, "--footprint-bytes", "0")),
+            "--footprint-bytes: must be at least 1");
   EXPECT_NE(refusal_of(with(argv, "--footprint-bytes", "x")).find("--footprint-bytes: expected"),
             std::string::npos);
   EXPECT_EQ(refusal_of(with(argv, "--threads", "0")), "--threads: must be at least 1");
@@ -183,7 +185,8 @@ TEST(WorkloadArgsTest, EveryValueHasADomainAndItsBoundaryIsRefusedByName) {
   EXPECT_EQ(refusal_of(with(argv, "--isa", "sse")),
             "--isa: 'sse' is none of scalar, avx2, avx512, neon");
   for (const char* line : {"4", "0", "100", "8192"}) {
-    EXPECT_NE(refusal_of(with(argv, "--line-bytes", line)).find("--line-bytes: "), std::string::npos)
+    EXPECT_NE(refusal_of(with(argv, "--line-bytes", line)).find("--line-bytes: "),
+              std::string::npos)
         << line;
   }
   EXPECT_EQ(refusal_of(with(argv, "--line-bytes", "100")),
@@ -286,8 +289,8 @@ TEST(RerunArgsTest, EveryValueIsRefusedByName) {
             std::string::npos);
   EXPECT_NE(rerun_refusal(with(argv, "--cpu", "4294967296")).find("--cpu: 4294967296"),
             std::string::npos);
-  EXPECT_TRUE(parse_rerun_args(views_of(with(argv, "--iteration", "18446744073709551615")))
-                  .has_value())
+  EXPECT_TRUE(
+      parse_rerun_args(views_of(with(argv, "--iteration", "18446744073709551615"))).has_value())
       << "any unit index is a unit";
 }
 
@@ -352,8 +355,8 @@ class DecoratedRegistry final : public workloads::Registry {
     if (!made.has_value()) {
       return made.error();
     }
-    std::unique_ptr<workloads::Workload> wrapped = std::make_unique<DecoratedWorkload>(
-        std::move(made).value(), corrupt, version);
+    std::unique_ptr<workloads::Workload> wrapped =
+        std::make_unique<DecoratedWorkload>(std::move(made).value(), corrupt, version);
     return wrapped;
   }
   workloads::BuiltinRegistry inner;
@@ -368,7 +371,8 @@ class UncheckingOracle final : public verification::Oracle {
   [[nodiscard]] verification::Contract contract() const noexcept override {
     return verification::Contract::kExact;
   }
-  [[nodiscard]] verification::Verdict check(const verification::UnitEvidence& /*e*/) const override {
+  [[nodiscard]] verification::Verdict check(
+      const verification::UnitEvidence& /*e*/) const override {
     return verification::NotChecked{"scripted", "the script says so", 0};
   }
 
@@ -390,19 +394,25 @@ class UncheckingOracles final : public verification::OracleRegistry {
 
 /// A runner whose calls can fail, for the paths the real one has no reason to
 /// take.
-bool g_slice_fails = false;
-bool g_finish_fails = false;
+bool& g_slice_fails() {
+  static bool fails = false;
+  return fails;
+}
+bool& g_finish_fails() {
+  static bool fails = false;
+  return fails;
+}
 class FailingRunner final : public verification::SliceRunner {
  public:
   core::Result<verification::SliceReport, verification::RunnerError> run_slice(
       const verification::SliceRequest& /*r*/) override {
-    if (g_slice_fails) {
+    if (g_slice_fails()) {
       return verification::RunnerError{verification::RunnerFault::kFinished, "scripted halt"};
     }
     return verification::SliceReport{};
   }
   core::Result<verification::SliceReport, verification::RunnerError> finish() override {
-    if (g_finish_fails) {
+    if (g_finish_fails()) {
       return verification::RunnerError{verification::RunnerFault::kFinished, "scripted finish"};
     }
     return verification::SliceReport{};
@@ -412,8 +422,8 @@ class FailingRunner final : public verification::SliceRunner {
  private:
   verification::Tally total_;
 };
-core::Result<std::unique_ptr<verification::SliceRunner>, verification::RunnerError>
-make_failing(const verification::RunnerSetup& /*setup*/) {
+core::Result<std::unique_ptr<verification::SliceRunner>, verification::RunnerError> make_failing(
+    const verification::RunnerSetup& /*setup*/) {
   std::unique_ptr<verification::SliceRunner> runner = std::make_unique<FailingRunner>();
   return runner;
 }
@@ -430,8 +440,8 @@ struct Doubles {
                                   bool unchecked = false) const {
     Services services;
     services.workloads = &workloads;
-    services.oracles = unchecked ? static_cast<const verification::OracleRegistry*>(&unchecking)
-                                 : &oracles;
+    services.oracles =
+        unchecked ? static_cast<const verification::OracleRegistry*>(&unchecking) : &oracles;
     services.fp = const_cast<controller_testing::ModelFp<true, false>*>(&fp);
     services.threads = const_cast<PosixThreads*>(&threads);
     services.isa = &probe;
@@ -535,8 +545,7 @@ TEST(VerifiedWorkerRun, AnUnrunnableUnitIsASetupFailureThatNamesTheStageAndIsSen
   WorkerArgs args = rig.args();
   args.workload->workload = "no_such";
   EXPECT_EQ(rig.run(args, rig.doubles.services()), static_cast<int>(WorkerExit::kSetupFailed));
-  EXPECT_NE(rig.err.str().find("loadforge --worker: workload: unknown workload"),
-            std::string::npos)
+  EXPECT_NE(rig.err.str().find("loadforge --worker: workload: unknown workload"), std::string::npos)
       << rig.err.str();
   const std::vector<ipc::Record> frames = rig.received();
   ASSERT_EQ(frames.size(), 2U);
@@ -545,10 +554,10 @@ TEST(VerifiedWorkerRun, AnUnrunnableUnitIsASetupFailureThatNamesTheStageAndIsSen
 
 TEST(VerifiedWorkerRun, ARunnerThatStoppedItselfIsCompletedWithTheReasonInTheSummary) {
   Rig rig;
-  g_slice_fails = true;
+  g_slice_fails() = true;
   EXPECT_EQ(rig.run(rig.args(), rig.doubles.services(&make_failing)),
             static_cast<int>(WorkerExit::kCompleted));
-  g_slice_fails = false;
+  g_slice_fails() = false;
   const std::string summary = Rig::text_of(rig.received().back());
   EXPECT_NE(summary.find("the verification runner stopped the run"), std::string::npos) << summary;
   EXPECT_NE(summary.find("; runner: scripted halt"), std::string::npos) << summary;
@@ -588,7 +597,7 @@ struct ReRig {
   std::ostringstream err;
   Doubles doubles;
 
-  RerunArgs args() {
+  static RerunArgs args() {
     RerunArgs args;
     args.unit.workload = "compression";
     args.unit.seed = 5;
@@ -637,7 +646,7 @@ TEST(ReRunEntry, EveryWayTheReRunCannotBeMadeIsNotPerformedAndSaysWhy) {
   }
   {
     ReRig rig;
-    RerunArgs args = rig.args();
+    RerunArgs args = ReRig::args();
     args.cpu = 4096;
     EXPECT_EQ(rig.run(args, rig.doubles.services()), static_cast<int>(RerunExit::kNotPerformed));
     EXPECT_NE(rig.err.str().find("loadforge --rerun: cpu: "), std::string::npos) << rig.err.str();
@@ -653,7 +662,7 @@ TEST(ReRunEntry, EveryWayTheReRunCannotBeMadeIsNotPerformedAndSaysWhy) {
   }
   {
     ReRig rig;
-    RerunArgs args = rig.args();
+    RerunArgs args = ReRig::args();
     args.unit.workload = "no_such";
     EXPECT_EQ(rig.run(args, rig.doubles.services()), static_cast<int>(RerunExit::kNotPerformed));
     EXPECT_NE(rig.err.str().find("workload: unknown workload"), std::string::npos) << rig.err.str();
@@ -663,24 +672,25 @@ TEST(ReRunEntry, EveryWayTheReRunCannotBeMadeIsNotPerformedAndSaysWhy) {
     rig.doubles.workloads.version = 2;  // This build's bits are not the finding's.
     EXPECT_EQ(rig.run(rig.args(), rig.doubles.services()),
               static_cast<int>(RerunExit::kNotPerformed));
-    EXPECT_NE(rig.err.str().find("the finding is of version 1 of compression, this build has version 2"),
-              std::string::npos)
+    EXPECT_NE(
+        rig.err.str().find("the finding is of version 1 of compression, this build has version 2"),
+        std::string::npos)
         << rig.err.str();
   }
   {
     ReRig rig;
-    g_slice_fails = true;
+    g_slice_fails() = true;
     EXPECT_EQ(rig.run(rig.args(), rig.doubles.services(&make_failing)),
               static_cast<int>(RerunExit::kNotPerformed));
-    g_slice_fails = false;
+    g_slice_fails() = false;
     EXPECT_NE(rig.err.str().find("scripted halt"), std::string::npos);
   }
   {
     ReRig rig;
-    g_finish_fails = true;
+    g_finish_fails() = true;
     EXPECT_EQ(rig.run(rig.args(), rig.doubles.services(&make_failing)),
               static_cast<int>(RerunExit::kNotPerformed));
-    g_finish_fails = false;
+    g_finish_fails() = false;
     EXPECT_NE(rig.err.str().find("scripted finish"), std::string::npos);
   }
 }

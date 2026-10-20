@@ -86,9 +86,10 @@ TEST(ChooseIsa, WithoutARequestTheWidestPathAllThreeSetsHoldIsChosen) {
   // for a workload that has no such kernel.
   const IsaSet everything{IsaPath::kScalar, IsaPath::kAvx2, IsaPath::kAvx512};
   EXPECT_EQ(choose_isa(std::nullopt, everything, everything, everything).value(), IsaPath::kAvx512);
-  EXPECT_EQ(choose_isa(std::nullopt, everything, everything, IsaSet{IsaPath::kScalar, IsaPath::kAvx2})
-                .value(),
-            IsaPath::kAvx2);
+  EXPECT_EQ(
+      choose_isa(std::nullopt, everything, everything, IsaSet{IsaPath::kScalar, IsaPath::kAvx2})
+          .value(),
+      IsaPath::kAvx2);
   EXPECT_EQ(choose_isa(std::nullopt, everything, everything, IsaSet{IsaPath::kScalar}).value(),
             IsaPath::kScalar);
   EXPECT_EQ(choose_isa(std::nullopt, IsaSet{}, everything, everything).value(), IsaPath::kScalar);
@@ -106,7 +107,8 @@ TEST(DescribeState, SaysEveryPropertyThatExistsOnTheArchitectureAndNoOtherInTheR
   dirty.rounding = fpenv::Rounding::kUpward;
   EXPECT_EQ(describe_state(dirty),
             "rounding upward, flush-to-zero on, denormals-are-zero on, default-NaN on");
-  EXPECT_EQ(describe_state(fpenv::FpState{}), "rounding to nearest, ties to even, flush-to-zero off");
+  EXPECT_EQ(describe_state(fpenv::FpState{}),
+            "rounding to nearest, ties to even, flush-to-zero off");
 }
 
 // --- plan_worker ---------------------------------------------------------------------
@@ -245,7 +247,7 @@ TEST(PlanWorker, ASingleCpuWithNoNumaNodeOrCoreInTheSnapshotIsLeftUnsaid) {
 }
 
 TEST(PlanWorker, AConfiguredFootprintIsResolvedAgainstTheBudget) {
-  Planning planning;
+  const Planning planning;
   const config::MemoryBudget budget{std::uint64_t{64} << 20U, std::nullopt};
   auto absolute = plan_worker(entry("compression", config::Threads::count(1),
                                     core::ByteSize::bytes(std::uint64_t{4} << 20U)),
@@ -308,7 +310,8 @@ TEST(PlanWorker, EveryReasonARunCannotStartNamesTheWorkload) {
     planning.registry.fail_from = 2;
     auto planned = plan_worker(entry("compression"), 0, std::nullopt, planning.options, nullptr);
     ASSERT_FALSE(planned.has_value());
-    EXPECT_EQ(planned.error(), "compression: configuration outside the workload's domain: scripted");
+    EXPECT_EQ(planned.error(),
+              "compression: configuration outside the workload's domain: scripted");
   }
 }
 
@@ -321,7 +324,7 @@ TEST(PlanWorker, WithoutAnIsaProbeOnlyScalarIsOffered) {
 }
 
 TEST(VerificationOptionsTest, EqualityLooksAtEveryField) {
-  VerificationOptions a;
+  const VerificationOptions a;
   VerificationOptions b;
   EXPECT_EQ(a, b);
   b.seed = 9;

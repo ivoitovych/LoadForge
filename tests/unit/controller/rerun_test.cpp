@@ -7,9 +7,9 @@
 #include "controller/rerun.hpp"
 
 #include <gtest/gtest.h>
-#include <signal.h>
 
 #include <cerrno>
+#include <csignal>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,9 +28,8 @@ using verification::RerunRequest;
 using verification::Rung;
 
 constexpr pid_t kChild = 777;
-/// With pipes numbered from here, the re-runner's pipe is (kReadFd, kWriteFd).
+/// With pipes numbered from here, the re-runner's pipe is (kReadFd, kReadFd + 1).
 constexpr int kReadFd = 100;
-constexpr int kWriteFd = 101;
 
 WorkerWork a_work() {
   WorkerWork work;
@@ -85,9 +84,7 @@ struct Rig {
     rerunner.use(a_work());
   }
   /// The child exits with `code` (a raw status is the code shifted a byte).
-  void child_exits(int code) {
-    syscalls.script_waits({{platform::Reaped{kChild, code << 8}, 0}});
-  }
+  void child_exits(int code) { syscalls.script_waits({{platform::Reaped{kChild, code << 8}, 0}}); }
 };
 
 TEST(RealRerunner, ACleanExitIsCleanAndTheReproductionCodeIsAReproduction) {
@@ -212,7 +209,7 @@ TEST(RealRerunner, ARunThatCannotBeStartedIsNotPerformed) {
 }
 
 TEST(RealRerunner, ARunThatNeverEndsIsKilledAndNotPerformed) {
-  Rig rig(300 * 1'000'000);  // Three looks of 100 ms.
+  Rig rig(std::int64_t{300} * 1'000'000);                         // Three looks of 100 ms.
   rig.syscalls.script_readiness(kReadFd, platform::Readiness{});  // Still going.
   rig.syscalls.script_waits({{platform::Reaped{kChild, SIGKILL}, 0}});
   EXPECT_EQ(rig.rerunner.rerun(a_finding(), a_request()), RerunOutcome::kNotPerformed);

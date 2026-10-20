@@ -33,11 +33,20 @@ class ModelSource final : public telemetry::Source {
 
   std::vector<telemetry::MetricStatus> probe() override {
     probed_ = true;
-    telemetry::Metric temperature{"model.temperature", telemetry::Unit::kCelsius,
-                                  telemetry::Kind::kGauge, telemetry::Scope::kPackage, 0,
-                                  std::nullopt, "model"};
-    telemetry::Metric energy{"model.energy", telemetry::Unit::kJoules, telemetry::Kind::kCounter,
-                             telemetry::Scope::kPackage, 0, std::nullopt, "model"};
+    const telemetry::Metric temperature{"model.temperature",
+                                        telemetry::Unit::kCelsius,
+                                        telemetry::Kind::kGauge,
+                                        telemetry::Scope::kPackage,
+                                        0,
+                                        std::nullopt,
+                                        "model"};
+    const telemetry::Metric energy{"model.energy",
+                                   telemetry::Unit::kJoules,
+                                   telemetry::Kind::kCounter,
+                                   telemetry::Scope::kPackage,
+                                   0,
+                                   std::nullopt,
+                                   "model"};
     telemetry::Unavailable denied{topology::Availability::kDenied, "/model/energy",
                                   "permission denied", "run as a user that may read it"};
     return {telemetry::MetricStatus{temperature, std::nullopt},
@@ -124,8 +133,7 @@ struct ModelSelect {
         return simd::DispatchError{simd::DispatchFault::kNotCompiled, *requested, "not compiled"};
       }
       if (!supported.contains(*requested)) {
-        return simd::DispatchError{simd::DispatchFault::kNotSupported, *requested,
-                                   "not supported"};
+        return simd::DispatchError{simd::DispatchFault::kNotSupported, *requested, "not supported"};
       }
       return *requested;
     }

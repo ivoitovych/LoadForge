@@ -47,8 +47,8 @@ TEST(Disagreements, TheUnrequestedPathSelectIsNotAlwaysOneAWorkloadHas) {
                  << ", which dense_linear has a kernel for; the disagreement needs AVX-512";
   }
   const workloads::BuiltinRegistry registry;
-  const auto created = registry.create(
-      "dense_linear", workloads::WorkloadConfig{1, kFootprint, 0, chosen.value()});
+  const auto created =
+      registry.create("dense_linear", workloads::WorkloadConfig{1, kFootprint, 0, chosen.value()});
   ASSERT_FALSE(created.has_value());
   EXPECT_EQ(created.error().fault, workloads::WorkloadFault::kConfiguration);
 }
@@ -75,12 +75,12 @@ TEST(Disagreements, AnUnprivilegedProcessCannotLockTheWorkingSetTheRunnerAlwaysL
     const verification::BuiltinOracleRegistry oracles;
     platform::RealSyscalls syscalls;
     worker::PosixThreads threads;
-    fpenv::RealFpControl fp;
+    const fpenv::RealFpControl fp;
     const workloads::WorkloadConfig config{1, std::uint64_t{32} << 20U, 0, simd::IsaPath::kScalar};
     auto workload = workloads.create("compression", config);
     auto oracle = oracles.create("compression", config, workload.value()->plan());
-    auto pool = worker::make_thread_pool(std::vector<worker::ThreadPlacement>(1), threads,
-                                         syscalls, fp);
+    auto pool =
+        worker::make_thread_pool(std::vector<worker::ThreadPlacement>(1), threads, syscalls, fp);
     verification::RunnerSetup setup;
     setup.workload = workload.value().get();
     setup.oracle = oracle.value().get();
@@ -110,8 +110,8 @@ TEST(Disagreements, AnUnprivilegedProcessCannotLockTheWorkingSetTheRunnerAlwaysL
 // from the record alone would compute different bits than the finding is about.
 TEST(Disagreements, AUnitsOutputDependsOnADecompositionTheProvenanceDoesNotCarry) {
   const workloads::BuiltinRegistry registry;
-  const auto fine = registry.create("dense_linear",
-                                    workloads::WorkloadConfig{9, kFootprint, 16, simd::IsaPath::kScalar});
+  const auto fine = registry.create(
+      "dense_linear", workloads::WorkloadConfig{9, kFootprint, 16, simd::IsaPath::kScalar});
   const auto coarse = registry.create(
       "dense_linear", workloads::WorkloadConfig{9, kFootprint, 256, simd::IsaPath::kScalar});
   ASSERT_TRUE(fine.has_value() && coarse.has_value());

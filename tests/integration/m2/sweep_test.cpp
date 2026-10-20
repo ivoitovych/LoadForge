@@ -4,13 +4,14 @@
 // decomposition it lists and on every ISA path this machine can run, handed to
 // the oracle registry for the plan it resolved, and run through the real
 // input-integrity runner on one thread and on three, at unit indices from 0 up
-// to the last that fit in 64 bits (the second unit of that run wraps). Streams wrote the workloads, the oracles and the runner apart, from
-// the specifications and the contracts; this is where their readings of one
-// configuration meet, and nowhere else do they.
+// to the last that fit in 64 bits (the second unit of that run wraps). Streams wrote the workloads,
+// the oracles and the runner apart, from the specifications and the contracts; this is where their
+// readings of one configuration meet, and nowhere else do they.
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -56,13 +57,12 @@ TEST(Sweep, EveryWorkloadItsOracleAndTheRunnerAgreeOnEveryConfigurationTheWorklo
   const auto probe = isa::make_native_probe();
   platform::RealSyscalls syscalls;
   worker::PosixThreads threads;
-  fpenv::RealFpControl fp;
+  const fpenv::RealFpControl fp;
   std::size_t configurations = 0;
   for (const std::string& name : workloads.names()) {
     for (const std::uint32_t decomposition : decompositions_of(name)) {
-      for (const simd::IsaPath path :
-           {simd::IsaPath::kScalar, simd::IsaPath::kAvx2, simd::IsaPath::kAvx512,
-            simd::IsaPath::kNeon}) {
+      for (const simd::IsaPath path : {simd::IsaPath::kScalar, simd::IsaPath::kAvx2,
+                                       simd::IsaPath::kAvx512, simd::IsaPath::kNeon}) {
         if (!probe->supported().intersect(simd::compiled_paths()).contains(path)) {
           continue;
         }
@@ -87,11 +87,10 @@ TEST(Sweep, EveryWorkloadItsOracleAndTheRunnerAgreeOnEveryConfigurationTheWorklo
           if (thread_count > 1 && decomposition != 0) {
             continue;
           }
-          std::vector<worker::ThreadPlacement> placements(thread_count);
+          const std::vector<worker::ThreadPlacement> placements(thread_count);
           auto pool = worker::make_thread_pool(placements, threads, syscalls, fp);
           ASSERT_TRUE(pool.has_value());
-          for (const std::uint64_t first :
-               {std::uint64_t{0}, ~std::uint64_t{0} - 1U}) {
+          for (const std::uint64_t first : {std::uint64_t{0}, ~std::uint64_t{0} - 1U}) {
             verification::RunnerSetup setup;
             setup.workload = &workload;
             setup.oracle = oracle.value().get();
@@ -125,6 +124,7 @@ TEST(Sweep, EveryWorkloadItsOracleAndTheRunnerAgreeOnEveryConfigurationTheWorklo
       }
     }
   }
+  std::cout << "[sweep] " << configurations << " configurations, each run through the runner\n";
   EXPECT_GT(configurations, 20U);
 }
 

@@ -81,6 +81,9 @@ Sent send_report(ipc::RecordWriter& records, const verification::SliceReport& re
 
 }  // namespace
 
+// A size and two durations, named in the order the sentence in the header reads
+// them; a struct for three numbers would be one more type for a pure function.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::uint64_t next_slice_units(std::uint64_t last_units, std::int64_t took_ns,
                                std::int64_t target_ns) noexcept {
   const std::uint64_t doubled = std::min(last_units * 2, kMaxSliceUnits);
@@ -182,106 +185,167 @@ core::Result<Prepared, WorkerError> prepare(platform::Syscalls& syscalls, const 
   return prepared;
 }
 
-core::Result<VerifiedOutcome, WorkerError> VerifiedRun::run() {
-  const WorkloadArgs& workload = *args_->workload;
-  auto prepared = prepare(*syscalls_, workload, args_->cpus, 0, *services_);
-  if (!prepared.has_value()) {
-    return prepared.error();
-  }
-  verification::SliceRunner& runner = *prepared.value().runner;
+namespace {
 
-  platform::Clock clock(*syscalls_);
-  auto started = clock.now();
-  if (!started.has_value()) {
-    return error_at("clock", describe(started.error()));
-  }
-  const auto pid = static_cast<std::uint32_t>(syscalls_->process_id());
-  const std::size_t slot = ipc::worker_slot(session_.slot);
-  const std::int64_t target_ns =
-      std::max(session_.pacing.interval_ns / kTargetDivisor, kMinTargetNs);
-  ControllerWatch watch(*syscalls_, session_, started.value().running_ns);
-  VerifiedOutcome result;
-  std::uint64_t units = 1;
+/// What one tick came to: go on, end the run (and state what it did not
+/// check), or leave at once because nobody is listening.
+enum class Step : std::uint8_t { kContinue, kEnd, kLeave };
 
-  while (true) {
-    auto now = clock.now();
+/// The loop's state across ticks, so that a tick is a function and the run is
+/// a loop over it.
+class Ticker {
+ public:
+  Ticker(platform::Syscalls& syscalls, ipc::RecordWriter& records, const Session& session,
+         verification::SliceRunner& runner)
+      : syscalls_(&syscalls),
+        records_(&records),
+        session_(&session),
+        runner_(&runner),
+        clock_(syscalls),
+        pid_(static_cast<std::uint32_t>(syscalls.process_id())),
+        target_ns_(std::max(session.pacing.interval_ns / kTargetDivisor, kMinTargetNs)) {}
+
+  /// Reads the clock for the first time and arms the watch on the controller.
+  [[nodiscard]] std::optional<WorkerError> start() {
+    auto started = clock_.now();
+    if (!started.has_value()) {
+      return error_at("clock", describe(started.error()));
+    }
+    started_ = started.value();
+    watch_ = std::make_unique<ControllerWatch>(*syscalls_, *session_, started_.running_ns);
+    return std::nullopt;
+  }
+
+  /// One tick: the beat, then the judgements, then a slice.
+  [[nodiscard]] core::Result<Step, WorkerError> once() {
+    auto now = clock_.now();
     if (!now.has_value()) {
       return error_at("clock", describe(now.error()));
     }
-    auto elapsed = platform::Clock::between(started.value(), now.value());
+    auto elapsed = platform::Clock::between(started_, now.value());
     if (!elapsed.has_value()) {
       return error_at("clock", describe(elapsed.error()));
     }
     const std::int64_t elapsed_ns = elapsed.value().raw_ns;
-    result.outcome.elapsed_ns = elapsed_ns;
-    result.outcome.progress = runner.total().units_computed;
+    result_.outcome.elapsed_ns = elapsed_ns;
+    result_.outcome.progress = runner_->total().units_computed;
 
-    const ipc::Heartbeat beat{now.value().running_ns, result.outcome.progress,
-                              NullWorkload::kPhaseRunning, pid};
-    if (auto published = session_.region->publish(slot, beat); !published.has_value()) {
+    const ipc::Heartbeat beat{now.value().running_ns, result_.outcome.progress,
+                              NullWorkload::kPhaseRunning, pid_};
+    if (auto published = session_->region->publish(ipc::worker_slot(session_->slot), beat);
+        !published.has_value()) {
       return error_at("heartbeat", describe(published.error()));
     }
-    if (elapsed_ns >= session_.pacing.duration_ns) {
-      result.outcome.reason = StopReason::kDurationElapsed;
-      break;
+    if (elapsed_ns >= session_->pacing.duration_ns) {
+      return end(StopReason::kDurationElapsed);
     }
-    if (const auto gone = watch.gone(now.value(), elapsed_ns); gone.has_value()) {
-      result.outcome.reason = *gone;
-      return result;
+    if (const auto gone = watch_->gone(now.value(), elapsed_ns); gone.has_value()) {
+      result_.outcome.reason = *gone;
+      return Step::kLeave;
     }
-    auto looked = watch.wait(0);
+    auto looked = watch_->wait(0);
     if (!looked.has_value()) {
       return looked.error();
     }
-    if (looked.value().has_value()) {
-      result.outcome.reason = *looked.value();
-      if (controller_lost(result.outcome.reason)) {
-        return result;
-      }
-      break;
+    const std::optional<StopReason> asked = looked.value();
+    if (asked.has_value()) {
+      return controller_lost(*asked) ? leave(*asked) : end(*asked);
     }
+    return slice(now.value());
+  }
 
-    auto slice = runner.run_slice(verification::SliceRequest{units});
-    if (!slice.has_value()) {
-      // kFinished is the only error a slice has: the runner ended the run
-      // itself (a slice before this one said why, in a record).
-      result.outcome.reason = StopReason::kRunnerStopped;
-      result.note = slice.error().detail;
-      break;
+  /// The run's last word: what the whole run did not check, then the tally.
+  [[nodiscard]] core::Result<VerifiedOutcome, WorkerError> conclude() {
+    auto last = runner_->finish();
+    if (!last.has_value()) {
+      // finish() answers kFinished only to a second call, and this is the first.
+      return error_at("runner", "finish: " + last.error().detail);
     }
-    const Sent sent = send_report(*records_, slice.value(), runner.total());
+    result_.tally = runner_->total();
+    result_.outcome.progress = result_.tally.units_computed;
+    const Sent sent = send_report(*records_, last.value(), result_.tally);
     if (sent.failure.has_value()) {
       return *sent.failure;
     }
     if (sent.controller_gone) {
-      result.outcome.reason = StopReason::kControllerHungUp;
-      return result;
+      result_.outcome.reason = StopReason::kControllerHungUp;
     }
-    auto after = clock.now();
+    return result_;
+  }
+
+  [[nodiscard]] const VerifiedOutcome& result() const noexcept { return result_; }
+
+ private:
+  Step end(StopReason reason) {
+    result_.outcome.reason = reason;
+    return Step::kEnd;
+  }
+  Step leave(StopReason reason) {
+    result_.outcome.reason = reason;
+    return Step::kLeave;
+  }
+
+  core::Result<Step, WorkerError> slice(const platform::TimePoint& now) {
+    auto ran = runner_->run_slice(verification::SliceRequest{units_});
+    if (!ran.has_value()) {
+      // kFinished is the only error a slice has: the runner ended the run
+      // itself (a slice before this one said why, in a record).
+      result_.note = ran.error().detail;
+      return end(StopReason::kRunnerStopped);
+    }
+    const Sent sent = send_report(*records_, ran.value(), runner_->total());
+    if (sent.failure.has_value()) {
+      return *sent.failure;
+    }
+    if (sent.controller_gone) {
+      return leave(StopReason::kControllerHungUp);
+    }
+    auto after = clock_.now();
     if (!after.has_value()) {
       return error_at("clock", describe(after.error()));
     }
-    units = next_slice_units(units, after.value().running_ns - now.value().running_ns, target_ns);
+    units_ = next_slice_units(units_, after.value().running_ns - now.running_ns, target_ns_);
+    return Step::kContinue;
   }
 
-  // Ended by time, by request, or by the runner: its last word, the records
-  // that state what the whole run did not check, goes out before the worker
-  // says it finished.
-  auto last = runner.finish();
-  if (!last.has_value()) {
-    // finish() answers kFinished only to a second call, and this is the first.
-    return error_at("runner", "finish: " + last.error().detail);
+  platform::Syscalls* syscalls_;
+  ipc::RecordWriter* records_;
+  const Session* session_;
+  verification::SliceRunner* runner_;
+  platform::Clock clock_;
+  std::uint32_t pid_;
+  std::int64_t target_ns_;
+  platform::TimePoint started_;
+  std::unique_ptr<ControllerWatch> watch_;
+  std::uint64_t units_ = 1;
+  VerifiedOutcome result_;
+};
+
+}  // namespace
+
+core::Result<VerifiedOutcome, WorkerError> VerifiedRun::run() {
+  auto prepared = prepare(*syscalls_, *workload_, args_->cpus, 0, *services_);
+  if (!prepared.has_value()) {
+    return prepared.error();
   }
-  result.tally = runner.total();
-  result.outcome.progress = result.tally.units_computed;
-  const Sent sent = send_report(*records_, last.value(), result.tally);
-  if (sent.failure.has_value()) {
-    return *sent.failure;
+  Ticker ticker(*syscalls_, *records_, session_, *prepared.value().runner);
+  if (auto failed = ticker.start(); failed.has_value()) {
+    return *failed;
   }
-  if (sent.controller_gone) {
-    result.outcome.reason = StopReason::kControllerHungUp;
+  while (true) {
+    auto step = ticker.once();
+    if (!step.has_value()) {
+      return step.error();
+    }
+    if (step.value() == Step::kLeave) {
+      return ticker.result();
+    }
+    if (step.value() == Step::kEnd) {
+      // Ended by time, by request, or by the runner: its last word goes out
+      // before the worker says it finished.
+      return ticker.conclude();
+    }
   }
-  return result;
 }
 
 }  // namespace loadforge::worker

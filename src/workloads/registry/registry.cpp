@@ -52,7 +52,7 @@ std::vector<std::string> BuiltinRegistry::names() const {
 
 core::Result<std::unique_ptr<Workload>, WorkloadError> BuiltinRegistry::create(
     std::string_view name, const WorkloadConfig& config) const {
-  const auto found = std::ranges::find(kEntries, name, &Entry::name);
+  const auto* const found = std::ranges::find(kEntries, name, &Entry::name);
   if (found == kEntries.end()) {
     WorkloadError unknown;
     unknown.fault = WorkloadFault::kUnknownWorkload;

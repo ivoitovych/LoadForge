@@ -123,6 +123,31 @@ expect "an allowlist line that is not a key FAILS"             1 $? "is not an a
 # One shard at a time (--scope). The sweep runs one CI job per module, each
 # mutating only its own sources; the gate must judge each of them alone without
 # giving up anything it refuses for the whole.
+# Several test executables, one run each (M2a exit criterion 6): the same
+# mutants are compiled into every executable that links their code, and a
+# mutant is killed when ANY executable's tests kill it.
+echo "mutation-gate.py (several executables)"
+merged() { # allowlist-fixture, report-fixture-dirs...
+  local allow="$1"; shift; local reports=()
+  for dir in "$@"; do reports+=(--report-dir "$FIX/mull/$dir"); done
+  GATE_OUT="$(python3 "$GATE" "${reports[@]}" --allowlist "$FIX/$allow" --root "$ROOT" 2>&1)"
+  GATE_RC=$?; return $GATE_RC
+}
+merged allow-empty.txt merge-a
+expect "one executable alone leaves two survivors"             1 $? "2 unexplained" "$GATE_OUT"
+merged allow-empty.txt merge-a merge-b
+expect "a second executable's kill removes a survivor"         1 $? "1 unexplained" "$GATE_OUT"
+expect "and the one left is the one nobody killed"             1 "$GATE_RC" \
+       "UNEXPLAINED SURVIVOR: src/core/duration.cpp:51:9:cxx_ge_to_lt" "$GATE_OUT"
+merged allow-empty.txt merge-a merge-b merge-c
+expect "three executables between them kill every mutant"      0 $? "0 unexplained" "$GATE_OUT"
+merged allow-empty.txt merge-c merge-b merge-a
+expect "and the order they ran in does not matter"             0 $? "0 unexplained" "$GATE_OUT"
+merged allow-empty.txt not-covered not-covered
+expect "a mutant no executable ran stays not-covered"          1 $? "NOT-COVERED MUTANT" "$GATE_OUT"
+merged allow-empty.txt merge-a malformed
+expect "an executable whose report cannot be read fails all"   1 $? "no Mull summary line" "$GATE_OUT"
+
 echo "mutation-gate.py --scope"
 gate clean allow-empty.txt --scope src/core
 expect "a shard whose mutants all lie in scope passes"         0 $? "2 mutant(s), all in scope" "$GATE_OUT"
@@ -257,6 +282,34 @@ expect "a plan whose header host has no source FAILS"          1 $? "choose anot
 rm -rf "$tree/src"/*
 out="$(python3 "$SHARD" --root "$tree" plan 2>&1)"
 expect "an src/ with no module FAILS"                          1 $? "holds no module" "$out"
+rm -rf "$tree"
+
+# The test executables of a shard: where its tests live decides.
+out="$(python3 "$SHARD" targets verification 2>&1)"
+expect "a module with suites of its own names them"             0 $? "loadforge_unit_verification_checksum_tests" "$out"
+out="$(python3 "$SHARD" targets resources 2>&1)"
+expect "a module whose tests join the unit binary names it"     0 $? "^loadforge_unit_tests$" "$out"
+out="$(python3 "$SHARD" targets worker 2>&1)"
+expect "and the unit binary is named once with the suites too" 0 $? "loadforge_unit_worker_executor_tests" "$out"
+leftover="$(grep -c 'supervision\|integration\|soak' <<< "$out")"
+expect "the process-starting and the soak binaries are left out" 0 "$leftover" ""
+tree="$(mktemp -d)"
+mkdir -p "$tree/src/core" "$tree/src/alpha" "$tree/tests/unit/alpha" "$tree/tests/unit/core" "$tree/tests/supervision" "$tree/tools"
+touch "$tree/src/core/a.cpp" "$tree/src/alpha/b.cpp" "$tree/tools/mutation-allowlist.txt"
+printf 'loadforge_test_suite(loadforge_unit_alpha_tests SOURCES a.cpp)\nloadforge_test_suite(\n  loadforge_unit_alpha_more_tests\n  SOURCES b.cpp)\n' > "$tree/tests/unit/alpha/CMakeLists.txt"
+printf 'target_sources(loadforge_unit_tests PRIVATE x.cpp)\n' > "$tree/tests/unit/core/CMakeLists.txt"
+printf 'loadforge_test_suite(loadforge_supervision_x_tests SOURCES a.cpp)\n' > "$tree/tests/supervision/CMakeLists.txt"
+out="$(python3 "$SHARD" --root "$tree" targets alpha 2>&1)"
+expect "every suite a module's fragment defines is named"       0 $? "loadforge_unit_alpha_more_tests" "$out"
+out="$(python3 "$SHARD" --root "$tree" targets core 2>&1)"
+expect "target_sources joins the unit-test binary"              0 $? "^loadforge_unit_tests$" "$out"
+printf 'add_executable(loadforge_unit_tests\n  unit/alpha/y_test.cpp\n)\n' > "$tree/tests/CMakeLists.txt"
+rm "$tree/tests/unit/alpha/CMakeLists.txt"
+out="$(python3 "$SHARD" --root "$tree" targets alpha 2>&1)"
+expect "so does a listed source under tests/unit/<module>/"     0 $? "^loadforge_unit_tests$" "$out"
+rm "$tree/tests/CMakeLists.txt"
+out="$(python3 "$SHARD" --root "$tree" targets alpha 2>&1)"
+expect "a shard no executable tests FAILS rather than sweeping nothing" 1 $? "run against nothing" "$out"
 rm -rf "$tree"
 
 # check-processes, against stand-in test programs that answer like GoogleTest:

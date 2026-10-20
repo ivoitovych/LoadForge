@@ -71,14 +71,17 @@ std::uint64_t not_performed_count(const RunReport& report) noexcept {
   return total;
 }
 
-bool operator==(const WorkerWork& lhs, const WorkerWork& rhs) noexcept {
-  return std::tie(lhs.descriptor, lhs.isa, lhs.decomposition, lhs.duty, lhs.logical_bytes,
-                  lhs.threads, lhs.cpu, lhs.seed, lhs.footprint_bytes, lhs.line_bytes) ==
-         std::tie(rhs.descriptor, rhs.isa, rhs.decomposition, rhs.duty, rhs.logical_bytes,
-                  rhs.threads, rhs.cpu, rhs.seed, rhs.footprint_bytes, rhs.line_bytes);
+bool operator==(const WorkerWork& lhs, const WorkerWork& rhs) {
+  // Member by member: std::tuple's comparison is not declared noexcept, and a
+  // noexcept function that calls one is a function an exception may escape.
+  return lhs.descriptor == rhs.descriptor && lhs.isa == rhs.isa &&
+         lhs.decomposition == rhs.decomposition && lhs.duty == rhs.duty &&
+         lhs.logical_bytes == rhs.logical_bytes && lhs.threads == rhs.threads &&
+         lhs.cpu == rhs.cpu && lhs.seed == rhs.seed && lhs.footprint_bytes == rhs.footprint_bytes &&
+         lhs.line_bytes == rhs.line_bytes;
 }
 
-bool operator==(const FindingReport& lhs, const FindingReport& rhs) noexcept {
+bool operator==(const FindingReport& lhs, const FindingReport& rhs) {
   return std::tie(lhs.record, lhs.isolation, lhs.not_isolated) ==
          std::tie(rhs.record, rhs.isolation, rhs.not_isolated);
 }
@@ -192,10 +195,12 @@ class Run {
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_available(Tracked& worker);
   /// Takes one record a worker sent into the worker's account of itself, or
   /// says why the channel can no longer be believed.
-  [[nodiscard]] std::optional<std::string> ingest(Tracked& worker, const ipc::Record& record);
-  [[nodiscard]] std::optional<std::string> take_error_record(Tracked& worker,
+  [[nodiscard]] static std::optional<std::string> ingest(Tracked& worker,
+                                                         const ipc::Record& record);
+  [[nodiscard]] static std::optional<std::string> take_error_record(Tracked& worker,
+                                                                    const ipc::Record& record);
+  [[nodiscard]] static std::optional<std::string> take_tally(Tracked& worker,
                                                              const ipc::Record& record);
-  [[nodiscard]] std::optional<std::string> take_tally(Tracked& worker, const ipc::Record& record);
   [[nodiscard]] core::Result<core::Ok, ControllerError> reap(std::int64_t elapsed_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
   void attribute_oom_kills();

@@ -35,7 +35,6 @@ using loadforge::testing::FakeSyscalls;
 constexpr std::int64_t kMs = 1'000'000;
 constexpr pid_t kFirstPid = 1001;
 constexpr pid_t kSecondPid = 1002;
-constexpr int kRegionFd = 100;
 constexpr int kRecordRead0 = 200;
 constexpr int kRecordWrite0 = 201;
 constexpr int kControlRead0 = 202;
@@ -406,7 +405,7 @@ TEST(ControllerVerified,
 
 /// A frame with one byte of the whole frame (header, checksum or payload) changed.
 std::string with_one_byte_changed(std::string frame, std::uint64_t pick) {
-  const std::size_t at = static_cast<std::size_t>(pick % frame.size());
+  const auto at = static_cast<std::size_t>(pick % frame.size());
   frame[at] = static_cast<char>(static_cast<unsigned char>(frame[at]) ^ (1U << (pick / 7 % 8)));
   return frame;
 }
@@ -444,9 +443,14 @@ TEST(ControllerVerified, WhateverBytesFillAWholeFrameNoInvalidRecordIsEverKept) 
       payload[0] = std::byte{verification::kRecordFormatVersion};
       payload[1] = static_cast<std::byte>(1 + stream % 3);
     }
-    const std::uint16_t type = stream % 5 == 0   ? worker::kTallyFrameType
-                               : stream % 5 == 1 ? static_cast<std::uint16_t>(stream % 64)
-                                                 : verification::kErrorRecordFrameType;
+    // Every fifth a tally, every fifth (the next) of a type nobody reads, the
+    // rest error records.
+    std::uint16_t type = verification::kErrorRecordFrameType;
+    if (stream % 5 == 0) {
+      type = worker::kTallyFrameType;
+    } else if (stream % 5 == 1) {
+      type = static_cast<std::uint16_t>(stream % 64);
+    }
     Rig rig;
     rig.both_exit_after([&rig, &payload, type] { rig.deliver(0, type, payload); });
     auto result = rig.run();
@@ -458,7 +462,7 @@ TEST(ControllerVerified, WhateverBytesFillAWholeFrameNoInvalidRecordIsEverKept) 
 }
 
 TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
-  WorkerReport a;
+  const WorkerReport a;
   WorkerReport b;
   EXPECT_EQ(a, b);
   b.tally.units_computed = 1;
@@ -499,7 +503,7 @@ TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
   EXPECT_TRUE(differs([](WorkerWork& w) { w.footprint_bytes = 1; }));
   EXPECT_TRUE(differs([](WorkerWork& w) { w.line_bytes = 1; }));
 
-  FindingReport f;
+  const FindingReport f;
   FindingReport g;
   EXPECT_EQ(f, g);
   g.not_isolated = "x";
@@ -511,7 +515,7 @@ TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
   g.record = a_wrong_result();
   EXPECT_NE(f, g);
 
-  RunPlan p;
+  const RunPlan p;
   RunPlan q;
   q.workloads.emplace_back("x");
   EXPECT_NE(p, q);
@@ -522,7 +526,7 @@ TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
   q.capabilities = "x";
   EXPECT_NE(p, q);
 
-  RunOptions o;
+  const RunOptions o;
   RunOptions r;
   EXPECT_EQ(o, r);
   r.verification.seed = 3;

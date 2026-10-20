@@ -40,8 +40,15 @@ constexpr std::array<std::uint64_t, 2> kDigestedUnits{0, 4097};
 constexpr std::uint64_t kDigestSeed = 0x5E1F7E57ULL;
 constexpr std::uint64_t kDigestFootprint = std::uint64_t{8} << 20U;
 
-std::string_view as_text(const std::vector<std::byte>& bytes) {
-  return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+/// FNV-1a over bytes: the same function as fnv1a over the characters of a
+/// string, for the bytes of an output.
+std::uint64_t fold(const std::vector<std::byte>& bytes, std::uint64_t basis) noexcept {
+  std::uint64_t hash = basis;
+  for (const std::byte byte : bytes) {
+    hash ^= std::to_integer<std::uint64_t>(byte);
+    hash *= kFnvPrime;
+  }
+  return hash;
 }
 
 }  // namespace
@@ -87,8 +94,7 @@ std::uint64_t workloads_digest(std::uint64_t basis) {
   const workloads::BuiltinRegistry registry;
   SerialExecutor executor;
   std::uint64_t hash = basis;
-  const workloads::WorkloadConfig config{kDigestSeed, kDigestFootprint, 0,
-                                         simd::IsaPath::kScalar};
+  const workloads::WorkloadConfig config{kDigestSeed, kDigestFootprint, 0, simd::IsaPath::kScalar};
   for (const std::string_view name : kDigestedWorkloads) {
     // The scalar path exists for every workload and this configuration is one
     // every workload accepts (the registry's tests create each one), so a
@@ -103,7 +109,7 @@ std::uint64_t workloads_digest(std::uint64_t basis) {
     for (const std::uint64_t index : kDigestedUnits) {
       workload.generate(index, input);
       workload.compute(index, input, output, scratch, executor);
-      hash = fnv1a(as_text(output), hash);
+      hash = fold(output, hash);
     }
   }
   return hash;

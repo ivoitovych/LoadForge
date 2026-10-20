@@ -45,21 +45,22 @@ core::Result<verification::Tally, std::string> decode_tally(std::span<const std:
     return "tally frame: unknown format version " +
            std::to_string(std::to_integer<unsigned>(bytes.front()));
   }
-  std::array<std::uint64_t, kCounters> counters{};
-  for (std::size_t index = 0; index < kCounters; ++index) {
-    for (std::size_t byte = 0; byte < 8; ++byte) {
-      const auto value = std::to_integer<std::uint64_t>(bytes[1 + index * 8 + byte]);
-      counters[index] |= value << (8 * byte);
-    }
-  }
   verification::Tally tally;
-  tally.units_computed = counters[0];
-  tally.oracle_checked = counters[1];
-  tally.oracle_blocks = counters[2];
-  tally.oracle_failed = counters[3];
-  tally.oracle_not_performed = counters[4];
-  tally.integrity_checked = counters[5];
-  tally.integrity_failed = counters[6];
+  const std::array<std::uint64_t*, kCounters> fields{
+      &tally.units_computed,  &tally.oracle_checked,       &tally.oracle_blocks,
+      &tally.oracle_failed,   &tally.oracle_not_performed, &tally.integrity_checked,
+      &tally.integrity_failed};
+  // Read front to back: a cursor, not an index, so that no byte is addressed
+  // by arithmetic the compiler cannot see the bound of.
+  auto cursor = bytes.begin() + 1;
+  for (std::uint64_t* field : fields) {
+    std::uint64_t value = 0;
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+      value |= std::to_integer<std::uint64_t>(*cursor) << shift;
+      ++cursor;
+    }
+    *field = value;
+  }
   return tally;
 }
 

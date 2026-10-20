@@ -23,7 +23,8 @@ IsolationSummary isolate_findings(RunReport& report, const topology::Snapshot* m
     if (!worker.work.has_value()) {
       continue;
     }
-    rerunner.use(*worker.work);
+    const WorkerWork work = *worker.work;
+    rerunner.use(work);
     std::size_t isolated_here = 0;
     for (FindingReport& finding : worker.findings) {
       const std::optional<verification::WrongResult> wrong =
@@ -48,7 +49,7 @@ IsolationSummary isolate_findings(RunReport& report, const topology::Snapshot* m
         continue;
       }
       const verification::Placement placement =
-          verification::isolation::placement_for(*machine, *cpu, worker.work->threads);
+          verification::isolation::placement_for(*machine, *cpu, work.threads);
       finding.isolation = isolator.isolate(*wrong, placement, rerunner);
       ++isolated_here;
       ++summary.isolated;
