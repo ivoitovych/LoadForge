@@ -3,10 +3,11 @@
 // ADR 0003, rule 3: the provider's suite of the record encoding, run against
 // the worker's own reading of it.
 
+#include "unit/worker/model_codec.hpp"
+
 #include <gtest/gtest.h>
 
 #include "contracts/verification/record_contract.hpp"
-#include "unit/worker/model_codec.hpp"
 
 namespace loadforge::contracts {
 namespace {

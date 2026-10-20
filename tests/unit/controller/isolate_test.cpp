@@ -102,8 +102,7 @@ TEST(IsolateFindings, TheThreadsOfThePlacementAreTheWorkersAndAnotherCoreIsOffer
   EXPECT_EQ(rerunner.requests[1].rung, verification::Rung::kOtherCore);
   EXPECT_NE(rerunner.requests[1].cpu, 1U);
   EXPECT_EQ(rerunner.requests[2].threads, 1U);
-  EXPECT_EQ(report.workers[0].findings[0].isolation->finding,
-            verification::Finding::kNotCoreLocal);
+  EXPECT_EQ(report.workers[0].findings[0].isolation->finding, verification::Finding::kNotCoreLocal);
 }
 
 TEST(IsolateFindings, WhatIsNotIsolatedSaysWhyAndIsNeverMadeUpAsAnIsolation) {

@@ -4,10 +4,11 @@
 // the worker's own model of it. A model that fails a test here is a reading of
 // the contract that the input-integrity stream did not share.
 
+#include "unit/worker/model_runner.hpp"
+
 #include <gtest/gtest.h>
 
 #include "contracts/verification/runner_contract.hpp"
-#include "unit/worker/model_runner.hpp"
 
 namespace loadforge::contracts {
 namespace {

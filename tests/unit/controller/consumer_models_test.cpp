@@ -3,13 +3,14 @@
 // ADR 0003, rule 3: the providers' suites for the contracts the controller and
 // the command line consume, run against their own models of them.
 
+#include "unit/controller/consumer_models.hpp"
+
 #include <gtest/gtest.h>
 
 #include "contracts/fpenv/fpenv_contract.hpp"
 #include "contracts/simd/dispatch_contract.hpp"
 #include "contracts/telemetry/telemetry_contract.hpp"
 #include "contracts/verification/isolation_contract.hpp"
-#include "unit/controller/consumer_models.hpp"
 
 namespace loadforge::contracts {
 namespace {
@@ -38,8 +39,7 @@ INSTANTIATE_TYPED_TEST_SUITE_P(ControllerModel, FpControlContract, FpSubjects);
 struct X86Probe {
   static constexpr std::string_view kArchitecture = "x86_64";
   static std::unique_ptr<simd::IsaProbe> make() {
-    return std::make_unique<ModelProbe>(
-        simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kAvx2});
+    return std::make_unique<ModelProbe>(simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kAvx2});
   }
 };
 struct ArmProbe {
@@ -50,11 +50,12 @@ struct ArmProbe {
 };
 using ProbeSubjects = ::testing::Types<X86Probe, ArmProbe>;
 INSTANTIATE_TYPED_TEST_SUITE_P(ControllerModel, IsaProbeContract, ProbeSubjects);
-INSTANTIATE_TYPED_TEST_SUITE_P(ControllerModel, SelectPathContract,
-                               ::testing::Types<ModelSelect>);
+INSTANTIATE_TYPED_TEST_SUITE_P(ControllerModel, SelectPathContract, ::testing::Types<ModelSelect>);
 
 struct IsolatorSubject {
-  static std::unique_ptr<verification::Isolator> make() { return std::make_unique<ModelIsolator>(); }
+  static std::unique_ptr<verification::Isolator> make() {
+    return std::make_unique<ModelIsolator>();
+  }
 };
 INSTANTIATE_TYPED_TEST_SUITE_P(ControllerModel, IsolatorContract,
                                ::testing::Types<IsolatorSubject>);

@@ -35,7 +35,8 @@ class MachineTree {
  public:
   explicit MachineTree(const MachineShape& shape)
       : root_(std::filesystem::temp_directory_path() /
-              ("loadforge-machine-" + std::to_string(::getpid()) + "-" + std::to_string(++serial()))) {
+              ("loadforge-machine-" + std::to_string(::getpid()) + "-" +
+               std::to_string(++serial()))) {
     const std::filesystem::path cpu = root_ / "devices" / "system" / "cpu";
     std::filesystem::create_directories(cpu);
     write(cpu / "online", "0-" + std::to_string(shape.cpus - 1));

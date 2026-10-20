@@ -284,9 +284,12 @@ possible in this container, so the first full sweep is still the roadmap's item 
 
 ### Merging the two wave-1 branches
 
-Not done: neither #38 nor #39 had changed or merged while this stream ran. When one does,
-`git fetch origin && git merge origin/main` with a signed merge is the whole procedure; the
-registries and the ledger rows here are the files most likely to conflict.
+Both merged to main (#38, #39) while this stream ran, along with other streams' work (adaptive
+mesh, raytrace, primitives, telemetry sources). `git fetch origin && git merge origin/main` with
+a signed merge took them with no conflict; the build, the ledger gate and the whole debug suite
+(3357 tests) pass on the merged tree. The two workloads that arrived (adaptive_mesh, raytrace)
+are not in the registry here: the brief names compression and dense_linear, and registering a
+workload is one table row and one oracle adapter for whoever integrates it.
 
 ### The exit code
 

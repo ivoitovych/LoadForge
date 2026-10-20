@@ -119,7 +119,8 @@ TEST(WorkloadsDigest, FoldsTheScalarOutputsOfBothWorkloadsAndNothingElse) {
   ThreeThreads threads;
   EXPECT_EQ(workloads_digest(kFnvOffsetBasis), digest_with(threads, kFnvOffsetBasis))
       << "the digest is the outputs' hash, whatever schedule computed them";
-  EXPECT_EQ(workloads_digest(7), digest_with(threads, 7)) << "and it continues the basis it is given";
+  EXPECT_EQ(workloads_digest(7), digest_with(threads, 7))
+      << "and it continues the basis it is given";
 }
 
 TEST(WorkloadsDigest, DependsOnItsBasisAndIsStable) {
