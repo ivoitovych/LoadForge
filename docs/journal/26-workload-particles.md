@@ -1,6 +1,6 @@
 # Journal fragment 26 — workload: particles
 
-**Written:** 2026-10-20 17:25 UTC
+**Written:** 2026-10-20 18:01 UTC
 **Stream:** 26, branch `feature/workload-particles`
 **Change:** `src/workloads/particles/`, its tests under every tier directory it owes, its
 ledger fragment.
@@ -66,6 +66,15 @@ tolerance must be caught and one that moves it by less than a quarter must go un
 each of the 64 bits of each of the 48 entries, on both paths. The bits above about 2^-12
 relative are caught; the lowest three or four mantissa bits are not, which is the "what
 the bound does not claim" paragraph of `spec.hpp` made concrete.
+
+### The golden bits are the same at -O0, in the release build and under both sanitizers
+
+The fixture was written from a debug (-O0) library. The determinism test, which compares
+the digests of its scalar and AVX2 rows, passes in the debug, the RelWithDebInfo release
+and the Clang ASan+UBSan and TSan builds, and (for the scalar rows, which are the
+cross-architecture claim) in the `LOADFORGE_SIMD=scalar` build. The compiler's choice of
+instructions does not leak into the bits, as `-ffp-contract=off` and the absence of fused
+operations promise.
 
 ### A gtest test body is a member function of a `testing::Test`
 
