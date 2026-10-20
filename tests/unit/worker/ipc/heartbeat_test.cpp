@@ -352,7 +352,10 @@ TEST_F(HeartbeatRegionTest, MovingTransfersOwnershipSoTheRegionIsReleasedOnce) {
   HeartbeatRegion a = std::move(first).value();
   const int fd = a.fd();
   HeartbeatRegion b(std::move(a));
-  EXPECT_EQ(a.fd(), -1);  // NOLINT(bugprone-use-after-move): the moved-from state is the assertion
+  // This test inspects a moved-from object on purpose: what a moved-from
+  // HeartbeatRegion reports is the assertion.
+  // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+  EXPECT_EQ(a.fd(), -1);
   EXPECT_EQ(b.fd(), fd);
 
   auto second = HeartbeatRegion::create(syscalls, 1);
@@ -462,7 +465,7 @@ TEST_F(HeartbeatRegionTest, AConcurrentReaderNeverObservesATornBeat) {
 
 // --- across a real process boundary --------------------------------------------
 
-TEST(RealHeartbeatRegion, AForkedChildPublishesThroughItsOwnMappingAndTheParentSeesIt) {
+TEST(RealProcessHeartbeatRegion, AForkedChildPublishesThroughItsOwnMappingAndTheParentSeesIt) {
   // The real kernel, a real memfd, two processes, two mappings of one file.
   // The child maps the inherited descriptor afresh (as a worker does after
   // exec) rather than reusing the parent's mapping, so this proves the FILE

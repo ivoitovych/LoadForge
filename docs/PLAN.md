@@ -1507,8 +1507,8 @@ LoadForge/
 │   ├── canary-2604.yml             # Ubuntu 26.04 forward-compat, NON-blocking
 │   ├── licensing.yml               # SPDX, dep manifest, fetch centralization, DCO
 │   ├── coverage.yml                # 100% line/branch + reviewed-exclusion gate
-│   └── mutation.yml                # zero UNEXPLAINED SURVIVORS (§7.3) — not a score,
-│                                   #   and workflow_dispatch until Mull is pinned
+│   └── mutation.yml                # zero UNEXPLAINED SURVIVORS (§7.3) — not a score;
+│                                   #   weekly, pinned Mull, one job per src/ module
 │
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
@@ -1618,7 +1618,7 @@ LoadForge/
 │   └── tomlplusplus/               # toml++ v3.4.0, MIT, header-only (config/, M1)
 ├── tools/                          # the trust chain: gates, and the files they review against
 │   ├── coverage.sh  check-exclusions.sh  coverage-exclusions.txt
-│   ├── mutation-gate.py  mutation-allowlist.txt
+│   ├── mutation-gate.py  mutation-allowlist.txt  mutation-shard.py
 │   ├── check-dependencies.py  check-fetch-centralization.sh
 │   ├── check-test-obligations.py   # the per-module path/tier ledger gate
 │   ├── capture-sysfs.sh  gen-golden/

@@ -8,10 +8,10 @@
 #include "platform/clock.hpp"
 
 #include <gtest/gtest.h>
-#include <time.h>
 
 #include <cerrno>
 #include <cstdint>
+#include <ctime>
 #include <string>
 
 #include "platform/syscalls.hpp"
@@ -271,7 +271,7 @@ TEST(ClockElapsedTest, EachClockGoingBackwardsIsRefusedAndNamed) {
 
   const struct {
     TimePoint end;
-    const char* named;
+    const char* named = nullptr;
   } cases[] = {
       {{99 * kSecond, 100 * kSecond, 100 * kSecond}, "CLOCK_MONOTONIC_RAW"},
       {{100 * kSecond, 99 * kSecond, 100 * kSecond}, "CLOCK_MONOTONIC"},
