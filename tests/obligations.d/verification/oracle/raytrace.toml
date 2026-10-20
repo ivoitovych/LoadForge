@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/raytrace and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/raytrace"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The ray tracing workload's independent oracle, written from \
+workloads/raytrace/spec.hpp and nothing of the workload: for sampled pixels \
+every primitive is tried in index order and the nearest kept, and every tile \
+sum is recomputed from the stored pixel records. It takes the arithmetic from \
+the specification's helpers, as the specification requires, and has no \
+hierarchy. \
+\
+P1: the items in their order (the 64 sampled pixels, then the tile sums of \
+the plan's edge), a failure ending the check and blocks_compared counting the \
+items evaluated; where sample j lies; the well-formedness rules of a stored \
+record, each broken in turn; the tie rule (a later primitive must be strictly \
+nearer); the refusals of create(). \
+\
+P3: every range of the input at both of its ends and one step beyond, NaN, \
+both infinities; the three tile edges (8, 16, 32) with their 128, 80 and 68 \
+items; a tile sum whose order matters; the first and the last sample, the \
+first and last tile, the last pixel of a tile; slots past tile_count(edge) \
+(not items); a hit with the smallest and an arbitrary primitive index, kNoHit \
+and one below it. \
+\
+P4: every verdict the contract allows an exact oracle. A sampled pixel or a \
+tile sum that differs is an ExactMismatch in Domain::kStored with offsets \
+from the start of the output; a tile with a record that is not well-formed is \
+an ExactMismatch with no difference, naming the first such pixel; wrong-sized \
+evidence and a scene value out of range are NotChecked, with no block \
+compared. OracleContract runs against the oracle in tests/unit with good \
+units rendered by a model built differently from the oracle and a wrong unit \
+for each kind of item. T5: every bit of every sampled pixel and of every tile \
+sum is caught as a single bit of that item (at all three edges for the sums); \
+several bits are classified by where they lie; the bits of pixels the \
+samples do not look at are caught through the tile sum or the record's form, \
+or shown by the test's own recomputation to be a change the specification \
+does not ask the oracle to see; the bits of the input are NotChecked when \
+they leave a range and judged when they do not. T5b: wrong sizes, every kind \
+of value out of range even over a corrupt output, and a plan that gets no \
+oracle are each a check not made, never an Agreement. \
+\
+T3: there is no reference tool for a synthetic scene, so the reference is \
+mathematics, not a fixture: generated scenes (the specification's recipe) \
+solved again pixel by pixel in long double with a different formulation \
+(the quadratic in t; the plane of the triangle with three edge functions), \
+and scenes with an answer known by hand (a triangle in the plane z = 0 is met \
+at t = 4; a sphere on the axis at the nearer root). \
+\
+No P2: the oracle makes no system call and allocates only the strings of a \
+verdict. Not P5: check() shares nothing between calls and holds no lock or \
+atomic; the contract's concurrency test runs it from a thread per unit."""
