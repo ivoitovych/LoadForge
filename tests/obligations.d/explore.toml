@@ -3,12 +3,23 @@
 
 [[module]]
 path    = "src/explore"
-classes = ["P1"]
-tiers   = ["T1"]
+classes = ["P1", "P3"]
+tiers   = ["T1", "T4"]
+consumes = ["TrialRunnerContract"]
 note    = """
-What explore needs from the layers below (F5): today the trial-runner \
-contract alone (ADR 0004); P1 here is the fault words and the settle \
-phase's equality. The explore stream takes this row over with search, \
-objectives, drift correction and confidence, owes P3 and T4 and T8 as \
-IMPLEMENTATION §3 lists, consumes TrialRunnerContract against its own mock \
-runner, and the explore-integration stream provides it over the controller."""
+Explore's logic over the trial-runner contract (F5), with no process, thread \
+or system call of its own. P1 is every decision in objective binding and \
+scoring, the search's configuration checks, successive halving's rounds, the \
+interleaving of the reference, and the fate of a candidate whose trial found \
+something. P3 is the value domains the search must not lie about: zero, one \
+and two replicates (a spread exists from two), a statistic that a one-reading \
+window cannot give, a reference of one reading, two readings at one time, a \
+constant objective, ties, and an empty candidate set. T1 drives the search \
+against this stream's own runner model, which runs \
+TrialRunnerContract (consumes) in runner_contract_test.cpp. T4 holds the \
+properties the brief names: a constant objective ranks nothing, injected \
+drift is corrected, more replicates narrow the interval, and the interval \
+covers the true mean at about its nominal rate. P2 is not owed -- there is \
+no fallible call here, only results to propagate from the runner, each \
+asserted. T8, the search over the real controller, belongs to the \
+explore-integration stream, which provides the runner."""

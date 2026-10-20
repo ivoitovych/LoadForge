@@ -941,6 +941,11 @@ class FakeSyscalls final : public platform::Syscalls {
       --held.pipe->writers;
     }
   }
+  /// Number the next pipes' ends from this descriptor on. The kernel hands
+  /// out the lowest number free, which is 0 in a process started with its
+  /// standard input closed; the default, well away from that, keeps a pipe's
+  /// ends apart from every other descriptor here.
+  void number_pipes_from(int fd) { next_pipe_fd_ = fd; }
   /// Deliver at most this many bytes per pipe read, so a frame arrives in
   /// pieces. Defaults to everything queued.
   void limit_pipe_reads(std::size_t bytes) { pipe_read_limit_ = bytes; }

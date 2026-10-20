@@ -139,6 +139,10 @@ class WorkerPool {
   /// Signals and reaps whatever a failed spawn had already started.
   void unwind_partial_spawn();
 
+  /// The death of `child` if it is one of this pool's workers, clearing its
+  /// slot; nothing for a stranger, which the caller skips.
+  [[nodiscard]] std::optional<WorkerDeath> claim(const Reaped& child);
+
   Syscalls* syscalls_;
   WorkerLauncher* launcher_;
   std::vector<pid_t> pids_;  ///< Indexed by slot; zeroed as each is reaped.
