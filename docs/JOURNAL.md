@@ -636,6 +636,14 @@ Established while building the fake worker (§2.19) and its T7 tests:
   `error()` of each showed as never executed: 99.8% of lines over code no test of `src/` is
   meant to reach. The fake is now linked with the coverage runtime, which the instrumented
   libraries it links need, and not compiled with instrumentation itself.
+- **A seqlock reader's retry bound is microseconds; a descheduled writer is milliseconds.**
+  Under TSan with four suites running on four cores, the real-binary test
+  `TwoWorkersCompleteForTheConfiguredDuration` saw a worker `SIGTERM`ed as stale 619 ms into
+  a run whose allowance was 2000 ms. By elimination the only path that could do that was a
+  slot the controller could not read: a worker taken off its core between the odd and the
+  even store of a publish tears every one of the reader's 64 retries, and the controller
+  called one torn read a death. The worker side had the same flaw for the controller's slot,
+  leaving with 124. Ten full TSan runs under the same load pass since §2.22.
 
 ---
 
@@ -1168,7 +1176,8 @@ controller's own beat is judged against the allowance each tick; a controller th
 beat is given the allowance and then treated as stale, because a controller publishes its
 first beat before it spawns anyone. A controller slot that cannot be read — a controller
 that died inside `publish` — is its own reason, not an error, because the worker's answer
-is the same: leave.
+is the same: leave. (Once it has stayed unreadable for longer than the allowance, since
+§2.22: one torn read is also what a controller descheduled mid-publish looks like.)
 
 **Four exit codes, none colliding with the launcher's.** 0 completed; 119 setup failed
 (could not attach, report, or be placed; or the loop itself failed); 124 controller lost
@@ -1209,7 +1218,8 @@ there are none, and the rule is written down for the milestone that adds them).
 hang); fresh by timestamp but no progress for the allowance (the spin — "working slowly" and
 "not progressing" are the catalogue's required distinction); and a slot that cannot be read
 (a worker that died inside `publish`, which will not beat again). All three send `SIGTERM`
-with `stale_when_signalled` set, and the escalation ladder takes it from there.
+with `stale_when_signalled` set, and the escalation ladder takes it from there. (The third
+was corrected by §2.22: unreadable for longer than the allowance, not unreadable once.)
 
 **The ladder is a pure function of time.** `escalation_due(step, since, now, grace)` says
 which signal is due; `step_after(signal)` says where that leaves the worker. The request
@@ -1354,6 +1364,25 @@ rephrasing, where a comment-stripping bug could have waved a real lock through. 
 by hand from atomics in shared memory has no name to match; the design's answer is to have
 none (§2.15), and review's is to notice one. Today there are none, and the gate prints so on
 every run rather than printing nothing.
+
+### 2.22 One torn read is not a death: a slot is unreadable once it stays so past the allowance
+
+§2.15 made a torn sample the `EOWNERDEAD` of a design with no lock: a writer that died
+mid-publish leaves its sequence odd, and readers report it rather than wait. The controller
+and the worker then each took one torn read as that death, and §1.23 shows what that costs:
+a writer that is merely descheduled between its two stores looks the same for as long as the
+scheduler keeps it off the core, and a healthy worker was killed for it.
+
+**Chosen:** each side remembers when the slot last gave a consistent sample, and a slot that
+cannot be read is stale (the controller's view of a worker) or unreadable (the worker's view
+of the controller) only once nothing could be read from it for longer than the staleness
+allowance. A writer that really died inside `publish` stays odd for ever and is caught one
+allowance later than before, which is the bound every other way of going quiet already has.
+
+*Rejected:* more retries, or a sleep between them, in `observe` (any bound shorter than a
+scheduling delay is wrong sometimes, and one long enough would make every reader wait on a
+dead writer, the thing the seqlock exists to avoid); treating torn as fresh (a writer that
+died mid-publish would then never be stale at all).
 
 ---
 
@@ -1816,10 +1845,11 @@ Kept short and current; move an item to the relevant document once it is settled
   by the parent-death signal. The review of 2026-10-19 then found that it did not ignore
   `SIGPIPE` (R-02): on `main`, the real-binary stress test died by signal 13 in 2 runs of
   12, the shared fake having modelled the write as a plain `EPIPE` (ADR 0003). The
-  fake-worker executable followed (§1.23, §2.19–§2.21): every reachable row of the T7
+  fake-worker executable followed (§1.23, §2.19–§2.22): every reachable row of the T7
   misbehaviour catalogue, workers leading their own sessions so a dead worker's grandchildren
   are killed with it, and the two new gates (no test-hook symbol in the shipped binary; an
-  `EOWNERDEAD` robustness test per process-shared lock, of which there are none). Still to
+  `EOWNERDEAD` robustness test per process-shared lock, of which there are none). Under
+  load it also found that both sides called one torn heartbeat read a death (§2.22). Still to
   come: OOM classification from the kernel's own record (`/proc/vmstat oom_kill` or the
   cgroup's `memory.events`) and the memory-budget reader. The M1 exit criteria in
   IMPLEMENTATION.md §4 are the checklist.

@@ -100,6 +100,7 @@ struct Tracked {
   bool reaped = false;
   std::uint64_t progress = 0;
   std::int64_t progress_changed_ns = 0;
+  std::int64_t last_read_ns = 0;  ///< When its slot last gave a consistent sample.
   std::vector<std::string> notes;
 };
 
@@ -261,6 +262,7 @@ core::Result<std::optional<int>, ControllerError> Run::spawn() {
   for (Tracked& worker : workers_) {
     worker.pid = spawned.value().pids()[worker.slot];
     worker.progress_changed_ns = started_.running_ns;
+    worker.last_read_ns = started_.running_ns;
     // The worker's ends are the worker's now; the controller keeping a copy
     // would hide the end of file that is the one signal a dead worker cannot
     // fake.
@@ -350,14 +352,22 @@ core::Result<core::Ok, ControllerError> Run::request_stop(std::int64_t now_ns) {
 core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker, const platform::TimePoint& now,
                                                    std::int64_t elapsed_ns) {
   // The worker's beat: stale by timestamp is the hang; fresh but with no
-  // progress for the same allowance is the spin. Both are the same decision,
-  // and a slot that cannot be read is a worker that died inside publish(),
-  // treated as stale because it will not beat again.
+  // progress for the same allowance is the spin. Both are the same decision.
+  //
+  // A slot that cannot be read this tick has a writer in the middle of a
+  // publish. That is a worker that died there and will never beat again, or
+  // one the scheduler took off the core between the two halves of its write,
+  // for as long as the scheduler likes: under TSan with every core busy, the
+  // first version, which called one torn read a death, killed a healthy
+  // worker in a 600 ms run. One look cannot tell the two apart; the allowance
+  // can, so the slot is stale once nothing could be read from it for longer
+  // than a beat may be old.
   bool stale = false;
   auto observed = region_->observe(ipc::worker_slot(worker.slot));
   if (!observed.has_value()) {
-    stale = true;
+    stale = now.running_ns - worker.last_read_ns > options_->stale_after_ns;
   } else {
+    worker.last_read_ns = now.running_ns;
     const std::optional<ipc::Heartbeat> beat = observed.value();
     const ipc::Liveness liveness = ipc::liveness(beat, now.running_ns, options_->stale_after_ns);
     if (beat.has_value() && beat->progress > worker.progress) {

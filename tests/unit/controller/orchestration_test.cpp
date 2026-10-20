@@ -366,7 +366,37 @@ TEST(ControllerTest, AWorkerThatDiedInsideAPublishIsTreatedAsStale) {
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kFault)
       << "SIGTERM was sent, but what killed it was the fault";
-  EXPECT_EQ(rig.reporter.elapsed[1], 10 * kMs) << "unreadable on the first tick";
+  // Unreadable from the start, and stale once that has lasted longer than the
+  // 100 ms allowance: the tick at 110 ms, not the first one.
+  EXPECT_EQ(rig.reporter.elapsed[1], 110 * kMs) << "unreadable past the allowance";
+}
+
+TEST(ControllerTest, ASlotUnreadableForLessThanTheAllowanceIsNotADeath) {
+  // A worker descheduled between the two halves of a publish leaves its slot
+  // unreadable for as long as the scheduler likes. The first version called
+  // one torn read a death, and under TSan with every core busy it SIGTERMed a
+  // healthy worker in a 600 ms run. Torn from the start of a 50 ms run with a
+  // 100 ms allowance, worker 0 is never signalled, and completes.
+  Rig rig;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, 10 * kMs, 3);
+      rig.beat(1, 1, 10'000 * kMs);
+    } else if (starts_with(line, "deadline")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+  EXPECT_EQ(result.value().workers[0].stop, "stop requested");
+  for (const auto& [pid, signal] : rig.syscalls.signals_sent()) {
+    EXPECT_LT(pid, 0) << "only the group sweeps; signal " << signal << " to " << pid;
+  }
 }
 
 TEST(ControllerTest, AStopRequestIgnoredIsEscalatedAndOneWorkerHonoursTheTerm) {
