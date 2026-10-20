@@ -1846,6 +1846,24 @@ test at the boundary, or allowlisted with a written reason if it is equivalent, 
 follow-up changes per module (ROADMAP item 11b). The sweep merges first: it is weekly and
 gates no pull request, so a red sweep holds nothing up and names exactly what is left.
 
+*Platform, 2026-10-20 15:44 UTC.* All 23 killed by hand, none allowlisted. The five in
+`fork_process` and `reap_any_nonblocking` went as planned above: the decision on the pid
+is now `fork_result` and `reap_result`, pure functions tested at -1, 0 and a positive pid,
+and the seam methods are the bare call and an errno read. In the rest of `syscalls.cpp`,
+a return of 0 from `open`, `memfd_create` and `write` is a real success (descriptor 0 with
+standard input closed; a zero-byte write) and is now tested; `readlink` and a blocking
+`waitpid` never return 0, so they test for -1, which removes the boundary. The five mask
+mutants survived because the affinity tests restored the process's mask *through the
+conversion under test*: a conversion that kept only CPU 0 pinned the process there, after
+which the glibc cross-check saw one CPU both ways. The conversions are now public and held
+to `CPU_SET`/`CPU_ISSET` on all 1024 bits (nodes too: a `cpu_set_t` is the kernel bitmap
+type `mbind` reads), and the restore goes through glibc. `exec`'s reserve is killed by an
+empty argument list; `describe`'s reserve is gone; the clock's two are message arithmetic,
+now asserted exactly; `WorkerPool`'s two slot loops are one `std::find_if`, and `pid_at` is
+killed at slot 0 of an empty pool, where the mutant reads storage never allocated. The new
+tests met §1.22's trap twice: `Reaped`'s and `CpuMask`'s defaulted comparisons are now
+defaulted out of line in `syscalls.cpp`.
+
 *The controller and worker shards' 18 survivors* (2026-10-20 12:59 UTC) are all gone, and
 none is allowlisted. Most fell to a test at the boundary: a memory total equal to
 `limits.memory`, an allowance equal to the interval, a region of `kMaxWorkers` attached, a

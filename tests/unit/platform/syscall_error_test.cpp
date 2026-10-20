@@ -56,6 +56,16 @@ TEST(SyscallError, AnUnrecognisedErrnoStillSaysSomething) {
   EXPECT_GT(message.size(), std::string("read(fd 7): ").size()) << message;
 }
 
+TEST(SyscallError, ASubjectLongerThanTheReasonBufferIsCarriedWhole) {
+  // strerror_r writes into a fixed buffer; the subject does not go through it,
+  // and a long path must reach the user uncut. A path of 1000 characters is
+  // well past the buffer and well within PATH_MAX.
+  const std::string path = "/" + std::string(999, 'p');
+  const SyscallError error{ENOENT, "open", path};
+
+  EXPECT_EQ(describe(error), "open(" + path + "): No such file or directory (errno 2)");
+}
+
 TEST(SyscallError, ComparesByEveryField) {
   const SyscallError base{EACCES, "open", "/sys/a"};
 
