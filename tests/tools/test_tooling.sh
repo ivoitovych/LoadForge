@@ -1162,6 +1162,7 @@ echo "check-commit-identity.sh"
 # matter -- a GitHub-shaped merge, a signature -- are shapes of those objects.
 idr="$(mktemp -d)"; ids="$(mktemp)"
 git init -q "$idr"
+git -C "$idr" config user.name "Identity Test"
 git -C "$idr" config commit.gpgsign false
 printf '# admitted\nowner@example.invalid\n\n' > "$ids"
 id_commit() { # name, email, message, [committer-email]; signs off as the author unless the message has a sign-off
