@@ -239,9 +239,9 @@ vendored component is checked for GPL compatibility in CI.
 **Contributions are welcome — issues, forks and pull requests.** See
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-The project is early in implementation, so the most useful contribution right now is
-review of [`docs/PLAN.md`](docs/PLAN.md) — particularly the open questions at the end —
-and of what has landed against it.
+The most useful contribution right now is **review**: nothing here has had an outside
+reviewer yet. [`docs/REVIEW-REQUEST.md`](docs/REVIEW-REQUEST.md) lists what to look at,
+area by area, with the files and the questions, and how to report what you find.
 
 Two things worth knowing before you write code, because they are not obvious and are
 strictly enforced: **an implementation is never verified by re-running itself** (every
