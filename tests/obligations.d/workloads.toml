@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/workloads and nothing else.
+
+[[module]]
+path    = "src/workloads"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+The workload contract: header-only, frozen (ADR 0004). Each workload is a \
+module of its own under it, src/workloads/<name>/, with its own fragment, and \
+runs WorkloadContract against its implementation. What this directory holds \
+and tests now: the determinism-class and fault names, the name rule (P3: the \
+empty name, a leading digit or underscore, an upper-case letter, and each \
+character just outside the allowed ranges), and member-by-member equality of \
+the value types. WorkloadContract and RegistryContract run against two \
+reference workloads and a registry of them in tests/contracts/workloads/."""
