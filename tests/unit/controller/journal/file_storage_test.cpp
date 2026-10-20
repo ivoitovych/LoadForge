@@ -241,6 +241,32 @@ TEST(FileStorageSync, TheDirectoryFsyncIsRetriedToo) {
   EXPECT_TRUE(FileStorage::open(ops, kPath).has_value());
 }
 
+TEST(FileStorageSync, GivesUpOnFsyncsInterruptedWithoutEnd) {
+  FakeFileOps ops;
+  const auto storage = opened(ops);
+  ops.script(Call::kFsync, EINTR, FileStorage::kMaxConsecutiveInterrupts + 1);
+  const auto synced = storage->sync();
+  ASSERT_FALSE(synced.has_value());
+  expect_storage_fault(synced.error(), EINTR);
+}
+
+TEST(FileStorageSync, GivesUpOnTheDirectoryFsyncInterruptedWithoutEnd) {
+  FakeFileOps ops;
+  ops.script(Call::kFsync, EINTR, FileStorage::kMaxConsecutiveInterrupts + 1);
+  const auto storage = FileStorage::open(ops, kPath);
+  ASSERT_FALSE(storage.has_value());
+  expect_storage_fault(storage.error(), EINTR);
+}
+
+TEST(FileStorageRead, GivesUpOnReadsInterruptedWithoutEnd) {
+  FakeFileOps ops;
+  const auto storage = opened(ops);
+  ops.script(Call::kRead, EINTR, FileStorage::kMaxConsecutiveInterrupts + 1);
+  const auto read = storage->read_all();
+  ASSERT_FALSE(read.has_value());
+  expect_storage_fault(read.error(), EINTR);
+}
+
 class ReadFailure : public ::testing::TestWithParam<int> {};
 INSTANTIATE_TEST_SUITE_P(Errno, ReadFailure, ::testing::ValuesIn(kReadErrors));
 
