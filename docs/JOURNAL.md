@@ -1887,3 +1887,23 @@ Kept short and current; move an item to the relevant document once it is settled
   counter — but the telemetry sources at M3 will, and the decision about where wrap
   detection lives (in `Source`, or in a counter type above it) should be made deliberately
   rather than by whoever first hits it.
+- **Answered by ADR 0004:** wrap detection lives above the source. A source reports a
+  counter's raw value with its modulus (`telemetry/sample.hpp`), `counter_delta()` defines
+  the advance across one wrap, and the Load Signature never adds an advance across a gap in
+  the readings, where the counter may have reset (`statistics/signature.hpp`).
+
+---
+
+## 7. Stream journals
+
+From M2a on, work runs as parallel streams (ADR 0004), and ten streams appending to this
+file in one wave would conflict on every merge. So each stream keeps its own fragment,
+`docs/journal/<NN>-<slug>.md`, with the same three kinds of entry as this file —
+**Established by experiment** (a fact, and how it was established), **Decisions** (the
+choice, the alternatives, the reason), and **Contract questions** (an ambiguity met in a
+frozen contract, the reading taken, and the test that pins it). At the end of a wave the
+manager folds each fragment into the sections above, keeps the file as a record of which
+stream learned what, and resolves the contract questions in a contract change.
+
+The first fragment is `docs/journal/00-contracts-and-streams.md`, from the change that
+wrote the contracts.
