@@ -17,8 +17,8 @@ namespace loadforge::controller {
 ///
 /// This is the vocabulary of IMPLEMENTATION §4's state machine and
 /// misbehaviour catalogue, and the distinctions are the point: a worker
-/// that exited 1 is a worker error, one killed by SIGBUS is a hardware
-/// event, and one the controller itself stopped is neither.
+/// that exited 1 is a worker error, one killed by SIGBUS is a process fault,
+/// and one the controller itself stopped is neither.
 ///
 ///   kCompleted              exited 0 with its finished record delivered.
 ///   kWorkerError            exited non-zero for its own reasons (including
@@ -29,7 +29,14 @@ namespace loadforge::controller {
 ///                           was gone. If the controller is reporting this, it
 ///                           was not gone, and the fault is the controller's.
 ///   kFault                  killed by a fault signal: SIGSEGV, SIGBUS,
-///                           SIGABRT, SIGILL, SIGFPE, SIGTRAP.
+///                           SIGABRT, SIGILL, SIGFPE, SIGTRAP. A process
+///                           fault that may have software or hardware causes:
+///                           abort() and a read past a truncated mapping
+///                           raise SIGABRT and SIGBUS as surely as a failing
+///                           memory module does. The signal establishes that
+///                           the process died, never why; a verdict on the
+///                           hardware belongs to verification and isolation
+///                           (docs/verification.md §7a), not to the signal.
 ///   kKilled                 killed by a signal with nothing to say who sent
 ///                           it: one the controller did not send, or a SIGKILL
 ///                           it attempted that the kernel's OOM-kill count

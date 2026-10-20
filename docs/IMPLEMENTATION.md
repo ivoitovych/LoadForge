@@ -404,8 +404,8 @@ The fake worker's **misbehaviour catalogue**, each entry a T7 test:
 | Misbehaviour | The controller must |
 |---|---|
 | Exit 0 | Record completion, reap without a zombie |
-| Exit non-zero | Classify as worker error, not hardware fault |
-| `SIGSEGV`, `SIGBUS`, `SIGABRT` | Classify as fault, name the signal, preserve the timeline up to it |
+| Exit non-zero | Classify as worker error, not as a fault signal |
+| `SIGSEGV`, `SIGBUS`, `SIGABRT` | Classify as a process fault, name the signal, preserve the timeline up to it; claim no cause (docs/verification.md §7a) |
 | Silent hang — alive, no heartbeat | Detect by heartbeat staleness, not by EOF; a wedged process holds its descriptors open |
 | Spin without progress | Distinguish "working slowly" from "not progressing" |
 | Allocate until OOM-killed | Classify as OOM **distinctly** from a fault, by reading the kernel's own record |
