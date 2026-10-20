@@ -113,6 +113,8 @@ inline bool inside(const Leaf& cell, const Hotspot& spot) {
 
 /// The leaves under `cell`, depth first, children in the order q = 0..3, by
 /// plain recursion.
+// The reference is a plain recursion on purpose: the stress side walks an explicit stack.
+// NOLINTNEXTLINE(misc-no-recursion)
 inline void leaves_under(const Leaf& cell, const Hotspots& spots, std::vector<Leaf>& out) {
   const bool split = cell.level < kMaxLevel && std::any_of(spots.begin(), spots.end(),
                                                            [&](auto s) { return inside(cell, s); });
