@@ -43,13 +43,13 @@ struct Digits {
 
 std::optional<Digits> read_digits(std::string_view text, std::uint64_t bound) {
   Digits digits;
-  while (digits.length < text.size() && text[digits.length] >= '0' && text[digits.length] <= '9') {
+  const std::size_t span = std::min(text.find_first_not_of("0123456789"), text.size());
+  for (; digits.length < span; ++digits.length) {
     const auto digit = static_cast<std::uint64_t>(text[digits.length] - '0');
     if (digits.value > (bound - digit) / 10) {
       return std::nullopt;  // Past the bound: to the caller, not a number.
     }
     digits.value = digits.value * 10 + digit;
-    ++digits.length;
   }
   if (digits.length == 0) {
     return std::nullopt;
