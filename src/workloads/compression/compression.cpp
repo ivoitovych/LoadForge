@@ -27,6 +27,24 @@ void store_le32(std::span<std::byte> bytes, std::size_t at, std::uint32_t value)
   }
 }
 
+/// One unit's spans, handed to the executor as its task's context.
+struct UnitTask {
+  std::span<const std::byte> input;
+  std::span<std::byte> output;
+  std::span<std::byte> scratch;
+};
+
+/// The executor's Task: the unit, compressed with the table in `slot`'s piece
+/// of scratch. Written out rather than through for_each_index(), whose lambda
+/// in executor.hpp clang-tidy flags once it is instantiated under src/ (journal
+/// fragment 05, contract questions); the two size_t parameters are the
+/// contract's own signature.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+void compress_in_slot(void* context, std::size_t /*index*/, std::size_t slot) noexcept {
+  const UnitTask& task = *static_cast<const UnitTask*>(context);
+  write_unit(task.input, task.output, task.scratch.subspan(slot * kTableBytes, kTableBytes));
+}
+
 class Compression final : public Workload {
  public:
   Compression(const WorkloadConfig& config, const Plan& plan)
@@ -48,10 +66,8 @@ class Compression final : public Workload {
   void compute(std::uint64_t /*index*/, std::span<const std::byte> input,
                std::span<std::byte> output, std::span<std::byte> scratch,
                worker::Executor& executor) const noexcept override {
-    auto compress = [input, output, scratch](std::size_t /*task*/, std::size_t slot) noexcept {
-      write_unit(input, output, scratch.subspan(slot * kTableBytes, kTableBytes));
-    };
-    worker::for_each_index(executor, 1, compress);
+    UnitTask task{input, output, scratch};
+    executor.run(1, compress_in_slot, &task);
   }
 
  private:

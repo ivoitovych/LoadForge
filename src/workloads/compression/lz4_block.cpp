@@ -37,9 +37,13 @@ void table_put(std::span<std::byte> table, std::size_t slot, std::uint32_t posit
 
 }  // namespace
 
+// The offset and the match length are both byte counts, in the order the
+// format writes them.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 std::size_t write_sequence(std::span<std::byte> block, std::size_t at,
                            std::span<const std::byte> literals, std::size_t offset,
                            std::size_t match_length) noexcept {
+  // NOLINTEND(bugprone-easily-swappable-parameters)
   const std::size_t literal_count = literals.size();
   const std::size_t match_code = match_length == 0 ? 0 : match_length - kMinMatch;
   const std::size_t token =
@@ -61,6 +65,9 @@ std::size_t write_sequence(std::span<std::byte> block, std::size_t at,
   return at;
 }
 
+// The block and the table are both writable bytes; the block comes first, as
+// the output does in every call of this shape.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::size_t compress_block(std::span<const std::byte> input, std::span<std::byte> block,
                            std::span<std::byte> table) noexcept {
   const std::size_t size = input.size();

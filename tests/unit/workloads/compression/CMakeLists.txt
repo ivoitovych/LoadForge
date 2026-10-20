@@ -12,3 +12,10 @@ loadforge_test_suite(loadforge_unit_workloads_compression_tests
     generator_test.cpp
     lz4_block_test.cpp
   LINK loadforge_workloads_compression)
+
+# Tasks run on several threads here, through executor.hpp's for_each_index
+# instantiated in these units: atomic counters, as for the library
+# (src/workloads/compression/CMakeLists.txt says why).
+if(LOADFORGE_COVERAGE)
+  target_compile_options(loadforge_unit_workloads_compression_tests PRIVATE -fprofile-update=atomic)
+endif()
