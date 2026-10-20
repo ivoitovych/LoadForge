@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry and nothing else.
+
+[[module]]
+path    = "src/telemetry"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+The telemetry contracts: header-only, frozen (ADR 0004). Sources, the \
+sampler, the timeline and the capability probe are modules of their own \
+under it, each with its fragment. What this directory holds and tests now: \
+sample.hpp's vocabulary -- unit and scope names, the metric-name rule (P3: \
+one part, an empty first, middle or last part, a part starting with a digit, \
+each character just outside the allowed ranges), what makes two metrics one \
+series, and counter_delta across a wrap at a modulus and at 2^64; \
+source.hpp's capability counts; timeline.hpp's fault names. The Source \
+suite holds every source to "never silent, every absence with a remedy, a \
+metric present at the probe is never later absent". SourceContract and \
+TimelineContract run against references in tests/contracts/telemetry/. P7 is \
+declared by each source module, with its own fixtures, not here: this \
+directory's code has no capability state of its own."""

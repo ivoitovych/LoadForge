@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/explore and nothing else.
+
+[[module]]
+path    = "src/explore"
+classes = ["P1"]
+tiers   = ["T1"]
+note    = """
+What explore needs from the layers below (F5): today the trial-runner \
+contract alone (ADR 0004); P1 here is the fault words and the settle \
+phase's equality. The explore stream takes this row over with search, \
+objectives, drift correction and confidence, owes P3 and T4 and T8 as \
+IMPLEMENTATION §3 lists, consumes TrialRunnerContract against its own mock \
+runner, and the explore-integration stream provides it over the controller."""

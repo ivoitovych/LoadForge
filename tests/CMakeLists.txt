@@ -25,9 +25,6 @@ add_executable(loadforge_unit_tests
   unit/topology/cache_test.cpp
   unit/topology/numa_test.cpp
   unit/topology/snapshot_test.cpp
-  unit/resources/cgroup_test.cpp
-  unit/resources/memory_budget_test.cpp
-  unit/resources/cgroup_oom_record_test.cpp
   unit/worker/ipc/heartbeat_test.cpp
   unit/worker/ipc/record_test.cpp
   unit/worker/scheduler_test.cpp
@@ -41,8 +38,8 @@ add_executable(loadforge_unit_tests
   unit/third_party/tomlplusplus_smoke_test.cpp
 )
 target_link_libraries(loadforge_unit_tests PRIVATE
-  loadforge_cli loadforge_config loadforge_platform loadforge_topology loadforge_resources
-  loadforge_worker loadforge_controller GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
+  loadforge_cli loadforge_config loadforge_platform loadforge_topology loadforge_worker
+  loadforge_controller GTest::gtest_main GTest::gmock loadforge::tomlplusplus)
 # tests/ is on the include path so that support/ fakes resolve the same way
 # src/ headers do, rather than by relative path from wherever a test lives.
 target_include_directories(loadforge_unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -96,15 +93,6 @@ add_test(NAME cli_stress_runs
          COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress.toml")
 set_tests_properties(cli_stress_runs PROPERTIES
                      PASS_REGULAR_EXPRESSION "2 of 2 worker\\(s\\) completed")
-# The memory budget through the real binary on the real machine: a run that
-# configures memory must find the budget this machine offers and say the limit
-# is enforced. NOT ENFORCED here would mean the reader refused a real machine,
-# which is the failure a reader of /proc and the cgroup files is most likely
-# to have and least likely to show anywhere else.
-add_test(NAME cli_stress_enforces_memory
-         COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress-memory.toml")
-set_tests_properties(cli_stress_enforces_memory PROPERTIES
-                     PASS_REGULAR_EXPRESSION "limit memory: enforced \\(checked at start against a ceiling of")
 # The topology snapshot through the real binary on the real machine: taken
 # before the first fork and printed in the banner, which precedes the spawn.
 add_test(NAME cli_stress_describes_the_machine
@@ -136,3 +124,12 @@ set_tests_properties(release_gate_refuses_the_fake_worker PROPERTIES
 
 # T7: the supervision tier, with really spawned, really killed children.
 add_subdirectory(supervision)
+
+# Every other CMakeLists.txt under tests/ is a component's test fragment --
+# tests/<tier>/<component>/CMakeLists.txt -- and the contracts' own suites in
+# tests/contracts/. Found by glob, so no stream edits this file to add its
+# tests (cmake/Components.cmake, ADR 0004). The two subdirectories above are
+# added explicitly; fixtures and the gates' own tests are never build fragments.
+loadforge_add_fragments("${CMAKE_CURRENT_SOURCE_DIR}"
+  EXCLUDE supervision/CMakeLists.txt support/fake_worker/CMakeLists.txt
+  EXCLUDE_TREES fixtures tools)

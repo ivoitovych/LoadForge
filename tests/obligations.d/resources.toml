@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/resources and nothing else.
+
+[[module]]
+path             = "src/resources"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2", "T8"]
+fixture_builders = [
+  "tests/unit/resources/cgroup_test.cpp",
+  "tests/unit/resources/memory_budget_test.cpp",
+  "tests/unit/resources/cgroup_oom_record_test.cpp",
+]
+note             = """
+What the kernel lets this process use and what it records when that runs \
+out: MemAvailable from /proc/meminfo, the memory cgroup's limit under v1 \
+(memory.stat's hierarchical_memory_limit, the kernel's own effective figure) \
+and v2 (the lowest memory.max from the cgroup up to its mount), found through \
+/proc/self/cgroup AND /proc/self/mountinfo -- the second because a v1 \
+container without a cgroup namespace is mounted at its own cgroup, and a \
+reader that joined the two paths would find nothing and call it no limit -- \
+and the cgroup's OOM-kill count (memory.events, memory.oom_control). \
+\
+P7 is the module's subject: every source -- meminfo, the membership, \
+mountinfo, the directory probe, each limit file, the count -- is put in each \
+state it can be in, present, absent, denied, malformed, unreadable, and for \
+the count, which is read more than once, vanished. Absent is a reading in \
+exactly three places (no cgroups at all, no memory cgroup, a v2 level with \
+no memory.max) and a failure everywhere else, because "could not read the \
+limit" must never become "no limit". The trees are BUILT per test and read \
+through RealSyscalls; denial is aimed at one source at a time through \
+FakeSyscalls' read script (P2, T2), since the tests run as root and a \
+mode-000 file arrives from a clone readable; vanished is made by reading the \
+count and removing it. \
+\
+P3: the v1 unlimited sentinel on every page size and the floor below it, \
+the largest limit a page counter holds and one past it, the largest kB count \
+a byte count can carry and one past it, every escape mountinfo writes and \
+the ones it does not, a mount root that prefixes a path as text but not as \
+a path. \
+\
+T8 reads the real machine and checks it against the kernel's other figures: \
+the located cgroup's cgroup.procs lists the test's pid; MemAvailable is no \
+more than sysconf's physical memory; on v1 the hierarchical limit is no \
+higher than any visible level's own; the count does not move for a real \
+kill -9; and where a v1 memory cgroup can be made (root, v1 or hybrid), a \
+child really OOM-killed under a 16 MiB limit dies of SIGKILL and moves its \
+cgroup's count by exactly one. On a v2 host that last test skips and says \
+why: a leaf that holds processes cannot be given a memory-limited child. \
+The binary's own run with memory configured must say the limit is enforced \
+(cli_stress_enforces_memory), so a reader that refused a real machine fails \
+there and not only in the field.\
+"""

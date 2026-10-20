@@ -159,6 +159,15 @@ it fails closed on a ledger it cannot parse or a source file it cannot read, and
 ledger with a populated `src/` is a failure, not a pass. It runs in the coverage
 workflow, next to the gate whose blind spots it covers, and has 39 tests of its own.
 
+**Since ADR 0004 the ledger is the root file plus one fragment per module**,
+`tests/obligations.d/<module path below src>.toml`, so that components built in parallel
+never edit one file; a fragment declaring any module but the one it is named after is
+refused. A row may also declare the contract suites its module **provides** and
+**consumes** (ADR 0003): each must be a suite under `tests/contracts/`, and the module's
+own tests must instantiate it — against the implementation, or against the module's own
+mock. That instantiation is the cross-execution ADR 0003 requires, and the gate now
+refuses a declaration without it.
+
 **The `EOWNERDEAD` obligation is recorded per lock.** A source file that names a
 process-shared or robust lock primitive (`PTHREAD_PROCESS_SHARED`,
 `pthread_mutexattr_setrobust`, `sem_init`, a futex and the like — matched in the raw
@@ -277,6 +286,16 @@ those, so a blank there means a real exemption and never an oversight.
 | `workloads/*` (3–11) | M4 | P1, P3, P4, P5 | T1, T3, T4, T5, T5b, T6 | Each owes the full set; none is exempt |
 | `workloads/mixed` | M5 | P1, P3, P4, P5, P6 | all of the above + T7, T10 | The flagship |
 | `explore/` | M6 | P1, P3 | T1, T4, T8 | Search, objectives, drift correction (F5) |
+
+**The contracts between these modules are written (ADR 0004)**, as headers under the
+directories above with provider-side suites in `tests/contracts/`, and the modules are
+built by the streams of `docs/ROADMAP.md`. Three rows were refined by that work and the
+streams follow the refined form: input-integrity re-verification is its own module,
+`verification/integrity`, which runs every workload's units inside the bracket (so the
+P5 of "verification concurrent with compute" is the runner's, not each workload's); the
+sampler is driven in rounds by the controller's loop and has no P5 unless it adds a
+thread; and the ISA probe is `platform/isa`. Each contract directory has a ledger
+fragment of its own, which the stream that implements it takes over.
 
 Two rules follow from this table and are worth stating separately, because they are the
 ones a contributor under pressure will want to bend:
@@ -729,7 +748,9 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 
 ## 10. Status
 
-**M0 complete. M1: every exit criterion met; complete once the first mutation sweep reports clean.**
+**M0 complete. M1: every exit criterion met; complete once the first mutation sweep reports clean.
+The contracts for M2a to M7 are written and the work after M1 is planned as streams in
+waves (ADR 0004, `docs/ROADMAP.md`, `docs/streams/`).**
 
 The working queue, item by item, is [`ROADMAP.md`](ROADMAP.md); this section is the
 summary it is kept consistent with.

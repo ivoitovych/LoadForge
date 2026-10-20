@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/rng and nothing else.
+
+[[module]]
+path    = "src/primitives/rng"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+A contract that carries its definition: Philox4x32-10 and the project's \
+(seed, stream, position) addressing (ADR 0004 says why this one is defined \
+rather than declared). P1 is the round loop and the partial last block of \
+fill_stream; P3 is every length from empty through one past a block boundary, \
+and the edges of the unit interval (0, the largest value 1 - 2^-53, and the \
+discarded low bits). The answers are Random123's published known-answer \
+vectors, read from tests/fixtures/rng/philox4x32-10.kat, copied from the \
+reference implementation rather than recalled (F21). Tests: \
+tests/contracts/rng/philox_test.cpp."""

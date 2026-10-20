@@ -649,7 +649,179 @@ tiers   = ["T1"]'
 expect "a source file that cannot be read FAILS"             1 $? "cannot be read" "$out"
 rm -rf "$ob/src/core/trap.cpp" "$ob/tests/supervision"
 
+# One fragment per module (ADR 0004): streams built in parallel never edit the
+# same ledger file. A fragment is named after its module and declares nothing
+# else; anything in the directory that is not a fragment is refused, because a
+# row the gate does not read is a row nobody checks.
+core_row='[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]'
+frag() { # relative-name, content
+  mkdir -p "$(dirname "$ob/tests/obligations.d/$1")"
+  printf '%s\n' "$2" > "$ob/tests/obligations.d/$1"; }
+mkdir -p "$ob/src/workloads/compression"
+printf 'int c();\n' > "$ob/src/workloads/compression/codec.hpp"
+led "$core_row"
+expect "a module in neither the ledger nor a fragment FAILS" 1 $? "obligations.d/workloads/compression.toml" "$out"
+
+frag workloads/compression.toml '[[module]]
+path    = "src/workloads/compression"
+classes = ["P1", "P3"]
+tiers   = ["T1"]'
+led "$core_row"
+expect "a fragment named after its module passes"           0 $? "ok    src/workloads/compression" "$out"
+expect "the summary counts the fragment"                    0 $? "1 fragment(s)" "$out"
+
+frag workloads/compression.toml '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]'
+led "$core_row"
+expect "a fragment declaring another module FAILS"           1 $? "only the module it is named after" "$out"
+
+frag workloads/compression.toml '[[module]]
+path    = "src/workloads/compression"
+classes = ["P1"]
+tiers   = ["T1"]
+
+[[module]]
+path    = "src/workloads/compression"
+classes = ["P1"]
+tiers   = ["T1"]'
+led "$core_row"
+expect "a fragment declaring two modules FAILS"              1 $? "declares 2 module(s)" "$out"
+
+frag workloads/compression.toml '[[module]
+path = broken'
+led "$core_row"
+expect "a fragment that does not parse FAILS"                1 $? "compression.toml does not parse as TOML" "$out"
+
+frag workloads/compression.toml '[[module]]
+path    = "src/workloads/compression"
+classes = ["P1"]
+tiers   = ["T1"]'
+led "$core_row
+
+[[module]]
+path    = \"src/workloads/compression\"
+classes = [\"P1\"]
+tiers   = [\"T1\"]"
+expect "a module in the ledger and in a fragment FAILS"      1 $? "declared twice" "$out"
+
+frag workloads/compression.tml 'path = "src/workloads/compression"'
+led "$core_row"
+expect "a file in the fragment directory that is not one FAILS" 1 $? "is not a .toml fragment" "$out"
+rm -f "$ob/tests/obligations.d/workloads/compression.tml"
+
+frag workloads/compression.toml '[[module]]
+path    = "src/workloads/compression"
+classes = ["P1"]
+tiers   = ["T1"]
+cosumes = ["ExecutorContract"]'
+led "$core_row"
+expect "a misspelt field in a fragment FAILS"                1 $? "unknown field" "$out"
+
+# Cross-execution (ADR 0003): a module that provides or consumes a contract runs
+# the contract's own suite from tests/contracts/ -- against its implementation,
+# or against its own mock. The gate finds the suite declared and the module's
+# tests instantiating it, and refuses a declaration with either missing.
+contract_row() { # field, name
+  frag workloads/compression.toml "[[module]]
+path    = \"src/workloads/compression\"
+classes = [\"P1\"]
+tiers   = [\"T1\"]
+$1 = [\"$2\"]"; led "$core_row"; }
+contract_row consumes ExecutorContract
+expect "consuming a contract with no suite FAILS"            1 $? "is not a contract suite" "$out"
+
+mkdir -p "$ob/tests/contracts/worker"
+printf 'TYPED_TEST_SUITE_P(ExecutorContract);\n' > "$ob/tests/contracts/worker/executor_contract.hpp"
+contract_row consumes ExecutorContract
+expect "a consumer that never runs the suite FAILS"          1 $? "against its own mock" "$out"
+
+mkdir -p "$ob/tests/contracts/workloads/compression"
+printf 'INSTANTIATE_TYPED_TEST_SUITE_P(Mock, ExecutorContract, Types);\n' \
+  > "$ob/tests/contracts/workloads/compression/mock_test.cpp"
+contract_row consumes ExecutorContract
+expect "an instantiation inside tests/contracts does not count" 1 $? "against its own mock" "$out"
+rm -rf "$ob/tests/contracts/workloads"
+
+mkdir -p "$ob/tests/unit/workloads/compression/deeper"
+printf 'INSTANTIATE_TYPED_TEST_SUITE_P(\n    Mock, ExecutorContract, ::testing::Types<M>);\n' \
+  > "$ob/tests/unit/workloads/compression/deeper/executor_mock_test.cpp"
+contract_row consumes ExecutorContract
+expect "a consumer running the suite against its mock passes" 0 $? "1 provides/consumes" "$out"
+
+contract_row provides ExecutorContract
+expect "a provider running the suite passes"                 0 $? "ok    src/workloads/compression" "$out"
+
+# The instantiation must belong to THIS module: one in a more specific module's
+# tests serves that module, not its parent.
+mkdir -p "$ob/src/workloads/compression/deeper"
+printf 'int d();\n' > "$ob/src/workloads/compression/deeper/d.hpp"
+frag workloads/compression/deeper.toml '[[module]]
+path    = "src/workloads/compression/deeper"
+classes = ["P1"]
+tiers   = ["T1"]'
+contract_row provides ExecutorContract
+expect "a child module's instantiation does not serve its parent" 1 $? "against its implementation" "$out"
+rm -rf "$ob/src/workloads/compression/deeper" "$ob/tests/obligations.d/workloads/compression"
+
+frag workloads/compression.toml '[[module]]
+path     = "src/workloads/compression"
+classes  = ["P1"]
+tiers    = ["T1"]
+provides = "ExecutorContract"'
+led "$core_row"
+expect "provides that is not a list FAILS"                   1 $? "must be a list of contract suite names" "$out"
+
+# T1 is served by the contracts' own unit tests too.
+rm -rf "$ob/tests/unit"
+mkdir -p "$ob/tests/unit"
+frag workloads/compression.toml '[[module]]
+path    = "src/workloads/compression"
+classes = ["P1"]
+tiers   = ["T1"]'
+led "$core_row"
+expect "T1 is served by tests/contracts alone"               0 $? "ok    src/core" "$out"
+
 rm -rf "$ob"
+
+echo "cmake/Components.cmake: build fragments"
+# The glob that replaced editing the two shared CMake files (ADR 0004). It must
+# add every fragment, skip the excluded trees and files, and fail loudly -- not
+# add twice, not skip -- when a fragment adds another itself.
+if command -v cmake >/dev/null 2>&1; then
+  cf="$(mktemp -d)"
+  mkdir -p "$cf/tree/a/b" "$cf/tree/c" "$cf/tree/fixtures/x" "$cf/tree/kept"
+  cat > "$cf/CMakeLists.txt" <<CMAKE
+cmake_minimum_required(VERSION 3.28)
+project(fragments NONE)
+include("$ROOT/cmake/Components.cmake")
+loadforge_add_fragments("\${CMAKE_CURRENT_SOURCE_DIR}/tree" EXCLUDE kept/CMakeLists.txt EXCLUDE_TREES fixtures)
+CMAKE
+  printf 'message(STATUS "fragment-in: tree root, which is never a fragment")\n' > "$cf/tree/CMakeLists.txt"
+  printf 'message(STATUS "fragment-in: a/b")\n' > "$cf/tree/a/b/CMakeLists.txt"
+  printf 'message(STATUS "fragment-in: c")\n' > "$cf/tree/c/CMakeLists.txt"
+  printf 'message(STATUS "fragment-in: fixtures")\n' > "$cf/tree/fixtures/x/CMakeLists.txt"
+  printf 'message(STATUS "fragment-in: kept")\n' > "$cf/tree/kept/CMakeLists.txt"
+  out="$(cmake -S "$cf" -B "$cf/build" 2>&1)"; rc=$?
+  expect "every fragment is added"                           0 $rc "2 build fragment(s) under tree/" "$out"
+  expect "nested fragments are found"                        0 $rc "fragment-in: a/b" "$out"
+  if grep -qE "fragment-in: (fixtures|kept|tree root)" <<< "$out"; then
+    expect "excluded trees and files are not added"          1 0
+  else
+    expect "excluded trees and files are not added"          0 0
+  fi
+  printf 'add_subdirectory(b)\n' > "$cf/tree/a/CMakeLists.txt"
+  rm -rf "$cf/build"
+  out="$(cmake -S "$cf" -B "$cf/build" 2>&1)"
+  expect "a fragment that adds another FAILS at configure"   1 $? "already" "$out"
+  rm -rf "$cf"
+else
+  echo "  FAIL  cmake is not installed, so the fragment glob is untested"; fail=$((fail + 1))
+fi
 
 echo "check-dco.sh"
 # Real git repositories, because the bug this gate had was entirely about what
