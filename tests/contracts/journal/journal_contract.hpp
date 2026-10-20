@@ -35,7 +35,8 @@ class MemoryStorage final : public journal::Storage {
 
   core::Result<core::Ok, journal::JournalError> append(std::span<const std::byte> bytes) override {
     if (fail_append) {
-      bytes_.insert(bytes_.end(), bytes.begin(), bytes.begin() + (bytes.size() / 2));
+      bytes_.insert(bytes_.end(), bytes.begin(),
+                    bytes.begin() + static_cast<std::ptrdiff_t>(bytes.size() / 2));
       return journal::JournalError{journal::JournalFault::kStorage, "ENOSPC"};
     }
     bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
@@ -150,8 +151,8 @@ TYPED_TEST_P(JournalContract, ACutAtAnyByteKeepsEveryWholeRecordBeforeIt) {
   const std::vector<std::byte> whole = this->written(true);
   std::size_t previous = 0;
   for (std::size_t cut = 0; cut < whole.size(); ++cut) {
-    const journal::Replay replay =
-        this->replayed(std::vector<std::byte>(whole.begin(), whole.begin() + cut));
+    const journal::Replay replay = this->replayed(
+        std::vector<std::byte>(whole.begin(), whole.begin() + static_cast<std::ptrdiff_t>(cut)));
     EXPECT_TRUE(this->is_prefix(replay.entries)) << "cut at " << cut;
     EXPECT_GE(replay.entries.size(), previous) << "a longer journal never loses an entry";
     previous = replay.entries.size();

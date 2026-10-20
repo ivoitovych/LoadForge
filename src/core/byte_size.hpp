@@ -55,6 +55,9 @@ class ByteSize {
     return std::get<Fraction>(store_).whole;
   }
 
+  // Comparing two trivially comparable alternatives cannot throw, though the
+  // standard does not mark std::variant's comparison noexcept.
+  // NOLINTNEXTLINE(bugprone-exception-escape)
   friend constexpr bool operator==(const ByteSize&, const ByteSize&) noexcept = default;
 
   static constexpr std::uint64_t kMaxPercent = 100;
