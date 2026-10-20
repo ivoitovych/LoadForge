@@ -7,6 +7,7 @@
 // zeros, a trailing document, and any byte sequence that is not UTF-8. A
 // writer that produced text this reads is writing JSON.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -19,27 +20,30 @@
 namespace loadforge::reporters::testing {
 
 struct Json {
-  enum class Kind { kNull, kBool, kNumber, kString, kArray, kObject } kind = Kind::kNull;
+  enum class Kind : std::uint8_t {
+    kNull,
+    kBool,
+    kNumber,
+    kString,
+    kArray,
+    kObject
+  } kind = Kind::kNull;
   bool boolean = false;
   std::string text;  ///< A string's characters, or a number's literal.
   std::vector<Json> items;
-  std::vector<std::pair<std::string, Json>> members;
+  std::vector<std::string> keys;
+  std::vector<Json> values;
 
   [[nodiscard]] const Json& at(const std::string& key) const {
-    for (const auto& [name, value] : members) {
-      if (name == key) {
-        return value;
+    for (std::size_t index = 0; index < keys.size(); ++index) {
+      if (keys[index] == key) {
+        return values[index];
       }
     }
     throw std::out_of_range("no member " + key);
   }
   [[nodiscard]] bool has(const std::string& key) const {
-    for (const auto& member : members) {
-      if (member.first == key) {
-        return true;
-      }
-    }
-    return false;
+    return std::ranges::find(keys, key) != keys.end();
   }
   [[nodiscard]] const Json& at(std::size_t index) const { return items.at(index); }
 };
@@ -84,6 +88,7 @@ class JsonReader {
     at_ += w.size();
   }
 
+  // NOLINTNEXTLINE(misc-no-recursion): JSON nests.
   Json value() {
     space();
     Json out;
@@ -101,7 +106,8 @@ class JsonReader {
         std::string key = string();
         space();
         expect(':');
-        out.members.emplace_back(std::move(key), value());
+        out.keys.push_back(std::move(key));
+        out.values.push_back(value());
         space();
         if (peek() == ',') {
           ++at_;
@@ -305,7 +311,12 @@ class JsonReader {
         cp = (cp << 6U) | (next & 0x3FU);
         out += static_cast<char>(next);
       }
-      const std::uint32_t minimum = length == 2 ? 0x80U : (length == 3 ? 0x800U : 0x10000U);
+      std::uint32_t minimum = 0x10000U;
+      if (length == 2) {
+        minimum = 0x80U;
+      } else if (length == 3) {
+        minimum = 0x800U;
+      }
       if (cp < minimum || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) {
         throw std::runtime_error("invalid UTF-8 scalar");
       }

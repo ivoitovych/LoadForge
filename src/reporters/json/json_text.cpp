@@ -13,6 +13,7 @@ constexpr std::string_view kIndent = "  ";
 constexpr std::string_view kHexDigits = "0123456789abcdef";
 constexpr std::string_view kReplacement = "\\ufffd";
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 bool continuation(std::string_view text, std::size_t index, unsigned char low, unsigned char high) {
   const auto byte = static_cast<unsigned char>(text[index]);
   return byte >= low && byte <= high;
@@ -49,6 +50,7 @@ void write_absence(std::string& out, const results::Absence& absence, std::size_
   out += "}";
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): the tree is a tree.
 void write_array(std::string& out, const results::Array& array, std::size_t depth) {
   if (array.items.empty()) {
     out += "[]";
@@ -64,6 +66,7 @@ void write_array(std::string& out, const results::Array& array, std::size_t dept
   out += "]";
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): the tree is a tree.
 void write_object(std::string& out, const results::Object& object, std::size_t depth) {
   if (object.keys.empty()) {
     out += "{}";
@@ -89,6 +92,7 @@ void write_object(std::string& out, const results::Object& object, std::size_t d
   out += "}";
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): the tree is a tree.
 void write_node(std::string& out, const results::Node& node, std::size_t depth) {
   switch (node.kind()) {
     case results::NodeKind::kNull:
@@ -115,7 +119,7 @@ void write_node(std::string& out, const results::Node& node, std::size_t depth) 
     case results::NodeKind::kObject:
       write_object(out, node.as_object(), depth);
       return;
-    case results::NodeKind::kAbsence:
+    default:  // kAbsence: the last kind, so no arm is left to be unreachable
       break;
   }
   write_absence(out, node.as_absence(), depth);

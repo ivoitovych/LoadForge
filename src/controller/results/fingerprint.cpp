@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include "core/parse_number.hpp"
 #include "core/result.hpp"
@@ -36,6 +37,8 @@ constexpr std::int64_t kMillidegreesPerDegree = 1000;
 using topology::Availability;
 using topology::Unavailable;
 
+using Value = std::variant<bool, double, std::string>;
+
 // Why a parser refused a file's text.
 struct Refused {
   std::string detail;
@@ -50,112 +53,141 @@ std::string unexpected(std::string_view expected, const std::string& found) {
   return detail;
 }
 
-core::Result<bool, Refused> parse_flag(const std::string& text) {
+core::Result<Value, Refused> parse_flag(const std::string& text) {
   if (text == "1") {
-    return true;
+    return Value{true};
   }
   if (text == "0") {
-    return false;
+    return Value{false};
   }
   return Refused{unexpected("0 or 1", text)};
 }
 
 // intel_pstate's no_turbo is the question asked the other way round.
-core::Result<bool, Refused> parse_no_turbo(const std::string& text) {
+core::Result<Value, Refused> parse_no_turbo(const std::string& text) {
   auto no_turbo = parse_flag(text);
   if (!no_turbo.has_value()) {
     return no_turbo;
   }
-  return !no_turbo.value();
+  return Value{!std::get<bool>(no_turbo.value())};
 }
 
-core::Result<std::string, Refused> parse_mains(const std::string& text) {
+core::Result<Value, Refused> parse_mains(const std::string& text) {
   if (text == "1") {
-    return std::string{"ac"};
+    return Value{std::string{"ac"}};
   }
   if (text == "0") {
-    return std::string{"battery"};
+    return Value{std::string{"battery"}};
   }
   return Refused{unexpected("0 or 1", text)};
 }
 
-core::Result<std::string, Refused> parse_word(const std::string& text) {
+core::Result<Value, Refused> parse_word(const std::string& text) {
   if (text.empty()) {
     return Refused{"expected a value, found an empty file"};
   }
-  return text;
+  return Value{text};
 }
 
-core::Result<std::string, Refused> parse_selected(const std::string& text) {
+core::Result<Value, Refused> parse_selected(const std::string& text) {
   auto word = selected_word(text);
   if (!word.has_value()) {
     return Refused{unexpected("one [selected] word", text)};
   }
-  return std::move(*word);
+  return Value{std::move(*word)};
 }
 
-core::Result<double, Refused> parse_millidegrees(const std::string& text) {
+core::Result<Value, Refused> parse_millidegrees(const std::string& text) {
   std::int64_t value = 0;
-  const char* const end = text.data() + text.size();
-  const auto parsed = std::from_chars(text.data(), end, value);
+  const char* const end = std::to_address(text.end());
+  const auto parsed = std::from_chars(std::to_address(text.begin()), end, value);
   if (text.empty() || parsed.ec != std::errc{} || parsed.ptr != end) {
     return Refused{unexpected("a whole number of millidegrees", text)};
   }
-  return static_cast<double>(value) / static_cast<double>(kMillidegreesPerDegree);
+  return Value{static_cast<double>(value) / static_cast<double>(kMillidegreesPerDegree)};
 }
 
 // One file a field may come from, and how to read what it says.
-template <typename T>
 struct Candidate {
   std::string_view path;
-  core::Result<T, Refused> (*parse)(const std::string&);
+  core::Result<Value, Refused> (*parse)(const std::string&);
 };
+
+// The failure a field reports when no candidate answered: the first that is not
+// a plain absence, else the first. `failures` is never empty: a field has at
+// least one candidate and each one that did not answer left its failure.
+const Unavailable& most_informative(const std::vector<Unavailable>& failures) {
+  for (const Unavailable& failure : failures) {
+    if (failure.kind != Availability::kAbsent) {
+      return failure;
+    }
+  }
+  return failures.front();
+}
+
+// Appends in place: a gap built as a temporary and handed to push_back leaves a
+// cleanup path no test can take (journal §1.13).
+void add_gap(std::vector<FingerprintGap>& gaps, std::string_view field, const Unavailable& why) {
+  gaps.emplace_back();
+  gaps.back().field = field;
+  gaps.back().why = why;
+}
+
+std::optional<std::string> text_of(const std::optional<Value>& value) {
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  return std::get<std::string>(*value);
+}
+
+std::optional<bool> flag_of(const std::optional<Value>& value) {
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  return std::get<bool>(*value);
+}
+
+std::optional<double> real_of(const std::optional<Value>& value) {
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  return std::get<double>(*value);
+}
 
 class Reader {
  public:
   Reader(platform::FileSystem& filesystem, std::string_view root, std::vector<FingerprintGap>& gaps)
       : filesystem_(&filesystem), root_(root), gaps_(&gaps) {}
 
-  // The first candidate that yields a value. When none does, one gap for the
-  // field: the failure that says most, which is the first that is not a plain
-  // absence, else the first.
-  template <typename T>
-  std::optional<T> parsed(std::string_view field, std::initializer_list<Candidate<T>> candidates) {
-    return first_of<T>(field, candidates, [](topology::Source& source, const Candidate<T>& one) {
-      return parse_file<T>(source, one.parse);
-    });
-  }
-
-  std::optional<std::string> cpuinfo(std::string_view field, std::string_view key) {
-    return first_of<std::string>(field, {Candidate<std::string>{"/proc/cpuinfo", nullptr}},
-                                 [key](topology::Source& source, const Candidate<std::string>&) {
-                                   return cpuinfo_line(source, key);
-                                 });
-  }
-
- private:
-  template <typename T, typename Read>
-  std::optional<T> first_of(std::string_view field, std::initializer_list<Candidate<T>> candidates,
-                            Read read) {
-    std::optional<Unavailable> best;
-    for (const Candidate<T>& candidate : candidates) {
+  // The first candidate that yields a value. When none does, one gap for the field.
+  std::optional<Value> parsed(std::string_view field, std::initializer_list<Candidate> candidates) {
+    std::vector<Unavailable> failures;
+    for (const Candidate& candidate : candidates) {
       topology::Source source(*filesystem_, root_ + std::string(candidate.path));
-      auto reading = read(source, candidate);
+      auto reading = parse_file(source, candidate.parse);
       if (reading.has_value()) {
         return std::move(reading).value();
       }
-      if (!best.has_value() ||
-          (best->kind == Availability::kAbsent && reading.error().kind != Availability::kAbsent)) {
-        best = reading.error();
-      }
+      failures.push_back(reading.error());
     }
-    gaps_->push_back(FingerprintGap{std::string(field), *best});
+    add_gap(*gaps_, field, most_informative(failures));
     return std::nullopt;
   }
 
-  template <typename T>
-  static core::Result<T, Unavailable> parse_file(
-      topology::Source& source, core::Result<T, Refused> (*parse)(const std::string&)) {
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+  std::optional<std::string> cpuinfo(std::string_view field, std::string_view key) {
+    topology::Source source(*filesystem_, root_ + "/proc/cpuinfo");
+    auto line = cpuinfo_line(source, key);
+    if (line.has_value()) {
+      return std::move(line).value();
+    }
+    add_gap(*gaps_, field, line.error());
+    return std::nullopt;
+  }
+
+ private:
+  static core::Result<Value, Unavailable> parse_file(
+      topology::Source& source, core::Result<Value, Refused> (*parse)(const std::string&)) {
     auto text = source.text();
     if (!text.has_value()) {
       return text.error();
@@ -198,8 +230,12 @@ void compare(std::vector<std::string_view>& out, std::string_view name, const T&
 }  // namespace
 
 BuildInfo this_build() {
-  return BuildInfo{std::string(core::kVersion), non_empty(LOADFORGE_GIT_COMMIT),
-                   std::string(kCompiler), LOADFORGE_BUILD_FLAGS};
+  BuildInfo build;
+  build.loadforge_version = core::kVersion;
+  build.git_commit = non_empty(LOADFORGE_GIT_COMMIT);
+  build.compiler = kCompiler;
+  build.flags = LOADFORGE_BUILD_FLAGS;
+  return build;
 }
 
 std::optional<std::string> non_empty(std::string_view text) {
@@ -258,44 +294,46 @@ FingerprintReading read_fingerprint(platform::FileSystem& filesystem, std::strin
   fingerprint.cpu_model = reader.cpuinfo("cpu_model", "model name");
   fingerprint.microcode = reader.cpuinfo("microcode", "microcode");
   fingerprint.kernel =
-      reader.parsed<std::string>("kernel", {{"/proc/sys/kernel/osrelease", parse_word}});
+      text_of(reader.parsed("kernel", {{"/proc/sys/kernel/osrelease", parse_word}}));
   fingerprint.smt_enabled =
-      reader.parsed<bool>("smt_enabled", {{"/sys/devices/system/cpu/smt/active", parse_flag}});
-  fingerprint.power_source = reader.parsed<std::string>(
-      "power_source", {{"/sys/class/power_supply/AC/online", parse_mains},
-                       {"/sys/class/power_supply/ACAD/online", parse_mains},
-                       {"/sys/class/power_supply/ADP0/online", parse_mains},
-                       {"/sys/class/power_supply/ADP1/online", parse_mains},
-                       {"/sys/class/power_supply/AC0/online", parse_mains}});
-  fingerprint.battery_state = reader.parsed<std::string>(
-      "battery_state", {{"/sys/class/power_supply/BAT0/status", parse_word},
-                        {"/sys/class/power_supply/BAT1/status", parse_word}});
-  fingerprint.cpufreq_governor = reader.parsed<std::string>(
-      "cpufreq_governor", {{"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", parse_word}});
-  fingerprint.energy_performance_preference = reader.parsed<std::string>(
+      flag_of(reader.parsed("smt_enabled", {{"/sys/devices/system/cpu/smt/active", parse_flag}}));
+  fingerprint.power_source =
+      text_of(reader.parsed("power_source", {{"/sys/class/power_supply/AC/online", parse_mains},
+                                             {"/sys/class/power_supply/ACAD/online", parse_mains},
+                                             {"/sys/class/power_supply/ADP0/online", parse_mains},
+                                             {"/sys/class/power_supply/ADP1/online", parse_mains},
+                                             {"/sys/class/power_supply/AC0/online", parse_mains}}));
+  fingerprint.battery_state = text_of(
+      reader.parsed("battery_state", {{"/sys/class/power_supply/BAT0/status", parse_word},
+                                      {"/sys/class/power_supply/BAT1/status", parse_word}}));
+  fingerprint.cpufreq_governor = text_of(reader.parsed(
+      "cpufreq_governor", {{"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", parse_word}}));
+  fingerprint.energy_performance_preference = text_of(reader.parsed(
       "energy_performance_preference",
-      {{"/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference", parse_word}});
-  fingerprint.platform_profile = reader.parsed<std::string>(
-      "platform_profile", {{"/sys/firmware/acpi/platform_profile", parse_word}});
-  fingerprint.turbo_enabled = reader.parsed<bool>(
+      {{"/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference", parse_word}}));
+  fingerprint.platform_profile = text_of(
+      reader.parsed("platform_profile", {{"/sys/firmware/acpi/platform_profile", parse_word}}));
+  fingerprint.turbo_enabled = flag_of(reader.parsed(
       "turbo_enabled", {{"/sys/devices/system/cpu/intel_pstate/no_turbo", parse_no_turbo},
-                        {"/sys/devices/system/cpu/cpufreq/boost", parse_flag}});
-  fingerprint.cooling_profile = reader.parsed<std::string>(
-      "cooling_profile", {{"/sys/class/thermal/thermal_zone0/policy", parse_word}});
+                        {"/sys/devices/system/cpu/cpufreq/boost", parse_flag}}));
+  fingerprint.cooling_profile = text_of(
+      reader.parsed("cooling_profile", {{"/sys/class/thermal/thermal_zone0/policy", parse_word}}));
 
-  fingerprint.huge_page_policy = reader.parsed<std::string>(
-      "huge_page_policy", {{"/sys/kernel/mm/transparent_hugepage/enabled", parse_selected}});
-  fingerprint.temperature_at_start_c = reader.parsed<double>(
-      "temperature_at_start_c", {{"/sys/class/thermal/thermal_zone0/temp", parse_millidegrees}});
+  fingerprint.huge_page_policy = text_of(reader.parsed(
+      "huge_page_policy", {{"/sys/kernel/mm/transparent_hugepage/enabled", parse_selected}}));
+  fingerprint.temperature_at_start_c = real_of(reader.parsed(
+      "temperature_at_start_c", {{"/sys/class/thermal/thermal_zone0/temp", parse_millidegrees}}));
 
   const auto budget = resources::read_memory_budget(filesystem, root);
   if (budget.has_value()) {
     fingerprint.cgroup_memory_limit_bytes = budget.value().cgroup_limit_bytes;
   } else {
     const topology::DiscoveryFailure& failure = budget.error();
-    reading.gaps.push_back(
-        FingerprintGap{"cgroup_memory_limit_bytes",
-                       Unavailable{failure.availability, failure.subject, failure.detail}});
+    Unavailable why;
+    why.kind = failure.availability;
+    why.path = failure.subject;
+    why.detail = failure.detail;
+    add_gap(reading.gaps, "cgroup_memory_limit_bytes", why);
   }
   return reading;
 }

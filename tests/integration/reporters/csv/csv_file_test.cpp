@@ -43,7 +43,7 @@ class RunFile {
 
 std::string read_back(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
-  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
 TEST(CsvFileTest, ARealFileReadsBackAsTheSameTableTheStreamHeld) {
@@ -76,3 +76,9 @@ TEST(CsvFileTest, AFullDiskIsAFailureNotAShortFile) {
 
 }  // namespace
 }  // namespace loadforge::reporters
+
+namespace loadforge::contracts {
+// rich_run.hpp builds on the contract suites' fixtures and so includes
+// results_contract.hpp, which registers VerdictContract: this binary leaves it out.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(VerdictContract);
+}  // namespace loadforge::contracts

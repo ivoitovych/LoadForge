@@ -41,6 +41,7 @@ std::string decimal(Integer value) {
   return std::string(buffer.data(), written.ptr);
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): the tree is a tree.
 void flatten(std::string& out, std::string_view version, const std::string& field,
              const results::Node& node) {
   Row row{version, field, "", "present", "", "", "", ""};
@@ -88,12 +89,15 @@ void flatten(std::string& out, std::string_view version, const std::string& fiel
         return;
       }
       for (std::size_t index = 0; index < object.keys.size(); ++index) {
-        flatten(out, version, field.empty() ? object.keys[index] : field + "." + object.keys[index],
-                object.values[index]);
+        std::string member = object.keys[index];
+        if (!field.empty()) {
+          member = field + "." + object.keys[index];
+        }
+        flatten(out, version, member, object.values[index]);
       }
       return;
     }
-    case results::NodeKind::kAbsence: {
+    default: {  // kAbsence: the last kind, so no arm is left to be unreachable
       const results::Absence& absence = node.as_absence();
       row.status = absence.kind;
       row.reason = absence.words;

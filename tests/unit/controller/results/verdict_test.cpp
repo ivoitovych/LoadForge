@@ -36,9 +36,9 @@ TEST(VerdictTest, EveryVerdictHasItsOwnWords) {
 
 TEST(VerdictTest, AGaugeOfTheSameNameIsNotAnError) {
   RunResult run = suite::clean_run();
-  statistics::MetricSummary gauge{suite::counter(std::string(kUncorrectedErrorsMetric)),
-                                  statistics::GaugeSummary{3, 1.0, 9.0, 5.0, 1.0, 1.0, 9.0, 0.5},
-                                  0};
+  const statistics::MetricSummary gauge{
+      suite::counter(std::string(kUncorrectedErrorsMetric)),
+      statistics::GaugeSummary{3, 1.0, 9.0, 5.0, 1.0, 1.0, 9.0, 0.5}, 0};
   run.signature.metrics.push_back(gauge);
   EXPECT_EQ(derive_verdict(run), Verdict::kClean);
 }

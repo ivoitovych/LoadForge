@@ -46,10 +46,12 @@ struct Absence {
 
 class Node;
 
+// NOLINTNEXTLINE(misc-no-recursion): a tree holds trees.
 struct Array {
   std::vector<Node> items;
 };
 
+// NOLINTNEXTLINE(misc-no-recursion): a tree holds trees.
 struct Object {
   std::vector<std::string> keys;
   std::vector<Node> values;
@@ -67,6 +69,7 @@ enum class NodeKind : std::uint8_t {
   kAbsence,
 };
 
+// NOLINTNEXTLINE(misc-no-recursion): a tree holds trees.
 class Node {
  public:
   Node() = default;  ///< Null.

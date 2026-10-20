@@ -74,7 +74,7 @@ Node Node::absence(Absence value) {
 }
 
 Node& Node::add(std::string key, Node value) {
-  Object& object = std::get<Object>(value_);
+  auto& object = std::get<Object>(value_);
   object.keys.push_back(std::move(key));
   object.values.push_back(std::move(value));
   return *this;
@@ -96,7 +96,7 @@ const Object& Node::as_object() const { return std::get<Object>(value_); }
 const Absence& Node::as_absence() const { return std::get<Absence>(value_); }
 
 const Node* Node::find(std::string_view key) const {
-  const Object& object = std::get<Object>(value_);
+  const auto& object = std::get<Object>(value_);
   for (std::size_t index = 0; index < object.keys.size(); ++index) {
     if (object.keys[index] == key) {
       return &object.values[index];
@@ -108,7 +108,7 @@ const Node* Node::find(std::string_view key) const {
 std::string format_real(double value) {
   std::array<char, 40> buffer{};
   const auto written = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-  return std::string(buffer.data(), written.ptr);
+  return {buffer.data(), written.ptr};
 }
 
 std::string_view availability_code(topology::Availability availability) noexcept {
@@ -150,19 +150,34 @@ using telemetry::Unavailable;
 Node text(std::string_view value) { return Node::text(std::string(value)); }
 
 Node opt_text(const std::optional<std::string>& value) {
-  return value.has_value() ? Node::text(*value) : Node::null();
+  if (!value.has_value()) {
+    return Node::null();
+  }
+  return Node::text(*value);
 }
 Node opt_unsigned(const std::optional<std::uint64_t>& value) {
-  return value.has_value() ? Node::unsigned_integer(*value) : Node::null();
+  if (!value.has_value()) {
+    return Node::null();
+  }
+  return Node::unsigned_integer(*value);
 }
 Node opt_integer(const std::optional<std::int64_t>& value) {
-  return value.has_value() ? Node::integer(*value) : Node::null();
+  if (!value.has_value()) {
+    return Node::null();
+  }
+  return Node::integer(*value);
 }
 Node opt_real(const std::optional<double>& value) {
-  return value.has_value() ? Node::real(*value) : Node::null();
+  if (!value.has_value()) {
+    return Node::null();
+  }
+  return Node::real(*value);
 }
 Node opt_bool(const std::optional<bool>& value) {
-  return value.has_value() ? Node::boolean(*value) : Node::null();
+  if (!value.has_value()) {
+    return Node::null();
+  }
+  return Node::boolean(*value);
 }
 
 std::string hex(const std::vector<std::byte>& bytes) {
@@ -178,9 +193,13 @@ std::string hex(const std::vector<std::byte>& bytes) {
 }
 
 Node absence_of(const Unavailable& unavailable) {
-  return Node::absence(Absence{std::string(availability_code(unavailable.kind)),
-                               std::string(topology::describe(unavailable.kind)), unavailable.path,
-                               unavailable.detail, unavailable.remediation});
+  Absence absence;
+  absence.kind = availability_code(unavailable.kind);
+  absence.words = topology::describe(unavailable.kind);
+  absence.path = unavailable.path;
+  absence.detail = unavailable.detail;
+  absence.remediation = unavailable.remediation;
+  return Node::absence(std::move(absence));
 }
 
 Node metric_node(const telemetry::Metric& metric) {

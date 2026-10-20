@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 #include <sys/utsname.h>
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 
@@ -56,12 +57,8 @@ TEST(FingerprintMachineTest, EveryAbsentFileFieldHasItsGapAndEveryGapItsField) {
   const FingerprintReading reading = read_machine();
   const Fingerprint& f = reading.fingerprint;
   const auto has_gap = [&reading](std::string_view field) {
-    for (const FingerprintGap& gap : reading.gaps) {
-      if (gap.field == field) {
-        return true;
-      }
-    }
-    return false;
+    return std::ranges::any_of(reading.gaps,
+                               [field](const FingerprintGap& gap) { return gap.field == field; });
   };
   EXPECT_EQ(!f.cpu_model.has_value(), has_gap("cpu_model"));
   EXPECT_EQ(!f.microcode.has_value(), has_gap("microcode"));

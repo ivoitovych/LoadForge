@@ -7,6 +7,7 @@
 
 #include "unit/reporters/json/mini_json.hpp"
 
+// NOLINTBEGIN(modernize-raw-string-literal): escapes are the point of these tests.
 namespace loadforge::reporters {
 namespace {
 
@@ -201,3 +202,4 @@ TEST(ToJsonTest, AnAbsenceThatIsNotAMemberIsItsOwnObject) {
 
 }  // namespace
 }  // namespace loadforge::reporters
+// NOLINTEND(modernize-raw-string-literal)
