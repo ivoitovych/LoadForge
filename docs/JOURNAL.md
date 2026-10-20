@@ -2154,9 +2154,11 @@ Kept short and current; move an item to the relevant document once it is settled
   memory-budget reader and OOM classification from the kernel's own record followed
   (§1.24, §2.23): `src/resources`, the cgroup's OOM-kill count consulted before the first
   fork and after the last reap, `kOomKilled` only when the count accounts for every
-  SIGKILL the controller did not send. Still to come: the T7 row that OOM-kills a real fake
-  worker and asserts `kOomKilled` end to end, now that both halves exist. The M1 exit
-  criteria in IMPLEMENTATION.md §4 are the checklist.
+  SIGKILL the controller did not send. The M1 exit review followed
+  (`reviews/m1-exit-review-2026-10-20-0444-UTC.md`): the OOM row end to end (§1.25, §2.24),
+  the topology snapshot before the fork (§2.25), the stop-byte row without its race (§2.26),
+  and `EPIPE` on a record pipe as the controller lost (§2.27). Every M1 exit criterion is
+  met; the milestone waits only on the first mutation sweep over `src/`.
 - **A known gap, from §2.20:** when the controller itself is `SIGKILL`ed, a grandchild of a
   worker survives: the death signal is cleared across fork and nobody is left to sweep the
   group. The real worker forks nothing, so nothing is exposed today; the first workload that
