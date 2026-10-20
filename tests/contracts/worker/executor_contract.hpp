@@ -50,8 +50,8 @@ TYPED_TEST_P(ExecutorContract, ZeroTasksCallsNothing) {
 TYPED_TEST_P(ExecutorContract, EveryIndexExactlyOnceAndNoOther) {
   const std::unique_ptr<worker::Executor> executor = TypeParam::make();
   const std::size_t threads = executor->threads();
-  for (const std::size_t count : {std::size_t{1}, threads, threads + 1, std::size_t{7},
-                                  std::size_t{1000}}) {
+  for (const std::size_t count :
+       {std::size_t{1}, threads, threads + 1, std::size_t{7}, std::size_t{1000}}) {
     std::vector<std::atomic<int>> seen(count);
     std::atomic<int> out_of_range{0};
     auto mark = [&](std::size_t index, std::size_t) noexcept {
