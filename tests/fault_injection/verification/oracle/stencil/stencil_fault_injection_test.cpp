@@ -81,7 +81,7 @@ TEST(StencilFaultInjection, AnExponentFlipInAnyWindowNamesTheCellAndCountsTheCel
     EXPECT_EQ(found.check, "stencil-cell");
     EXPECT_EQ(found.element, std::optional<std::uint64_t>(element));
     // The earliest window holding the cell: a window can overlap an earlier one.
-    EXPECT_LE(found.blocks_compared, window * 256 + 4 * 16 + 11 + 1);
+    EXPECT_LE(found.blocks_compared, static_cast<std::uint64_t>(window) * 256 + 4 * 16 + 11 + 1);
     EXPECT_GT(found.residual, found.tolerance);
     EXPECT_EQ(found.condition_number, std::nullopt);
   }

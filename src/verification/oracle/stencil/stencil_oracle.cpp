@@ -94,10 +94,11 @@ Window expected_window(std::span<const std::byte> input, Origin origin) noexcept
   }
 
   Window window{};
+  const std::span<double> cells(window);
   for (std::size_t r = 0; r < spec::kRegionEdge; ++r) {
     for (std::size_t c = 0; c < spec::kRegionEdge; ++c) {
-      window[r * spec::kRegionEdge + c] = current[(origin.row - first_row + r + 1) * kStride +
-                                                  (origin.column - first_column + c + 1)];
+      cells[r * spec::kRegionEdge + c] = current[(origin.row - first_row + r + 1) * kStride +
+                                                 (origin.column - first_column + c + 1)];
     }
   }
   return window;
@@ -134,7 +135,8 @@ Verdict StencilOracle::check(const UnitEvidence& evidence) const {
 
   std::uint64_t compared = 0;
   for (const Origin origin : window_origins(evidence.index)) {
-    const Window expected = expected_window(evidence.input, origin);
+    const Window window = expected_window(evidence.input, origin);
+    const std::span<const double> expected(window);
     for (std::size_t r = 0; r < spec::kRegionEdge; ++r) {
       for (std::size_t c = 0; c < spec::kRegionEdge; ++c) {
         ++compared;
