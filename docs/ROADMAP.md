@@ -27,7 +27,7 @@ work continues.
 | 4 | Controller ignores SIGPIPE through the seam; test and catalogue row | review R-02 | done, this PR |
 | 5 | Kill the surviving drain-bound mutant with an exact assertion | review R-06 | done, this PR |
 | 6 | Hygiene batch: linkage, torn-slot wording, drain bound by wall time, slot layout asserts, fixture references | review R-03..R-05, R-24, R-29 | |
-| 7 | Documentation reconciliation in one commit | review R-08..R-13, R-19, R-21, R-25, R-27, R-33 | |
+| 7 | Documentation reconciliation in one commit | review R-08..R-13, R-19, R-21, R-25, R-27, R-33 | done, #26 |
 | 8 | Fake-worker executable with the misbehaviour catalogue, including a worker that ignores its control pipe (the only real test that the parent-death signal ends a worker); gate: no test-hook symbol in the shipped binary; gate: lock obligations in the ledger | IMPLEMENTATION §10 | |
 | 9 | Memory-budget reader (`MemAvailable`, cgroup v1 and v2) and OOM classified from the kernel's record | IMPLEMENTATION §10, journal §1.18 | |
 | 10 | M1 exit: every criterion in IMPLEMENTATION §4 met and marked | IMPLEMENTATION §4 | |
