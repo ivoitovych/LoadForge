@@ -195,7 +195,7 @@ TEST(RunnerWorkingSetTest, TheRunnerUnmapsEverythingWhenItGoes) {
 void expect_slots_aligned(std::uint32_t line_bytes) {
   SCOPED_TRACE("line " + std::to_string(line_bytes));
   const auto workload = make_rotor();
-  RotorOracle oracle;
+  const RotorOracle oracle;
   ScriptedOracle wrong_everywhere(oracle);
   for (std::uint64_t index = 0; index < 8; ++index) {
     wrong_everywhere.answers[index] = [](const verification::UnitEvidence&) {
@@ -233,7 +233,7 @@ TEST(RunnerWorkingSetTest, SlotsAreLineAlignedInMemoryThatIsNotPageAligned) {
   // The fake's memory is the heap's, aligned to 16 at best: the runner must
   // find the line inside its slack rather than assume the mapping is on one.
   const auto workload = make_rotor();
-  RotorOracle oracle;
+  const RotorOracle oracle;
   ScriptedOracle unchecked(oracle);
   unchecked.answers[3] = [](const verification::UnitEvidence&) {
     return verification::Verdict{verification::NotChecked{"slot", "to see its address", 0}};
@@ -286,7 +286,7 @@ TEST(RunnerRunTest, SlicesAddUpAndTheTotalIsTheirSum) {
 
 TEST(RunnerRunTest, MoreUnitsThanSlotsReuseTheSlotsInTurn) {
   const auto workload = make_rotor();
-  RotorOracle oracle;
+  const RotorOracle oracle;
   ScriptedOracle unchecked(oracle);
   for (const std::uint64_t index : {1U, 9U, 17U}) {
     unchecked.answers[index] = [](const verification::UnitEvidence&) {
@@ -309,8 +309,8 @@ TEST(RunnerRunTest, MoreUnitsThanSlotsReuseTheSlotsInTurn) {
 
 TEST(RunnerRunTest, TheIndexWrapsAtTheTopOfItsRange) {
   const auto workload = make_rotor();
-  RotorOracle oracle;
-  ScriptedOracle observed(oracle);
+  const RotorOracle oracle;
+  const ScriptedOracle observed(oracle);
   SerialExecutor executor;
   SteppedSyscalls syscalls;
   verification::RunnerSetup setup = setup_for(*workload, observed, executor, syscalls);
@@ -341,7 +341,7 @@ TEST(RunnerRunTest, AThreadedExecutorRunsTheSameUnitsWithScratchForEveryThread) 
 
 TEST(RunnerRunTest, ARecordNamesTheSetupsProvenanceAndLeavesTheSeedAbsentWhenItWas) {
   const auto workload = make_rotor();
-  RotorOracle oracle;
+  const RotorOracle oracle;
   ScriptedOracle unchecked(oracle);
   unchecked.answers[0] = [](const verification::UnitEvidence&) {
     return verification::Verdict{verification::NotChecked{"unit", "scripted", 0}};

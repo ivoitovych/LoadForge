@@ -88,9 +88,9 @@ TEST(LayoutTest, APlanWithoutAUnitIsRefusedBeforeItDividesByZero) {
 
 TEST(LayoutTest, EverySizeThatOverflowsIsRefusedAsResourcesWithNoMappingAskedFor) {
   const struct {
-    const char* why;
-    workloads::Plan plan;
-    std::size_t threads;
+    const char* why = "";
+    workloads::Plan plan{};
+    std::size_t threads = 0;
   } cases[] = {
       {"the input stride rounds past the top", plan(kMax, 8, 0, 1), 1},
       {"the output stride rounds past the top", plan(8, kMax - 3, 0, 1), 1},

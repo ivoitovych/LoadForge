@@ -226,7 +226,7 @@ class RotorOracle final : public verification::Oracle {
     }
     Bytes expected(evidence.output.size());
     for (std::size_t at = 0; at < expected.size(); ++at) {
-      const unsigned value = std::to_integer<unsigned>(evidence.input[at]);
+      const auto value = std::to_integer<unsigned>(evidence.input[at]);
       const unsigned rotated = ((value << 3U) | (value >> 5U)) & 0xFFU;
       expected[at] = static_cast<std::byte>(rotated ^ RotorWorkload::key(evidence.index));
     }
@@ -579,7 +579,7 @@ class SteppedSyscalls final : public platform::Syscalls {
 // ---------------------------------------------------------------------------
 
 inline workloads::WorkloadConfig rotor_config(std::uint64_t seed = 7) {
-  return workloads::WorkloadConfig{seed, 8 * 400, 0, simd::IsaPath::kScalar};
+  return workloads::WorkloadConfig{seed, std::uint64_t{8} * 400, 0, simd::IsaPath::kScalar};
 }
 
 inline std::unique_ptr<workloads::Workload> make_rotor(std::uint64_t seed = 7) {
@@ -587,8 +587,8 @@ inline std::unique_ptr<workloads::Workload> make_rotor(std::uint64_t seed = 7) {
 }
 
 inline std::unique_ptr<workloads::Workload> make_mean(std::uint64_t seed = 5) {
-  return std::move(MeanWorkload::create(
-                       workloads::WorkloadConfig{seed, 4 * 72, 0, simd::IsaPath::kScalar}))
+  return std::move(MeanWorkload::create(workloads::WorkloadConfig{seed, std::uint64_t{4} * 72, 0,
+                                                                  simd::IsaPath::kScalar}))
       .value();
 }
 

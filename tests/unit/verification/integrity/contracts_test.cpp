@@ -78,7 +78,7 @@ struct Rotor {
 struct Mean {
   static constexpr const char* kName = "mean";
   static workloads::WorkloadConfig config() {
-    return workloads::WorkloadConfig{5, 4 * 72, 0, simd::IsaPath::kScalar};
+    return workloads::WorkloadConfig{5, std::uint64_t{4} * 72, 0, simd::IsaPath::kScalar};
   }
   static core::Result<std::unique_ptr<workloads::Workload>, workloads::WorkloadError> create(
       const workloads::WorkloadConfig& config) {

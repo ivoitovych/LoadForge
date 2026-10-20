@@ -50,7 +50,7 @@ struct Rig {
     setup = setup_for(tamper, oracle, executor, real, duty);
     setup.line_bytes = line_bytes;
   }
-  std::unique_ptr<verification::SliceRunner> runner() { return make_runner(setup); }
+  std::unique_ptr<verification::SliceRunner> runner() const { return make_runner(setup); }
 
   std::unique_ptr<workloads::Workload> workload;
   TamperingWorkload tamper;
@@ -201,7 +201,7 @@ TEST(BracketTest, AWrongOutputIsAnOutputRecordWithTheBracketIntact) {
   ASSERT_NE(runner, nullptr);
   const verification::SliceReport report = slice(*runner, 7);
   ASSERT_EQ(report.records.size(), 1U);
-  const auto* exact = std::get_if<ExactBitCorruption>(&report.records[0]);
+  const auto* exact = std::get_if<ExactBitCorruption>(report.records.data());
   ASSERT_NE(exact, nullptr);
   EXPECT_EQ(exact->side, Side::kOutput);
   EXPECT_EQ(exact->line_bytes, 128U);
@@ -225,7 +225,7 @@ TEST(BracketTest, InputAndOutputRecordsOfOneUnitAreTwoFindingsInStepOrder) {
   ASSERT_NE(runner, nullptr);
   const verification::SliceReport report = slice(*runner, 3);
   ASSERT_EQ(report.records.size(), 2U);
-  const auto* check = std::get_if<ExactBitCorruption>(&report.records[0]);
+  const auto* check = std::get_if<ExactBitCorruption>(report.records.data());
   const auto* close = std::get_if<ExactBitCorruption>(&report.records[1]);
   ASSERT_NE(check, nullptr);
   ASSERT_NE(close, nullptr);
@@ -247,7 +247,7 @@ TEST(BracketTest, AUnitTheDutyCycleDidNotBracketSaysSoAndItsInputGoesUnseen) {
   const verification::SliceReport report = slice(*runner, 6);
   ASSERT_EQ(report.records.size(), 1U)
       << "unit 3's input changed while read, and nothing bracketed it: the duty cycle's cost";
-  const auto* exact = std::get_if<ExactBitCorruption>(&report.records[0]);
+  const auto* exact = std::get_if<ExactBitCorruption>(report.records.data());
   ASSERT_NE(exact, nullptr);
   EXPECT_EQ(exact->provenance.iteration, 5U);
   EXPECT_EQ(exact->provenance.input_integrity, InputIntegrity::kNotChecked)
@@ -269,7 +269,7 @@ TEST(BracketTest, ABoundedWorkloadsWrongOutputHasNoBitsAndItsWrongInputDoes) {
   ASSERT_EQ(report.records.size(), 2U);
 
   const auto* numerical =
-      std::get_if<verification::NumericalVerificationFailure>(&report.records[0]);
+      std::get_if<verification::NumericalVerificationFailure>(report.records.data());
   ASSERT_NE(numerical, nullptr) << verification::kind_name(report.records[0]);
   EXPECT_EQ(numerical->check, "|output - mean|");
   EXPECT_GT(verification::ratio(*numerical), 1.0);

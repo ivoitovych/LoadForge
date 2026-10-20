@@ -54,7 +54,7 @@ const VerificationNotPerformed& unrun(const verification::ErrorRecord& record) {
   return found != nullptr ? *found : kNone;
 }
 
-ScriptedOracle::Answer answer(verification::Verdict verdict) {
+ScriptedOracle::Answer answer(const verification::Verdict& verdict) {
   return [verdict](const verification::UnitEvidence&) { return verdict; };
 }
 
@@ -131,7 +131,7 @@ TEST(UnrunTest, AVerdictTheOracleContractForbidsIsBelievedNeitherWay) {
 }
 
 TEST(UnrunTest, ADutyCycleOfNothingFinishesWithBothChecksUnmade) {
-  Rig rig({0, 0});
+  const Rig rig({0, 0});
   const auto runner = make_runner(rig.setup);
   ASSERT_NE(runner, nullptr);
   const verification::SliceReport report = slice(*runner, 10);
@@ -203,7 +203,7 @@ TEST(UnrunTest, WhenTheBracketStoppedEverySampledUnitTheOracleComparedNothing) {
 }
 
 TEST(UnrunTest, ARunThatComputedNothingCheckedNothing) {
-  Rig rig;
+  const Rig rig;
   const auto runner = make_runner(rig.setup);
   ASSERT_NE(runner, nullptr);
   const auto finished = runner->finish();
@@ -224,7 +224,7 @@ TEST(UnrunTest, TextTooLongForARecordIsCutToFitRatherThanMakingItInvalid) {
   };
   SerialExecutor executor;
   SteppedSyscalls syscalls;
-  verification::RunnerSetup setup = setup_for(workload, oracle, executor, syscalls, {1, 0});
+  const verification::RunnerSetup setup = setup_for(workload, oracle, executor, syscalls, {1, 0});
   const auto runner = make_runner(setup);
   ASSERT_NE(runner, nullptr);
   const verification::SliceReport report = slice(*runner, 1);

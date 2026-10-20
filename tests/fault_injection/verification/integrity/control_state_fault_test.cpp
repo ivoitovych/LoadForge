@@ -68,7 +68,9 @@ std::vector<std::byte> bytes_of(std::span<const std::byte> copy) {
 
 struct Store {
   Store() : state(std::move(ControlState::create(syscalls, sample(), {})).value()) {}
-  std::span<std::byte> copy(std::size_t which) { return syscalls.mapping(which); }
+  [[nodiscard]] std::span<std::byte> copy(std::size_t which) const {
+    return syscalls.mapping(which);
+  }
   SteppedSyscalls syscalls;
   ControlState state;
 };
@@ -169,7 +171,9 @@ struct Rig {
     setup = setup_for(tamper, oracle, executor, syscalls);
   }
   /// Copy `which` of the runner's control state: mappings 1 to 3.
-  std::span<std::byte> copy(std::size_t which) { return syscalls.mapping(1 + which); }
+  [[nodiscard]] std::span<std::byte> copy(std::size_t which) const {
+    return syscalls.mapping(1 + which);
+  }
 
   std::unique_ptr<workloads::Workload> workload;
   TamperingWorkload tamper;
@@ -194,7 +198,7 @@ TEST(ControlStateUnderRunTest, ACorruptedStoredSeedIsRepairedAndNeverReported) {
     rig.copy(copy)[kSeedByte] ^= std::byte{0x04};  // seed 7 becomes 3 in this copy
     const verification::SliceReport report = slice(*runner, 4);
     ASSERT_EQ(report.records.size(), 1U) << "the scripted wrong output, and nothing else";
-    const auto* exact = std::get_if<verification::ExactBitCorruption>(&report.records[0]);
+    const auto* exact = std::get_if<verification::ExactBitCorruption>(report.records.data());
     ASSERT_NE(exact, nullptr);
     EXPECT_EQ(exact->side, verification::Side::kOutput);
     EXPECT_EQ(exact->provenance.seed, 7U) << "the voted seed, not the corrupted copy's";
@@ -245,7 +249,7 @@ TEST(ControlStateUnderRunTest, AUnitKeepsTheValuesVotedAtItsStartWhateverHappens
 }
 
 TEST(ControlStateUnderRunTest, AnUndecidableControlStateStopsTheRunAndSaysItIsTheRuns) {
-  Rig rig;
+  const Rig rig;
   const auto runner = make_runner(rig.setup);
   ASSERT_NE(runner, nullptr);
   EXPECT_TRUE(slice(*runner, 4).records.empty());
@@ -256,7 +260,7 @@ TEST(ControlStateUnderRunTest, AnUndecidableControlStateStopsTheRunAndSaysItIsTh
   EXPECT_EQ(report.next_index, 4U);
   ASSERT_EQ(report.records.size(), 1U) << "no hardware finding about any unit";
   EXPECT_FALSE(verification::is_wrong_result(report.records[0]));
-  const auto* stopped = std::get_if<verification::VerificationNotPerformed>(&report.records[0]);
+  const auto* stopped = std::get_if<verification::VerificationNotPerformed>(report.records.data());
   ASSERT_NE(stopped, nullptr);
   EXPECT_EQ(stopped->what, "control state of the rotor run");
   EXPECT_EQ(stopped->why,
@@ -280,20 +284,20 @@ TEST(ControlStateUnderRunTest, AnUndecidableControlStateStopsTheRunAndSaysItIsTh
 }
 
 TEST(ControlStateUnderRunTest, ThreeVerifiedCopiesThatDisagreeStopTheRunBeforeItsNextUnit) {
-  Rig rig;
+  const Rig rig;
   const auto runner = make_runner(rig.setup);
   ASSERT_NE(runner, nullptr);
   slice(*runner, 2);
-  ControlWords one{7, 1, 2, 1, 1, 64};
-  ControlWords two{7, 1, 9, 1, 1, 64};
+  const ControlWords one{7, 1, 2, 1, 1, 64};
+  const ControlWords two{7, 1, 9, 1, 1, 64};
   forge(rig.copy(1), one);
   forge(rig.copy(2), two);
-  ControlWords zero{7, 1, 5, 1, 1, 64};
+  const ControlWords zero{7, 1, 5, 1, 1, 64};
   forge(rig.copy(0), zero);
   const verification::SliceReport report = slice(*runner, 3);
   EXPECT_EQ(report.tally, verification::Tally{});
   ASSERT_EQ(report.records.size(), 1U);
-  const auto* stopped = std::get_if<verification::VerificationNotPerformed>(&report.records[0]);
+  const auto* stopped = std::get_if<verification::VerificationNotPerformed>(report.records.data());
   ASSERT_NE(stopped, nullptr);
   EXPECT_EQ(stopped->why.rfind("the verified copies of the control state disagree", 0), 0U);
   EXPECT_EQ(report.next_index, 2U) << "the progress last confirmed";
