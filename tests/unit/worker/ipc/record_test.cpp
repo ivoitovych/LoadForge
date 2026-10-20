@@ -336,7 +336,7 @@ TEST(RecordReaderTest, EverySingleByteCorruptionOfAValidStreamIsCaughtAndNeverYi
   std::vector<std::vector<std::byte>> frames;
   std::vector<std::byte> stream;
   for (std::uint16_t index = 0; index < 5; ++index) {
-    std::string payload(static_cast<std::size_t>(index) * 7, static_cast<char>('a' + index));
+    const std::string payload(static_cast<std::size_t>(index) * 7, static_cast<char>('a' + index));
     frames.push_back(frame_of(index, payload));
     stream.insert(stream.end(), frames.back().begin(), frames.back().end());
   }

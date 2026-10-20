@@ -208,8 +208,10 @@ TEST_F(MappingTest, MovingTransfersOwnershipSoOnlyOneUnmapHappens) {
   void* const address = a.address();
 
   Mapping b(std::move(a));
-  EXPECT_EQ(a.address(),
-            nullptr);  // NOLINT(bugprone-use-after-move): the moved-from state is the assertion
+  // This test inspects a moved-from object on purpose: what a moved-from
+  // Mapping reports is the assertion.
+  // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+  EXPECT_EQ(a.address(), nullptr);
   EXPECT_EQ(b.address(), address);
 
   auto second = memory.map(request(4096));

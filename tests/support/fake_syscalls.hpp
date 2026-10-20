@@ -901,7 +901,8 @@ class FakeSyscalls final : public platform::Syscalls {
   static std::string describe(int fd) { return "fd " + std::to_string(fd); }
 
   /// EBADF for a descriptor this fake never handed out, or already took back.
-  core::Result<core::Ok, platform::SyscallError> check_descriptor(int fd, std::string_view call) {
+  [[nodiscard]] core::Result<core::Ok, platform::SyscallError> check_descriptor(
+      int fd, std::string_view call) const {
     if (fd != kFakeDescriptor || !descriptor_open_) {
       return platform::SyscallError{EBADF, call, describe(fd)};
     }
