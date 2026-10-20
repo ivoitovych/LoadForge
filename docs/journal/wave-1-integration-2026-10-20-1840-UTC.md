@@ -28,8 +28,10 @@ fragment's reading is the narrowest one and no consumer depends on another).
    (the dense-linear stream's own headers, not contracts).
 2. `src/worker/executor.hpp`: `NOLINTNEXTLINE(bugprone-easily-swappable-parameters)` with
    its reason on the `for_each_index` lambda.
-3. `src/verification/oracle.hpp`: `is_valid(Verdict, Contract)` and `blocks_of()` end in
-   `std::get<NotChecked>`, not a dereferenced `get_if`. `tests/contracts/headers/verification_oracle.cpp`
+3. `src/verification/oracle.hpp`: `is_valid(Verdict, Contract)` and `blocks_of()` are a
+   visit over per-alternative overloads (`detail::keeps_rules`), not a dereferenced `get_if`
+   (`std::get` was tried first and trips `bugprone-exception-escape`; the two NOLINTs say why a
+   visit cannot throw here). `tests/contracts/headers/verification_oracle.cpp`
    now calls both over a verdict of unknown alternative, and the `static-headers` preset
    (Release, static) with a step in `.github/workflows/release-static.yml` compiles the
    header units under the static artifact's flags.
