@@ -87,7 +87,7 @@ class ExitStatus {
   /// docs/verification.md forbids. This reports the fact; the inference is
   /// the controller's, which calls a death an OOM kill only when the kernel's
   /// own record -- the cgroup's OOM-kill count, read before and after the run
-  /// -- accounts for it (controller::judge_oom_kills, journal §2.19).
+  /// -- accounts for it (controller::judge_oom_kills, journal §2.23).
   [[nodiscard]] bool killed_by_sigkill() const noexcept;
 
   /// A description suitable for a user-facing report, e.g.

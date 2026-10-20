@@ -198,9 +198,30 @@ TEST(NullWorkloadTest, LeavesWhenTheControllerDiedInsideAPublish) {
   const std::uint64_t odd = 1;
   std::memcpy(static_cast<std::byte*>(mapped.value()) + HeartbeatRegion::kHeaderBytes, &odd,
               sizeof odd);
+  // Unreadable is a reason to leave only once it has lasted longer than the
+  // allowance (100 ms, strictly): a controller descheduled between the two
+  // halves of a publish is unreadable too, for a while. The first reading
+  // was at 0, so the tick at 110 ms leaves, after ten polls.
   auto outcome = rig.run(Pacing{1000 * kMs, 10 * kMs, 100 * kMs});
   ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
-  EXPECT_EQ(outcome.value(), (Outcome{StopReason::kControllerUnreadable, 0, 10 * kMs}));
+  EXPECT_EQ(outcome.value(), (Outcome{StopReason::kControllerUnreadable, 10, 110 * kMs}));
+  EXPECT_TRUE(rig.syscalls.unmap(mapped.value(), rig.region->bytes()).has_value());
+}
+
+TEST(NullWorkloadTest, AControllerSlotUnreadableForLessThanTheAllowanceIsWaitedOut) {
+  // The same odd sequence, for a run shorter than the allowance: the worker
+  // keeps working and completes. One torn read is no evidence of a death;
+  // the first version left on it, and under TSan with every core busy a
+  // healthy controller descheduled mid-publish made its workers exit 124.
+  Rig rig;
+  auto mapped = rig.syscalls.map_shared(rig.region->fd(), rig.region->bytes());
+  ASSERT_TRUE(mapped.has_value());
+  const std::uint64_t odd = 1;
+  std::memcpy(static_cast<std::byte*>(mapped.value()) + HeartbeatRegion::kHeaderBytes, &odd,
+              sizeof odd);
+  auto outcome = rig.run(Pacing{50 * kMs, 10 * kMs, 100 * kMs});
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(outcome.value(), (Outcome{StopReason::kDurationElapsed, 4, 50 * kMs}));
   EXPECT_TRUE(rig.syscalls.unmap(mapped.value(), rig.region->bytes()).has_value());
 }
 

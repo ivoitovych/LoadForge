@@ -139,16 +139,30 @@ loadforge_enable_sanitizers(loadforge_cli)
 loadforge_enable_coverage(loadforge_cli)
 
 # ---- worker -----------------------------------------------------------------
-# What runs inside a worker process and the IPC it shares with the controller.
-# Depends on platform for the seam; the controller depends on this, never the
-# other way round.
-add_library(loadforge_worker STATIC
+# The IPC the worker shares with the controller, and what runs inside a worker
+# process. Depends on platform for the seam; the controller depends on this,
+# never the other way round.
+#
+# The IPC is a library of its own because it is the protocol's provider, and a
+# second implementation of the worker -- the test-only fake worker of the
+# supervision tier -- links it without the real worker's loop (ADR 0003). With
+# one library, nothing but review would keep that fake from calling the loop it
+# is meant to be independent of; with two, it is a link error.
+add_library(loadforge_ipc STATIC
   src/worker/ipc/heartbeat.cpp
   src/worker/ipc/record.cpp
+)
+target_link_libraries(loadforge_ipc PUBLIC loadforge_platform)
+loadforge_set_warnings(loadforge_ipc)
+loadforge_set_fp_contract(loadforge_ipc)
+loadforge_enable_sanitizers(loadforge_ipc)
+loadforge_enable_coverage(loadforge_ipc)
+
+add_library(loadforge_worker STATIC
   src/worker/scheduler.cpp
   src/worker/entry.cpp
 )
-target_link_libraries(loadforge_worker PUBLIC loadforge_platform)
+target_link_libraries(loadforge_worker PUBLIC loadforge_ipc)
 loadforge_set_warnings(loadforge_worker)
 loadforge_set_fp_contract(loadforge_worker)
 loadforge_enable_sanitizers(loadforge_worker)

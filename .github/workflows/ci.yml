@@ -42,6 +42,11 @@ jobs:
         # dependency that GCC on x86-64 resolves statically may arrive as a
         # NEEDED entry under Clang on ARM64.
         run: ./tools/check-runtime-deps.sh build/debug/loadforge
+      - name: The shipped binary carries no test hook
+        # The release workflow runs the same gate on the static artifact; here
+        # it runs on every compiler and architecture, for the reason the check
+        # above does: what a link pulls in is the toolchain's business.
+        run: ./tools/check-no-test-hooks.sh build/debug/loadforge
 
   tooling:
     # The trust chain tests itself: mutation-gate.py decides whether the test
@@ -91,4 +96,7 @@ jobs:
         env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug
       - name: clang-tidy
-        run: find src -name '*.cpp' | xargs clang-tidy-18 -p build/debug
+        # src/, and the fake worker: a second implementation of the worker
+        # contract, held to the product's bar rather than the tests' (the rest
+        # of tests/ is roadmap item 12).
+        run: find src tests/support/fake_worker -name '*.cpp' | xargs clang-tidy-18 -p build/debug

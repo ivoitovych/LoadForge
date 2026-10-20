@@ -153,10 +153,22 @@ fixtures = ["sysfs/intel", "sysfs/amd", "sysfs/arm64", "sysfs/no-hwmon", "sysfs/
 from the ledger, when a ledger entry names a module that no longer exists, when a declared
 class is not one of the seven, when an entry omits P1 (every module has decision paths, so
 an entry without it was filled in rather than classified), when a declared tier has no
-tests under it, or when a named fixture does not exist. It is built to the F20 standard:
-it fails closed on a ledger it cannot parse, and an empty ledger with a populated `src/`
-is a failure, not a pass. It runs in the coverage workflow, next to the gate whose blind
-spots it covers, and has 25 tests of its own.
+tests under it, when a named fixture does not exist, or when a process-shared lock in
+`src/` is not declared with its robustness test (below). It is built to the F20 standard:
+it fails closed on a ledger it cannot parse or a source file it cannot read, and an empty
+ledger with a populated `src/` is a failure, not a pass. It runs in the coverage
+workflow, next to the gate whose blind spots it covers, and has 39 tests of its own.
+
+**The `EOWNERDEAD` obligation is recorded per lock.** A source file that names a
+process-shared or robust lock primitive (`PTHREAD_PROCESS_SHARED`,
+`pthread_mutexattr_setrobust`, `sem_init`, a futex and the like — matched in the raw
+text, comments included, so the gate errs towards refusing) must be named by a
+`process_shared_locks` entry in its module's row; each entry names the lock, its file and
+a robustness test under `tests/supervision/` that carries `LOADFORGE EOWNERDEAD TEST:
+<name>`, and the module must declare P5. A declaration whose file uses no such primitive
+is refused as stale. There are none today, by design (PLAN §4.6; the heartbeat region is
+a seqlock with nothing to die holding), and the gate prints that it found none rather than
+printing nothing.
 
 The classes that cannot be tested without something to force the state carry their own
 rules, and the two are forced by **different** means — conflating them was this gate's
@@ -229,7 +241,7 @@ those, so a blank there means a real exemption and never an oversight.
 | `config/` | M1 ✅ | P1, P3 | T1, T8 | **Shipped.** TOML parse, schema validation, resolution. Corrected against what was built: the failing open is not behind the seam (PLAN §4.2), so it is reached by real files at T8 rather than injected at T2, and the row no longer claims P2 |
 | `platform` (seam, `fs`) | M1 ✅ | P1, P2, P3 | T1, T2, T8 | **Shipped.** The substitutable `Syscalls` and the reader above it. Corrected against what was built: the row previously claimed P7 and omitted P3 and T8. `fs` itself has no capability states — a source being present, absent or forbidden is a property of the *telemetry sources* that use it, and those arrive at M3 |
 | `platform/clock` | M1 ✅ | P1, P2, P3 | T1, T2, T8 | **Shipped** (JOURNAL §1.11, §1.12). Corrected against what was built: three clocks, not one (`CLOCK_MONOTONIC_RAW` for durations, `CLOCK_MONOTONIC` for timestamps, `CLOCK_BOOTTIME` for suspend detection); P2 because every `clock_gettime` failure is injected; T8 against the real clocks. One directory with `fs`, `process`, `affinity` and `memory`: the ledger row is `src/platform` |
-| `platform/process` | M1 ✅ | P1, P2, P6 | T1, T2, T8 | **Shipped** (JOURNAL §2.1): `WorkerLauncher` (fork, `PR_SET_PDEATHSIG`, the orphan race, close-on-exec handover, exec) and `WorkerPool` (spawn N, reap, signal all, partial-spawn unwind, non-blocking reap). Corrected against what was built: the lifecycle paths are forced through the seam (T2) and real children are forked and reaped at T8; the T7 tier arrives with the controller, which is what a supervision test supervises |
+| `platform/process` | M1 ✅ | P1, P2, P6 | T1, T2, T8 | **Shipped** (JOURNAL §2.1): `WorkerLauncher` (fork, `PR_SET_PDEATHSIG`, the orphan race, a session of the worker's own, close-on-exec handover, exec) and `WorkerPool` (spawn N, reap, signal all, partial-spawn unwind, non-blocking reap). Corrected against what was built: the lifecycle paths are forced through the seam (T2) and real children are forked and reaped at T8; the T7 tier is the controller's, which is what a supervision test supervises. The session (JOURNAL §2.20) is what lets the controller kill what a dead worker left running |
 | `platform/affinity` | M1 ✅ | P1, P2, P7 | T1, T2, T8 | **Shipped.** The P7 state is a cpuset narrower than the topology, built in the fake (JOURNAL §2.12); the kernel's own answers are asserted at T8 against the calling thread only |
 | `platform/memory` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped.** mmap, huge pages, NUMA, mlock — each failure mode injected. Corrected against what was built: the huge-page pool is a P7 state (present, exhausted, unreserved) built in the fake, and T8 corroborates each kernel answer the fake models |
 | `platform/fpenv` | M2b | P1, P2, P3 | T1, T6 | MXCSR/FPCR assert and re-assert (F15) |
@@ -239,8 +251,8 @@ those, so a blank there means a real exemption and never an oversight.
 | `platform/edac` | M3 | P1, P2, P7 | T1, T2 | F13 |
 | `topology/` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped** (JOURNAL §2.6–§2.11): CPU lists, the capability-classifying `Source`, CPUs with their cross-checks, caches, NUMA. Corrected against what was built: T8 added, because the real `/sys` of every CI runner is read and checked against `sysconf` — a tree the tests wrote is still a tree the tests believe in (F21). The snapshot-before-fork rule is the controller's to honour |
 | `worker/scheduler` | M1 ✅ | P1, P2, P3, P6 | T1, T2, T8 | **Shipped** as `src/worker` (JOURNAL §2.17): the internal `--worker` switch, its argument parser, the null workload loop and four exit codes. Corrected against what was built: no barriers (nothing to synchronise in a null workload; they arrive with the first workload), no pool (the pool is `platform/process`); affinity placement and heartbeat emission as planned. T7 arrives with the controller, which is what runs this under supervision |
-| `worker/ipc` | M1 ✅ | P1, P2, P3, P4, P5 | T1, T2 | **Shipped** (JOURNAL §2.15, §2.16): the heartbeat region (seqlock slots, no lock, memfd across exec) and the record channel (CRC-32 frames, a reader that never resynchronises). Corrected against what was built: the boundary is fuzzed and every single-byte corruption of a multi-frame stream is tried, but at T1 (`tests/unit`), because `tests/fault_injection` (T5) does not exist until M2a creates it — the row claimed a tier before the tier; P4 added because the frame check is a verification with a classification per corruption |
-| `controller/orchestration` | M1 | P1, P2, P3, P6 | T1, T2, T7 | Run control: one loop, one blocking call; the deadline's stop request; spawn and teardown |
+| `worker/ipc` | M1 ✅ | P1, P2, P3, P4, P5 | T1, T2 | **Shipped** (JOURNAL §2.15, §2.16): the heartbeat region (seqlock slots, no lock, memfd across exec) and the record channel (CRC-32 frames, a reader that never resynchronises). Its own library, `loadforge_ipc`, so the test-only fake worker links the protocol without the real worker's loop (ADR 0003). No process-shared lock, and the ledger gate checks that on every run. Corrected against what was built: the boundary is fuzzed and every single-byte corruption of a multi-frame stream is tried, but at T1 (`tests/unit`), because `tests/fault_injection` (T5) does not exist until M2a creates it — the row claimed a tier before the tier; P4 added because the frame check is a verification with a classification per corruption |
+| `controller/orchestration` | M1 | P1, P2, P3, P6 | T1, T2, T7 | Run control: one loop, one blocking call; the deadline's stop request; spawn and teardown; each reaped worker's process group killed with it. T7 is the misbehaviour catalogue against `tests/support/fake_worker` (JOURNAL §2.19) |
 | `controller/safety` | M1 | P1, P3 | T1 | The escalation ladder as a function of time; the limits a run states and whether each is enforced |
 | `controller/supervision` | M1 | P1, P3 | T1 | Crash classification: the table of fates. OOM is told from a fault and from a plain kill by the cgroup's OOM-kill count, read before the first fork and after the last reap, all or none (JOURNAL §2.19) |
 | `resources/` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped** (JOURNAL §1.23, §2.19): the memory budget (`MemAvailable`; the cgroup limit under v1 and v2, found through `/proc/self/cgroup` and `mountinfo`) and the cgroup's OOM-kill count, behind the contract the controller consults. Above `topology`, not inside `platform`, because every source is classified with topology's capability model. T8 checks the real machine against the kernel's other figures, including a child really OOM-killed where a v1 cgroup can be made |
@@ -426,7 +438,9 @@ mixed workload at M5 raises it.
 **New gates:** two. A release-artifact check that no test-hook symbol is present in the
 shipped binary, and the `EOWNERDEAD` obligation recorded per lock in the ledger.
 `tools/check-test-obligations.py` and `tests/obligations.toml` already exist, so M1's
-modules join a ledger rather than being retrofitted into one.
+modules join a ledger rather than being retrofitted into one. Both are in:
+`tools/check-no-test-hooks.sh` reads the shipped binary's symbols in the release and CI
+workflows, and the ledger gate refuses an undeclared lock (§2.5; JOURNAL §2.21).
 
 **Exit criteria** — all measurable, all in CI:
 
@@ -617,6 +631,8 @@ What CI enforces at each milestone. A gate, once added, is never removed.
 | Unrun-check (T5b) required on `verification/` | | | ✅ | ✅ | ✅ |
 | Determinism class enforced per workload | | | ✅ | ✅ | ✅ |
 | Supervision tier on every process transition | | ✅ | ✅ | ✅ | ✅ |
+| No test-hook symbol in the shipped binary | | ✅ | ✅ | ✅ | ✅ |
+| `EOWNERDEAD` robustness test per process-shared lock | | ✅ | ✅ | ✅ | ✅ |
 | Hostile fixture per source × state | | | | ✅ | ✅ |
 | Soak (T10), nightly | | | | | ✅ |
 
@@ -715,29 +731,35 @@ branch with zero exclusions and a ledger row the gate checks: `core`, `main`, th
 `platform` (seam and `fs`, exit status, launcher and pool, clock, affinity, memory),
 `topology`, `config` with `loadforge --check-config FILE`, `worker/ipc` (heartbeat region,
 record channel), `worker` (the `--worker` switch and the null workload loop),
-`controller` with `reporters/console` and `loadforge stress` (#23), and `resources` (the
-memory budget and the OOM-kill record). The
+`controller` with `reporters/console` and `loadforge stress` (#23), the misbehaviour
+catalogue (#29: `tests/support/fake_worker`, a second implementation of the worker contract
+that misbehaves on demand, every reachable catalogue row as a T7 test against it, and the
+two gates M1 adds: no test-hook symbol in the shipped binary; the `EOWNERDEAD` obligation
+per lock in the ledger), and `resources` (the memory budget and the OOM-kill record). The
 ledger in §3 marks each ✅ with the corrections made against what was actually built.
 
 **Against the M1 exit criteria in §4:** criteria 5 (config round-trips; every rejection
 tested for its message) and 6 (100% / zero exclusions; ledger current) are met on `main`.
 Criterion 1 (the controller runs the null workload for the configured duration and honours
-its limits) is met on `main` with its T7 tier, and the memory limit is now honoured against
-a real ceiling: `src/resources` reads `MemAvailable` and the cgroup limit under either
+its limits) is met on `main` with its T7 tier, and the memory limit is honoured against a
+real ceiling: `src/resources` reads `MemAvailable` and the cgroup limit under either
 hierarchy, and `stress` reports memory NOT ENFORCED only when that budget cannot be read,
-with the reader's reason. Criterion 3 is met on the classification side: a SIGKILL the
-controller did not send is `kOomKilled` only when the cgroup's OOM-kill count accounts for
-it, asserted row by row in the table and through the loop against the controller's own
-fake of the record, and the kernel's side (a child really OOM-killed moves the count by one,
-a `kill -9` by none) is asserted against the real kernel; the T7 row that OOM-kills a real
-fake worker end to end lands with the fake-worker executable. Criteria 2 and 4 wait on that
-executable and the remaining injected paths.
+with the reader's reason. Criterion 2 is met for every transition but one: COMPLETE, FAULT
+(`SIGSEGV`, `SIGBUS`, `SIGABRT`), TIMEOUT (the hang and the spin) and the controller killed
+each have a T7 test against the fake worker, and the controller-killed case is proved for a
+worker that ignores its control pipe, which only the parent-death signal can end.
+Criterion 3 is met on the classification side: a SIGKILL the controller did not send is
+`kOomKilled` only when the cgroup's OOM-kill count accounts for it, asserted row by row in
+the table and through the loop against the controller's own fake of the record, and the
+kernel's side (a child really OOM-killed moves the count by one, a `kill -9` by none) is
+asserted against the real kernel. What remains of criteria 2 and 3 is one T7 test: the
+fake worker's `allocate` misbehaviour, OOM-killed for real under a memory limit, reported
+`kOomKilled` end to end. Criterion 4 waits on the remaining injected paths. Of the
+catalogue's rows, "die holding a process-shared lock" has nothing to test, because there is
+no such lock (PLAN §4.6), and the ledger gate checks that on every run.
 
-The next concrete action, after the review fixes queued in the roadmap: the fake-worker
-executable with the misbehaviour catalogue -- including the worker that allocates until it
-is OOM-killed, whose T7 test closes criterion 3 end to end -- and the two gates: no
-test-hook symbol in the shipped binary; the `EOWNERDEAD` obligation per lock in the ledger
-(today there are zero locks, by design — PLAN §4.6).
+The next concrete actions, after the review fixes queued in the roadmap: that T7 OOM test,
+and the M1 exit review of every criterion in §4.
 
 Outside the repository, and still owner-only: **branch protection on `main`**, and a
 **Mull release pinned by verified SHA-256** — the latter a hard prerequisite for M2a.

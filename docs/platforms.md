@@ -95,7 +95,7 @@ built against.
 | glibc (dynamic build) | **2.39** | 2.39 | build | A 24.04-linked binary cannot start on 22.04 (F19) |
 | Host glibc (static build) | 2.39 | **no host requirement** | build | No NSS/DNS/`dlopen`, so static linking is clean — verified |
 | Kernel | 6.18 (dev host) | **5.15** | capability | A floor for *telemetry expectations*, not a hard block |
-| cgroup | v1 and v2 | v1 and v2 | capability | Both hierarchies are read for the memory limit and the OOM-kill count, found through `/proc/self/cgroup` and `/proc/self/mountinfo` (JOURNAL §1.18, §1.23, §2.19); the OOM count needs 4.13, and without it an OOM kill is reported as a kill; the development container runs v1 |
+| cgroup | v1 and v2 | v1 and v2 | capability | Both hierarchies are read for the memory limit and the OOM-kill count, found through `/proc/self/cgroup` and `/proc/self/mountinfo` (JOURNAL §1.18, §1.24, §2.23); the OOM count needs 4.13, and without it an OOM kill is reported as a kill; the development container runs v1 |
 
 > **What the static build does and does not solve.** It removes the **host glibc and
 > libstdc++ ABI requirement** — nothing more. Kernel ABI, CPU ISA and architecture

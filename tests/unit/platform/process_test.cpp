@@ -215,6 +215,46 @@ TEST(WorkerLauncherTest, AMatchingParentPidProceedsToExec) {
   EXPECT_EQ(syscalls.exec_count(), 1);
 }
 
+TEST(WorkerLauncherTest, TheChildLeadsASessionOfItsOwnBeforeItExecs) {
+  // A group of its own, so the supervisor can kill whatever the worker forks
+  // once the worker is gone: the death signal is cleared across fork, so a
+  // grandchild has none.
+  FakeSyscalls syscalls;
+  WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+  EXPECT_EQ(launcher.become_worker(kSupervisor, {"loadforge"}), WorkerStartupFailure::kExecFailed);
+  EXPECT_EQ(syscalls.session_count(), 1);
+  EXPECT_EQ(syscalls.exec_count(), 1);
+}
+
+TEST(WorkerLauncherTest, TheSessionComesAfterTheRaceCheckAndBeforeTheDescriptors) {
+  {
+    // Refused at the death signal or orphaned in the window: no session for a
+    // process that is about to exit.
+    FakeSyscalls syscalls;
+    syscalls.fail_set_parent_death_signal(EINVAL);
+    WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+    (void)launcher.become_worker(kSupervisor, {"loadforge"});
+    EXPECT_EQ(syscalls.session_count(), 0);
+  }
+  {
+    FakeSyscalls syscalls;
+    syscalls.set_parent_pid(1);
+    WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+    (void)launcher.become_worker(kSupervisor, {"loadforge"});
+    EXPECT_EQ(syscalls.session_count(), 0);
+  }
+  {
+    // A descriptor that cannot be handed over stops the worker after its
+    // session began: the order is race check, session, descriptors, exec.
+    FakeSyscalls syscalls;
+    syscalls.fail_inherit(EBADF);
+    WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+    EXPECT_EQ(launcher.become_worker(kSupervisor, {"loadforge"}, {7}),
+              WorkerStartupFailure::kDescriptorNotInherited);
+    EXPECT_EQ(syscalls.session_count(), 1);
+  }
+}
+
 TEST(WorkerLauncherTest, TheChildHandsOverExactlyTheDescriptorsItIsGiven) {
   FakeSyscalls syscalls;
   WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
@@ -435,6 +475,25 @@ TEST(RealWorker, AFailedExecReachesTheSupervisorAsItsDistinguishedCode) {
   EXPECT_EQ(status.termination(), Termination::kExited);
   EXPECT_EQ(status.code(), static_cast<int>(WorkerStartupFailure::kExecFailed));
   EXPECT_FALSE(status.is_success());
+}
+
+TEST(RealWorker, ARealChildLeadsItsOwnSessionAndProcessGroup) {
+  // What start_session does in the one place it is called: the child of a
+  // fork, which is never a group leader, becomes the leader of a new session
+  // and of a group whose id is its pid. Shown in a child because only a child
+  // can show it; the line's own coverage is the RealSyscalls test.
+  RealSyscalls syscalls;
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    syscalls.start_session();
+    const pid_t self = ::getpid();
+    ::_exit(::getsid(0) == self && ::getpgid(0) == self ? 0 : 1);
+  }
+  int raw = 0;
+  ASSERT_EQ(::waitpid(child, &raw, 0), child);
+  const ExitStatus status{raw};
+  EXPECT_TRUE(status.is_success()) << status.describe();
 }
 
 TEST(RealWorker, TheDeathSignalIsActuallyArmedInARealChild) {
