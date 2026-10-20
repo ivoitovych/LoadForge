@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Regression tripwire for the particles workload, NOT an oracle (determinism.md
+# §3: golden vectors are per ISA path). The bits the workload produced for a
+# few units, to be reproduced on every machine of the path's class.
+#
+# Produced by the workload itself, built in the debug preset and run serially:
+#   generate(unit) then compute(unit) of the workload created with
+#   {seed, footprint = 4 units, decomposition = cells per cutoff, isa = path}.
+# Machine: Intel(R) Xeon(R) Processor @ 2.80GHz, Linux 6.18.44 x86_64, GCC 13.3.0.
+# The scalar rows are claimed identical on x86-64 and ARM64 (determinism.md §3);
+# the avx2 rows hold for any AVX2 machine (four lanes, no fused operation). No
+# neon row: none was produced on an ARM64 machine, and one is not invented.
+#
+# Columns: path cells seed unit input_fnv1a64 output_fnv1a64 and the bits of
+# the first three output doubles (force on particle 0: x, y, z). FNV-1a, 64 bit,
+# over the unit's bytes. Hex digits are the values as the double's bit pattern.
+scalar 1 1 0 016f8b0c5ed22ca8 dc66c145924929cf bffc8281f614e301 bff2ad7deca1130f 3facee51fc8149f4
+scalar 2 1 0 016f8b0c5ed22ca8 0bf84e70d577a555 bffc8281f614e301 bff2ad7deca1130f 3facee51fc814a24
+scalar 4 1 0 016f8b0c5ed22ca8 82f8f141da27bebe bffc8281f614e301 bff2ad7deca11310 3facee51fc814a34
+scalar 2 12648430 7 7dee9e025e776056 3c4531ab7c22d8ee 40003ab6303e1d15 3fd939e13dd11eb6 3fdc85ff74a7e280
+avx2 1 1 0 016f8b0c5ed22ca8 447c0ed04565ecc2 bffc8281f614e301 bff2ad7deca1130e 3facee51fc8149f8
+avx2 2 1 0 016f8b0c5ed22ca8 3aa388b1320d2810 bffc8281f614e301 bff2ad7deca1130e 3facee51fc814a08
+avx2 4 1 0 016f8b0c5ed22ca8 adc85c779052832c bffc8281f614e302 bff2ad7deca1130f 3facee51fc814a14
+avx2 2 12648430 7 7dee9e025e776056 46dc234dbf41b62e 40003ab6303e1d16 3fd939e13dd11eb4 3fdc85ff74a7e27c
