@@ -60,14 +60,35 @@ double sum_forward(std::span<const double> x) {
   return s;
 }
 
+// Pairwise: the range splits at size / 2, left half added to right half.
+// Iterative (an explicit stack, left half first), the recursive order exactly.
 double sum_pairwise(std::span<const double> x) {
   if (x.empty()) {
     return 0.0;
   }
-  if (x.size() == 1) {
-    return x[0];
+  struct Step {
+    std::size_t first;
+    std::size_t size;  // 0: combine the two values on top of the value stack
+  };
+  std::vector<Step> todo{{0, x.size()}};
+  std::vector<double> values;
+  while (!todo.empty()) {
+    const Step step = todo.back();
+    todo.pop_back();
+    if (step.size == 0) {
+      const double right = values.back();
+      values.pop_back();
+      values.back() += right;
+    } else if (step.size == 1) {
+      values.push_back(x[step.first]);
+    } else {
+      const std::size_t half = step.size / 2;
+      todo.push_back({0, 0});
+      todo.push_back({step.first + half, step.size - half});
+      todo.push_back({step.first, half});
+    }
   }
-  return sum_pairwise(x.first(x.size() / 2)) + sum_pairwise(x.subspan(x.size() / 2));
+  return values.back();
 }
 
 double sum_blocked(std::span<const double> x, std::size_t block) {
@@ -155,7 +176,7 @@ TEST(InvariantProperty, ATotalIsConservedUnderPermutationAndExactRedistribution)
 
 TEST(InvariantProperty, APermutationFingerprintsEqualAndASortedSequenceHasNoDescent) {
   for (std::uint64_t stream = 0; stream < 300; ++stream) {
-    const std::size_t n = static_cast<std::size_t>(draw(stream, 999) % 600);
+    const auto n = static_cast<std::size_t>(draw(stream, 999) % 600);
     std::vector<std::uint64_t> keys(n);
     for (std::size_t k = 0; k < n; ++k) {
       // A narrow range in some streams, so duplicates are common.

@@ -124,7 +124,7 @@ TEST(DenseLinearOracleGrid, PowersOfTwoUpToTheOrder) {
 TEST(DenseLinearOracleSample, OneEntryInEachTileDependingOnTheIndexAlone) {
   for (const std::size_t grid : {std::size_t{1}, std::size_t{8}, std::size_t{32}}) {
     const std::size_t edge = kN / grid;
-    for (std::uint64_t index : {std::uint64_t{0}, std::uint64_t{1}, ~std::uint64_t{0}}) {
+    for (const std::uint64_t index : {std::uint64_t{0}, std::uint64_t{1}, ~std::uint64_t{0}}) {
       std::set<std::size_t> seen;
       for (std::size_t tile = 0; tile < grid * grid; ++tile) {
         const Entry entry = sample_entry(index, grid, tile);
@@ -225,8 +225,8 @@ TEST(DenseLinearOracleVerdict, NotCheckedNamesTheInputEntryAndItsValue) {
 TEST(DenseLinearOracleVerdict, MinusOneIsInsideTheRangeTheGeneratorDraws) {
   // entry_value(0) = -1 exactly: a correctly generated entry. A unit of -1s
   // and 1/2s is checked, not refused.
-  units::Unit unit{0, std::vector<double>(kEntries, -1.0), std::vector<double>(kEntries, 0.5),
-                   std::vector<double>(kEntries, -128.0)};
+  const units::Unit unit{0, std::vector<double>(kEntries, -1.0), std::vector<double>(kEntries, 0.5),
+                         std::vector<double>(kEntries, -128.0)};
   EXPECT_TRUE(std::holds_alternative<Agreement>(check(*make(), unit)));
   EXPECT_EQ(spec::entry_value(0), -1.0);
 }
@@ -321,6 +321,63 @@ TEST(DenseLinearOracleVerdict, AnEntryOutsideTheSampleIsNotJudged) {
   ASSERT_TRUE(std::holds_alternative<BoundedMismatch>(full));
   EXPECT_EQ(std::get<BoundedMismatch>(full).element, unsampled);
   EXPECT_EQ(std::get<BoundedMismatch>(full).blocks_compared, kEntries);
+}
+
+/// Tile 0's 4 x 8 block (rows r..r+3, columns c..c+7) that avoids unit
+/// `index`'s sampled entry of tile 0, found from the sample alone. Returns the
+/// block's top-left corner.
+Entry block_avoiding_the_sample(std::uint64_t index) {
+  const Entry sampled = sample_entry(index, kDefaultGrid, 0);
+  const std::size_t tile = kN / kDefaultGrid;
+  for (std::size_t row = 0; row + 4 <= tile; row += 4) {
+    for (std::size_t column = 0; column + 8 <= tile; column += 8) {
+      const bool inside = sampled.row >= row && sampled.row < row + 4 && sampled.column >= column &&
+                          sampled.column < column + 8;
+      if (!inside) {
+        return Entry{row, column};
+      }
+    }
+  }
+  return Entry{};
+}
+
+void corrupt_block(units::Unit& unit, const Entry corner) {
+  for (std::size_t r = 0; r < 4; ++r) {
+    for (std::size_t c = 0; c < 8; ++c) {
+      unit.c[(corner.row + r) * kN + corner.column + c] += 1.0;
+    }
+  }
+}
+
+TEST(DenseLinearOracleVerdict, DocumentedLimitationADamagedBlockAvoidingTheSampleIsAgreement) {
+  // NOT a defect: review W1-02. One entry of a 32 x 32 tile is checked, so a
+  // 4 x 8 block (32 of 1024 entries) wrong by 1.0, far beyond tolerance, is
+  // missed by this unit when it avoids the sampled entry. Agreement says 64
+  // sampled entries passed, not that the output is right.
+  units::Unit unit = flat_unit(3);
+  corrupt_block(unit, block_avoiding_the_sample(3));
+  const Verdict verdict = check(*make(), unit);
+  ASSERT_TRUE(std::holds_alternative<Agreement>(verdict));
+  EXPECT_EQ(blocks_of(verdict), 64U);
+}
+
+TEST(DenseLinearOracleVerdict, TheSameDamagedBlockIsCaughtAtFullGrid) {
+  units::Unit unit = flat_unit(3);
+  const Entry corner = block_avoiding_the_sample(3);
+  corrupt_block(unit, corner);
+  const Verdict verdict = check(*make(kN), unit);
+  ASSERT_TRUE(std::holds_alternative<BoundedMismatch>(verdict));
+  const auto& mismatch = std::get<BoundedMismatch>(verdict);
+  ASSERT_TRUE(mismatch.element.has_value());
+  const std::size_t row = *mismatch.element / kN;
+  const std::size_t column = *mismatch.element % kN;
+  EXPECT_TRUE(row >= corner.row && row < corner.row + 4 && column >= corner.column &&
+              column < corner.column + 8);
+}
+
+TEST(DenseLinearOracleVerdict, AgreementSaysHowManyEntriesPassed) {
+  EXPECT_EQ(blocks_of(check(*make(), flat_unit(6))), 64U) << "sampled entries only";
+  EXPECT_EQ(blocks_of(check(*make(kN), flat_unit(6))), 65536U) << "every entry";
 }
 
 }  // namespace

@@ -15,13 +15,14 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace loadforge::verification::orders {
 
-enum class Shape { kForward, kReverse, kPairwise, kPanel };
+enum class Shape : std::uint8_t { kForward, kReverse, kPairwise, kPanel };
 
 /// One evaluation order. For kPanel: k-panels of depth `kc`, each summed into
 /// `lanes` accumulators (k mod lanes) that are then combined pairwise, the
@@ -49,12 +50,33 @@ inline std::string name_of(const Order& order) {
          (order.fused ? " fma" : "");
 }
 
+/// The pairwise sum of x[k] y[k]: the range splits at size / 2, left half
+/// added to right half. Iterative (an explicit stack, left half first), so the
+/// order of the additions is the recursive one exactly.
 inline double pairwise(std::span<const double> x, std::span<const double> y) {
-  if (x.size() == 1) {
-    return x[0] * y[0];
+  struct Step {
+    std::size_t first;
+    std::size_t size;  // 0: combine the two values on top of the value stack
+  };
+  std::vector<Step> todo{{0, x.size()}};
+  std::vector<double> values;
+  while (!todo.empty()) {
+    const Step step = todo.back();
+    todo.pop_back();
+    if (step.size == 0) {
+      const double right = values.back();
+      values.pop_back();
+      values.back() += right;
+    } else if (step.size == 1) {
+      values.push_back(x[step.first] * y[step.first]);
+    } else {
+      const std::size_t half = step.size / 2;
+      todo.push_back({0, 0});
+      todo.push_back({step.first + half, step.size - half});
+      todo.push_back({step.first, half});
+    }
   }
-  const std::size_t half = x.size() / 2;
-  return pairwise(x.first(half), y.first(half)) + pairwise(x.subspan(half), y.subspan(half));
+  return values.back();
 }
 
 inline double evaluate(const Order& order, std::span<const double> x, std::span<const double> y) {

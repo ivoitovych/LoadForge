@@ -150,7 +150,7 @@ TEST(ResidualTolerance, WithNothingToRoundItIsTheUnderflowTermAlone) {
 /// 113-bit significands), so B's few-ulp margins are resolved.
 long double bound_b(ErrorModel model, double magnitude) {
   const long double u = kU;
-  const long double k = static_cast<long double>(model.depth);
+  const auto k = static_cast<long double>(model.depth);
   const long double g = k * u / (1.0L - k * u);
   const long double big_g = 2.0L * g / (1.0L - g);
   const long double unit = static_cast<long double>(model.products) * 0x1p-1074L;
@@ -162,7 +162,7 @@ TEST(ResidualTolerance, IsNeverBelowTheBoundAndBarelyAboveIt) {
   // Depths and magnitudes across the domain, and random magnitudes, so that
   // a rounding the derivation forgot -- an up-step too few, a rounding of K
   // assumed exact -- shows as T^ < B for some of them.
-  std::vector<ErrorModel> models{
+  const std::vector<ErrorModel> models{
       dot_model(1),   dot_model(2),   dot_model(3), dot_model(256),     dot_model(255),
       dot_model(257), sum_model(256), sum_model(2), dot_model(1000003), {kMaxDepth, kMaxDepth}};
   std::vector<double> magnitudes{1.0, 0.5, 3.0, 255.75, 256.0, 1e-300, 1e300, kMaxMagnitude};
@@ -201,7 +201,7 @@ TEST(ResidualTolerance, CoversAnEvaluationThatUnderflowed) {
   const Accumulation computed = dot(x, y);
   EXPECT_EQ(computed.value, 0.0);
   EXPECT_EQ(computed.magnitude, 0.0);
-  const double exact = static_cast<double>(n / 2) * kTiny;  // n 2^-1075, n even
+  const double exact = static_cast<double>(n) / 2.0 * kTiny;  // n 2^-1075, n even
   const double t = derived(dot_model(n), computed.magnitude);
   EXPECT_TRUE(within(compare(exact, computed.value, t)));
   // And the underflow term is what holds it: the floor alone would refuse.

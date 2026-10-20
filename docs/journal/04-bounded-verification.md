@@ -118,11 +118,12 @@ the dot products.
 
 Options: a fixed set of entries (the same for every unit: a fault elsewhere is never seen);
 uniform random entries (clusters and gaps); whole rows or columns (one tile row only); one
-entry per tile of a grid, drawn per unit. **One per tile** is taken: a fault confined to one
-region of C — a microkernel's register block, a cache line's rows — meets a check whatever
-the region, and the drawn offset varies with the unit, so over units every entry is
-checked. Drawn from Philox at a fixed seed with the unit index as the stream, so the
-sample is a function of the index alone (oracle.hpp). The grid is a parameter of the
+entry per tile of a grid, drawn per unit. **One per tile** is taken: every tile of C is
+represented by one sampled entry, and the drawn offset varies with the unit, so over units
+every entry is checked. This does not mean a fault confined to a tile meets a check: see
+"Correction: what one entry per tile guarantees" below. Drawn from Philox at a fixed seed
+with the unit index as the stream, so the sample is a function of the index alone
+(oracle.hpp). The grid is a parameter of the
 factory, validated (a power of two up to 256), so the tests can check every entry; the
 default of 8 is 64 dot products, about 0.2% of a unit's arithmetic before the duty cycle.
 
@@ -212,3 +213,19 @@ would carry is on the branch and in this fragment.
    This stream sets `-fprofile-update=atomic` on its own targets. Suggested: add it in
    `loadforge_enable_coverage` for every target, so the next stream with a concurrency
    test does not meet this again.
+
+### Correction: what one entry per tile guarantees
+
+External review 2026-10-20 12:51 UTC, W1-02. The header and the sampling decision above
+said a fault confined to one tile (a microkernel's register block, a cache line's rows)
+"meets a check". It does not: at the default grid each tile is 32 x 32 = 1024 entries and
+one is checked, so a fault altering k entries of a tile is caught in one unit with
+probability k / 1024 (a 4 x 8 block: 3.125%; four lanes of a row: 0.390625%). Corrected
+statement: every tile is represented by one sampled entry; a fault is caught in a unit only
+if it alters a sampled entry; a persistent fault is caught across units because the
+sampled positions vary with the unit index; grid = 256 checks every entry. Decision:
+sampling stays the default (a full check costs as much as the product). Agreement already
+carries blocks_compared (64, or 65536 at grid 256), which is what lets a consumer tell
+sampled from complete. Tests added: the limitation (`DocumentedLimitation...`, a 4 x 8
+block avoiding the sample is an Agreement at the default grid), the control (the same
+corruption is a BoundedMismatch at grid 256), and the pinned blocks_compared values.

@@ -12,14 +12,25 @@
 // --------------
 // For unit `index`, the n x n output (n = kOrder) is divided into grid x grid
 // tiles of (n / grid) x (n / grid) entries, and ONE entry of each tile is
-// checked: grid^2 entries, spread so that a fault confined to any one tile of
-// the output -- one microkernel's registers, one cache line's worth of rows --
-// meets a check. Which entry of each tile is drawn from Philox at
-// (kSampleSeed, index, tile), so the entries are a function of the unit index
-// alone (oracle.hpp: a re-run checks the same ones), and different units check
-// different entries. The default grid, 8, checks 64 entries: 64 dot products
-// of 256 terms, about 0.2% of the unit's 2 n^3 operations, before the duty
-// cycle (record.hpp, DutyCycle) thins it further. grid = n checks every entry.
+// checked: grid^2 entries. Every tile is REPRESENTED by one sampled entry; a
+// fault is caught in a unit only if it alters a sampled entry. A fault
+// confined to a tile does not, by that, meet a check. At the default grid of
+// 8 each tile is 32 x 32 = 1024 entries and one is checked, so a fault that
+// alters k entries of one tile, at positions independent of the sample, is
+// caught in a single unit with probability k / 1024: a damaged 4 x 8 kernel
+// output block (k = 32) 3.125%, four lanes of one row (k = 4) 0.390625%. Which
+// entry of each tile is drawn from Philox at (kSampleSeed, index, tile), so
+// the entries are a function of the unit index alone (oracle.hpp: a re-run
+// checks the same ones) and different units check different entries; a
+// PERSISTENT fault is therefore caught across units, a transient one in a
+// single unit may be missed. The default grid checks 64 dot products of 256
+// terms, about 0.2% of the unit's 2 n^3 operations, before the duty cycle
+// (record.hpp, DutyCycle) thins it further. Sampling stays the default because
+// a full check costs as much as the product. grid = n = 256 checks every
+// entry, and only then does Agreement mean the whole output is right.
+// Agreement carries blocks_compared, the number of entries checked (64, or
+// 65536 at grid 256), so a consumer can tell "64 sampled entries passed" from
+// "all entries passed"; it is not a proof of the remaining entries.
 //
 // For a checked entry (i, j), with a_i the row of A and b_j the column of B:
 //
