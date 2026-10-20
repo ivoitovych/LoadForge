@@ -52,8 +52,47 @@ struct WorkerReport {
 /// rather than carry on as a second controller. The caller returns it from
 /// main; the child is single-threaded and the streams were flushed before
 /// the fork, so an ordinary exit is safe and, unlike _exit, measurable.
+/// When a worker was reaped, on the timeline's clock: the telemetry before this
+/// instant is what the worker's death leaves behind.
+struct Reap {
+  std::size_t slot = 0;
+  std::int64_t at_ns = 0;
+
+  [[nodiscard]] friend bool operator==(const Reap&, const Reap&) = default;
+};
+
+/// What the sampler did during the run (PLAN F17: the observer is measured).
+///
+///   enabled          a sampler was offered.
+///   interval_ns      the interval between rounds the controller kept to.
+///   rounds, points   rounds taken and points they appended to the timeline.
+///   cost_ns          the time the rounds took, summed: what the observer cost.
+///   first_round_ns, last_round_ns   CLOCK_MONOTONIC (the heartbeat clock, and
+///                    the timeline's), of the first round -- taken before the
+///                    first fork, so a counter has its baseline before any
+///                    worker can move it -- and of the last, taken after the
+///                    last reap.
+///   reaps            every worker's reap time, in the order they were reaped.
+///   fault            the first thing the telemetry could not do (a timeline
+///                    at capacity, a phase refused); sampling stops at a
+///                    refused round, and the run does not.
+struct SamplingReport {
+  bool enabled = false;
+  std::int64_t interval_ns = 0;
+  std::uint64_t rounds = 0;
+  std::uint64_t points = 0;
+  std::int64_t cost_ns = 0;
+  std::int64_t first_round_ns = 0;
+  std::int64_t last_round_ns = 0;
+  std::vector<Reap> reaps;
+  std::optional<std::string> fault;
+
+  [[nodiscard]] friend bool operator==(const SamplingReport&, const SamplingReport&) = default;
+};
+
 struct RunReport {
   std::vector<WorkerReport> workers;
+  SamplingReport sampling;
   std::int64_t elapsed_ns = 0;
   std::optional<int> worker_exit_code;
 

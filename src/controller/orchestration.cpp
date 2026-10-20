@@ -3,6 +3,7 @@
 
 #include <sys/types.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <csignal>
@@ -27,6 +28,7 @@
 #include "platform/syscalls.hpp"
 #include "platform/worker_pool.hpp"
 #include "resources/oom_kill_record.hpp"
+#include "telemetry/timeline.hpp"
 #include "topology/snapshot.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
@@ -145,6 +147,10 @@ class Run {
   [[nodiscard]] core::Result<core::Ok, ControllerError> reap(std::int64_t elapsed_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
   void attribute_oom_kills();
+  void begin_telemetry();
+  void take_round(std::int64_t now_ns, bool force);
+  void mark_phase(std::string_view label, std::int64_t now_ns);
+  void telemetry_fault(const std::string& text, std::int64_t now_ns);
   [[nodiscard]] core::Result<RunReport, ControllerError> finish();
   void close_channel(Tracked& worker);
   void kill_group(Tracked& worker);
@@ -170,6 +176,14 @@ class Run {
   std::size_t live_ = 0;
   bool stop_requested_ = false;
   bool spawned_ = false;
+  /// What the sampler did; `sampling_live_` is false before it begins and
+  /// after a round it refused.
+  SamplingReport sampling_;
+  bool sampling_live_ = false;
+  /// The monotonic time of the latest clock reading the loop made, so that the
+  /// sampling and the reaping use the reading the tick already took and add no
+  /// read of their own.
+  std::int64_t clock_running_ns_ = 0;
 };
 
 core::Result<core::Ok, ControllerError> Run::prepare() {
@@ -216,7 +230,9 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
     return error_at("clock", describe(now.error()));
   }
   started_ = now.value();
+  clock_running_ns_ = started_.running_ns;
   beat(started_);
+  begin_telemetry();
 
   for (Tracked& worker : workers_) {
     auto records = syscalls_->create_pipe();
@@ -309,6 +325,7 @@ core::Result<std::int64_t, ControllerError> Run::elapsed_now() {
   if (!elapsed.has_value()) {
     return error_at("clock", describe(elapsed.error()));
   }
+  clock_running_ns_ = now.value().running_ns;
   return elapsed.value().raw_ns;
 }
 
@@ -322,13 +339,20 @@ core::Result<core::Ok, ControllerError> Run::tick() {
     return error_at("clock", describe(elapsed.error()));
   }
   const std::int64_t elapsed_ns = elapsed.value().raw_ns;
+  clock_running_ns_ = now.value().running_ns;
   beat(now.value());
   if (!stop_requested_ && elapsed_ns >= duration_ns_) {
+    // The round that closes the phase the deadline ends, and the mark that
+    // opens the next, share this instant: a counter's advance up to the
+    // deadline then belongs to "run" and what follows to "stop".
+    take_round(now.value().running_ns, true);
+    mark_phase("stop", now.value().running_ns);
     if (auto requested = request_stop(now.value().running_ns); !requested.has_value()) {
       return requested;
     }
     reporter_->event(elapsed_ns, "deadline reached: stop requested");
   }
+  take_round(now.value().running_ns, false);
   for (Tracked& worker : workers_) {
     if (!worker.reaped) {
       if (auto watched = watch(worker, now.value(), elapsed_ns); !watched.has_value()) {
@@ -499,6 +523,9 @@ core::Result<core::Ok, ControllerError> Run::reap(std::int64_t elapsed_ns) {
     Tracked& worker = workers_[dead->slot];
     worker.evidence.status = dead->status;
     worker.reaped = true;
+    if (sampling_.enabled) {
+      sampling_.reaps.push_back(Reap{dead->slot, clock_running_ns_});
+    }
     --live_;
     kill_group(worker);
     (void)syscalls_->close(worker.control.write_fd);
@@ -581,6 +608,71 @@ core::Result<core::Ok, ControllerError> Run::drain_after_death() {
   return core::Ok{};
 }
 
+void Run::telemetry_fault(const std::string& text, std::int64_t now_ns) {
+  if (!sampling_.fault.has_value()) {
+    sampling_.fault = text;
+  }
+  reporter_->event(now_ns - started_.running_ns, "telemetry: " + text);
+}
+
+void Run::begin_telemetry() {
+  if (options_->sampler == nullptr) {
+    return;
+  }
+  sampling_.enabled = true;
+  sampling_.interval_ns = options_->sample_interval_ns;
+  sampling_live_ = true;
+  // Before the first fork: the baseline every counter's delta is taken from.
+  take_round(started_.running_ns, true);
+  mark_phase("run", started_.running_ns);
+}
+
+void Run::take_round(std::int64_t now_ns, bool force) {
+  if (!sampling_live_) {
+    return;
+  }
+  const bool taken = sampling_.rounds > 0;
+  // The timeline refuses a round that is not later than the last: skipped, as
+  // a round that is not due is, rather than offered and refused.
+  if (taken && now_ns <= sampling_.last_round_ns) {
+    return;
+  }
+  if (taken && !force && now_ns - sampling_.last_round_ns < options_->sample_interval_ns) {
+    return;
+  }
+  const auto answer = options_->sampler->round(now_ns);
+  // The observer's cost (F17). A clock that cannot be read leaves the cost a
+  // lower bound, which is the only honest thing to say about it.
+  if (const auto after = clock_.now(); after.has_value()) {
+    sampling_.cost_ns += std::max<std::int64_t>(0, after.value().running_ns - now_ns);
+  }
+  if (!answer.has_value()) {
+    telemetry_fault("sampling stopped: " + std::string{telemetry::describe(answer.error().fault)} +
+                        (answer.error().detail.empty() ? "" : " (" + answer.error().detail + ")"),
+                    now_ns);
+    sampling_live_ = false;
+    return;
+  }
+  if (!taken) {
+    sampling_.first_round_ns = now_ns;
+  }
+  sampling_.last_round_ns = now_ns;
+  ++sampling_.rounds;
+  sampling_.points += answer.value();
+}
+
+void Run::mark_phase(std::string_view label, std::int64_t now_ns) {
+  if (!sampling_.enabled || options_->timeline == nullptr) {
+    return;
+  }
+  const auto marked = options_->timeline->mark_phase({now_ns, std::string{label}});
+  if (!marked.has_value()) {
+    telemetry_fault("phase \"" + std::string{label} +
+                        "\" refused: " + std::string{telemetry::describe(marked.error().fault)},
+                    now_ns);
+  }
+}
+
 void Run::attribute_oom_kills() {
   // Every worker is reaped by now, so the deaths and the count are complete:
   // the window judge_oom_kills needs. The count is read again only when a
@@ -628,6 +720,10 @@ core::Result<RunReport, ControllerError> Run::finish() {
     entry.records = std::move(worker.notes);
     report.workers.push_back(std::move(entry));
   }
+  // After the last reap: every counter now holds what the workers did, and
+  // what they left behind when they died.
+  take_round(clock_running_ns_, true);
+  report.sampling = sampling_;
   auto released = region_->release();
   if (!released.has_value()) {
     return error_at("heartbeat", describe(released.error()));

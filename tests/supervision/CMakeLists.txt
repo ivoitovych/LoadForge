@@ -7,9 +7,10 @@
 # misbehaviour catalogue). A separate executable so the ledger's T7 location is
 # a directory of tests and nothing else, and so these tests, which take seconds
 # each, are a tier a contributor can run on its own.
-add_executable(loadforge_supervision_tests supervision_test.cpp catalogue_test.cpp)
+add_executable(loadforge_supervision_tests supervision_test.cpp catalogue_test.cpp
+               telemetry_death_test.cpp)
 target_link_libraries(loadforge_supervision_tests PRIVATE
-  loadforge_controller loadforge_platform GTest::gtest_main)
+  loadforge_cli loadforge_controller loadforge_platform GTest::gtest_main)
 target_include_directories(loadforge_supervision_tests PRIVATE "${CMAKE_SOURCE_DIR}/tests")
 # Two worker binaries: the real one, and the fake worker the misbehaviour
 # catalogue runs (catalogue_test.cpp). Their paths are baked in rather than
