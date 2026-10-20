@@ -105,8 +105,8 @@ class PullExecutor final : public worker::Executor {
 [[nodiscard]] inline workloads::WorkloadConfig config_for(std::uint32_t decomposition,
                                                           simd::IsaPath isa,
                                                           std::uint64_t seed = 7) {
-  return workloads::WorkloadConfig{
-      seed, 3 * (spec::kInputBytes + spec::kOutputBytes), decomposition, isa};
+  return workloads::WorkloadConfig{seed, 3 * (spec::kInputBytes + spec::kOutputBytes),
+                                   decomposition, isa};
 }
 
 [[nodiscard]] inline std::unique_ptr<workloads::Workload> make(
@@ -122,6 +122,7 @@ class PullExecutor final : public worker::Executor {
   }
 #if defined(__x86_64__)
   if (path == simd::IsaPath::kAvx2) {
+    // NOLINTNEXTLINE(readability-implicit-bool-conversion): the builtin answers an int.
     return __builtin_cpu_supports("avx2") != 0;
   }
   return path == simd::IsaPath::kScalar;
@@ -206,7 +207,7 @@ struct Reference {
     const std::uint32_t tail = queue.front();
     queue.pop();
     for (std::size_t slot = 0; slot < 8; ++slot) {
-      const std::uint32_t head = heads[tail * 8 + slot];
+      const std::uint32_t head = heads[std::size_t{tail} * 8 + slot];
       if (distance[head] == 0xFFFFFFFFU) {
         distance[head] = distance[tail] + 1;
         queue.push(head);
@@ -260,8 +261,7 @@ struct Reference {
 // ---- running the workload --------------------------------------------------------
 
 [[nodiscard]] inline Bytes run_compute(const workloads::Workload& workload, const Bytes& input,
-                                       worker::Executor& executor,
-                                       std::byte fill = std::byte{0}) {
+                                       worker::Executor& executor, std::byte fill = std::byte{0}) {
   Bytes output(workload.plan().output_bytes, fill);
   Bytes scratch(workload.plan().scratch_bytes * executor.threads(), fill);
   workload.compute(0, input, output, scratch, executor);

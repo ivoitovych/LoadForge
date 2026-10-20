@@ -9,10 +9,10 @@
 #include "workloads/graph/spec.hpp"
 
 #if defined(__x86_64__) && !defined(LOADFORGE_SIMD_SCALAR)
-#define LOADFORGE_GRAPH_AVX2 1
+#define LOADFORGE_GRAPH_AVX2
 #include <immintrin.h>
 #elif defined(__aarch64__) && !defined(LOADFORGE_SIMD_SCALAR)
-#define LOADFORGE_GRAPH_NEON 1
+#define LOADFORGE_GRAPH_NEON
 #include <arm_neon.h>
 #endif
 
@@ -57,6 +57,8 @@ void sweep_scalar(const InEdges& edges, std::span<const double> cur, std::span<d
   }
 }
 
+// The kernels are the one place an intrinsic is wanted, behind the dispatch seam.
+// NOLINTBEGIN(portability-simd-intrinsics)
 #if defined(LOADFORGE_GRAPH_AVX2)
 
 /// The four ranks the tails at `at` .. `at` + 3 name, times the edge share.
@@ -76,21 +78,23 @@ __attribute__((target("avx2"))) void sweep_wide(const InEdges& edges, std::span<
                                                 std::span<double> next, std::uint32_t accumulators,
                                                 std::size_t begin, std::size_t end) noexcept {
   for (std::size_t vertex = begin; vertex < end; ++vertex) {
-    __m256d low = _mm256_setzero_pd();
-    __m256d high = _mm256_setzero_pd();  // lanes 4 .. 7: unused when kLanes is 4
+    struct {
+      __m256d low;
+      __m256d high;  // lanes 4 .. 7: unused when kLanes is 4
+    } acc = {_mm256_setzero_pd(), _mm256_setzero_pd()};
     const std::size_t first = edges.offsets[vertex];
     const std::size_t last = edges.offsets[vertex + 1];
     std::size_t term = first;
     for (; term + kLanes <= last; term += kLanes) {
-      low = _mm256_add_pd(low, terms_at(edges, cur, term));
+      acc.low = _mm256_add_pd(acc.low, terms_at(edges, cur, term));
       if constexpr (kLanes == 8) {
-        high = _mm256_add_pd(high, terms_at(edges, cur, term + 4));
+        acc.high = _mm256_add_pd(acc.high, terms_at(edges, cur, term + 4));
       }
     }
     std::array<double, kMaxAccumulators> storage{};
     const std::span<double> lanes(storage);
-    _mm256_storeu_pd(lanes.first(4).data(), low);
-    _mm256_storeu_pd(lanes.last(4).data(), high);
+    _mm256_storeu_pd(lanes.first(4).data(), acc.low);
+    _mm256_storeu_pd(lanes.last(4).data(), acc.high);
     add_tail(edges, cur, lanes, term, last);
     next[vertex] = rank_of(lanes, accumulators);
   }
@@ -132,8 +136,8 @@ void sweep_wide(const InEdges& edges, std::span<const double> cur, std::span<dou
     for (; term + kLanes <= last; term += kLanes) {
       for (std::size_t vector = 0; vector < kVectors; ++vector) {
         const std::size_t at = term + 2 * vector;
-        const float64x2_t gathered = vcombine_f64(vld1_f64(&cur[edges.tails[at]]),
-                                                  vld1_f64(&cur[edges.tails[at + 1]]));
+        const float64x2_t gathered =
+            vcombine_f64(vld1_f64(&cur[edges.tails[at]]), vld1_f64(&cur[edges.tails[at + 1]]));
         acc[vector] = vaddq_f64(acc[vector], vmulq_f64(gathered, share));
       }
     }
@@ -161,6 +165,7 @@ void sweep_neon(const InEdges& edges, std::span<const double> cur, std::span<dou
 }
 
 #endif
+// NOLINTEND(portability-simd-intrinsics)
 
 }  // namespace
 

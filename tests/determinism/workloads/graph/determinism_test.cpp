@@ -76,6 +76,7 @@ TEST(GraphDeterminism, EveryIsaPathProducesTheSameBitsForTheSameDecomposition) {
 TEST(GraphDeterminism, TheDistancesAreTheSameForEveryDecompositionAndTheRanksDifferForEachPair) {
   const Unit unit;
   std::vector<Bytes> outputs;
+  outputs.reserve(spec::kAccumulators.size());
   for (const std::uint32_t accumulators : spec::kAccumulators) {
     outputs.push_back(run_serial(*workload_for(accumulators), unit.input));
   }

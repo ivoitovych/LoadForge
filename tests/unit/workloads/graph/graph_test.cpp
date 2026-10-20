@@ -38,8 +38,8 @@ TEST(GraphCreate, ADecompositionThatIsNotAnAccumulatorCountIsRefusedByValue) {
 }
 
 TEST(GraphCreate, APathWithoutAKernelIsRefusedByName) {
-  for (const simd::IsaPath path : {simd::IsaPath::kAvx2, simd::IsaPath::kAvx512,
-                                   simd::IsaPath::kNeon}) {
+  for (const simd::IsaPath path :
+       {simd::IsaPath::kAvx2, simd::IsaPath::kAvx512, simd::IsaPath::kNeon}) {
     if (make(config_for(0, simd::IsaPath::kScalar))->descriptor().paths.contains(path)) {
       continue;
     }
@@ -48,6 +48,13 @@ TEST(GraphCreate, APathWithoutAKernelIsRefusedByName) {
     EXPECT_EQ(created.error().fault, WorkloadFault::kConfiguration);
     EXPECT_NE(created.error().detail.find(std::string(simd::describe(path))), std::string::npos);
   }
+}
+
+TEST(GraphCreate, AnIsaPathValueOutsideTheEnumerationIsRefusedLikeAnyOtherWithoutAKernel) {
+  const auto created = spec::create(config_for(0, static_cast<simd::IsaPath>(200)));
+  ASSERT_FALSE(created.has_value());
+  EXPECT_EQ(created.error().fault, WorkloadFault::kConfiguration);
+  EXPECT_NE(created.error().detail.find("unrecognised"), std::string::npos);
 }
 
 TEST(GraphCreate, AFootprintOfExactlyOneUnitHoldsOneAndOneByteLessHoldsNone) {
@@ -116,9 +123,11 @@ TEST(GraphDescriptor, ThePathsAreTheOnesThisBuildHasKernelsFor) {
 #if defined(LOADFORGE_SIMD_SCALAR)
   EXPECT_EQ(workload->descriptor().paths, (simd::IsaSet{simd::IsaPath::kScalar}));
 #elif defined(__x86_64__)
-  EXPECT_EQ(workload->descriptor().paths, (simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kAvx2}));
+  EXPECT_EQ(workload->descriptor().paths,
+            (simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kAvx2}));
 #elif defined(__aarch64__)
-  EXPECT_EQ(workload->descriptor().paths, (simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kNeon}));
+  EXPECT_EQ(workload->descriptor().paths,
+            (simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kNeon}));
 #else
   EXPECT_EQ(workload->descriptor().paths, (simd::IsaSet{simd::IsaPath::kScalar}));
 #endif
@@ -142,7 +151,8 @@ TEST(GraphGenerate, EveryWordIsAVertexAndTheLastIsTheSource) {
   for (std::size_t at = 0; at <= spec::kEdges; ++at) {
     EXPECT_LT(word(input, at), spec::kVertices);
   }
-  EXPECT_EQ(word(input, spec::kEdges), spec::vertex_of(rng::u64_of(rng::block_at(7, 1, spec::kEdges))));
+  EXPECT_EQ(word(input, spec::kEdges),
+            spec::vertex_of(rng::u64_of(rng::block_at(7, 1, spec::kEdges))));
 }
 
 TEST(GraphGenerate, TheDecompositionAndThePathDoNotTouchTheInput) {

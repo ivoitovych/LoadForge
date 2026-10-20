@@ -312,7 +312,8 @@ void sweep_task(void* context, std::size_t index, std::size_t /*slot*/) noexcept
 /// written -- plus the output.
 constexpr std::uint64_t kLogicalBytes =
     2 * kInputBytes + 2 * (kOffsetsBytes + kEdges * kWordBytes) + 2 * kVertices * kWordBytes +
-    kIterations * (kEdges * (kWordBytes + sizeof(double)) + kVertices * (kWordBytes + sizeof(double))) +
+    kIterations *
+        (kEdges * (kWordBytes + sizeof(double)) + kVertices * (kWordBytes + sizeof(double))) +
     kOutputBytes;
 
 class GraphWorkload final : public Workload {
@@ -329,6 +330,8 @@ class GraphWorkload final : public Workload {
     }
   }
 
+  // The signature is the contract's (workload.hpp): two byte spans, output then scratch.
+  // NOLINTBEGIN(bugprone-easily-swappable-parameters)
   void compute(std::uint64_t /*index*/, std::span<const std::byte> input,
                std::span<std::byte> output, std::span<std::byte> scratch,
                worker::Executor& executor) const noexcept override {
@@ -340,6 +343,7 @@ class GraphWorkload final : public Workload {
     std::memcpy(output.first(kRanksOffset).data(), arena.dist.data(), kRanksOffset);
     std::memcpy(output.subspan(kRanksOffset).data(), ranks.data(), kVertices * sizeof(double));
   }
+  // NOLINTEND(bugprone-easily-swappable-parameters)
 
  private:
   Descriptor descriptor_;
@@ -361,9 +365,9 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
   const simd::KernelTable<SweepFn>& kernels = sweep_kernels();
   const SweepFn kernel = simd::kernel_at(kernels, config.isa);
   if (kernel == nullptr) {
-    return WorkloadError{WorkloadFault::kConfiguration,
-                         "graph: no " + std::string(simd::describe(config.isa)) +
-                             " kernel in this build"};
+    return WorkloadError{
+        WorkloadFault::kConfiguration,
+        "graph: no " + std::string(simd::describe(config.isa)) + " kernel in this build"};
   }
   Plan plan;
   plan.input_bytes = kInputBytes;

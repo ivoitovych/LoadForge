@@ -22,9 +22,7 @@ struct SerialMock {
   static std::unique_ptr<worker::Executor> make() { return std::make_unique<SerialExecutor>(); }
 };
 struct PartitionMock {
-  static std::unique_ptr<worker::Executor> make() {
-    return std::make_unique<PartitionExecutor>(3);
-  }
+  static std::unique_ptr<worker::Executor> make() { return std::make_unique<PartitionExecutor>(3); }
 };
 struct PullMock {
   static std::unique_ptr<worker::Executor> make() { return std::make_unique<PullExecutor>(4); }

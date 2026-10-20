@@ -81,8 +81,8 @@ TEST(GraphFaultInjection, ASingleBitFlippedInTheDistancesIsClassifiedAsOneBit) {
 
 TEST(GraphFaultInjection, ASingleBitFlippedInTheRanksIsClassifiedAsOneBit) {
   const Fixture f;
-  for (const std::size_t byte : {spec::kRanksOffset, spec::kRanksOffset + 4097,
-                                 spec::kOutputBytes - 1}) {
+  for (const std::size_t byte :
+       {spec::kRanksOffset, spec::kRanksOffset + 4097, spec::kOutputBytes - 1}) {
     for (const unsigned bit : {0U, 7U}) {
       Bytes bad = f.clean;
       flip(bad, byte, bit);

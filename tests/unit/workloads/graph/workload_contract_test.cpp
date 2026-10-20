@@ -3,11 +3,12 @@
 // WorkloadContract against the graph workload, one subject per decomposition
 // and per ISA path this build has a kernel for.
 
+#include "contracts/workloads/workload_contract.hpp"
+
 #include <gtest/gtest.h>
 
 #include <memory>
 
-#include "contracts/workloads/workload_contract.hpp"
 #include "graph_support.hpp"
 
 namespace loadforge::contracts {
@@ -34,10 +35,10 @@ struct Subject {
   }
 };
 
-using Scalar = ::testing::Types<
-    Subject<0, simd::IsaPath::kScalar>, Subject<1, simd::IsaPath::kScalar>,
-    Subject<2, simd::IsaPath::kScalar>, Subject<4, simd::IsaPath::kScalar>,
-    Subject<8, simd::IsaPath::kScalar>>;
+using Scalar =
+    ::testing::Types<Subject<0, simd::IsaPath::kScalar>, Subject<1, simd::IsaPath::kScalar>,
+                     Subject<2, simd::IsaPath::kScalar>, Subject<4, simd::IsaPath::kScalar>,
+                     Subject<8, simd::IsaPath::kScalar>>;
 INSTANTIATE_TYPED_TEST_SUITE_P(GraphScalar, WorkloadContract, Scalar);
 
 #if defined(__x86_64__) && !defined(LOADFORGE_SIMD_SCALAR)

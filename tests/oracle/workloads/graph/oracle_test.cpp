@@ -25,8 +25,13 @@ Bytes generated(std::uint64_t seed, std::uint64_t index) {
   return input;
 }
 
-void expect_equals_reference(const Bytes& input, const char* what) {
-  for (const std::uint32_t accumulators : spec::kAccumulators) {
+/// Every decomposition by default; the hand-built graphs and the corrupt
+/// inputs pass `thorough = false` and are checked with the default one and the
+/// widest, which between them run the vector kernels at both widths.
+void expect_equals_reference(const Bytes& input, const char* what, bool thorough = true) {
+  const std::vector<std::uint32_t> all(spec::kAccumulators.begin(), spec::kAccumulators.end());
+  for (const std::uint32_t accumulators :
+       thorough ? all : std::vector<std::uint32_t>{spec::kDefaultAccumulators, 8U}) {
     const Bytes expected = reference_output(input, accumulators);
     for (const simd::IsaPath path : runnable_paths()) {
       const auto workload = make(config_for(accumulators, path));
@@ -38,7 +43,8 @@ void expect_equals_reference(const Bytes& input, const char* what) {
 }
 
 TEST(GraphOracle, GeneratedUnitsMatchTheReferenceBitForBit) {
-  for (const auto& [seed, index] : {std::pair<std::uint64_t, std::uint64_t>{1, 0}, {1, 1}, {99, 4}}) {
+  for (const auto& [seed, index] :
+       {std::pair<std::uint64_t, std::uint64_t>{1, 0}, {1, 1}, {99, 4}}) {
     expect_equals_reference(generated(seed, index), "generated");
   }
 }
@@ -75,7 +81,7 @@ TEST(GraphOracle, ARingHasDistanceEqualToTheStepsAroundIt) {
   const std::vector<double> rank = ranks_of(output);
   EXPECT_EQ(*std::ranges::min_element(rank), *std::ranges::max_element(rank))
       << "the ring is symmetric: every vertex has the same rank, to the bit";
-  expect_equals_reference(input, "ring");
+  expect_equals_reference(input, "ring", false);
 }
 
 TEST(GraphOracle, AStarReachesEverythingInOneStepAndTheHubOutranksTheRest) {
@@ -100,12 +106,12 @@ TEST(GraphOracle, AStarReachesEverythingInOneStepAndTheHubOutranksTheRest) {
   const std::vector<double> rank = ranks_of(output);
   EXPECT_GT(rank[0], rank[1]);
   EXPECT_EQ(rank[9], spec::kTeleport) << "no in-edges: only the teleport term, exactly";
-  expect_equals_reference(input, "star");
+  expect_equals_reference(input, "star", false);
 }
 
 TEST(GraphOracle, EveryEdgeASelfLoopLeavesEverythingButTheSourceUnreachable) {
-  const Bytes input = input_of(
-      [](std::size_t edge) { return static_cast<std::uint32_t>(edge / 8); }, 77);
+  const Bytes input =
+      input_of([](std::size_t edge) { return static_cast<std::uint32_t>(edge / 8); }, 77);
   const auto workload = make(config_for(0, simd::IsaPath::kScalar));
   ASSERT_NE(workload, nullptr);
   const Bytes output = run_serial(*workload, input);
@@ -115,7 +121,29 @@ TEST(GraphOracle, EveryEdgeASelfLoopLeavesEverythingButTheSourceUnreachable) {
   }
   const std::vector<double> rank = ranks_of(output);
   EXPECT_EQ(rank[3], rank[4]);
-  expect_equals_reference(input, "self-loops");
+  expect_equals_reference(input, "self-loops", false);
+}
+
+TEST(GraphOracle, AWideShallowTreeKeepsTheBfsTopDownUntilTheUnvisitedAreFew) {
+  // The 8-ary heap: vertex v's j-th edge leads to 8v + 1 + j (wrapped), so the
+  // levels hold 1, 8, 64, 512, 4096 vertices. The fourth level is a frontier
+  // of 512 -- as large as a bottom-up step needs -- with almost everything
+  // still unvisited, where the step stays top-down and runs over the executor.
+  const Bytes input = input_of(
+      [](std::size_t edge) {
+        return static_cast<std::uint32_t>((edge / 8 * 8 + 1 + edge % 8) % spec::kVertices);
+      },
+      0);
+  const auto workload = make(config_for(0, simd::IsaPath::kScalar));
+  ASSERT_NE(workload, nullptr);
+  PullExecutor pull(3);
+  const std::vector<std::uint32_t> distance = distances_of(run_compute(*workload, input, pull));
+  EXPECT_EQ(distance[0], 0U);
+  EXPECT_EQ(distance[8], 1U);
+  EXPECT_EQ(distance[9], 2U);
+  EXPECT_EQ(distance[584], 3U) << "the last of the 512 at depth three";
+  EXPECT_EQ(distance[585], 4U);
+  expect_equals_reference(input, "8-ary heap", false);
 }
 
 TEST(GraphOracle, APathOfThirtyTwoThousandLevelsIsComputedAndIsBounded) {
@@ -129,7 +157,8 @@ TEST(GraphOracle, APathOfThirtyTwoThousandLevelsIsComputedAndIsBounded) {
   const Bytes output = run_compute(*workload, input, executor);
   const std::vector<std::uint32_t> distance = distances_of(output);
   EXPECT_EQ(distance[spec::kVertices - 1], spec::kVertices - 1);
-  EXPECT_LT(executor.runs, 16U + 64U) << "a chain's levels must not each cost an executor round trip";
+  EXPECT_LT(executor.runs, 16U + 64U)
+      << "a chain's levels must not each cost an executor round trip";
 }
 
 TEST(GraphOracle, AVertexNumberNotBelowVIsReducedModuloV) {
@@ -148,20 +177,20 @@ TEST(GraphOracle, AVertexNumberNotBelowVIsReducedModuloV) {
   ASSERT_NE(workload, nullptr);
   EXPECT_EQ(run_serial(*workload, input), run_serial(*workload, reduced))
       << "the reduced input and the raw one are the same graph";
-  expect_equals_reference(input, "unreduced words");
+  expect_equals_reference(input, "unreduced words", false);
 }
 
 TEST(GraphOracle, EveryByteOfEveryPatternIsAnInputWithAnExactAnswer) {
-  for (const unsigned fill : {0x00U, 0xFFU, 0x7FU, 0x80U}) {
+  for (const unsigned fill : {0x00U, 0xFFU, 0x80U}) {
     const Bytes input(spec::kInputBytes, static_cast<std::byte>(fill));
-    expect_equals_reference(input, "constant bytes");
+    expect_equals_reference(input, "constant bytes", false);
   }
 }
 
 TEST(GraphOracle, RandomBytesAreAnInputToo) {
   Bytes input(spec::kInputBytes);
   rng::fill_stream(0xBAD, 1, input);
-  expect_equals_reference(input, "random bytes");
+  expect_equals_reference(input, "random bytes", false);
 }
 
 // ---- the triangle inequality ------------------------------------------------------

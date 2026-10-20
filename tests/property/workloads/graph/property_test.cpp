@@ -164,7 +164,8 @@ TEST(GraphProperty, RelabellingTheVerticesRelabelsTheDistances) {
     Bytes moved(spec::kInputBytes);
     for (std::size_t vertex = 0; vertex < spec::kVertices; ++vertex) {
       for (std::size_t slot = 0; slot < 8; ++slot) {
-        set_word(moved, rename[vertex] * 8 + slot, rename[word(input, vertex * 8 + slot) % 32768U]);
+        set_word(moved, std::size_t{rename[vertex]} * 8 + slot,
+                 rename[word(input, vertex * 8 + slot) % 32768U]);
       }
     }
     set_word(moved, spec::kEdges, rename[word(input, spec::kEdges) % 32768U]);
