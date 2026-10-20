@@ -533,6 +533,102 @@ classes = ["P1"]
 tiers   = ["T1"]'
 expect "a module declared twice FAILS"                       1 $? "declared twice" "$out"
 
+# The EOWNERDEAD obligation, per process-shared lock (IMPLEMENTATION §4, M1's
+# second new gate). The real tree has none, and the gate must say so rather
+# than say nothing; a fixture tree with an undeclared lock must be refused.
+out="$("$ROOT/tools/check-test-obligations.py" 2>&1)"
+expect "the real tree has no lock and says so"               0 $? "none in src/ and none declared" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]'
+expect "a tree without locks owes nothing, explicitly"       0 $? "no EOWNERDEAD obligation is owed" "$out"
+
+cat > "$ob/src/core/shared.cpp" <<'CPP'
+#include <pthread.h>
+void make(pthread_mutexattr_t* attributes) {
+  pthread_mutexattr_setpshared(attributes, PTHREAD_PROCESS_SHARED);
+  pthread_mutexattr_setrobust(attributes, PTHREAD_MUTEX_ROBUST);
+}
+CPP
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P5"]
+tiers   = ["T1"]'
+expect "an undeclared process-shared lock FAILS"             1 $? "declares no process-shared lock" "$out"
+
+printf 'void make() { /* sem_init */ }\n' > "$ob/src/core/shared.cpp"
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P5"]
+tiers   = ["T1"]'
+expect "a primitive named only in a comment still FAILS"     1 $? "uses sem_init" "$out"
+
+cat > "$ob/src/core/shared.cpp" <<'CPP'
+#include <pthread.h>
+void make(pthread_mutexattr_t* attributes) {
+  pthread_mutexattr_setrobust(attributes, PTHREAD_MUTEX_ROBUST);
+}
+CPP
+mkdir -p "$ob/tests/supervision"
+lock_ledger() { # robustness-test, [classes]
+  led "[[module]]
+path    = \"src/core\"
+classes = ${2:-[\"P1\", \"P5\"]}
+tiers   = [\"T1\", \"T7\"]
+process_shared_locks = [
+  { name = \"region lock\", file = \"src/core/shared.cpp\", robustness_test = \"$1\" },
+]"; }
+lock_ledger "tests/supervision/no_such_test.cpp"
+expect "a lock whose robustness test is missing FAILS"       1 $? "not a file under tests/supervision" "$out"
+
+printf 'int dummy;\n' > "$ob/tests/unit/lock_test.cpp"
+lock_ledger "tests/unit/lock_test.cpp"
+expect "a robustness test outside the T7 tier FAILS"         1 $? "not a file under tests/supervision" "$out"
+
+printf 'int robust;\n' > "$ob/tests/supervision/lock_test.cpp"
+lock_ledger "tests/supervision/lock_test.cpp"
+expect "a robustness test that names no lock FAILS"          1 $? "does not carry" "$out"
+
+printf '// LOADFORGE EOWNERDEAD TEST: region lock two\n' >> "$ob/tests/supervision/lock_test.cpp"
+lock_ledger "tests/supervision/lock_test.cpp"
+expect "a robustness test for a different lock FAILS"        1 $? "does not carry" "$out"
+
+printf '// LOADFORGE EOWNERDEAD TEST: region lock\n' >> "$ob/tests/supervision/lock_test.cpp"
+lock_ledger "tests/supervision/lock_test.cpp" '["P1", "P6"]'
+expect "a lock in a module without P5 FAILS"                 1 $? "does not declare P5" "$out"
+
+lock_ledger "tests/supervision/lock_test.cpp"
+expect "a declared lock with its robustness test passes"     0 $? "1 lock(s) declared" "$out"
+
+printf 'void make() {}\n' > "$ob/src/core/shared.cpp"
+lock_ledger "tests/supervision/lock_test.cpp"
+expect "a lock declared where there is none FAILS"           1 $? "uses no process-shared lock" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P5"]
+tiers   = ["T1"]
+process_shared_locks = [{ name = "region lock", file = "src/core/shared.cpp" }]'
+expect "a lock entry missing a field FAILS"                  1 $? "needs exactly" "$out"
+
+led '[[module]]
+path    = "src/core"
+classes = ["P1", "P5"]
+tiers   = ["T1"]
+process_shared_locks = "src/core/shared.cpp"'
+expect "process_shared_locks that is not a list FAILS"       1 $? "must be a list of tables" "$out"
+
+rm -f "$ob/src/core/shared.cpp"
+mkdir -p "$ob/src/core/trap.cpp"
+led '[[module]]
+path    = "src/core"
+classes = ["P1"]
+tiers   = ["T1"]'
+expect "a source file that cannot be read FAILS"             1 $? "cannot be read" "$out"
+rm -rf "$ob/src/core/trap.cpp" "$ob/tests/supervision"
+
 rm -rf "$ob"
 
 echo "check-dco.sh"

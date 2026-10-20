@@ -31,6 +31,27 @@
 #
 # T0 (static), T0b (gate tests) and T9 (sanitizers) are never listed: they are
 # universal. A blank 'tiers' is therefore a real exemption, never an oversight.
+#
+# PROCESS-SHARED LOCKS, ONE ENTRY EACH
+#
+# docs/PLAN.md §4.6: a worker can die holding a process-shared lock, and unless
+# the lock is robust and every acquirer handles EOWNERDEAD, one dead worker
+# deadlocks every survivor. So every such lock is declared in its module's row,
+# with the supervision test that kills its holder mid-critical-section and
+# proves a survivor recovers:
+#
+#   process_shared_locks = [
+#     { name = "...", file = "src/<module>/<file>", robustness_test = "tests/supervision/<file>" },
+#   ]
+#
+# The gate finds the primitives in src/ by name (PTHREAD_PROCESS_SHARED,
+# pthread_mutexattr_setrobust, sem_init, futexes and the like) and refuses a file
+# that uses one without a declaration; the test must carry the line
+# "LOADFORGE EOWNERDEAD TEST: <name>", and the module must declare P5.
+#
+# There are none today, by design: the one piece of state workers and the
+# controller share is the heartbeat region, single-writer seqlock slots with no
+# lock to die holding (docs/JOURNAL.md §2.15). The gate says so on every run.
 
 [[module]]
 path    = "src/core"
