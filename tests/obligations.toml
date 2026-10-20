@@ -162,7 +162,7 @@ open(dir, O_RDONLY) succeeds and EISDIR comes from read(2) instead. \
 ExitStatus classifies waitpid(2) status words and is pure decision and boundary \
 logic (P1, P3), so it needs no seam -- but the same F21 rule applies to its \
 CONSTANTS: the encodings its unit tests use were read off real children forked \
-and killed by the RealWaitStatus tests, not recalled, and it was those that \
+and killed by the RealProcessWaitStatus tests, not recalled, and it was those that \
 established the W* macros do not partition the integers. \
 \
 WorkerLauncher is where P6 arrives, because it is the first code that PERFORMS \
