@@ -1,6 +1,6 @@
 # Stream 16 — The crash journal
 
-**State:** not started  
+**State:** complete, pushed on feature/journal (2026-10-20 15:57 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

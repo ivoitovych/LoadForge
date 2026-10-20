@@ -3,8 +3,10 @@
 
 #include <fcntl.h>
 #include <linux/mempolicy.h>
+#include <linux/perf_event.h>
 #include <poll.h>
 #include <sched.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -21,6 +23,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -31,10 +34,24 @@ namespace {
 /// reading "read(fd 7): Bad file descriptor" cannot be mistaken for a path.
 std::string describe_fd(int fd) { return "fd " + std::to_string(fd); }
 
+/// A counter as an error message names it: "perf event type 4 config 1".
+std::string describe_event(const PerfEventSpec& spec) {
+  std::string text = "perf event type ";
+  text += std::to_string(spec.type);
+  text += " config ";
+  text += std::to_string(spec.config);
+  return text;
+}
+
 }  // namespace
 
 bool operator==(const Reaped&, const Reaped&) = default;
 bool operator==(const CpuMask&, const CpuMask&) = default;
+
+bool operator==(const PerfCount& lhs, const PerfCount& rhs) noexcept {
+  return std::tie(lhs.value, lhs.time_enabled, lhs.time_running) ==
+         std::tie(rhs.value, rhs.time_enabled, rhs.time_running);
+}
 
 // Every function below is a translation and nothing else. There is no decision
 // here to test, which is the point: docs/PLAN.md §4.3 keeps the layer that
@@ -47,6 +64,19 @@ bool operator==(const CpuMask&, const CpuMask&) = default;
 // and by tests/unit/platform/real_syscalls_test.cpp, which drives them against
 // genuine paths in a temporary directory, including genuine failures: a missing
 // file for ENOENT, a directory for EISDIR, and a closed descriptor for EBADF.
+
+core::Result<int, SyscallError> Syscalls::open_perf_event(const PerfEventSpec& /*spec*/) {
+  return SyscallError{ENOSYS, "perf_event_open", ""};
+}
+
+core::Result<core::Ok, SyscallError> Syscalls::control_perf_event(int /*fd*/,
+                                                                  PerfAction /*action*/) {
+  return SyscallError{ENOSYS, "ioctl", ""};
+}
+
+core::Result<PerfCount, SyscallError> Syscalls::read_perf_count(int /*fd*/) {
+  return SyscallError{ENOSYS, "read", ""};
+}
 
 core::Result<int, SyscallError> RealSyscalls::open_read(const std::string& path) {
   // O_CLOEXEC matters here beyond hygiene: the controller forks workers, and a
@@ -473,6 +503,62 @@ core::Result<std::optional<Reaped>, SyscallError> RealSyscalls::reap_any_nonbloc
   const pid_t pid = ::waitpid(-1, &status, WNOHANG);
   const int number = errno;
   return reap_result(pid, status, number);
+}
+
+core::Result<int, SyscallError> RealSyscalls::open_perf_event(const PerfEventSpec& spec) {
+  perf_event_attr attr{};
+  attr.size = sizeof(attr);
+  attr.type = spec.type;
+  attr.config = spec.config;
+  attr.disabled = 1;
+  attr.exclude_kernel = spec.user_only;
+  attr.exclude_hv = spec.user_only;
+  attr.inherit = spec.inherit;
+  attr.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING;
+  // The glibc syscall() wrapper is variadic and perf_event_open has no other
+  // spelling: glibc provides none.
+  // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
+  const long fd =
+      ::syscall(SYS_perf_event_open, &attr, spec.pid, spec.cpu, -1, PERF_FLAG_FD_CLOEXEC);
+  // NOLINTEND(cppcoreguidelines-pro-type-vararg)
+  // Not an `if`: whether the kernel grants a counter depends on the machine's
+  // PMU and perf_event_paranoid, so a test cannot choose the arm on every
+  // machine, and a branch here would be covered on one runner and not another.
+  return result_or_error(static_cast<int>(fd), fd < 0, errno, "perf_event_open",
+                         describe_event(spec));
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::control_perf_event(int fd, PerfAction action) {
+  unsigned long request = 0;
+  switch (action) {
+    case PerfAction::kReset:
+      request = PERF_EVENT_IOC_RESET;
+      break;
+    case PerfAction::kEnable:
+      request = PERF_EVENT_IOC_ENABLE;
+      break;
+    case PerfAction::kDisable:
+      request = PERF_EVENT_IOC_DISABLE;
+      break;
+  }
+  if (request == 0) {
+    return SyscallError{EINVAL, "ioctl", describe_fd(fd)};  // An action outside the enumeration.
+  }
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const int result = ::ioctl(fd, request, 0);
+  return result_or_error(core::Ok{}, result != 0, errno, "ioctl", describe_fd(fd));
+}
+
+core::Result<PerfCount, SyscallError> RealSyscalls::read_perf_count(int fd) {
+  std::array<std::uint64_t, 3> raw{};
+  const ssize_t count = ::read(fd, raw.data(), sizeof(raw));
+  if (count < 0) {
+    return SyscallError{errno, "read", describe_fd(fd)};
+  }
+  if (static_cast<std::size_t>(count) != sizeof(raw)) {
+    return SyscallError{EIO, "read", describe_fd(fd)};  // Not a counter, or a torn read.
+  }
+  return PerfCount{raw[0], raw[1], raw[2]};
 }
 
 }  // namespace loadforge::platform

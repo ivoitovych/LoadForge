@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/worker/executor and nothing else.
+
+[[module]]
+path     = "src/worker/executor"
+classes  = ["P1", "P2", "P3", "P5"]
+tiers    = ["T1", "T2", "T8", "T10"]
+provides = ["ExecutorContract"]
+consumes = ["FpControlContract"]
+note     = """
+The thread pool behind worker/executor.hpp: a fixed set of threads made once \
+by make_thread_pool, each placed and checked on its own thread before the \
+next starts. P1 is the factory's refusals, the protocol's waits and the \
+renderings, every arm taken by a test whose outcome the protocol fixes rather \
+than the scheduler. P2 is every failure of the two fallible calls, forced \
+through the seams: pthread_create's EAGAIN, EINVAL and EPERM through the \
+pool's own Threads seam, at the first thread and after two have started (both \
+reaped); sched_setaffinity's EINVAL, ESRCH, EPERM and EFAULT through \
+platform::Syscalls, plus a cpuset that withholds the third thread's CPU; and a \
+thread whose floating-point state is not its creator's, through the stream's \
+own FpControl model. P3 is the boundaries of what the pool is given: no \
+placement (refused), one, an unpinned one among pinned; and of a run: no \
+index, one, fewer than threads, as many, one more, many more. P5 is the \
+hand-off and completion protocol -- one mutex, one seq_cst counter, nothing \
+weaker -- with its synchronisation argument in thread_pool.cpp and again in \
+tests/unit/worker/executor/ordering_test.cpp beside the test of each claim's \
+consequence; corroborated under TSan and on ARM64, not proved by them. T8 is \
+the real kernel and registers: each thread on the CPU it was pinned to and \
+the caller unmoved, EINVAL for a CPU the machine lacks as the fake models it, \
+and a thread inheriting its creator's rounding and flags, which the pool's \
+start-up check rests on; ExecutorContract runs pinned there, and \
+FpControlContract against the real registers as well as the model. T10 is a \
+million runs on one pool with every index checked, no thread gained and no \
+allocation made. No P6: the pool's threads have a start and a stop, but no \
+process lifecycle; a thread cannot die alone."""
