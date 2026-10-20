@@ -17,11 +17,14 @@ namespace loadforge::telemetry {
 namespace {
 
 // Millidegrees Celsius. Absolute zero is the floor: nothing below it is a
-// temperature. A thousand degrees is the ceiling: the fixed-width garbage a
-// failing sensor returns (4294967295, -128000) lands outside one or the other.
+// temperature. A thousand degrees is the ceiling: the 32-bit garbage a failing
+// sensor returns (4294967295, or an unsigned -1 read as signed on a wider
+// type) lands above it. The bounds are physics, not a guess at what a healthy
+// chip says: a chip that reports a fixed -128000 for "not connected" passes
+// them, and the journal fragment records that the range cannot catch it.
 constexpr std::int64_t kMinMilliCelsius = -273'150;
 constexpr std::int64_t kMaxMilliCelsius = 1'000'000;
-constexpr double kCelsiusPerMilli = 0.001;
+constexpr double kMilliPerCelsius = 1000.0;
 
 Remedies thermal_remedies(const std::string& provider) {
   return make_remedies(
@@ -49,7 +52,7 @@ GaugeSpec gauge_spec(Metric metric, std::string path) {
   spec.path = std::move(path);
   spec.minimum = kMinMilliCelsius;
   spec.maximum = kMaxMilliCelsius;
-  spec.scale = kCelsiusPerMilli;
+  spec.divisor = kMilliPerCelsius;
   return spec;
 }
 

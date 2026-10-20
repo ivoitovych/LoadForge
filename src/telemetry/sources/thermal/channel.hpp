@@ -39,7 +39,9 @@ struct Remedies {
 /// One sysfs attribute holding a single integer, read as a gauge.
 ///
 /// sysfs hwmon values are integers in a fixed sub-unit (millidegrees, rpm,
-/// kHz); `scale` turns the raw integer into the metric's unit. A raw value
+/// kHz); the reading is raw * multiplier / divisor, in the metric's unit (a
+/// division rather than a multiplication by 0.001, because 43700 / 1000.0 is
+/// the double nearest 43.7 and 43700 * 0.001 is not). A raw value
 /// outside [minimum, maximum] is refused as malformed: a sensor that reports
 /// -128000 or 4294967 degrees is not reporting a temperature, and a gauge that
 /// repeated it would put a plausible-looking lie in a column (F20).
@@ -52,7 +54,8 @@ struct GaugeSpec {
   std::string path;
   std::int64_t minimum = 0;
   std::int64_t maximum = 0;
-  double scale = 1.0;
+  double multiplier = 1.0;
+  double divisor = 1.0;
   Remedies remedies;
 };
 

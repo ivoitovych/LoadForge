@@ -52,7 +52,7 @@ core::Result<double, topology::Unavailable> Channel::value() {
     return topology::Unavailable{topology::Availability::kMalformed, spec_.path,
                                  std::move(detail)};
   }
-  return static_cast<double>(number) * spec_.scale;
+  return static_cast<double>(number) * spec_.multiplier / spec_.divisor;
 }
 
 MetricStatus Channel::probe() {

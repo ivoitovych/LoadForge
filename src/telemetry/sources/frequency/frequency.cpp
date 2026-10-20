@@ -168,7 +168,7 @@ std::vector<MetricStatus> FrequencySource::probe() {
       spec.path = cpu_directory + "/cpu" + std::to_string(cpu) + "/cpufreq/scaling_cur_freq";
       spec.minimum = 0;
       spec.maximum = kMaxKilohertz;
-      spec.scale = kHertzPerKilohertz;
+      spec.multiplier = kHertzPerKilohertz;
       spec.remedies = frequency_remedies();
       Channel channel(*filesystem_, std::move(spec));
       MetricStatus status = channel.probe();

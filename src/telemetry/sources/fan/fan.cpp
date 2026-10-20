@@ -45,7 +45,6 @@ GaugeSpec fan_spec(const HwmonChip& chip, std::uint32_t input, std::string path)
   spec.path = std::move(path);
   spec.minimum = 0;
   spec.maximum = kMaxRpm;
-  spec.scale = 1.0;
   return spec;
 }
 
