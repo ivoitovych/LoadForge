@@ -112,8 +112,14 @@ TEST(JournalSoak, AppendingForHoursGrowsTheFileAndNothingElse) {
     ASSERT_TRUE(writer.value()->append(entry).has_value()) << index;
     ASSERT_TRUE(writer.value()->sync().has_value()) << index;
     if (index == warm) {
-      resident_warm = resident_bytes();
+      // The descriptors are counted first: listing /proc/self/fd opens a
+      // directory stream and allocates for it, and under ThreadSanitizer
+      // that first use alone costs about 200 KiB of resident memory.
+      // Counted after the resident sample, it landed in the growth the bound
+      // is there to find and failed it by a few KiB; counted before, it is
+      // part of the baseline, as it is of the measurement at the end.
       descriptors_warm = open_descriptors();
+      resident_warm = resident_bytes();
     }
     if (pace.count() > 0) {
       std::this_thread::sleep_for(pace);
