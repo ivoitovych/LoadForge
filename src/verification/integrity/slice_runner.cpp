@@ -118,6 +118,7 @@ class IntegrityRunner final : public SliceRunner {
     const auto start = std::bit_cast<std::uintptr_t>(working_set_.address());
     const std::uintptr_t aligned = (start + layout_.line_bytes - 1) & ~(layout_.line_bytes - 1);
     slack_ = aligned - start;
+    start_address_ = start;
   }
 
   core::Result<SliceReport, RunnerError> run_slice(const SliceRequest& request) override {
@@ -184,7 +185,7 @@ class IntegrityRunner final : public SliceRunner {
                               InputIntegrity integrity) const {
     Provenance provenance = base_;
     provenance.iteration = unit.index;
-    provenance.buffer_address = std::bit_cast<std::uintptr_t>(working_set_.address()) + offset;
+    provenance.buffer_address = start_address_ + offset;
     provenance.buffer_offset = offset;
     provenance.seed = unit.seed;
     provenance.input_integrity = integrity;
@@ -387,6 +388,10 @@ class IntegrityRunner final : public SliceRunner {
   DutyCycle duty_;
   Layout layout_;
   platform::Mapping working_set_;
+  // The working set's first address, taken once. Kept as an integer rather
+  // than recomputed from the mapping in at(): clang-tidy 18's static analyzer
+  // crashes (SValBuilder::evalBinOp) on a bit_cast pointer plus an offset there.
+  std::uintptr_t start_address_ = 0;
   std::size_t slack_ = 0;
   ControlState control_;
   Tally total_;
