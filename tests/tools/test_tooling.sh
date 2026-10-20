@@ -714,5 +714,69 @@ out="$("$ROOT/tools/check-fetch-centralization.sh" "$fz" 2>&1)"
 expect "the same fetch in the reviewed module passes" 0 $? "0 violation(s)" "$out"
 rm -rf "$fz"
 
+echo "check-no-test-hooks.sh"
+# Real binaries, compiled here, because the gate reads real symbol tables and a
+# hand-written imitation of nm's output would agree with whatever the gate
+# believes (F21). Each refused binary differs from the passing one in exactly
+# the thing the case is about. No compiler is a FAILURE, not a skip: the cases
+# that prove the gate can refuse are the only ones that prove it is a gate.
+HOOKS="$ROOT/tools/check-no-test-hooks.sh"
+th="$(mktemp -d)"
+hooks() { out="$("$HOOKS" "$@" 2>&1)"; return $?; }
+build() { # name, extra source; every binary gets a loadforge:: symbol unless told not to
+  { printf 'namespace loadforge::worker { int run(int argc) { return argc - 1; } }\n'
+    printf '%s\n' "$2"
+    printf 'int main(int argc, char**) { return loadforge::worker::run(argc); }\n'
+  } > "$th/$1.cpp"
+  "${CXX:-c++}" -std=c++20 -O0 -o "$th/$1" "$th/$1.cpp" 2> "$th/$1.log"
+}
+if build clean '' \
+   && build fake 'namespace loadforge::fake_worker { int misbehave() { return 7; } }
+                  int poke() { return loadforge::fake_worker::misbehave(); }' \
+   && build fakes 'namespace loadforge::testing { struct FakeSyscalls { int answer(); };
+                   int FakeSyscalls::answer() { return 3; } }
+                   int poke() { return loadforge::testing::FakeSyscalls{}.answer(); }' \
+   && build gtest 'namespace testing { class Test { public: virtual ~Test(); }; Test::~Test() = default; }' \
+   && build selector '#include <cstdlib>
+                      const char* poke() { return std::getenv("LOADFORGE_FAKE_WORKER"); }' \
+   && build lookalike 'namespace loadforge::attesting { int fine() { return 1; } }
+                       int poke() { return loadforge::attesting::fine(); }'; then
+  hooks "$th/clean"
+  expect "a binary with no test hook passes"                   0 $? "0 test hook(s), ok" "$out"
+  hooks "$th/fake"
+  expect "a fake-worker symbol FAILS, named"                   1 $? "TEST HOOK: .*loadforge::fake_worker::misbehave" "$out"
+  hooks "$th/fakes"
+  expect "a test-fake symbol FAILS, named"                     1 $? "TEST HOOK: .*loadforge::testing::FakeSyscalls" "$out"
+  hooks "$th/gtest"
+  expect "a GoogleTest symbol FAILS, named"                    1 $? "TEST HOOK: .*testing::Test" "$out"
+  hooks "$th/selector"
+  expect "the fake worker's selector string FAILS"             1 $? "the selector string" "$out"
+  hooks "$th/lookalike"
+  expect "a name that merely ends in 'testing' passes"         0 $? "0 test hook(s), ok" "$out"
+
+  cp "$th/fake" "$th/stripped" && strip "$th/stripped"
+  hooks "$th/stripped"
+  expect "a stripped binary FAILS: nothing read is not a pass" 1 $? "no symbol table" "$out"
+  printf 'int main() { return 0; }\n' > "$th/foreign.cpp"
+  "${CXX:-c++}" -O0 -o "$th/foreign" "$th/foreign.cpp" 2> "$th/foreign.log"
+  hooks "$th/foreign"
+  expect "a binary with no loadforge:: symbol FAILS"           1 $? "not a LoadForge binary" "$out"
+else
+  echo "  FAIL  could not compile the test-hook fixtures with ${CXX:-c++}:"
+  cat "$th"/*.log 2>/dev/null | sed 's/^/          /'
+  fail=$((fail + 1))
+fi
+: > "$th/empty"
+hooks "$th/empty"
+expect "an empty file FAILS"                                   1 $? "empty" "$out"
+printf 'not an object file\n' > "$th/text"
+hooks "$th/text"
+expect "a file nm cannot read FAILS"                           1 $? "nm could not read it" "$out"
+hooks "$th/no-such-binary"
+expect "a missing binary FAILS"                                1 $? "not a file" "$out"
+hooks
+expect "no argument FAILS"                                     1 $? "usage" "$out"
+rm -rf "$th"
+
 echo; echo "  tooling tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

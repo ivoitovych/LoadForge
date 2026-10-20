@@ -101,5 +101,19 @@ set_tests_properties(cli_stress_usage PROPERTIES WILL_FAIL TRUE)
 # The fake worker the supervision tier drives the controller against.
 add_subdirectory(support/fake_worker)
 
+# The test-hook gate against this build's own binaries: the shipped one passes,
+# and the fake worker -- the thing the gate exists to keep out -- is refused by
+# name. tests/tools/test_tooling.sh has the gate's own cases; these are the
+# real artifacts, under whatever preset is building them.
+add_test(NAME release_gate_admits_the_shipped_binary
+         COMMAND "${CMAKE_SOURCE_DIR}/tools/check-no-test-hooks.sh" "$<TARGET_FILE:loadforge>")
+set_tests_properties(release_gate_admits_the_shipped_binary PROPERTIES
+                     PASS_REGULAR_EXPRESSION "0 test hook\\(s\\), ok")
+add_test(NAME release_gate_refuses_the_fake_worker
+         COMMAND "${CMAKE_SOURCE_DIR}/tools/check-no-test-hooks.sh"
+                 "$<TARGET_FILE:loadforge_fake_worker>")
+set_tests_properties(release_gate_refuses_the_fake_worker PROPERTIES
+                     PASS_REGULAR_EXPRESSION "TEST HOOK: .*loadforge::fake_worker::")
+
 # T7: the supervision tier, with really spawned, really killed children.
 add_subdirectory(supervision)
