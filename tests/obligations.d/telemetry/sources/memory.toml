@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry/sources/memory and nothing else.
+
+[[module]]
+path             = "src/telemetry/sources/memory"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2"]
+fixtures         = ["procfs/meminfo/present"]
+fixture_builders = ["tests/unit/telemetry/sources/memory/memory_test.cpp"]
+provides         = ["SourceContract"]
+note             = """
+Seven figures of /proc/meminfo in bytes (total, free, available, buffers, \
+cached, swap total and free), from one read of the file per round. \
+\
+P1: each figure is its own state: a kernel without MemAvailable reports that \
+one absent and the rest present; a line that is not "Key: number kB" is \
+malformed for its metric alone; a key that appears twice is malformed; a key \
+that only begins like another is not that key; no estimate stands in for a \
+missing line; no swap is 0 bytes, a reading. \
+\
+P2: the open and the read of the file fail with every errno that can \
+(ENOENT, EACCES, EPERM, EIO, EINTR past the bound, EISDIR, ENOTDIR), at the \
+probe and in the run. \
+\
+P3: the largest kB count a byte count can carry and one kilobyte more. \
+\
+P7: present (the captured file), absent (a line removed from it, or procfs \
+not mounted), denied, malformed, unreadable, and vanished mid-run (the whole \
+file, or one line), each run through SourceContract. Memory is gauges, so \
+there is no wrapped state."""

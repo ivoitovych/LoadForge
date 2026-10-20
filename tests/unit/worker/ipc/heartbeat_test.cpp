@@ -465,7 +465,7 @@ TEST_F(HeartbeatRegionTest, AConcurrentReaderNeverObservesATornBeat) {
 
 // --- across a real process boundary --------------------------------------------
 
-TEST(RealHeartbeatRegion, AForkedChildPublishesThroughItsOwnMappingAndTheParentSeesIt) {
+TEST(RealProcessHeartbeatRegion, AForkedChildPublishesThroughItsOwnMappingAndTheParentSeesIt) {
   // The real kernel, a real memfd, two processes, two mappings of one file.
   // The child maps the inherited descriptor afresh (as a worker does after
   // exec) rather than reusing the parent's mapping, so this proves the FILE
