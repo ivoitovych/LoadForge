@@ -332,8 +332,9 @@ class Syscalls {
   /// waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT): whether the child has
   /// terminated, without reaping it. True for a zombie. ECHILD -- not a child,
   /// or already reaped -- is an error, as in the reaps: a supervisor asking
-  /// about a worker it still tracks has lost track of it.
-  [[nodiscard]] virtual core::Result<bool, SyscallError> has_exited(pid_t pid) = 0;
+  /// about a worker it still tracks has lost track of it. The default fails
+  /// with ENOSYS, so that adding the call broke no fake.
+  [[nodiscard]] virtual core::Result<bool, SyscallError> has_exited(pid_t pid);
 
   /// clock_gettime(2) for the given clock id.
   ///

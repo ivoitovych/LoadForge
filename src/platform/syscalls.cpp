@@ -65,6 +65,10 @@ bool operator==(const PerfCount& lhs, const PerfCount& rhs) noexcept {
 // genuine paths in a temporary directory, including genuine failures: a missing
 // file for ENOENT, a directory for EISDIR, and a closed descriptor for EBADF.
 
+core::Result<bool, SyscallError> Syscalls::has_exited(pid_t /*pid*/) {
+  return SyscallError{ENOSYS, "waitid", ""};
+}
+
 core::Result<int, SyscallError> Syscalls::open_perf_event(const PerfEventSpec& /*spec*/) {
   return SyscallError{ENOSYS, "perf_event_open", ""};
 }
