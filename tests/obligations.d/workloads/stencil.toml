@@ -2,11 +2,40 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/stencil and nothing else.
 
 [[module]]
-path    = "src/workloads/stencil"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the stencil specification alone (spec.hpp, ADR 0004): the tile edges, the ring, the window counts and the tolerance factor, each tested in tests/contracts/workloads/. \
-The stencil stream takes this row over with the workload and owes what \
-IMPLEMENTATION §3 lists for it -- P4 and P5, and T3, T4, T5, T5b, T6 -- with \
-provides = ["WorkloadContract"]."""
+path     = "src/workloads/stencil"
+classes  = ["P1", "P3", "P4", "P5"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+fixtures = ["determinism/workloads/stencil/scalar-crc32.txt"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+The stencil workload: kSteps (eight) Jacobi sweeps of a 5-point stencil on a 256 x 256 \
+grid, tiled over the executor, with a scalar kernel and an AVX2 or NEON \
+kernel behind the dispatch seam (src/workloads/stencil/spec.hpp). \
+P1 is every decision of the tile walk (a tile on the ring, a tile off it, \
+the first and last tile of a row), of the kernel's lane loop and its tail \
+(widths from 1 cell to past two vectors at every start), of the sweep \
+ping-pong between scratch and output, and of create()'s three refusals. \
+P3 is the value domain: a tile edge that is not one of 16/32/64/128 (and 0, \
+the default), a footprint one byte under one unit and exactly one unit, a \
+path with no kernel, and inputs outside what generate() writes -- a NaN that \
+must spread exactly eight cells and no further, infinities, ring cells of \
+arbitrary bit patterns (copied, not computed), subnormals, signed zeros, \
+-1 everywhere and the largest generated value everywhere. \
+P4 is the specification's sampled-window check, written in the tests from \
+spec.hpp (the oracle stream's is a different reading): T5 corrupts the \
+output with flipped bits, NaN, infinity and disturbances either side of the \
+derived tolerance and asserts the BoundedMismatch it produces -- which cell, \
+which comparison count, first in window order -- and that damage outside the \
+windows or below the tolerance goes unseen; and corrupts the input after \
+generation and follows it through compute(). T5b asserts NotChecked, never \
+Agreement, for evidence of the wrong size, an input cell that is not finite \
+or exceeds 1, and an all-zero input. T3 measures every cell of the whole \
+grid against an exact integer reference, for every path this machine runs. \
+P5 is the barrier between sweeps and the disjoint tiles within one: the \
+executor's return from run() is the only synchronisation, no atomics and no \
+lock of the workload's own (so no process-shared lock); the evidence is T6 \
+under executors that deal tiles out in different ways, in reverse, on 1, 2, \
+3, 4 and 7 threads, and the TSan job. T6 also holds the scalar path to \
+committed digests that must agree on x86-64 and ARM64. The ExecutorContract \
+is run against this module's own executors (executor_mock_test.cpp)."""
