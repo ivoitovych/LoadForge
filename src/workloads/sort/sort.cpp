@@ -150,14 +150,22 @@ void move_range(void* context, std::size_t range, std::size_t /*slot*/) noexcept
   return detail;
 }
 
+/// What a configuration resolves to.
+struct Resolved {
+  std::uint64_t seed = 0;
+  std::uint32_t chunks = 0;
+  std::uint64_t units = 0;
+};
+
 class SortWorkload final : public Workload {
  public:
-  SortWorkload(std::uint64_t seed, std::uint32_t chunks, std::uint64_t units) noexcept
-      : seed_(seed),
+  explicit SortWorkload(const Resolved& resolved) noexcept
+      : seed_(resolved.seed),
         descriptor_{std::string(kName), kVersion, DeterminismClass::kBitExact,
                     verification::Contract::kExact, simd::IsaSet{simd::IsaPath::kScalar}},
-        plan_{kInputBytes,   kOutputBytes, kSideBytes + counters_bytes(chunks), units, chunks,
-              kLogicalBytes, kOperations} {}
+        plan_{kInputBytes,    kOutputBytes,    kSideBytes + counters_bytes(resolved.chunks),
+              resolved.units, resolved.chunks, kLogicalBytes,
+              kOperations} {}
 
   [[nodiscard]] const Descriptor& descriptor() const noexcept override { return descriptor_; }
   [[nodiscard]] const Plan& plan() const noexcept override { return plan_; }
@@ -223,7 +231,8 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
     return WorkloadError{WorkloadFault::kFootprintTooSmall,
                          refusal_of_footprint(config.footprint_bytes)};
   }
-  return std::unique_ptr<Workload>(std::make_unique<SortWorkload>(config.seed, chunks, units));
+  return std::unique_ptr<Workload>(
+      std::make_unique<SortWorkload>(Resolved{config.seed, chunks, units}));
 }
 
 }  // namespace loadforge::workloads::sort

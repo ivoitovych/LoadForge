@@ -275,8 +275,8 @@ TEST(SortKnownOutputs, EachByteOfTheKeyDecidesTheOrderOnItsOwn) {
 TEST(SortCompute, WritesOnlyTheOutputAndScratchItIsGiven) {
   const auto workload = make();
   ASSERT_NE(workload, nullptr);
-  Bytes input = generate(*workload, 4);
-  const Bytes before = input;
+  const Bytes input = generate(*workload, 4);
+  const Bytes before = generate(*workload, 4);
   SerialExecutor serial;
   (void)sorted(*workload, 4, input, serial);
   EXPECT_EQ(input, before) << "the input is read only";
