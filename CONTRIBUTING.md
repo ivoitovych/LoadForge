@@ -214,6 +214,11 @@ Non-negotiable review standards:
   gate's entire fixture suite passed while the parser misread every mutator identifier,
   because the fixtures encoded the same wrong assumption. A model of an external tool
   cannot falsify itself.
+- A unit test that creates a process — `fork`, a real launcher or pool — goes in a
+  suite named `RealProcess*`. Every mutant of the mutation sweep runs the unit tests
+  without them, because a child a mutant leaves alive is beyond Mull's timeout, and the
+  mutation workflow checks the name against what each test really does, both ways
+  (`tools/mutation-shard.py check-processes`).
 - External dependencies are fetched **only** from `cmake/Dependencies.cmake`. Adding a
   `FetchContent_Declare` elsewhere fails `tools/check-fetch-centralization.sh`, because
   the manifest cross-check cannot reconcile a pin it does not know to look for.

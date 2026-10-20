@@ -162,7 +162,9 @@ class ByteXor final : public Workload {
 
 struct ReferenceWordSum {
   static constexpr const char* kName = "word_sum";
-  static WorkloadConfig config() { return WorkloadConfig{42, 3 * (4096 + 8), 0, {}}; }
+  static WorkloadConfig config() {
+    return WorkloadConfig{42, std::uint64_t{3} * (4096 + 8), 0, {}};
+  }
   static core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& c) {
     return WordSum::create(c);
   }
