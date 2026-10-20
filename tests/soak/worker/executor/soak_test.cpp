@@ -101,16 +101,12 @@ long threads_now() {
   return -1;
 }
 
-// A million runs on an ordinary build; under the sanitizers, whose runtimes
-// make every synchronisation several times dearer, a tenth of that, which is
-// still far more hand-offs than any other test makes. LOADFORGE_SOAK_RUNS
-// overrides either, for a longer soak by hand or a shorter one repeated. The
-// figures and the time each takes are in the journal fragment.
-#if defined(LOADFORGE_SOAK_SANITIZED)
-constexpr std::uint64_t kDefaultRuns = 100'000;
-#else
+// A million runs, under every build: the time is the kernel's futex calls,
+// which the sanitizers barely touch (a hundred thousand runs took 7.7 s in the
+// debug build, 9 s under TSan and 8 s under ASan; see the journal fragment).
+// LOADFORGE_SOAK_RUNS overrides it, for a longer soak by hand or a shorter one
+// repeated.
 constexpr std::uint64_t kDefaultRuns = 1'000'000;
-#endif
 
 std::uint64_t runs() {
   const char* text = std::getenv("LOADFORGE_SOAK_RUNS");  // NOLINT(concurrency-mt-unsafe)
@@ -137,6 +133,7 @@ TEST(ExecutorSoak, MillionsOfRunsLoseNoIndexAndGrowNothing) {
   PosixThreads threads;
   loadforge::testing::FakeSyscalls syscalls;
   X86FpControl fp;
+  const long threads_without_pool = threads_now();
   auto made = make_thread_pool(std::vector<ThreadPlacement>(kThreads), threads, syscalls, fp);
   ASSERT_TRUE(made.has_value());
   const std::unique_ptr<Executor> executor = std::move(made).value();
@@ -181,7 +178,15 @@ TEST(ExecutorSoak, MillionsOfRunsLoseNoIndexAndGrowNothing) {
   }
   ASSERT_GT(threads_before, 0) << "/proc/self/status names no thread count";
   EXPECT_EQ(threads_after, threads_before);
-  EXPECT_EQ(threads_before, static_cast<long>(kThreads) + 1) << "the pool's threads and this one";
+#if !defined(LOADFORGE_SOAK_SANITIZED)
+  // ThreadSanitizer's runtime starts a thread of its own once the process has
+  // made one (measured: six threads where this build has five), so the count
+  // of what the pool added is exact only without it.
+  EXPECT_EQ(threads_before, threads_without_pool + static_cast<long>(kThreads))
+      << "the pool's threads, and no more";
+#else
+  (void)threads_without_pool;
+#endif
   EXPECT_EQ(allocations_after, allocations_before) << "a run allocated";
 }
 

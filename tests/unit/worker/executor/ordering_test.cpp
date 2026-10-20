@@ -38,8 +38,10 @@
 //       -> ASlotIsAlwaysTheSameThreadAndNeverTheCaller
 //
 // Each of these fails when the protocol is broken. Recorded in the journal
-// fragment (docs/journal/08-executor.md): with run() returning before waiting
-// for the finished count, 3 and 4 fail, and TSan reports the read in 3.
+// fragment (docs/journal/08-executor.md): with run() returning before the
+// threads finish, or a thread counting itself finished before its tasks, four
+// of the five fail, and TSan reports the second as races; with slots taken
+// from the index, the fifth and the contract's slot test fail.
 
 #include <gtest/gtest.h>
 #include <pthread.h>

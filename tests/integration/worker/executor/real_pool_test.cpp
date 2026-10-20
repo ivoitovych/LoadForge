@@ -176,6 +176,24 @@ CpuMask some_permitted(std::size_t most) {
   return mask;
 }
 
+/// The calling thread's mask, asked of the kernel directly rather than through
+/// RealSyscalls: tasks call this concurrently, and the platform library's
+/// coverage counters are not atomic (src/worker/executor/CMakeLists.txt).
+CpuMask own_affinity() {
+  cpu_set_t raw;
+  CPU_ZERO(&raw);
+  CpuMask mask;
+  if (sched_getaffinity(0, sizeof raw, &raw) != 0) {
+    return mask;  // empty: never equal to a placement, so the test says so
+  }
+  for (std::size_t cpu = 0; cpu < platform::kAffinityMaskBits; ++cpu) {
+    if (CPU_ISSET(cpu, &raw)) {
+      mask.cpus.set(cpu);
+    }
+  }
+  return mask;
+}
+
 // ---- pinning ----------------------------------------------------------------------
 
 TEST(RealPool, EachThreadRunsOnItsOwnCpuAndTheCallerIsNotMoved) {
@@ -198,8 +216,7 @@ TEST(RealPool, EachThreadRunsOnItsOwnCpuAndTheCallerIsNotMoved) {
   std::vector<int> ran_on(placements.size(), -1);
   std::vector<int> moved(placements.size(), 0);
   auto observe = [&](std::size_t, std::size_t slot) noexcept {
-    platform::RealSyscalls own;
-    affinity[slot] = own.get_affinity(0).value();
+    affinity[slot] = own_affinity();
     const int cpu = sched_getcpu();
     if (ran_on[slot] >= 0 && ran_on[slot] != cpu) {
       moved[slot] += 1;
