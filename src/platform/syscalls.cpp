@@ -62,6 +62,19 @@ bool operator==(const PerfCount& lhs, const PerfCount& rhs) noexcept {
 // genuine paths in a temporary directory, including genuine failures: a missing
 // file for ENOENT, a directory for EISDIR, and a closed descriptor for EBADF.
 
+core::Result<int, SyscallError> Syscalls::open_perf_event(const PerfEventSpec& /*spec*/) {
+  return SyscallError{ENOSYS, "perf_event_open", ""};
+}
+
+core::Result<core::Ok, SyscallError> Syscalls::control_perf_event(int /*fd*/,
+                                                                  PerfAction /*action*/) {
+  return SyscallError{ENOSYS, "ioctl", ""};
+}
+
+core::Result<PerfCount, SyscallError> Syscalls::read_perf_count(int /*fd*/) {
+  return SyscallError{ENOSYS, "read", ""};
+}
+
 core::Result<int, SyscallError> RealSyscalls::open_read(const std::string& path) {
   // O_CLOEXEC matters here beyond hygiene: the controller forks workers, and a
   // descriptor that survives exec is one the controller believes it closed.

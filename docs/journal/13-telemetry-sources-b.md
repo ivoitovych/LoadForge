@@ -26,6 +26,7 @@ All on the development VM: `Linux vm 6.18.44-fc-v139 #1 SMP PREEMPT_DYNAMIC x86_
 7. **Ledger.** Classes P1, P2, P3, P7 for all three; the brief's table omitted P3 (the 2^32 boundary, the scale and range bounds, the multiplexing arithmetic). P7 for each is the six states, built per test (`LOADFORGE P7 FIXTURE BUILDER`) over committed trees where a tree can hold the state.
 8. **Failures are filled in place** (see the coverage traps above) and `PowerChannel` is a public struct of `power.hpp` so the probe can be free functions under the complexity threshold.
 9. **No ADR proposed.** Nothing here meets ADR 0001's test: each decision is local to a module.
+10. **Seam additions are not pure.** `open_perf_event`, `control_perf_event` and `read_perf_count` were first pure, which made every other component's test fake of `Syscalls` abstract once merged with main, and ADR 0003 forbids this stream from editing those fakes. They now have ENOSYS defaults in `syscalls.cpp`, covered by `tests/unit/platform/syscalls_defaults_test.cpp`; `RealSyscalls`, `FakeSyscalls` and this stream's `MemFs` override them. The rule is written at the head of `Syscalls`: a call added after M1 has an ENOSYS default so that adding it breaks no implementation. ENOSYS above the seam already means "the kernel has no perf events".
 
 ## Contract questions
 

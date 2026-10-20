@@ -163,6 +163,11 @@ enum class PerfAction : std::uint8_t { kReset, kEnable, kDisable };
 ///
 /// The virtual dispatch costs a vtable lookup against a syscall that costs
 /// microseconds, which is not a trade worth thinking about.
+///
+/// A call added after M1 has an ENOSYS default so that adding it breaks no
+/// implementation; the real implementation and any fake that models it
+/// override it. Above the seam ENOSYS already means "the kernel does not offer
+/// this", which is what a fake that does not model the call should look like.
 class Syscalls {
  public:
   Syscalls() = default;
@@ -366,17 +371,18 @@ class Syscalls {
   /// the man page documents are E2BIG, EACCES, EBADF, EBUSY, EFAULT, EINVAL,
   /// EINTR, EMFILE, ENODEV, ENOENT, ENOSPC, ENOSYS, EOPNOTSUPP, EOVERFLOW,
   /// EPERM and ESRCH; what each means for a source is decided above the seam.
-  [[nodiscard]] virtual core::Result<int, SyscallError> open_perf_event(
-      const PerfEventSpec& spec) = 0;
+  /// The default fails with ENOSYS (no perf events).
+  [[nodiscard]] virtual core::Result<int, SyscallError> open_perf_event(const PerfEventSpec& spec);
 
-  /// ioctl(2) PERF_EVENT_IOC_RESET, _ENABLE or _DISABLE on a counter.
-  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> control_perf_event(
-      int fd, PerfAction action) = 0;
+  /// ioctl(2) PERF_EVENT_IOC_RESET, _ENABLE or _DISABLE on a counter. The
+  /// default fails with ENOSYS.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> control_perf_event(int fd,
+                                                                                PerfAction action);
 
   /// read(2) of a counter: its count and its two times. A counter is read as a
   /// whole or not at all, so a short read is an error here (EIO), unlike
-  /// read() above where it is normal.
-  [[nodiscard]] virtual core::Result<PerfCount, SyscallError> read_perf_count(int fd) = 0;
+  /// read() above where it is normal. The default fails with ENOSYS.
+  [[nodiscard]] virtual core::Result<PerfCount, SyscallError> read_perf_count(int fd);
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
