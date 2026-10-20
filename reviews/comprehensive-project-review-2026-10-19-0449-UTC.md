@@ -3,7 +3,7 @@
 - **Purpose:** whole-project read-through of every crafted file (sources, headers, tests, tools, workflows, configuration, documentation), to record what each component is, what it is for, the impression it leaves, and every defect, contradiction or risk found. Bulky generated material (vendored `toml.hpp`, the LICENSE body, mutation-tool fixture captures, logs) was deliberately skipped.
 - **Date and time:** 2026-10-19 04:49 UTC.
 - **State reviewed:** branch `feature/controller` at commit 115fb9e with the uncommitted controller increment and documentation reconciliation in the working tree (27 dirty entries); `main` at 0a3c325.
-- **Companion:** `reviews/reaction-plan-comprehensive-review-2026-10-19-0449.md` holds the plan of reaction to the findings below.
+- **Companion:** `reviews/reaction-plan-comprehensive-review-2026-10-19-0449-UTC.md` holds the plan of reaction to the findings below.
 - **Convention:** findings are numbered `R-nn` in the order they were recorded. Severity is one of *major* (a correctness defect that can produce a wrong result in the field), *medium* (a robustness defect with a plausible trigger), *minor* (hygiene, wording, or an oddity with no field consequence), *doc* (documentation contradicts code or itself), *info* (descriptive: what the thing is and how it reads). Informative findings are written down as the component is touched, so that they are not lost.
 
 ## 1. Defects and risks found during the read-through
