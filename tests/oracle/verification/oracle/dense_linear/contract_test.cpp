@@ -195,5 +195,4 @@ using DenseLinearOracles = ::testing::Types<verification::oracle::dense_linear::
 INSTANTIATE_TYPED_TEST_SUITE_P(DenseLinear, OracleContract, DenseLinearOracles);
 // The registry's suite shares the header and is the integration stream's to
 // run against the registry it provides; this module provides no registry.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 }  // namespace loadforge::contracts

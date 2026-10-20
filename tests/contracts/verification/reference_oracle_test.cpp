@@ -16,6 +16,7 @@
 
 #include "contracts/equality.hpp"
 #include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_registry_contract.hpp"
 #include "contracts/verification/record_contract.hpp"
 #include "verification/oracle.hpp"
 

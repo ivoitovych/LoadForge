@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_case.hpp"
 #include "workloads/sort/spec.hpp"
 
 namespace loadforge::tests::sort_units {
