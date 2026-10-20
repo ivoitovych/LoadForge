@@ -1,6 +1,6 @@
 # Journal fragment 21 — the M3 integration
 
-**Written:** 2026-10-20 21:50 UTC
+**Written:** 2026-10-20 23:41 UTC
 **Change:** `src/main/` (the telemetry rig, the result's assembly, the files written),
 `src/controller/` top level (sampling in the loop), `tests/integration/m3/`,
 `tests/supervision/telemetry_death_test.cpp`, the unit tests of both modules, their ledger
