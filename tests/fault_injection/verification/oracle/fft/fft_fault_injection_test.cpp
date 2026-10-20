@@ -83,7 +83,7 @@ TEST(FftFaultInjection, AnExponentFlipInASampledBinIsNamedWithItsOrdinal) {
   const auto bins = sampled_bins(kIndex);
   for (const std::size_t which : {std::size_t{0}, std::size_t{3}, spec::kSampledBins - 1}) {
     Unit unit = good_unit();
-    flip(unit.output, 2 * bins[which], 62);
+    flip(unit.output, 2 * std::size_t{bins[which]}, 62);
     const BoundedMismatch found = mismatch_of(check_unit(unit));
     EXPECT_EQ(found.check, "dft-bin");
     EXPECT_EQ(found.element, std::optional<std::uint64_t>(bins[which]));
@@ -96,7 +96,7 @@ TEST(FftFaultInjection, AnExponentFlipInASampledBinIsNamedWithItsOrdinal) {
 TEST(FftFaultInjection, AHighMantissaFlipOfTheImaginaryPartIsCaught) {
   const auto bins = sampled_bins(kIndex);
   Unit unit = good_unit();
-  flip(unit.output, 2 * bins[0] + 1, 51);
+  flip(unit.output, 2 * std::size_t{bins[0]} + 1, 51);
   const BoundedMismatch found = mismatch_of(check_unit(unit));
   EXPECT_EQ(found.check, "dft-bin");
   EXPECT_EQ(found.element, std::optional<std::uint64_t>(bins[0]));
@@ -106,9 +106,9 @@ TEST(FftFaultInjection, AHighMantissaFlipOfTheImaginaryPartIsCaught) {
 TEST(FftFaultInjection, OfSeveralFailingBinsTheSmallestKIsNamed) {
   const auto bins = sampled_bins(kIndex);
   Unit unit = good_unit();
-  flip(unit.output, 2 * bins[11], 62);
-  flip(unit.output, 2 * bins[4], 62);
-  flip(unit.output, 2 * bins[7] + 1, 62);
+  flip(unit.output, 2 * std::size_t{bins[11]}, 62);
+  flip(unit.output, 2 * std::size_t{bins[4]}, 62);
+  flip(unit.output, 2 * std::size_t{bins[7]} + 1, 62);
   const BoundedMismatch found = mismatch_of(check_unit(unit));
   EXPECT_EQ(found.element, std::optional<std::uint64_t>(bins[4]));
   EXPECT_EQ(found.blocks_compared, 5U);
@@ -127,7 +127,7 @@ TEST(FftFaultInjection, AFailingSampledBinTakesPrecedenceOverParseval) {
   const auto bins = sampled_bins(kIndex);
   Unit unit = good_unit();
   flip(unit.output, 2 * unsampled_bin(), 62);
-  flip(unit.output, 2 * bins[8], 62);
+  flip(unit.output, 2 * std::size_t{bins[8]}, 62);
   const BoundedMismatch found = mismatch_of(check_unit(unit));
   EXPECT_EQ(found.check, "dft-bin");
   EXPECT_EQ(found.blocks_compared, 9U);
@@ -140,7 +140,7 @@ TEST(FftFaultInjection, ANaNOrInfinityInASampledBinFailsWhichevierPartHoldsIt) {
   for (const std::size_t part : {std::size_t{0}, std::size_t{1}}) {
     for (const double bad : {nan, inf, -inf}) {
       Unit unit = good_unit();
-      put(unit.output, 2 * bins[6] + part, bad);
+      put(unit.output, 2 * std::size_t{bins[6]} + part, bad);
       const BoundedMismatch found = mismatch_of(check_unit(unit));
       EXPECT_EQ(found.check, "dft-bin");
       EXPECT_EQ(found.element, std::optional<std::uint64_t>(bins[6]));
@@ -175,7 +175,7 @@ TEST(FftFaultInjection, AnOutputWhoseSquaresOverflowFailsParsevalWithAnInfiniteR
 TEST(FftFaultInjection, BothRadicesCatchTheSameCorruption) {
   const auto bins = sampled_bins(kIndex);
   Unit unit = good_unit();
-  flip(unit.output, 2 * bins[2], 60);
+  flip(unit.output, 2 * std::size_t{bins[2]}, 60);
   for (const std::uint32_t radix : spec::kRadices) {
     const BoundedMismatch found = mismatch_of(check_unit(unit, radix));
     EXPECT_EQ(found.element, std::optional<std::uint64_t>(bins[2]));
@@ -187,7 +187,7 @@ TEST(FftFaultInjection, TheLowestMantissaBitOfAValueIsBelowWhatTheBoundClaims) {
   // false alarm on the least significant bit of a value of this size.
   const auto bins = sampled_bins(kIndex);
   Unit unit = good_unit();
-  flip(unit.output, 2 * bins[5], 0);
+  flip(unit.output, 2 * std::size_t{bins[5]}, 0);
   flip(unit.output, 2 * unsampled_bin() + 1, 0);
   EXPECT_TRUE(std::holds_alternative<Agreement>(check_unit(unit)));
 }

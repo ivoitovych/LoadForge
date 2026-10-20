@@ -69,7 +69,7 @@ std::vector<contracts::OracleCase> corrupted_cases() {
   cases.push_back(exponent);
   contracts::OracleCase nan = base;
   const std::vector<std::byte> nan_bytes = evidence::bytes_of(std::vector<double>(1, std::nan("")));
-  std::copy(nan_bytes.begin(), nan_bytes.end(), nan.output.begin() + 4000 * 8);
+  std::copy(nan_bytes.begin(), nan_bytes.end(), nan.output.begin() + std::ptrdiff_t{4000} * 8);
   cases.push_back(nan);
   return cases;
 }
@@ -100,7 +100,7 @@ struct RowRig {
     residual = evidence::explicit_residual(system, x);
   }
 
-  Unit unit_with_reported(std::size_t row, double reported) const {
+  [[nodiscard]] Unit unit_with_reported(std::size_t row, double reported) const {
     std::vector<double> reported_residual = residual.r;
     reported_residual[row] = reported;
     return Unit{0, evidence::input_bytes(system), evidence::output_bytes(x, reported_residual)};

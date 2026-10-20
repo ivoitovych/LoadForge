@@ -165,7 +165,7 @@ TEST(FftSampledBins, TheLargestIndexIsSampledToo) {
 
 TEST(FftDirectDft, OfAnImpulseIsATwiddleFactor) {
   std::vector<double> x(2 * spec::kPoints, 0.0);
-  x[2 * 3] = 1.0;  // x_3 = 1
+  x[6] = 1.0;  // x_3 = 1: the real part is element 2 * 3
   for (const std::size_t k :
        {std::size_t{0}, std::size_t{1}, std::size_t{700}, std::size_t{4095}}) {
     const Complex bin = direct_dft_bin(x, k);

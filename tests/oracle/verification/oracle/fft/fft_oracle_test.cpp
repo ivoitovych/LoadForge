@@ -50,6 +50,7 @@ Verdict check_unit(const Oracle& oracle, const Unit& unit) {
 // The real tool's units, and corruptions of them that every check would see.
 std::vector<contracts::OracleCase> real_tool_cases() {
   std::vector<contracts::OracleCase> cases;
+  cases.reserve(evidence::kFixtureIndices.size());
   for (const std::uint64_t index : evidence::kFixtureIndices) {
     cases.push_back(as_case(evidence::real_tool_unit(index)));
   }
@@ -75,7 +76,7 @@ std::vector<contracts::OracleCase> corrupted_cases() {
   contracts::OracleCase nan{5, input, base};
   const std::vector<double> quiet(1, std::nan(""));
   const std::vector<std::byte> nan_bytes = evidence::bytes_of(quiet);
-  std::copy(nan_bytes.begin(), nan_bytes.end(), nan.output.begin() + 777 * 8);
+  std::copy(nan_bytes.begin(), nan_bytes.end(), nan.output.begin() + std::ptrdiff_t{777} * 8);
   cases.push_back(nan);
   return cases;
 }
