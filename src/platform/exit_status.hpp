@@ -84,9 +84,10 @@ class ExitStatus {
   /// SIGKILL is also what a `kill -9`, a cgroup limit, a systemd stop and a
   /// watchdog send, and the signal itself carries no reason. Reporting a
   /// suspicion as a finding is exactly the fabricated provenance
-  /// docs/verification.md forbids. The corroboration (the kernel log, the
-  /// cgroup's memory.events) arrives with the crash journal at M5; until then
-  /// this reports the fact and not the inference.
+  /// docs/verification.md forbids. The corroboration (the kernel's oom_kill
+  /// count, the cgroup's memory.events) is M1 exit criterion 3 and lands with
+  /// the memory-budget reader; until then this reports the fact and not the
+  /// inference.
   [[nodiscard]] bool killed_by_sigkill() const noexcept;
 
   /// A description suitable for a user-facing report, e.g.

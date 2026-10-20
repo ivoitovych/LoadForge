@@ -1623,9 +1623,10 @@ Kept short and current; move an item to the relevant document once it is settled
   themselves); deletion of the merged branches. The credential this work runs under gets
   **403 on workflow dispatch and on deleting a ref**, so all three are genuinely the
   owner's rather than something to try harder at.
-- **Unanswered question:** whether CI should hard-require a specific committer identity.
-  Doing so would close the repository to outside contributors, so the current check
-  verifies *shape* — one author, complete identity — and not a particular person.
+- **Answered (#22):** whether CI should hard-require a specific committer identity. It
+  admits identities from an allowlist, `.github/commit-identities`, which holds the owner
+  today; a contributor's first PR adds their own line. That keeps the repository open while
+  making a new identity a reviewed change, and it is the check `--no-verify` cannot skip.
 - **Landed since this file was written:** the syscall seam, the runtime-dependency gate,
   `ExitStatus`, the coverage-completeness gate, the worker launcher and the pool that
   supervises a set of them (§2.1), the clock (§1.11, §1.12), the sysfs CPU-list parser, and
@@ -1652,13 +1653,15 @@ Kept short and current; move an item to the relevant document once it is settled
   itself (§1.21, §2.17: the internal `--worker` switch, the null workload loop, four exit
   codes) are in, with the seam calls each needed (memfd, shared map, close-on-exec
   handover; pipe, write, poll; ignore-signal, getpid; non-blocking reap). **The controller
-  is implemented and verified, and is the next thing to land** (§1.22, §2.18): `loadforge
+  landed in #23** (§1.22, §2.18): `loadforge
   stress --config FILE` runs the null workload in N worker processes for the configured
   duration — M1 exit criterion 1 — and the supervision tier (`tests/supervision/`, T7)
   runs the shipped binary as the worker: two complete, one is killed from outside while
   the other completes, and the controller itself is killed and every orphan is found dead
-  by the parent-death signal. Until it is merged, `main` has the worker and no controller.
-  Still to come after it, in order:
+  by the parent-death signal. The review of 2026-10-19 then found that it did not ignore
+  `SIGPIPE` (R-02): on `main`, the real-binary stress test died by signal 13 in 2 runs of
+  12, the shared fake having modelled the write as a plain `EPIPE` (ADR 0003). Still to
+  come, in order:
   the fake-worker executable with the T7 misbehaviour catalogue and the two new gates
   (no test-hook symbol in the shipped binary; a lock obligation per module in the ledger);
   OOM classification from the kernel's own record (`/proc/vmstat oom_kill` or the cgroup's
@@ -1678,23 +1681,14 @@ Kept short and current; move an item to the relevant document once it is settled
 - **Contradictions between the documents and the code, found by reading both and not yet
   resolved** — each is a decision or a one-line fix, recorded here rather than silently
   made:
-  - PLAN §4.6 promises a fallback for resolving the worker executable on a live medium
-    without `/proc`; `platform::ExecutablePath` refuses with no fallback and says why, and
-    `loadforge stress` refuses the run. The plan now carries an implementation note; which
-    of the two stands is the owner's call (an explicit `--worker-executable` override is the
-    code's suggested answer).
-  - `platform/exit_status.hpp` says the corroboration that turns a `SIGKILL` into an OOM
-    finding "arrives with the crash journal at M5"; IMPLEMENTATION §4 makes OOM-distinct
-    classification M1 exit criterion 3, and that is the plan being followed. The comment is
-    behind the plan.
-  - `platform/fs.cpp` says "the controller installs handlers for `SIGCHLD` and the shutdown
-    signals"; the controller as built installs none — a hang-up on the record pipe wakes
-    its poll (§2.18) — so the bounded `EINTR` retry it justifies is reached by other
-    signals, not that one. The bound is right; the example is wrong.
-  - `platform/process.hpp` says an exec failure's detail "arrives over the error-record pipe
-    at M3"; the record pipe exists at M1, and a worker that fails before exec has no pipe
-    to write on in any milestone — the status word is all the supervisor gets, and the
-    launcher's `last_exec_error` is for the child's own stderr.
+  - *Resolved 2026-10-20:* PLAN §4.6's promised fallback for the worker executable without
+    `/proc` is withdrawn; the refusal stands and an explicit `--worker-executable` override
+    is the remedy, when someone first needs it (PLAN §4.6 records the reasoning).
+  - *Resolved 2026-10-20:* the comments in `platform/exit_status.hpp` (OOM corroboration is
+    M1 exit criterion 3, not M5), `platform/fs.cpp` (no `SIGCHLD` handler exists; other
+    signals reach the bounded retry) and `platform/process.hpp` (an exec failure leaves only
+    the status word; the record pipe does not exist before exec at any milestone) now say
+    what the code does.
   - IMPLEMENTATION §3 listed `worker/ipc` as owing T5 before `tests/fault_injection` exists;
     the ledger row and the table now say T1 and why. The tier question returns at M2a.
 - **Deferred, and worth not forgetting:** `Source` has no "counter wraps" state, which the

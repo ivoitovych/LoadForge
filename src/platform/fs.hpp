@@ -54,8 +54,8 @@ class FileSystem {
   /// Thread-safety: this class holds no mutable state, so it is as thread-safe
   /// as the Syscalls it is given. RealSyscalls is stateless and therefore safe
   /// to share; the test fakes are not, and are per-test objects. Worth stating
-  /// because the controller is multithreaded by construction and a shared
-  /// reader is the obvious thing for someone to reach for.
+  /// because the telemetry sampler (M3) will read from threads of its own, and
+  /// a shared reader is the obvious thing for someone to reach for.
   explicit FileSystem(Syscalls& syscalls) : syscalls_(&syscalls) {}
 
   /// The whole file as text.

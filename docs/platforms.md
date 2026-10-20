@@ -95,7 +95,7 @@ built against.
 | glibc (dynamic build) | **2.39** | 2.39 | build | A 24.04-linked binary cannot start on 22.04 (F19) |
 | Host glibc (static build) | 2.39 | **no host requirement** | build | No NSS/DNS/`dlopen`, so static linking is clean — verified |
 | Kernel | 6.18 (dev host) | **5.15** | capability | A floor for *telemetry expectations*, not a hard block |
-| cgroup | v2 | v2 | capability | v1 detected and reported unsupported for limits |
+| cgroup | v1 and v2 | v1 and v2 | capability | Both hierarchies are read for the memory limit (JOURNAL §1.18); the CI container runs v1 |
 
 > **What the static build does and does not solve.** It removes the **host glibc and
 > libstdc++ ABI requirement** — nothing more. Kernel ABI, CPU ISA and architecture
@@ -110,7 +110,7 @@ built against.
 | GoogleTest + GMock | Pinned revision, system fallback, `BUILD_TESTS=OFF` path | BSD-3-Clause | **No** — test only |
 | toml++ | Vendored, pinned, header-only | MIT | Yes — vendored, not a third-party *dependency* |
 | gcovr | CI-installed | BSD | No |
-| mull | CI-installed, nightly | Apache-2.0 | No — Ubuntu AArch64 packages exist, so the ARM64 leg is covered |
+| mull | CI-installed, run on demand (`workflow_dispatch`) until a release is pinned by SHA-256 | Apache-2.0 | No — Ubuntu AArch64 packages exist, so the ARM64 leg is covered |
 
 All GPL-compatible (§5.1). Third-party **runtime** dependencies remain zero.
 
