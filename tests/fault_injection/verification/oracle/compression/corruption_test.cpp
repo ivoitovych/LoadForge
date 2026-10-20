@@ -302,7 +302,7 @@ TEST(CompressionOracleNotChecked, EvidenceOfAnyOtherSizeComparesNothing) {
 
 std::atomic<int> scratch_requests{0};
 
-std::unique_ptr<std::byte[]> no_scratch(std::size_t /*bytes*/) noexcept {
+std::unique_ptr<Scratch> no_scratch() noexcept {
   scratch_requests.fetch_add(1, std::memory_order_seq_cst);
   return nullptr;
 }

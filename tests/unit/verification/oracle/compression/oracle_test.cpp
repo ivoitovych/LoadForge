@@ -128,12 +128,13 @@ TEST(CompressionOracle, RefusesAPlanThatIsNotACompressionUnits) {
   expect_refused(two, compression_plan(), "not 1 and 2");
 }
 
-TEST(CompressionOracle, HeapScratchIsTheSizeAskedFor) {
-  const std::unique_ptr<std::byte[]> scratch = heap_scratch(spec::kInputBytes);
+TEST(CompressionOracle, HeapScratchHoldsADecodedUnit) {
+  const std::unique_ptr<Scratch> scratch = heap_scratch();
   ASSERT_NE(scratch, nullptr);
-  scratch[0] = std::byte{1};
-  scratch[spec::kInputBytes - 1] = std::byte{2};
-  EXPECT_EQ(scratch[spec::kInputBytes - 1], std::byte{2});
+  EXPECT_EQ(scratch->size(), spec::kInputBytes);
+  (*scratch)[0] = std::byte{1};
+  scratch->back() = std::byte{2};
+  EXPECT_EQ(scratch->back(), std::byte{2});
 }
 
 }  // namespace

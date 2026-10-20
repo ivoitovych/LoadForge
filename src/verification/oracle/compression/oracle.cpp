@@ -86,8 +86,8 @@ OracleError refused(std::string detail) {
 
 }  // namespace
 
-std::unique_ptr<std::byte[]> heap_scratch(std::size_t bytes) noexcept {
-  return std::unique_ptr<std::byte[]>(new (std::nothrow) std::byte[bytes]);
+std::unique_ptr<Scratch> heap_scratch() noexcept {
+  return std::unique_ptr<Scratch>(new (std::nothrow) Scratch);
 }
 
 CompressionOracle::CompressionOracle(ScratchSource scratch) noexcept : scratch_(scratch) {}
@@ -120,11 +120,14 @@ Verdict CompressionOracle::check(const UnitEvidence& evidence) const {
   if (const auto padding = nonzero_padding(output, block_end)) {
     return malformed(*padding, "the padding after the block is not zero");
   }
-  const std::unique_ptr<std::byte[]> scratch = scratch_(spec::kInputBytes);
+  const std::unique_ptr<Scratch> scratch = scratch_();
   if (scratch == nullptr) {
-    return NotChecked{std::string(kWhat), "no scratch for the decoded bytes could be had", 0};
+    // The reason in its own statement, so that no temporary is alive while
+    // another string is built (journal §1.13).
+    std::string why = "no scratch for the decoded bytes could be had";
+    return NotChecked{std::string(kWhat), std::move(why), 0};
   }
-  const std::span<std::byte> decoded(scratch.get(), spec::kInputBytes);
+  const std::span<std::byte> decoded(*scratch);
   const auto summary = decode_block(output.subspan(spec::kHeaderBytes, length), decoded);
   if (!summary.has_value()) {
     const Malformation& broken = summary.error();

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -19,19 +20,128 @@ constexpr std::size_t kMinMatch = 4;          // "minmatch"
 constexpr std::size_t kLastLiterals = 5;      // "the last 5 bytes ... are always literals"
 constexpr std::size_t kMatchStartLimit = 12;  // "at least 12 bytes before the end"
 
-/// Adds a length's extension bytes, starting at `at`, to `length`. False when
-/// the block ends before the byte that is not 255.
-bool read_extension(std::span<const std::byte> block, std::size_t& at,
-                    std::size_t& length) noexcept {
-  while (at < block.size()) {
-    const auto value = std::to_integer<unsigned>(block[at++]);
-    length += value;
-    if (value != kMoreMark) {
-      return true;
+/// One pass over one block: the position in the block, the bytes decoded so
+/// far, and a step per field of a sequence. Each step either moves on or
+/// says which rule broke where.
+class Decoder {
+ public:
+  Decoder(std::span<const std::byte> block, std::span<std::byte> decoded) noexcept
+      : block_(block), decoded_(decoded) {}
+
+  core::Result<Summary, Malformation> run() noexcept {
+    while (true) {
+      if (in_ == block_.size()) {
+        return broken(Rule::kNoLastSequence, in_);
+      }
+      const std::size_t token_at = in_;
+      const auto token = std::to_integer<unsigned>(block_[in_++]);
+      if (const auto malformation = literals(token >> 4U)) {
+        return *malformation;
+      }
+      if (in_ == block_.size()) {
+        return last(token_at);
+      }
+      if (const auto malformation = match(token & 0x0FU)) {
+        return *malformation;
+      }
     }
   }
-  return false;
-}
+
+ private:
+  [[nodiscard]] Malformation broken(Rule rule, std::size_t at) const noexcept {
+    return Malformation{rule, at, out_};
+  }
+
+  /// Adds a length's extension bytes to `length`. False when the block ends
+  /// before the byte that is not 255.
+  bool extend(std::size_t& length) noexcept {
+    while (in_ < block_.size()) {
+      const auto value = std::to_integer<unsigned>(block_[in_++]);
+      length += value;
+      if (value != kMoreMark) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  std::optional<Malformation> literals(unsigned field) noexcept {
+    std::size_t length = field;
+    if (field == kRunMark && !extend(length)) {
+      return broken(Rule::kLiteralLengthTruncated, in_);
+    }
+    if (length > block_.size() - in_) {
+      return broken(Rule::kLiteralsTruncated, in_);
+    }
+    if (length > decoded_.size() - out_) {
+      return broken(Rule::kLiteralsTooLong, in_);
+    }
+    std::copy_n(block_.begin() + static_cast<std::ptrdiff_t>(in_), length,
+                decoded_.begin() + static_cast<std::ptrdiff_t>(out_));
+    in_ += length;
+    out_ += length;
+    ++summary_.sequences;
+    summary_.longest_literals = std::max(summary_.longest_literals, length);
+    return std::nullopt;
+  }
+
+  /// The block ended after a sequence's literals: that was the last one.
+  [[nodiscard]] core::Result<Summary, Malformation> last(std::size_t token_at) const noexcept {
+    const unsigned match_field = std::to_integer<unsigned>(block_[token_at]) & 0x0FU;
+    if (match_field != 0) {
+      return broken(Rule::kLastTokenHasMatch, token_at);
+    }
+    if (out_ != decoded_.size()) {
+      return broken(Rule::kDecodedTooShort, token_at);
+    }
+    return summary_;
+  }
+
+  std::optional<Malformation> match(unsigned field) noexcept {
+    const std::size_t offset_at = in_;
+    if (block_.size() - in_ < 2) {
+      return broken(Rule::kOffsetTruncated, offset_at);
+    }
+    const std::size_t offset = std::to_integer<std::size_t>(block_[in_]) |
+                               (std::to_integer<std::size_t>(block_[in_ + 1]) << 8U);
+    in_ += 2;
+    if (offset == 0) {
+      return broken(Rule::kOffsetZero, offset_at);
+    }
+    if (offset > out_) {
+      return broken(Rule::kOffsetBeforeStart, offset_at);
+    }
+    std::size_t length = field + kMinMatch;
+    if (field == kRunMark && !extend(length)) {
+      return broken(Rule::kMatchLengthTruncated, in_);
+    }
+    // Neither subtraction can wrap: out_ <= size always, and the first test
+    // leaves at least kMatchStartLimit bytes after out_.
+    const std::size_t size = decoded_.size();
+    if (size - out_ < kMatchStartLimit) {
+      return broken(Rule::kMatchTooLate, offset_at);
+    }
+    if (length > size - out_ - kLastLiterals) {
+      return broken(Rule::kMatchIntoLastLiterals, offset_at);
+    }
+    // Byte by byte, front to back: when the match overlaps its own output
+    // (length > offset), the later bytes it copies are the ones it just wrote.
+    for (std::size_t copied = 0; copied < length; ++copied, ++out_) {
+      decoded_[out_] = decoded_[out_ - offset];
+    }
+    ++summary_.matches;
+    summary_.max_offset = std::max(summary_.max_offset, offset);
+    summary_.longest_match = std::max(summary_.longest_match, length);
+    summary_.overlapping_matches += length > offset ? 1U : 0U;
+    return std::nullopt;
+  }
+
+  std::span<const std::byte> block_;
+  std::span<std::byte> decoded_;
+  std::size_t in_ = 0;
+  std::size_t out_ = 0;
+  Summary summary_;
+};
 
 }  // namespace
 
@@ -67,79 +177,7 @@ std::string_view describe(Rule rule) noexcept {
 
 core::Result<Summary, Malformation> decode_block(std::span<const std::byte> block,
                                                  std::span<std::byte> decoded) noexcept {
-  const std::size_t size = decoded.size();
-  std::size_t in = 0;
-  std::size_t out = 0;
-  Summary summary;
-  while (true) {
-    if (in == block.size()) {
-      return Malformation{Rule::kNoLastSequence, in, out};
-    }
-    const std::size_t token_at = in;
-    const auto token = std::to_integer<unsigned>(block[in++]);
-    std::size_t literals = token >> 4U;
-    if (literals == kRunMark && !read_extension(block, in, literals)) {
-      return Malformation{Rule::kLiteralLengthTruncated, in, out};
-    }
-    if (literals > block.size() - in) {
-      return Malformation{Rule::kLiteralsTruncated, in, out};
-    }
-    if (literals > size - out) {
-      return Malformation{Rule::kLiteralsTooLong, in, out};
-    }
-    std::copy_n(block.begin() + static_cast<std::ptrdiff_t>(in), literals,
-                decoded.begin() + static_cast<std::ptrdiff_t>(out));
-    in += literals;
-    out += literals;
-    ++summary.sequences;
-    summary.longest_literals = std::max(summary.longest_literals, literals);
-
-    const unsigned match_field = token & 0x0FU;
-    if (in == block.size()) {
-      if (match_field != 0) {
-        return Malformation{Rule::kLastTokenHasMatch, token_at, out};
-      }
-      if (out != size) {
-        return Malformation{Rule::kDecodedTooShort, token_at, out};
-      }
-      return summary;
-    }
-
-    const std::size_t offset_at = in;
-    if (block.size() - in < 2) {
-      return Malformation{Rule::kOffsetTruncated, offset_at, out};
-    }
-    const std::size_t offset = std::to_integer<std::size_t>(block[in]) |
-                               (std::to_integer<std::size_t>(block[in + 1]) << 8U);
-    in += 2;
-    if (offset == 0) {
-      return Malformation{Rule::kOffsetZero, offset_at, out};
-    }
-    if (offset > out) {
-      return Malformation{Rule::kOffsetBeforeStart, offset_at, out};
-    }
-    std::size_t match = match_field + kMinMatch;
-    if (match_field == kRunMark && !read_extension(block, in, match)) {
-      return Malformation{Rule::kMatchLengthTruncated, in, out};
-    }
-    // Neither subtraction can wrap: out <= size always, and the first test
-    // leaves at least kMatchStartLimit bytes after out.
-    if (size - out < kMatchStartLimit) {
-      return Malformation{Rule::kMatchTooLate, offset_at, out};
-    }
-    if (match > size - out - kLastLiterals) {
-      return Malformation{Rule::kMatchIntoLastLiterals, offset_at, out};
-    }
-    // Byte by byte, front to back: when the match overlaps its own output
-    // (match > offset), the later bytes it copies are the ones it just wrote.
-    for (std::size_t copied = 0; copied < match; ++copied, ++out) {
-      decoded[out] = decoded[out - offset];
-    }
-    ++summary.matches;
-    summary.max_offset = std::max(summary.max_offset, offset);
-    summary.longest_match = std::max(summary.longest_match, match);
-    summary.overlapping_matches += match > offset ? 1U : 0U;
-  }
+  return Decoder(block, decoded).run();
 }
 
 }  // namespace loadforge::verification::oracle::compression
