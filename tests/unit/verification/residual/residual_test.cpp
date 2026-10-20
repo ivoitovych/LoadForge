@@ -33,11 +33,8 @@ constexpr double kTiny = 0x1p-1074;
 double up(double x) { return std::nextafter(x, kInf); }
 double down(double x) { return std::nextafter(x, 0.0); }
 
-double derived(ErrorModel model, double magnitude) {
-  const core::Result<double, Underivable> result = tolerance(model, magnitude);
-  EXPECT_TRUE(result.has_value()) << describe(result.has_value() ? Underivable{} : result.error());
-  return result.value_or(kNaN);
-}
+/// The derived tolerance; value() throws, failing the test, if there is none.
+double derived(ErrorModel model, double magnitude) { return tolerance(model, magnitude).value(); }
 
 TEST(ResidualGamma, IsDepthTimesUOverOneMinusThat) {
   EXPECT_EQ(gamma(0), 0.0);

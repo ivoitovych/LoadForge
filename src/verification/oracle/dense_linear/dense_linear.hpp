@@ -90,6 +90,10 @@ struct Entry {
 
 /// The entry checked in tile `tile` (row-major over the grid x grid tiles) of
 /// unit `index`. Preconditions: is_grid(grid), tile < grid * grid.
+// The grid and the tile are both counts of tiles, named in the order the
+// sentence above reads them; a struct for two integers would be one more type
+// for a pure function.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 [[nodiscard]] Entry sample_entry(std::uint64_t index, std::size_t grid, std::size_t tile) noexcept;
 
 /// The oracle for units of `plan`, checking grid x grid entries per unit.

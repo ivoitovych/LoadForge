@@ -87,22 +87,26 @@ class DenseLinearOracle final : public Oracle {
   [[nodiscard]] Contract contract() const noexcept override { return Contract::kBounded; }
 
   [[nodiscard]] Verdict check(const UnitEvidence& evidence) const override {
+    // Each text is built in a statement of its own before the verdict, so no
+    // verdict is ever half built when an allocation could throw: the cleanup
+    // block such a throw would need carries a branch no test can take
+    // (journal §1.13).
     if (evidence.input.size() != spec::kInputBytes) {
-      return NotChecked{std::string(kWhat),
-                        "the input is " + std::to_string(evidence.input.size()) + " bytes, not " +
-                            std::to_string(spec::kInputBytes),
-                        0};
+      std::string why = "the input is " + std::to_string(evidence.input.size());
+      why += " bytes, not " + std::to_string(spec::kInputBytes);
+      return NotChecked{std::string(kWhat), std::move(why), 0};
     }
     if (evidence.output.size() != spec::kOutputBytes) {
-      return NotChecked{std::string(kWhat),
-                        "the output is " + std::to_string(evidence.output.size()) + " bytes, not " +
-                            std::to_string(spec::kOutputBytes),
-                        0};
+      std::string why = "the output is " + std::to_string(evidence.output.size());
+      why += " bytes, not " + std::to_string(spec::kOutputBytes);
+      return NotChecked{std::string(kWhat), std::move(why), 0};
     }
     for (std::size_t element = 0; element < 2 * kMatrixEntries; ++element) {
       const double value = load(evidence.input, element);
-      // The generator's range, [-1, 1), written so that a NaN fails it.
-      if (!(value >= -1.0 && value < 1.0)) {
+      // The generator's range, [-1, 1). Named rather than negated in place:
+      // the De Morgan form, value < -1 || value >= 1, would let a NaN through.
+      const bool in_range = value >= -1.0 && value < 1.0;
+      if (!in_range) {
         std::string why = "input " + name_input(element);
         why += " is " + text_of(value);
         why += ", outside [-1, 1): the tolerance cannot be derived";
@@ -163,6 +167,7 @@ class DenseLinearOracle final : public Oracle {
 
 bool is_grid(std::size_t grid) noexcept { return grid <= kN && std::has_single_bit(grid); }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): named in the header's order.
 Entry sample_entry(std::uint64_t index, std::size_t grid, std::size_t tile) noexcept {
   const std::size_t edge = kN / grid;
   // std::size_t is std::uint64_t on every platform this builds for (LP64).
