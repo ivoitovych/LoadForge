@@ -8,6 +8,9 @@ schema_version = 1
 
 [run]
 mode     = "stress"
+# How long the workers run, counted from the moment the last of them has been
+# started. Starting them is not part of it: on a slow or loaded machine a run
+# takes that much longer than this, in all.
 duration = "30s"
 
 [[workload]]

@@ -97,5 +97,28 @@ TEST(FakeSyscallsTest, AScriptedPeekFailureIsRaisedAndRecorded) {
   EXPECT_EQ(peek.error().number, EINVAL);
 }
 
+TEST(FakeSyscallsTest, ASlowForkMovesEveryClockAndATestCanSeeWhatTheNextReadWillSay) {
+  FakeSyscalls fake;
+  fake.advance_clocks_per_read(10'000'000);
+  fake.script_forks({{kChild, 0}, {kChild + 1, 0}});
+  fake.delay_each_fork(995'000'000);
+  std::vector<int> returned;
+  fake.on_fork_returned([&returned](int index) { returned.push_back(index); });
+  EXPECT_EQ(fake.peek_clock_ns(CLOCK_MONOTONIC), 0) << "peeking reads nothing";
+  EXPECT_EQ(fake.peek_clock_ns(CLOCK_MONOTONIC), 0);
+  ASSERT_TRUE(fake.fork_process().has_value());
+  EXPECT_EQ(returned, std::vector<int>{0});
+  EXPECT_EQ(fake.peek_clock_ns(CLOCK_MONOTONIC), 995'000'000);
+  // The nanoseconds carry into the seconds, as the real clock's do.
+  ASSERT_TRUE(fake.read_clock(CLOCK_MONOTONIC).has_value());
+  const auto second = fake.read_clock(CLOCK_MONOTONIC);
+  ASSERT_TRUE(second.has_value());
+  EXPECT_EQ(second.value().seconds, 1);
+  EXPECT_EQ(second.value().nanoseconds, 5'000'000);
+  fake.script_forks({{0, 0}});
+  ASSERT_TRUE(fake.fork_process().has_value());
+  EXPECT_EQ(returned, std::vector<int>{0}) << "a child returns from no parent's fork";
+}
+
 }  // namespace
 }  // namespace loadforge::testing

@@ -2021,6 +2021,57 @@ real-kernel one): `MisbehaviourCatalogue.AWorkerKilledFromOutsideBeforeTheContro
 `kStoppedByController`), its companion `TheControllersOwnKillOfARunningWorkerIsStillItsStop`,
 the fake-driven `ControllerExitedTest`, `ControllerOomTest` and `AttemptedKillTest` rows.
 
+### 2.31 EXT-02: startup is its own supervised phase, and the duration starts at the last launch
+
+*2026-10-20 20:15 UTC.* Review: `reviews/review-response-2026-10-20-0352-UTC.md` EXT-02; plan:
+`reviews/reaction-plan-external-review-2026-10-20-1230-UTC.md` item 2.
+
+**Verified before changing anything.** All four claims held in the code: `started_` was
+taken in `prepare()`; `spawn()` forked every worker through one `WorkerPool::spawn` with no
+controller beat between forks; each worker's `progress_changed_ns` and `last_read_ns`, and the
+"never beat" allowance in `watch()`, were measured from `started_`; and the duration was
+compared against `started_`. The regression tests below were run against the unfixed
+controller and all four failed.
+
+**Chosen.**
+1. *The controller beats between forks.* `WorkerPool::spawn` takes an optional observer, called
+   in the supervisor after every fork that stays in it (never in a child). The controller's
+   observer reads the clock, beats slot 0, and records the worker's launch time. No thread is
+   added: the controller still forks before any thread exists (PLAN §4.6). A clock failure
+   there is the controller's failure at stage `clock`, and the pool unwinds every worker
+   already started, as it does for a failed fork.
+2. *Each worker's allowance is its own.* The first-heartbeat allowance, the progress clock and
+   the unreadable-slot clock all run from that worker's launch (`Tracked::launched_ns`), no
+   longer from before the first fork.
+3. *The configured `run.duration` starts when the last worker has been launched* (`started_`
+   is overwritten by each launch and so ends as the last one's). Starting the workers is not
+   part of the duration. Each worker also paces itself by the same duration from its own start
+   (unchanged), so every worker runs the full duration and the whole run lasts the time the
+   forks took plus the duration. Stated in the `loadforge --help` text, `config/quick.toml`,
+   `config::Run::duration` and the controller header.
+
+**Rejected.** A bigger global staleness allowance (trades false positives for slower detection
+of a real hang, as the review says). A beat thread (unsafe before the last fork; the header
+promises none). Counting the duration from `prepare()` (a short run on a slow machine would
+ask for its stop before late workers ran). Counting it from the first launch (the first worker
+would run longer than the last by the spawn time).
+
+**What stays open, and is said so.** One fork that by itself takes longer than the allowance
+still leaves earlier workers watching a beat that cannot be refreshed during that call; only
+a pause between forks is covered. That is a single system call blocking for seconds, which
+the controller cannot interleave without a thread.
+
+**Consequence for the tests.** The two extra clock reads (one per launch) move every tick of
+the fake clock, so the timing expectations in the existing controller tests were recomputed;
+a worker that never beats is now stale a launch-interval earlier than the one forked after it.
+
+**Tests, red before the fix:** `ControllerStartupTest` (a delay injected at the fork boundary
+through the shared fake, 60 ms per fork against a 100 ms allowance): a running worker never
+finds the controller's beat stale while it forks; a worker forked late is judged stale only
+once the allowance has passed from its own launch; the deadline falls the configured duration
+after the last launch; a clock failure between forks is the controller's failure and unwinds.
+The pool's observer has its own tests in `worker_pool_test.cpp`.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned

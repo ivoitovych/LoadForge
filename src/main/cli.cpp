@@ -39,6 +39,10 @@ void print_usage(std::ostream& out) {
       << "  loadforge --check-config FILE   parse and validate a configuration\n"
       << "  loadforge stress --config FILE  run the null workload under supervision\n"
       << "\n"
+      << "The configured run.duration is the time the workers run, counted from the moment\n"
+      << "the last of them has been started; starting them is not part of it, and a run on a\n"
+      << "slow or loaded machine takes that much longer in all.\n"
+      << "\n"
       << "Exit codes: 0 clean; 1 refused (configuration, or the run could not start);\n"
       << "2 usage; 3 the run ended with a worker that did not complete.\n"
       << "See docs/PLAN.md for what lands when.\n";

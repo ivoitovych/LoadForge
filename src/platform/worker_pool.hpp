@@ -5,6 +5,7 @@
 #include <sys/types.h>
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -85,7 +86,16 @@ class WorkerPool {
   WorkerPool(Syscalls& syscalls, WorkerLauncher& launcher)
       : syscalls_(&syscalls), launcher_(&launcher) {}
 
-  /// Forks one worker per argv entry.
+  /// Called in the supervisor after each successful fork, with the slot and the
+  /// pid just created. It exists so that a supervisor with something to do
+  /// between forks (the controller's heartbeat: workers already running are
+  /// watching it while the rest are still being created) can do it without a
+  /// thread, which must not exist before the last fork (docs/PLAN.md §4.6).
+  /// Never called in a worker. An error unwinds the spawn like a failed fork.
+  using LaunchObserver = std::function<core::Result<core::Ok, SyscallError>(std::size_t, pid_t)>;
+
+  /// Forks one worker per argv entry, calling `after_launch` (when given)
+  /// after each fork that stays in the supervisor.
   ///
   /// RETURNS IN EVERY PROCESS IT CREATES. A caller that gets `is_worker()` must
   /// call WorkerLauncher::become_worker and then _exit; it must never return
@@ -98,7 +108,8 @@ class WorkerPool {
   /// supervisor expecting them -- exactly the orphan the death signal exists to
   /// prevent, arrived at through the front door.
   [[nodiscard]] core::Result<SpawnOutcome, SyscallError> spawn(
-      const std::vector<std::vector<std::string>>& argv_per_worker);
+      const std::vector<std::vector<std::string>>& argv_per_worker,
+      const LaunchObserver& after_launch = {});
 
   /// Waits for the next worker to stop running.
   ///

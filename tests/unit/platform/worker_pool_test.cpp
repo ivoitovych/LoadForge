@@ -18,7 +18,9 @@
 
 #include <cerrno>
 #include <csignal>
+#include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "platform/exit_status.hpp"
@@ -121,6 +123,54 @@ TEST(WorkerPoolTest, SpawningNothingSucceedsWithNoWorkers) {
   EXPECT_FALSE(outcome.value().is_worker());
   EXPECT_EQ(pool.live_count(), 0U);
   EXPECT_EQ(syscalls.fork_count(), 0);
+}
+
+// --- the observer between forks (EXT-02) -----------------------------------------
+
+TEST(WorkerPoolTest, TheObserverIsToldEachWorkerAfterItsForkAndNeverInAChild) {
+  // The supervisor's beat goes here. It must run once per worker that stays
+  // in the supervisor, after that worker exists, and never in a child: a
+  // child that ran it would beat on behalf of a controller it is not.
+  FakeSyscalls syscalls;
+  syscalls.script_forks({ForkStep{kFirst, 0}, ForkStep{kSecond, 0}, ForkStep{0, 0}});
+  WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+  WorkerPool pool{syscalls, launcher};
+  std::vector<std::pair<std::size_t, pid_t>> told;
+  std::vector<int> forks_when_told;
+
+  auto outcome = pool.spawn(argv_for(3), [&](std::size_t slot, pid_t pid) {
+    told.emplace_back(slot, pid);
+    forks_when_told.push_back(syscalls.fork_count());
+    return core::Result<core::Ok, SyscallError>{core::Ok{}};
+  });
+
+  ASSERT_TRUE(outcome);
+  ASSERT_TRUE(outcome.value().is_worker());
+  EXPECT_EQ(told, (std::vector<std::pair<std::size_t, pid_t>>{{0, kFirst}, {1, kSecond}}));
+  EXPECT_EQ(forks_when_told, (std::vector<int>{1, 2})) << "told between forks, not after them all";
+}
+
+TEST(WorkerPoolTest, AnObserverThatRefusesUnwindsEveryWorkerStartedSoFarItsOwnIncluded) {
+  FakeSyscalls syscalls;
+  syscalls.script_forks({ForkStep{kFirst, 0}, ForkStep{kSecond, 0}, ForkStep{kThird, 0}});
+  syscalls.script_waits({WaitStep{Reaped{kFirst, signalled(SIGKILL)}, 0},
+                         WaitStep{Reaped{kSecond, signalled(SIGKILL)}, 0}});
+  WorkerLauncher launcher{syscalls, "/usr/bin/loadforge"};
+  WorkerPool pool{syscalls, launcher};
+
+  auto outcome = pool.spawn(argv_for(3), [](std::size_t slot, pid_t) {
+    if (slot == 1) {
+      return core::Result<core::Ok, SyscallError>{SyscallError{EIO, "clock_gettime", "test"}};
+    }
+    return core::Result<core::Ok, SyscallError>{core::Ok{}};
+  });
+
+  ASSERT_FALSE(outcome);
+  EXPECT_EQ(outcome.error().number, EIO) << "the observer's reason, not the cleanup's";
+  EXPECT_EQ(syscalls.fork_count(), 2) << "no third fork after a refusal";
+  ASSERT_EQ(syscalls.signals_sent().size(), 2U);
+  EXPECT_EQ(syscalls.signals_sent()[1].first, kSecond) << "the worker just forked is unwound too";
+  EXPECT_EQ(pool.live_count(), 0U);
 }
 
 // --- partial spawn failure: the pool unwinds itself --------------------------

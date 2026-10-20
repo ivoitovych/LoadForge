@@ -70,13 +70,27 @@ struct ControllerError {
 /// arrived, and reap without blocking. A worker's exit closes its record
 /// pipe, which wakes the poll, so a death is seen within one tick.
 ///
-/// WHAT THE CONTROLLER DOES BEFORE IT FORKS
-/// ----------------------------------------
+/// WHAT THE CONTROLLER DOES BEFORE IT FORKS, AND BETWEEN FORKS
+/// -----------------------------------------------------------
 /// It publishes its first beat. A worker gives a controller that has never
 /// beaten exactly the staleness allowance and then leaves, so the beat must
 /// exist before the first worker can look. And it forks before any thread
 /// starts (docs/PLAN.md §4.6): at M1 there are none; the rule is stated here
 /// for the milestone that adds them.
+///
+/// It beats again after every fork, in the spawn loop, because workers that
+/// are already running watch slot 0 while the rest are still being created,
+/// and a spawn can take longer than the staleness allowance (journal §2.31).
+/// Each worker's allowance for a first heartbeat, and the clock for its lack
+/// of progress, run from its own launch.
+///
+/// WHEN THE CONFIGURED DURATION STARTS
+/// -----------------------------------
+/// `run.duration` is the time the workers run, counted from the moment the
+/// last worker has been launched. Starting them is not part of it. Each
+/// worker also paces itself by the same duration from its own start, so every
+/// worker runs the full duration and the whole run lasts the time it took to
+/// start them, plus the duration.
 class Controller {
  public:
   Controller(platform::Syscalls& syscalls, Reporter& reporter) noexcept
