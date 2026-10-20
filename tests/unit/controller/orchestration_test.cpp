@@ -559,10 +559,14 @@ TEST(ControllerTest, AClockThatFailsDuringTheFinalDrainIsTheControllersFailure) 
     rig.config.run.duration = core::Duration{1000};
     rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
     rig.reporter.on_event = [&rig, extra](const std::string& line) {
-      const auto raw_reads =
-          static_cast<int>(std::count(rig.syscalls.clocks_read().begin(),
-                                      rig.syscalls.clocks_read().end(), CLOCK_MONOTONIC_RAW));
-      rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, raw_reads + extra, EIO);
+      if (starts_with(line, "worker ")) {
+        // A reap, and the last event before the final drain is the last reap:
+        // the next raw reading is the drain's first, the one after its second.
+        const auto raw_reads =
+            static_cast<int>(std::count(rig.syscalls.clocks_read().begin(),
+                                        rig.syscalls.clocks_read().end(), CLOCK_MONOTONIC_RAW));
+        rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, raw_reads + extra, EIO);
+      }
       if (starts_with(line, "spawned")) {
         rig.deliver(0, ipc::RecordType::kFinished, "done");
         rig.worker_exits(0, 0);
@@ -834,7 +838,9 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
   {
     Rig rig;
     complete_at_deadline(rig);
-    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 7, EIO);  // The finish's reading.
+    // The finish's reading: the eleventh, after six in the run and four in the
+    // final drain (two for each record channel still open).
+    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 11, EIO);
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "clock");
@@ -844,7 +850,7 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
     complete_at_deadline(rig);
     // The finish's reading is earlier than the start's: a clock that jumped.
     rig.syscalls.set_clock(CLOCK_MONOTONIC_RAW, platform::TimeSpec{10, 0});
-    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 7, platform::TimeSpec{0, 0});
+    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 11, platform::TimeSpec{0, 0});
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "clock");
