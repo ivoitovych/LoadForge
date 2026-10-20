@@ -56,8 +56,9 @@
 //   orphan            Forks a grandchild that spins on a core, then exits 1.
 //   deaf              Never reads its control pipe and never stops on its own:
 //                     only the parent-death signal can end it.
-//   allocate          Maps and touches memory until the OOM killer ends it.
-//                     For the OOM tier, under a memory limit; never run bare.
+//   allocate          Raises its oom_score_adj to 1000, then maps and touches
+//                     memory until the OOM killer ends it. For the OOM row,
+//                     under a memory limit; never run bare.
 //
 // Every misbehaviour but complete, ignore-term and deaf starts with the same
 // prelude: the started record, one beat with progress 1, and a wait until the
@@ -577,11 +578,44 @@ int Worker::orphan() {
   return kExitWorkerError;
 }
 
+/// Makes this process the OOM killer's first choice: oom_score_adj 1000 adds
+/// the whole of the limit's pages to its score, more than any other process
+/// in the cgroup can have, so the kernel picks it and not the controller or a
+/// companion that happened to charge the page that crossed the limit. Raising
+/// one's own adjustment needs no privilege. False, with the errno, when the
+/// kernel would not take it.
+bool make_first_oom_choice(int& error) {
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const int fd = ::open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);
+  if (fd < 0) {
+    error = errno;
+    return false;
+  }
+  constexpr std::string_view kMost = "1000";
+  const ssize_t written = ::write(fd, kMost.data(), kMost.size());
+  error = errno;
+  ::close(fd);
+  return written == static_cast<ssize_t>(kMost.size());
+}
+
 int Worker::allocate() {
+  if (int error = 0; !make_first_oom_choice(error)) {
+    (void)send(ipc::RecordType::kError,
+               "cannot raise oom_score_adj to 1000: errno " + std::to_string(error));
+    return kExitWorkerError;
+  }
   constexpr std::size_t kChunkBytes = std::size_t{64} << 20U;
+  // A ceiling of its own, far above any limit a test sets: a worker run
+  // where no limit binds stops at 1 GiB and says so, rather than taking the
+  // machine's memory until the global OOM killer chooses among everything.
+  constexpr std::uint64_t kMostChunks = 16;
   const auto page = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
   std::uint64_t progress = 1;
   while (true) {
+    if (progress > kMostChunks) {
+      (void)send(ipc::RecordType::kError, "touched 1 GiB and was not killed: no limit binds");
+      return kExitWorkerError;
+    }
     void* chunk =
         ::mmap(nullptr, kChunkBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (chunk == MAP_FAILED) {

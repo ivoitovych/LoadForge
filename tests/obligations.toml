@@ -179,10 +179,18 @@ judgement (every outcome: enough, none, too few, a count that went back, \
 unreadable at either end) are pure and tested row by row; the loop is driven \
 against the controller's own fake of the record's contract \
 (resources/oom_kill_record.hpp), never the reader's tests (docs/adr/0003). \
-The real OOM kill of a real fake worker, the catalogue's last open row, is \
-a T7 test still to write now that both halves exist; the kernel's side of it -- a child really OOM-killed moves its \
-cgroup's count by one, and a kill -9 moves it by none -- is the reader's \
-T8, in tests/unit/resources."""
+End to end, T7 in catalogue_test.cpp: three fake workers in a memory \
+cgroup the test makes and moves itself into, limited to 256 MiB, so the \
+workers are born there and the record the controller opens before the first \
+fork reads that cgroup's count; one allocates until the kernel's OOM killer \
+ends it (kOomKilled, the count moved by one), one dies by SIGSEGV beside it \
+(kFault), one completes. It skips, quoting the kernel's refusal, where no \
+such cgroup can be made (cgroup v2 without delegation and not root). Its \
+companion runs wherever a count can be read: a SIGKILL from outside, the \
+same record consulted, stays kKilled and says the count did not move. The \
+kernel's side alone -- a child really OOM-killed moves its cgroup's count by \
+one, and a kill -9 moves it by none -- is the reader's T8, in \
+tests/unit/resources."""
 
 [[module]]
 path             = "src/resources"

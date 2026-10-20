@@ -682,6 +682,36 @@ is the ceiling (PLAN F7's container case, on a real machine).
   kill -- and can include a kill whose victim has not been reaped yet, which is the race the
   attribution rule in §2.23 is shaped around.
 
+### 1.25 A test can put a whole run under a memory limit by moving itself
+
+Established while writing the OOM row of the misbehaviour catalogue (§2.24), on the same
+hybrid machine as §1.24 (v1 memory controller, root):
+
+- **A process moved into a fresh v1 cgroup takes its future children with it and nothing
+  else.** The test writes its own pid to a new child cgroup's `cgroup.procs`; the workers
+  the controller then forks are born there, and `/proc/self/cgroup` names the new cgroup,
+  so a `CgroupOomKillRecord` made afterwards reads that cgroup's `memory.oom_control` --
+  the same way `loadforge stress` opens its record. Memory charged before the move stays
+  charged where it was (`memory.move_charge_at_immigrate` is 0 by default), so the move
+  brings no history into the limit. Moving back and removing the directory leaves the
+  original cgroup as it was; `rmdir` succeeds once the last dead child is released.
+- **Inside a memory cgroup the OOM killer still chooses by the whole process, not by its
+  charge.** Read in `mm/oom_kill.c`, not measured: `oom_badness` scores a candidate by its
+  RSS, swap entries and page tables -- all of its memory, wherever charged -- plus
+  `oom_score_adj` times the cgroup's limit in pages over 1000. So a test process with a
+  large RSS charged elsewhere could in principle outscore the worker that crossed the
+  limit. The allocating fake worker raises its own `oom_score_adj` to 1000 first (no
+  privilege is needed to raise it), which adds the whole limit to its score and makes
+  the choice certain rather than likely.
+- **The count moves by exactly one.** Three fake workers under 256 MiB -- one allocating,
+  one dying by SIGSEGV, one completing -- moved the new cgroup's count from 0 to 1 on
+  every run: 30 of 30 alone, and 30 of 30 with the whole supervision tier repeated under
+  `ctest -j4`.
+- **CI's runner user cannot do any of this.** The hosted runners are cgroup v2, and the
+  test steps run as an unprivileged user in a cgroup it does not own, so `mkdir` is
+  refused with `EACCES`. The test skips there and quotes the refusal; CI runs it a second
+  time as root, where a skip is turned into a failure (§2.24).
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -1523,6 +1553,54 @@ drive the reader against trees and the kernel; the cross-execution of one agains
 other waits for the contracts-first step (ROADMAP 12a). `cli::run_stress` reads both the
 budget and the record through the seam it is given, so its signature did not change and
 its tests feed the readers from the fake's read script.
+
+### 2.24 The OOM row: a cgroup the test makes and moves itself into
+
+M1 exit criteria 2 and 3 end to end need a real fake worker really OOM-killed under a
+limit that the controller's OOM record reads, and the record is opened before the first
+fork on the cgroup the workers will be born into: the controller's own.
+
+**Chosen:** the test makes a memory cgroup, limits it to 256 MiB with swap off, moves
+*itself* into it, and only then makes the record and runs the controller in-process
+(`MisbehaviourCatalogue.AWorkerOomKilledUnderALimitIsOomKilledAndNotAFaultOrAKill`). On
+v1 the cgroup is a child of the test's own (§1.24: v1 allows children of a cgroup that
+holds processes, and the count is the victim's own cgroup's). On v2 the "no internal
+processes" rule forbids that, so it is a sibling under the parent that already enables
+memory for the test's cgroup, and failing that a child of the hierarchy's root, which the
+rule exempts and root may write. A guard moves the test back and removes the cgroup
+however the test ends. Where none of it can be done the test skips and quotes the
+kernel's refusal for each place it tried; it never passes without the kill.
+
+*Rejected:*
+
+- *Fork a child that moves itself and runs the controller.* GoogleTest assertions in a
+  forked child never reach the runner, so every check would need a protocol back to the
+  parent; moving the test process and moving it back costs one guard.
+- *Move only the workers, after the fork.* There is no moment to do it without a hook in
+  the controller -- the test-hook-in-shipped-code the fake worker exists to avoid (§2.19)
+  -- and a worker moved after its exec ran unlimited for a while.
+- *Lower the limit of the test's own cgroup.* It limits everything else there too (the
+  shell, `ctest`, parallel tests), and a test that died with it lowered would leave it so.
+- *A cgroup per worker.* The exact-attribution design deferred in §2.23; a change to how a
+  run starts, not a test of how a death is read.
+
+*Making the victim certain:* the allocator raises its own `oom_score_adj` to 1000 before
+it touches anything (§1.25), so whichever process charged the page that crossed the limit,
+the kernel kills the allocator and not the controller or a companion. It also stops at
+1 GiB and says so, so a run where no limit binds fails as a worker error rather than
+taking the machine's memory.
+
+*In CI:* the hosted runners are v2 and the tests run as an unprivileged user, so under
+`ctest` the test skips. The `ci` workflow therefore runs it once more on every matrix
+entry under `sudo`, with `LOADFORGE_REQUIRE_OOM_LIMIT` set, which turns a skip into a
+failure, and checks that the filter matched one test. That makes exit criterion 3 a CI
+fact rather than one true only on a developer's root shell. *Recorded, not hidden:* the
+v2 branch of the guard has not run on a v2 host before that CI step's first run, because
+none was available; the step fails loudly if it is wrong.
+
+*The companion:* `ASigkillFromOutsideIsAKillWhenTheRecordCountedNone` runs the same record
+against a worker killed by `kill -9` from the test. It needs no limit, only a count to
+read, so it runs under `ctest` wherever the machine keeps one, CI included.
 
 ---
 
