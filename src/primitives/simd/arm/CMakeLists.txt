@@ -8,4 +8,9 @@
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$" AND NOT LOADFORGE_SIMD STREQUAL "scalar")
   loadforge_component(loadforge_primitives_simd_arm SOURCES gemm_neon.cpp)
   target_compile_definitions(loadforge_primitives_simd_arm PUBLIC LOADFORGE_SIMD_ARM_KERNELS=1)
+  # Atomic coverage counters: the kernel runs on several threads at once
+  # (src/workloads/dense_linear/CMakeLists.txt says what plain ones did).
+  if(LOADFORGE_COVERAGE)
+    target_compile_options(loadforge_primitives_simd_arm PRIVATE -fprofile-update=atomic)
+  endif()
 endif()

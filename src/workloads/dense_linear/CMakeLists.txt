@@ -19,3 +19,11 @@ loadforge_component(loadforge_workloads_dense_linear
     dense_linear.cpp
     scalar_kernel.cpp
   LINK ${dense_linear_kernels})
+
+# Coverage counters updated atomically: the determinism tier runs this code on
+# up to seven threads at once, and gcov's plain increments then lose updates --
+# enough that gcov derived a negative fall-through count for a kernel loop and
+# gcovr refused the report (docs/journal/06-workload-dense-linear.md).
+if(LOADFORGE_COVERAGE)
+  target_compile_options(loadforge_workloads_dense_linear PRIVATE -fprofile-update=atomic)
+endif()
