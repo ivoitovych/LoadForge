@@ -167,6 +167,27 @@ TEST(FrameTest, AnEmptyPayloadAndTheLargestPayloadBothFrameAndOneMoreByteDoesNot
   EXPECT_EQ(refused.error().detail, "payload bytes 65537, expected 65536");
 }
 
+TEST(RecordReaderTest, AFrameOfTheLargestPayloadIsReadBackNotRefusedAsOversized) {
+  // The limit is the largest payload a frame may carry, for the reader as for
+  // the writer: a header that claims exactly that many bytes is believed, and
+  // waited for until they arrive.
+  const std::vector<std::byte> largest(kMaxPayloadBytes, std::byte{0x5a});
+  auto frame = encode(7, largest);
+  ASSERT_TRUE(frame.has_value());
+  RecordReader reader;
+  reader.feed(std::span<const std::byte>{frame.value()}.first(kFrameHeaderBytes + 1));
+  auto waiting = reader.next();
+  ASSERT_TRUE(waiting.has_value()) << describe(waiting.error());
+  EXPECT_FALSE(waiting.value().has_value()) << "the rest of the payload is waited for";
+  reader.feed(std::span<const std::byte>{frame.value()}.subspan(kFrameHeaderBytes + 1));
+  auto next = reader.next();
+  ASSERT_TRUE(next.has_value()) << describe(next.error());
+  ASSERT_TRUE(next.value().has_value());
+  EXPECT_EQ(next.value()->type, 7U);
+  EXPECT_EQ(next.value()->payload, largest);
+  EXPECT_EQ(reader.buffered(), 0U);
+}
+
 TEST(RecordReaderTest, ReadsBackWhatWasEncodedAndTheTypeNumberIsCarriedAsIs) {
   RecordReader reader;
   EXPECT_EQ(reader.buffered(), 0U);
@@ -634,7 +655,7 @@ TEST(RecordSourceTest, ReadFailuresAreReportedAndInterruptionsRetriedUpToTheBoun
 
 // --- the pipe, really ------------------------------------------------------------
 
-TEST(RecordChannelRealTest, AChildWritesRecordsThroughARealPipeAndTheParentReadsThemToTheEnd) {
+TEST(RealProcessRecordChannel, AChildWritesRecordsThroughARealPipeAndTheParentReadsThemToTheEnd) {
   // The round trip the controller/worker split rests on, against the kernel:
   // the child holds the write end, sends three records and exits; the parent
   // closes its copy of the write end, so the child's exit is the end of the

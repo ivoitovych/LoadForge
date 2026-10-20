@@ -5,12 +5,18 @@
 path     = "src/primitives/simd"
 classes  = ["P1", "P3"]
 tiers    = ["T1"]
+provides = ["SelectPathContract"]
 note     = """
-The SIMD dispatch seam: today the contract header alone (ADR 0004). P1 is the \
-path names and their parser, the set, the build's compiled paths and the \
-kernel table's lookup, each arm tested in tests/contracts/simd/; P3 is the \
-value outside the enumeration (in no set, named "unrecognised", no kernel) and \
-a table without its scalar kernel, which kernel_paths() exposes. select_path() \
-is declared and provided by the numerics stream, which takes this row over, \
-adds its implementation's classes and tiers, and runs SelectPathContract \
-against it; the suite's reference instantiation is in tests/contracts/simd/."""
+The SIMD dispatch seam: the contract header (ADR 0004) and select_path(), \
+which this module now provides. P1 is the path names and their parser, the \
+set, the build's compiled paths and the kernel table's lookup, each arm \
+tested in tests/contracts/simd/, and select_path()'s three outcomes: the \
+request used, refused as not compiled, refused as not supported (in that \
+order of precedence), and no request resolved to the widest path in the \
+intersection -- tested over all 256 pairs of sets. P3 is the value outside \
+the enumeration (in no set, named "unrecognised", no kernel; as a request it \
+is not compiled), a table without its scalar kernel, which kernel_paths() \
+exposes, and scalar never refused whatever the sets say. The messages a \
+person reads name the path and what the build or the machine has. \
+SelectPathContract runs against select_path(); the suite's reference \
+instantiation is in tests/contracts/simd/."""

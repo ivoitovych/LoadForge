@@ -25,6 +25,9 @@
 # that was never once exercised while the rule lived in YAML.
 set -uo pipefail
 
+# shellcheck source=tools/lib/commit-policy.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/commit-policy.sh" || exit 1
+
 BASE="${1:?usage: check-dco.sh <base-ref> <head-ref> [repo]}"
 HEAD_REF="${2:?usage: check-dco.sh <base-ref> <head-ref> [repo]}"
 REPO="${3:-.}"
@@ -40,13 +43,18 @@ for ref in "$BASE" "$HEAD_REF"; do
   }
 done
 
-# --no-merges is deliberate, and narrow. A merge commit contributes no authored
-# content of its own, and the project's own conflict guidance tells contributors
-# to merge the base branch into their head branch -- which, done with GitHub's
-# "Update branch" button, produces a merge commit nobody can sign off. Requiring
-# one would push people to rewrite history instead, which the same guidance
-# forbids on a branch someone else has checked out.
-mapfile -t commits < <(git rev-list --no-merges "$BASE..$HEAD_REF")
+# A GitHub merge commit that adds no content -- two parents, a GitHub committer,
+# a tree equal to the clean automatic merge of its parents -- cannot be signed
+# off by anyone and is skipped (tools/lib/commit-policy.sh). That is a test of
+# the tree, not of fields a forger can write: any other merge, whoever
+# committed it, is a commit like the rest and needs its author's sign-off.
+# The sign-off is the one the commit-msg hook requires: its email is the
+# author's.
+mapfile -t all < <(git rev-list "$BASE..$HEAD_REF")
+commits=()
+for c in "${all[@]}"; do
+  cp_is_github_merge "$c" || commits+=("$c")
+done
 
 if [ "${#commits[@]}" -eq 0 ]; then
   # An empty range means this gate examined nothing. "I found no problems" and
@@ -58,9 +66,9 @@ fi
 
 missing=0
 for commit in "${commits[@]}"; do
-  # %(trailers:key=...) parses the trailer block properly, so a body that merely
-  # mentions the words does not count as a sign-off.
-  if git log -1 --format='%(trailers:key=Signed-off-by)' "$commit" | grep -q .; then
+  # The trailer block is parsed properly, so a body that merely mentions the
+  # words does not count as a sign-off.
+  if git log -1 --format='%B' "$commit" | cp_signoff_matches "$(git log -1 --format='%ae' "$commit")"; then
     echo "  signed off: $(git log -1 --oneline "$commit")"
   else
     echo "  MISSING Signed-off-by: $(git log -1 --oneline "$commit")" >&2

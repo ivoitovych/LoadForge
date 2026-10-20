@@ -1,0 +1,2 @@
+[info] Mutation score: 100%
+[info] All mutations have been killed

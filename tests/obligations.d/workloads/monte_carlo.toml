@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/workloads/monte_carlo and nothing else.
+
+[[module]]
+path    = "src/workloads/monte_carlo"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+Today the Monte Carlo specification alone (spec.hpp, ADR 0004): the batch \
+keys, the sample bits of even and odd samples, the integrand at both ends of \
+its range, the chunk lengths, the sampled batches, and the tolerance and the \
+inequality its derivation rests on, each tested in \
+tests/contracts/workloads/. The Monte Carlo stream takes this row over with \
+the workload and owes what its brief, docs/streams/18-workload-monte-carlo.md, \
+lists -- P4, and T3, T4, T5, T5b, T6 -- with provides = ["WorkloadContract"]."""
