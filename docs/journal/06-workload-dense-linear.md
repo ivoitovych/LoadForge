@@ -95,6 +95,14 @@ failure, and the shared function is the better home for it.
   workload calls `Executor::run` with a named function instead, with its own `NOLINTNEXTLINE`
   (see Contract questions).
 
+### The portability gate reads comments
+
+The scalar-only job's "no x86 intrinsics outside src/primitives/simd/x86/" step is a `grep`
+over the raw text, so `panel.hpp`'s comment naming the AVX2 intrinsic by its spelling
+failed it, run locally before any push. The comment now names the instruction in words.
+Erring towards refusal is right for that gate; a header outside the kernel directories
+describes kernels without spelling their intrinsics.
+
 ### Times, for planning the tiers
 
 At `-O0` one unit takes about 180 ms on the scalar path and 40 ms on the AVX2 path (Xeon @

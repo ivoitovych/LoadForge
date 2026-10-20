@@ -26,7 +26,7 @@
 //   scalar  p <- p + (a * b): the product rounded, then the sum. No FMA:
 //           the scalar kernel names no intrinsic, and -ffp-contract=off keeps
 //           the compiler from fusing one for it.
-//   avx2    p <- fma(a, b, p) by _mm256_fmadd_pd: one rounding.
+//   avx2    p <- fma(a, b, p) by the AVX2 fused multiply-add: one rounding.
 //   neon    p <- fma(a, b, p) by vfmaq_f64: one rounding.
 //
 // So the two fused paths compute the same chain and give the same bits as
