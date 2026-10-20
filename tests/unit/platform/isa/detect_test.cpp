@@ -17,7 +17,7 @@ using simd::IsaPath;
 using simd::IsaSet;
 
 TEST(DetectX86Test, AMachineWithEverythingHasEveryX86Path) {
-  FakeSource source(fakes::Machine::kFullX86);
+  const FakeSource source(fakes::Machine::kFullX86);
   EXPECT_EQ(detect_paths(source, Architecture::kX86_64),
             (IsaSet{IsaPath::kScalar, IsaPath::kAvx2, IsaPath::kAvx512}));
   EXPECT_EQ(source.faults, 0);
@@ -86,7 +86,7 @@ TEST(DetectX86Test, ACpuWithoutLeafSevenIsNeverAskedForIt) {
 }
 
 TEST(DetectX86Test, ACpuThatReportsNothingIsScalarOnly) {
-  FakeSource source;
+  const FakeSource source;
   EXPECT_EQ(detect_paths(source, Architecture::kX86_64), IsaSet{IsaPath::kScalar});
 }
 
@@ -97,7 +97,7 @@ TEST(DetectX86Test, TheAarch64CapabilityWordIsIgnored) {
 }
 
 TEST(DetectAarch64Test, AsimdInTheCapabilityWordIsNeon) {
-  FakeSource source(fakes::Machine::kFullAarch64);
+  const FakeSource source(fakes::Machine::kFullAarch64);
   EXPECT_EQ(detect_paths(source, Architecture::kAarch64),
             (IsaSet{IsaPath::kScalar, IsaPath::kNeon}));
   EXPECT_EQ(source.leaves_read.size(), 0U) << "CPUID is x86 and is never read for AArch64";

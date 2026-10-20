@@ -47,7 +47,7 @@ TEST(MachineTest, TheProbeAgreesWithTheKernelsFeatureFlags) {
   const std::set<std::string> flags = kernel_flags();
   ASSERT_FALSE(flags.empty()) << "/proc/cpuinfo has no feature line to compare with";
   const simd::IsaSet set = make_native_probe()->supported();
-  const auto has = [&flags](const char* flag) { return flags.count(flag) != 0U; };
+  const auto has = [&flags](const char* flag) { return flags.contains(flag); };
 #if defined(__x86_64__)
   EXPECT_EQ(set.contains(IsaPath::kAvx2), has("avx2") && has("fma"));
   EXPECT_EQ(set.contains(IsaPath::kAvx512), has("avx512f"));

@@ -54,7 +54,7 @@ class FakeSource final : public IsaSource {
 
   [[nodiscard]] std::uint64_t xgetbv(std::uint32_t index) const override {
     ++xgetbv_calls;
-    const CpuidRegisters leaf1 = leaves.count({1, 0}) != 0 ? leaves.at({1, 0}) : CpuidRegisters{};
+    const CpuidRegisters leaf1 = leaves.contains({1, 0}) ? leaves.at({1, 0}) : CpuidRegisters{};
     if ((leaf1.ecx & kEcxOsxsave) == 0 || index != 0) {
       ++faults;
       return 0;

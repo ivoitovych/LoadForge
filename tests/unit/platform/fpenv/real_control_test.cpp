@@ -17,7 +17,7 @@ namespace {
 
 #if defined(__x86_64__)
 std::uint64_t raw_register() {
-  std::uint32_t value = 0;
+  std::uint32_t value = 0;  // NOLINT(misc-const-correctness): the asm below writes it
   asm volatile("stmxcsr %0" : "=m"(value));
   return value;
 }

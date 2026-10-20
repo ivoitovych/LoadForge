@@ -58,7 +58,7 @@ TEST(EnvironmentTest, EstablishingOnTheOtherShapeOfArchitectureWritesItsOwnFlags
 }
 
 TEST(EnvironmentTest, AssertingADirtyRegisterNamesEveryFlagAndWritesNothing) {
-  ScriptedControl control(kDirtyX86);
+  const ScriptedControl control(kDirtyX86);
   const auto asserted = assert_environment(control);
   ASSERT_FALSE(asserted.has_value());
   EXPECT_EQ(asserted.error().violations,

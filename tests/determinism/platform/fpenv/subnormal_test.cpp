@@ -25,7 +25,7 @@ class SubnormalTest : public ::testing::Test {
   void SetUp() override { saved_ = control_.read(); }
   void TearDown() override { control_.write(saved_); }
 
-  FpState required() const {
+  [[nodiscard]] static FpState required() {
     return required_state(RealFpControl::kHasDenormalsAreZero, RealFpControl::kHasDefaultNan);
   }
 
@@ -34,23 +34,23 @@ class SubnormalTest : public ::testing::Test {
 };
 
 double half_of_min_normal() {
-  volatile double min_normal = 0x1p-1022;
-  volatile double half = 0.5;
-  volatile double result = min_normal * half;
+  const volatile double min_normal = 0x1p-1022;
+  const volatile double half = 0.5;
+  const volatile double result = min_normal * half;
   return result;
 }
 
 double denorm_min_times_one() {
-  volatile double tiny = 0x1p-1074;
-  volatile double one = 1.0;
-  volatile double result = tiny * one;
+  const volatile double tiny = 0x1p-1074;
+  const volatile double one = 1.0;
+  const volatile double result = tiny * one;
   return result;
 }
 
 float float_half_of_min_normal() {
-  volatile float min_normal = 0x1p-126F;
-  volatile float half = 0.5F;
-  volatile float result = min_normal * half;
+  const volatile float min_normal = 0x1p-126F;
+  const volatile float half = 0.5F;
+  const volatile float result = min_normal * half;
   return result;
 }
 
@@ -86,9 +86,9 @@ TEST_F(SubnormalTest, DenormalsAreZeroTurnsASubnormalInputIntoZeroWhereTheArchit
 
 TEST_F(SubnormalTest, TheRoundingModeChangesTheLastBitAndEstablishingRestoresNearest) {
   const auto sum_with_tiny = [] {
-    volatile double one = 1.0;
-    volatile double tiny = 0x1p-80;
-    volatile double result = one + tiny;
+    const volatile double one = 1.0;
+    const volatile double tiny = 0x1p-80;
+    const volatile double result = one + tiny;
     return result;
   };
   FpState state = required();
@@ -106,7 +106,7 @@ TEST_F(SubnormalTest, AThreadStartedAfterEstablishingInheritsTheRequiredState) {
   ASSERT_TRUE(establish_environment(control_).has_value());
   bool clean = false;
   std::thread worker([&clean] {
-    RealFpControl own;
+    const RealFpControl own;
     clean = assert_environment(own).has_value() &&
             std::bit_cast<std::uint64_t>(half_of_min_normal()) == kHalfMinNormalBits;
   });

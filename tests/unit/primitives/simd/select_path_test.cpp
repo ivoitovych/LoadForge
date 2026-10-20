@@ -54,10 +54,10 @@ TEST(SelectPathTest, EveryPairOfSetsChoosesTheWidestInTheIntersectionOrScalar) {
       IsaSet supported;
       IsaSet compiled;
       for (unsigned i = 0; i < 4; ++i) {
-        if ((supported_bits >> i) & 1U) {
+        if (((supported_bits >> i) & 1U) != 0U) {
           supported = supported.with(all[i]);
         }
-        if ((compiled_bits >> i) & 1U) {
+        if (((compiled_bits >> i) & 1U) != 0U) {
           compiled = compiled.with(all[i]);
         }
       }

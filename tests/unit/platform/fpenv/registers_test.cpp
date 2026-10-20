@@ -51,7 +51,7 @@ TEST(MxcsrTest, EncodeSetsAndClearsEachFlagAndKeepsEveryOtherBit) {
 }
 
 TEST(MxcsrTest, AnAbsentDenormalsAreZeroLeavesTheBitAlone) {
-  FpState state;
+  const FpState state;
   EXPECT_EQ(encode_mxcsr(kMxcsrReset | (1U << 6), state), kMxcsrReset | (1U << 6));
   EXPECT_EQ(encode_mxcsr(kMxcsrReset, state), kMxcsrReset);
 }
@@ -100,7 +100,7 @@ TEST(FpcrTest, EncodeSetsAndClearsEachFlagAndKeepsEveryOtherBit) {
 }
 
 TEST(FpcrTest, AnAbsentDefaultNanLeavesTheBitAlone) {
-  FpState state;
+  const FpState state;
   EXPECT_EQ(encode_fpcr(1ULL << 25, state), 1ULL << 25);
   EXPECT_EQ(encode_fpcr(0, state), 0ULL);
 }
