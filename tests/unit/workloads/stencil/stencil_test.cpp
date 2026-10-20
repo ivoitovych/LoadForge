@@ -135,6 +135,14 @@ TEST(StencilPlan, APathWithoutAKernelIsRefusedByName) {
   }
 }
 
+TEST(StencilPlan, APathOutsideTheEnumerationIsRefusedAsOneWithNoKernel) {
+  const auto created = create(testing::config_for(static_cast<simd::IsaPath>(200)));
+  ASSERT_FALSE(created.has_value());
+  EXPECT_EQ(created.error().fault, WorkloadFault::kConfiguration);
+  EXPECT_NE(created.error().detail.find("unrecognised"), std::string::npos);
+  EXPECT_EQ(simd::kernel_at(kernel_table(), static_cast<simd::IsaPath>(200)), nullptr);
+}
+
 TEST(StencilPlan, ADecompositionIsJudgedBeforeTheFootprint) {
   WorkloadConfig config = testing::config_for(simd::IsaPath::kScalar, 48);
   config.footprint_bytes = 1;

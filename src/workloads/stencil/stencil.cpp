@@ -70,6 +70,17 @@ void sweep_tile(void* context, std::size_t index, std::size_t /*slot*/) noexcept
   }
 }
 
+/// What sweep `step` reads: the input first, then the grid the previous sweep
+/// wrote (the scratch grid after an even step, the output after an odd one).
+std::span<const std::byte> source_of(std::size_t step, std::span<const std::byte> input,
+                                     std::span<const std::byte> middle,
+                                     std::span<const std::byte> output) noexcept {
+  if (step == 0) {
+    return input;
+  }
+  return step % 2 == 1 ? middle : output;
+}
+
 class Stencil final : public Workload {
  public:
   Stencil(const WorkloadConfig& config, std::uint32_t tile_edge, SweepKernel kernel,
@@ -100,6 +111,8 @@ class Stencil final : public Workload {
   /// the input and writes scratch, the last (kSteps is even) writes the output.
   /// A sweep is one executor run, so the run's return is the barrier between
   /// sweeps; within one, tiles share nothing but the read-only source.
+  // The signature is the contract's: two writable spans in a row is its doing.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   void compute(std::uint64_t /*index*/, std::span<const std::byte> input,
                std::span<std::byte> output, std::span<std::byte> scratch,
                worker::Executor& executor) const noexcept override {
@@ -108,9 +121,7 @@ class Stencil final : public Workload {
     const std::size_t tiles_per_side = kEdge / plan_.decomposition;
     for (std::size_t step = 0; step < kSteps; ++step) {
       Sweep sweep;
-      sweep.src = step == 0 ? input
-                            : (step % 2 == 1 ? std::span<const std::byte>(middle)
-                                             : std::span<const std::byte>(output));
+      sweep.src = source_of(step, input, middle, output);
       sweep.dst = step % 2 == 0 ? middle : output;
       sweep.kernel = kernel_;
       sweep.tile = plan_.decomposition;
