@@ -72,7 +72,7 @@ std::vector<std::string> tail_of(const WorkerArgs& args) {
   return argv;
 }
 
-std::string refusal_of(std::vector<std::string> argv) {
+std::string refusal_of(const std::vector<std::string>& argv) {
   auto parsed = parse_args(views_of(argv));
   EXPECT_FALSE(parsed.has_value());
   return parsed.has_value() ? std::string{"(accepted)"} : parsed.error();
@@ -260,7 +260,7 @@ struct Rig {
   }
 
   /// The records the worker wrote, as (type, text) pairs.
-  std::vector<std::pair<std::uint16_t, std::string>> received() {
+  std::vector<std::pair<std::uint16_t, std::string>> received() const {
     std::vector<std::pair<std::uint16_t, std::string>> out;
     ipc::RecordReader reader;
     const std::string bytes = syscalls.pipe_contents(records.write_fd);

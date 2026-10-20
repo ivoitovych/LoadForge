@@ -37,17 +37,18 @@
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
-#include <signal.h>
-#include <stdlib.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -110,6 +111,8 @@ class Selector {
   ~Selector() { ::unsetenv("LOADFORGE_FAKE_WORKER"); }
   Selector(const Selector&) = delete;
   Selector& operator=(const Selector&) = delete;
+  Selector(Selector&&) = delete;
+  Selector& operator=(Selector&&) = delete;
 };
 
 std::vector<pid_t> pids_in(std::string_view line) {
@@ -154,12 +157,9 @@ class Recorder final : public Reporter {
 };
 
 bool has_record(const WorkerReport& worker, std::string_view prefix) {
-  for (const std::string& record : worker.records) {
-    if (record.substr(0, prefix.size()) == prefix) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(worker.records, [&](const std::string& record) {
+    return record.substr(0, prefix.size()) == prefix;
+  });
 }
 
 std::string records_of(const WorkerReport& worker) {

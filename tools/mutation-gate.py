@@ -40,6 +40,17 @@ must be parsed out of prose. Requiring both to describe the same set of mutants
 is the same doctrine the project applies to its workloads: never verify
 something by re-reading the one artifact it produced. Any disagreement between
 the two is a failure of the gate, not a pass (docs/PLAN.md F20).
+
+ONE SHARD AT A TIME
+-------------------
+The sweep over src/ runs as one CI job per shard (tools/mutation-shard.py), each
+mutating only its own sources. Given --scope, the gate judges one shard: every
+mutant in the report must lie under one of the scope's paths -- a mutant
+outside it means Mull mutated what the shard did not ask for, and the run is
+refused -- and only the allowlist entries under the scope are applied or can be
+stale. Entries for other shards are left to their own shard; the shard plan
+checks that every entry belongs to some shard, so none escapes review that way.
+Every other refusal holds within a shard exactly as it does without one.
 """
 
 import argparse
@@ -80,6 +91,30 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 ANNOUNCE_RE = re.compile(r": warning: (?:Killed|Survived|Not Covered):")
 
 LABELS = ("Killed", "Survived", "Not Covered")
+
+# An allowlist key, as the parsers above build it. The path may itself contain
+# colons, so the three trailing fields are taken from the right.
+KEY_RE = re.compile(r"^(?P<path>\S.*):(?P<line>\d+):(?P<col>\d+):(?P<mutator>[A-Za-z0-9_]+)$")
+
+# How the gate runs Mull. Both timeouts are Mull's own (mull-runner 0.34.2,
+# rust/mull-tools/mull-runner.rs):
+#
+#   --timeout          bounds the two unmutated runs (warm-up and baseline).
+#                      Mull's default is 3 s; a run that exceeds it is an error,
+#                      and the gate fails on Mull's non-zero exit.
+#   --minimum-timeout  is the floor of the per-mutant timeout, which Mull sets to
+#                      max(10 x baseline, floor). A mutant that outlives it is
+#                      killed and reported as killed: a hang is detected
+#                      breakage, by Mull's semantics and by this gate's.
+#
+# The floor is the dangerous one, in the direction that matters here: a timeout
+# counts as a kill, so a timeout short enough to cut off a healthy run would
+# turn survivors into kills and the gate would pass a mutant nobody detected.
+# So the floor is set far above any healthy run -- the suite every mutant runs
+# takes under half a second (docs/JOURNAL.md §1.26) -- and a timeout means a
+# hang, not a slow machine.
+RUN_TIMEOUT_MS = 120_000
+MUTANT_TIMEOUT_MS = 20_000
 
 
 class GateFailure(Exception):
@@ -358,9 +393,16 @@ def load_allowlist(path: pathlib.Path) -> list[str]:
     if not path.exists():
         return []
     entries = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw.strip()
         if line and not line.startswith("#"):
+            if not KEY_RE.match(line):
+                # A line that is not a key names no mutant, so it could never be
+                # applied, and no shard could say whether it is stale.
+                raise GateFailure(
+                    f"{path}:{number}: {line!r} is not an allowlist key. Each entry is "
+                    "path:line:column:mutator, exactly as the gate prints a survivor."
+                )
             entries.append(line)
     duplicates = {entry for entry in entries if entries.count(entry) > 1}
     if duplicates:
@@ -371,7 +413,82 @@ def load_allowlist(path: pathlib.Path) -> list[str]:
     return entries
 
 
-def run_mull(binary: str, runner: str, report_dir: pathlib.Path) -> tuple[str, str]:
+def parse_scope(raw: str) -> str:
+    """A shard's path prefix, relative to the repository root, without a
+    trailing slash. Refused rather than guessed at when it could name the wrong
+    thing: an absolute path, a parent reference, or nothing at all."""
+    text = raw.strip().rstrip("/")
+    parts = text.split("/")
+    if (
+        not text
+        or raw.strip().startswith("/")
+        or "\\" in text
+        or any(part in ("", ".", "..") for part in parts)
+    ):
+        raise GateFailure(
+            f"--scope {raw!r} is not a path below the repository root, such as "
+            "src/platform; a scope that could mean something else is not applied."
+        )
+    return text
+
+
+def in_scope(path: str, scopes: list[str]) -> bool:
+    """Whether a repository-relative path lies under one of the scopes. A prefix
+    matches whole components only: src/core does not contain src/core_extra."""
+    return any(path == scope or path.startswith(scope + "/") for scope in scopes)
+
+
+def key_path(key: str) -> str:
+    match = KEY_RE.match(key)
+    if not match:  # load_allowlist admits nothing else; refuse rather than assume
+        raise GateFailure(f"{key!r} is not an allowlist key")
+    return match["path"]
+
+
+def check_scope(ide: dict, scopes: list[str]) -> int:
+    """Refuse a shard's report that is not wholly about the shard.
+
+    Every mutant must be listed for that to be decidable, so a report that hides
+    its killed mutants is refused under a scope: a killed mutant in another
+    module's code is still Mull mutating what this shard did not ask for, and the
+    gate cannot say it did not happen without seeing it. Returns the number of
+    mutants in scope.
+    """
+    records, headers = ide["records"], ide["headers"]
+    if "Killed" not in headers:
+        listed = len(records["Survived"]) + len(records["Not Covered"])
+        total = next(iter(headers.values()))[1] if headers else None
+        if total is None or total != listed:
+            raise GateFailure(
+                "the report does not list its killed mutants, so the gate cannot check that "
+                "every mutant lies in this shard's scope. Run Mull with "
+                "--ide-reporter-show-killed, as run_mull does."
+            )
+    outside = sorted(
+        {
+            record["key"]
+            for label in LABELS
+            for record in records[label]
+            if not in_scope(record["path"], scopes)
+        }
+    )
+    if outside:
+        for key in outside:
+            print(f"  MUTANT OUTSIDE THE SHARD: {key}", file=sys.stderr)
+        raise GateFailure(
+            f"{len(outside)} mutant(s) lie outside this shard's scope ({', '.join(scopes)}). "
+            "Mull mutated sources the shard did not ask for, so its mull.yml was not the one "
+            "it was given, or was not read. No verdict on a run that is not the run asked for."
+        )
+    return sum(len(records[label]) for label in LABELS)
+
+
+def run_mull(
+    binary: str,
+    runner: str,
+    report_dir: pathlib.Path,
+    test_args: list[str],
+) -> tuple[str, str]:
     """Run Mull, asking for both renderings in one pass.
 
     --allow-surviving because survivors are this gate's business, not an exit
@@ -381,11 +498,17 @@ def run_mull(binary: str, runner: str, report_dir: pathlib.Path) -> tuple[str, s
     printed and the report cannot be reconciled against its own score.
     --include-not-covered because a mutant on an unexecuted line contradicts the
     100% coverage gate and the project would rather hear about it.
+    --timeout and --minimum-timeout as RUN_TIMEOUT_MS and MUTANT_TIMEOUT_MS say.
+    --no-mutant-output because Mull reads a mutant's output through pipes until
+    EOF, after its timeout has killed the program: a process the program forked
+    that outlives it holds those pipes open, and Mull then waits on them for
+    ever, with no timeout left to fire. Nothing the gate reads comes from that
+    output. The test program's arguments follow "--", after which Mull takes
+    nothing as its own option.
     """
     report_dir.mkdir(parents=True, exist_ok=True)
     command = [
         runner,
-        binary,
         "--reporters",
         "IDE",
         "--reporters",
@@ -397,6 +520,14 @@ def run_mull(binary: str, runner: str, report_dir: pathlib.Path) -> tuple[str, s
         "--ide-reporter-show-killed",
         "--include-not-covered",
         "--allow-surviving",
+        "--timeout",
+        str(RUN_TIMEOUT_MS),
+        "--minimum-timeout",
+        str(MUTANT_TIMEOUT_MS),
+        "--no-mutant-output",
+        binary,
+        "--",
+        *test_args,
     ]
     print("mutation gate: " + " ".join(command))
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -441,16 +572,35 @@ def main() -> int:
         default=pathlib.Path(__file__).resolve().parent.parent,
         help="repository root, used to make report paths relative",
     )
+    parser.add_argument(
+        "--scope",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="judge one shard: the repository-relative path(s) its mutants must lie under "
+        "and whose allowlist entries it owns (repeatable)",
+    )
+    parser.add_argument(
+        "--test-arg",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help="argument for the test program, passed after Mull's '--' (repeatable; write "
+        "--test-arg=--gtest_filter=... so the value is not read as an option)",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
     allowlist_path = args.allowlist or root / "tools" / "mutation-allowlist.txt"
 
     try:
+        scopes = [parse_scope(raw) for raw in args.scope]
         if args.report_dir is not None:
             ide_text, sarif_text = _read_reports(args.report_dir)
         elif args.binary:
-            ide_text, sarif_text = run_mull(args.binary, args.runner, root / "build" / "mutation")
+            ide_text, sarif_text = run_mull(
+                args.binary, args.runner, root / "build" / "mutation", args.test_arg
+            )
         else:
             parser.error("give a test binary to mutate, or --report-dir to judge existing reports")
 
@@ -458,6 +608,15 @@ def main() -> int:
         reconcile_ide(ide)
         cross_check(ide, parse_sarif(sarif_text, root))
         allowed = load_allowlist(allowlist_path)
+        if scopes:
+            in_shard = check_scope(ide, scopes)
+            elsewhere = [key for key in allowed if not in_scope(key_path(key), scopes)]
+            allowed = [key for key in allowed if in_scope(key_path(key), scopes)]
+            print(
+                f"mutation gate: shard {', '.join(scopes)}: {in_shard} mutant(s), all in scope; "
+                f"{len(elsewhere)} allowlist entr{'y' if len(elsewhere) == 1 else 'ies'} "
+                "for other shards, neither applied nor checked here"
+            )
 
         not_covered = sorted(record["key"] for record in ide["records"]["Not Covered"])
         if not_covered:

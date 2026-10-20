@@ -58,7 +58,8 @@ of `<format>`, `jthread`, `atomic_wait`, `barrier`, `latch`, `span`, `bit_cast`,
 are not usable** in this toolchain generation; the project uses classic headers.
 
 **Absent and required from CI:** `gcovr`, `lcov`, `perf`, `mull`. None are needed to
-build; all are needed for the gates.
+build; all are needed for the gates. `strace` is present here and installed in CI for the
+mutation workflow's process check.
 
 **Absent telemetry — the fact that shapes the architecture:** no `hwmon`, no `cpufreq`,
 no RAPL, no EDAC, and `perf_event_paranoid=2`. The development and CI environment exposes
@@ -110,7 +111,8 @@ built against.
 | GoogleTest + GMock | Pinned revision, system fallback, `BUILD_TESTS=OFF` path | BSD-3-Clause | **No** — test only |
 | toml++ | Vendored, pinned, header-only | MIT | Yes — vendored, not a third-party *dependency* |
 | gcovr | CI-installed | BSD | No |
-| mull | CI-installed: 0.34.2 for LLVM 18, pinned by SHA-256, weekly on `main` and on demand | Apache-2.0 | No — Ubuntu AArch64 packages exist, so the ARM64 leg is covered |
+| mull | CI-installed: 0.34.2 for LLVM 18, pinned by SHA-256, weekly on `main` and on demand; one job per module under `src/`, each on x86-64 (`tools/mutation-shard.py`, JOURNAL §2.28) | Apache-2.0 | No — Ubuntu AArch64 packages exist, so the ARM64 leg is covered |
+| strace | CI-installed from Ubuntu, unpinned: the mutation workflow and the tooling tests watch which tests create a process with it | LGPL-2.1-or-later | No |
 
 All GPL-compatible (§5.1). Third-party **runtime** dependencies remain zero.
 

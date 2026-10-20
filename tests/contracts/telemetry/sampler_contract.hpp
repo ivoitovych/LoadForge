@@ -53,7 +53,8 @@ class Scripted final : public telemetry::Source {
     ++samples;
     const auto count = static_cast<std::ptrdiff_t>(present_) + extra_;
     for (std::ptrdiff_t at = 0; at < count; ++at) {
-      out.emplace_back(telemetry::Gauge{static_cast<double>(samples * 10 + at)});
+      out.emplace_back(
+          telemetry::Gauge{static_cast<double>((static_cast<std::ptrdiff_t>(samples) * 10) + at)});
     }
   }
   [[nodiscard]] Metric metric(std::size_t at) const {
@@ -94,7 +95,8 @@ class Recording final : public telemetry::TimelineSink {
     points.at(id).push_back(point);
     return core::Ok{};
   }
-  core::Result<core::Ok, telemetry::TimelineError> mark_phase(telemetry::PhaseMark) override {
+  core::Result<core::Ok, telemetry::TimelineError> mark_phase(
+      telemetry::PhaseMark /*mark*/) override {
     return core::Ok{};
   }
   bool refuse_series = false;

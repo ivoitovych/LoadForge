@@ -8,13 +8,14 @@
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
-#include <signal.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -93,12 +94,9 @@ class WatchingReporter final : public Reporter {
 };
 
 bool has_record(const WorkerReport& worker, std::string_view prefix) {
-  for (const std::string& record : worker.records) {
-    if (record.substr(0, prefix.size()) == prefix) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(worker.records, [&](const std::string& record) {
+    return record.substr(0, prefix.size()) == prefix;
+  });
 }
 
 TEST(SupervisionTest, TwoWorkersCompleteForTheConfiguredDuration) {
