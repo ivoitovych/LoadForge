@@ -29,7 +29,7 @@ DEPS="$ROOT/tools/check-dependencies.py"
 pass=0; fail=0
 
 expect() { # description, expected-exit, actual-exit, [needle, output]
-  if [ "$2" -eq "$3" ] && { [ $# -lt 5 ] || grep -q "$4" <<< "$5"; }; then
+  if [ "$2" -eq "$3" ] && { [ $# -lt 5 ] || grep -q -- "$4" <<< "$5"; }; then
     echo "  PASS  $1"; pass=$((pass + 1))
   else
     echo "  FAIL  $1 (expected exit $2, got $3)"; fail=$((fail + 1))
@@ -37,9 +37,9 @@ expect() { # description, expected-exit, actual-exit, [needle, output]
   fi
 }
 
-gate() { # report-fixture-dir, allowlist-fixture
+gate() { # report-fixture-dir, allowlist-fixture, [more gate arguments]
   local out; out="$(python3 "$GATE" --report-dir "$FIX/mull/$1" \
-                    --allowlist "$FIX/$2" --root "$ROOT" 2>&1)"; local rc=$?
+                    --allowlist "$FIX/$2" --root "$ROOT" "${@:3}" 2>&1)"; local rc=$?
   GATE_OUT="$out"; GATE_RC=$rc; return $rc
 }
 
@@ -116,6 +116,197 @@ expect "a not-covered mutant FAILS and is not allowlistable"   1 $? "NOT-COVERED
 
 out="$(python3 "$GATE" --report-dir "$FIX/mull/no-such-run" --allowlist "$FIX/allow-empty.txt" 2>&1)"
 expect "missing report directory FAILS" 1 $? "does not exist" "$out"
+
+gate clean allow-malformed.txt
+expect "an allowlist line that is not a key FAILS"             1 $? "is not an allowlist key" "$GATE_OUT"
+
+# One shard at a time (--scope). The sweep runs one CI job per module, each
+# mutating only its own sources; the gate must judge each of them alone without
+# giving up anything it refuses for the whole.
+echo "mutation-gate.py --scope"
+gate clean allow-empty.txt --scope src/core
+expect "a shard whose mutants all lie in scope passes"         0 $? "2 mutant(s), all in scope" "$GATE_OUT"
+gate two-modules allow-one.txt --scope src/core
+expect "a mutant outside the shard FAILS, even a killed one"   1 $? \
+       "MUTANT OUTSIDE THE SHARD: src/platform/fs.cpp:88:13:cxx_lt_to_ge" "$GATE_OUT"
+gate two-modules allow-one.txt --scope src/core --scope src/platform/
+expect "a shard of several paths holds all of them"            0 $? "3 mutant(s), all in scope" "$GATE_OUT"
+gate clean allow-empty.txt --scope src/co
+expect "a scope is whole path components, not a string prefix" 1 $? "outside this shard" "$GATE_OUT"
+gate killed-unlisted allow-one.txt
+expect "(a report that hides its kills is judged without a scope)" 0 $? "1 allowed" "$GATE_OUT"
+gate killed-unlisted allow-one.txt --scope src/core
+expect "...but FAILS under one: hidden kills could lie anywhere" 1 $? "does not list its killed" "$GATE_OUT"
+gate all-killed-unlisted allow-empty.txt --scope src/core
+expect "'all killed' with nothing listed FAILS under a scope"  1 $? "does not list its killed" "$GATE_OUT"
+for bad in /src/core ../src src/./core "" 'src\core'; do
+  gate clean allow-empty.txt --scope "$bad"
+  expect "scope '$bad' is refused, not guessed at"             1 $? "not a path below" "$GATE_OUT"
+done
+
+# Allowlist entries for other shards are neither applied nor stale here; the
+# same entry is stale for the whole run, which is the case it must not hide.
+gate clean allow-elsewhere.txt --scope src/core
+expect "another shard's entry is neither applied nor stale"    0 $? "1 allowlist entry for other shards" "$GATE_OUT"
+gate clean allow-elsewhere.txt
+expect "(the same entry is stale when the whole run is judged)" 1 $? "STALE ALLOWLIST ENTRY" "$GATE_OUT"
+gate clean allow-one.txt --scope src/core
+expect "an in-scope stale entry still FAILS in a shard"        1 $? "STALE ALLOWLIST ENTRY" "$GATE_OUT"
+gate two-survivors allow-one.txt --scope src/core
+expect "an in-scope reviewed survivor is excused in a shard"   1 "$GATE_RC" "allowed (reviewed)" "$GATE_OUT"
+expect "and the other operator at that location is not"        1 "$GATE_RC" \
+       "UNEXPLAINED SURVIVOR: src/core/duration.cpp:51:9:cxx_ge_to_lt" "$GATE_OUT"
+gate not-covered allow-empty.txt --scope src/core
+expect "a not-covered mutant still FAILS in a shard"           1 $? "NOT-COVERED MUTANT" "$GATE_OUT"
+
+# Every refusal of the whole-run gate holds within a shard: the scope is checked
+# only after the report has been read, reconciled and cross-checked.
+for case in "malformed:no Mull summary line" "empty:no Mull summary line" \
+            "unparsed-record:did not parse" "header-count-mismatch:but lists" \
+            "totals-disagree:disagree about how many" "score-mismatch:describe different runs" \
+            "all-killed-with-survivor:all mutations were killed while listing" \
+            "zero-mutants:mutated nothing measures nothing" \
+            "sarif-disagrees:disagree about 'Survived'" "sarif-malformed:does not parse as JSON" \
+            "missing-sarif:does not exist"; do
+  gate "${case%%:*}" allow-empty.txt --scope src/core
+  expect "in a shard, ${case%%:*} still FAILS"                  1 $? "${case#*:}" "$GATE_OUT"
+done
+
+# How the gate runs Mull, against a stand-in runner that records its arguments
+# and returns a fixture: the timeouts, no capture of mutant output, and the test
+# program's arguments after "--", where Mull takes nothing as its own option.
+# The real runner's reading of the same command is tested end to end in
+# tests/tools/mutation_integration.sh.
+run_dir="$(mktemp -d)"
+cat > "$run_dir/fake-runner" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$(dirname "$0")/args"
+dir=""
+while [ $# -gt 0 ]; do [ "$1" = "--report-dir" ] && dir="$2"; shift; done
+cp "$FAKE_REPORTS/mutation.txt" "$FAKE_REPORTS/mutation.sarif" "$dir/"
+exit "${FAKE_EXIT:-0}"
+EOF
+chmod +x "$run_dir/fake-runner"
+out="$(FAKE_REPORTS="$FIX/mull/clean" python3 "$GATE" ./subject --runner "$run_dir/fake-runner" \
+       --allowlist "$FIX/allow-empty.txt" --root "$run_dir" --scope src/core \
+       --test-arg=--gtest_filter=-RealProcess* 2>&1)"
+expect "the gate runs Mull and judges the shard it reports"    0 $? "2 mutant(s), all in scope" "$out"
+args="$(tr '\n' ' ' < "$run_dir/args")"
+expect "Mull's warm-up and baseline are bounded"               0 0 "--timeout 120000 " "$args"
+expect "a hung mutant is killed at the 20 s floor"             0 0 "--minimum-timeout 20000 " "$args"
+expect "a mutant's output is not captured"                     0 0 "--no-mutant-output " "$args"
+expect "the test filter follows the program, after '--'"       0 0 \
+       " ./subject -- --gtest_filter=-RealProcess\*  *$" "$args"
+out="$(FAKE_EXIT=1 FAKE_REPORTS="$FIX/mull/clean" python3 "$GATE" ./subject \
+       --runner "$run_dir/fake-runner" --allowlist "$FIX/allow-empty.txt" --root "$run_dir" 2>&1)"
+expect "a runner that fails FAILS the gate, report or not"     1 $? "genuine failure to run" "$out"
+rm -rf "$run_dir"
+
+echo "mutation-shard.py"
+SHARD="$ROOT/tools/mutation-shard.py"
+out="$(python3 "$SHARD" plan 2>&1)"
+expect "the real tree's plan is made"                          0 $? '"platform"' "$out"
+expect "and every allowlist entry is in a shard"               0 0 "each in a shard" "$out"
+out="$(python3 "$SHARD" gtest-filter 2>&1)"
+expect "every mutant runs the tests that create no process"    0 $? "^-RealProcess\*$" "$out"
+
+# A throwaway tree: two modules with sources, one with headers only.
+tree="$(mktemp -d)"
+mkdir -p "$tree/src/core" "$tree/src/alpha/inner" "$tree/src/contract" "$tree/tools"
+touch "$tree/src/core/a.cpp" "$tree/src/alpha/inner/b.cpp" "$tree/src/contract/c.hpp"
+: > "$tree/tools/mutation-allowlist.txt"
+out="$(python3 "$SHARD" --root "$tree" plan 2>/dev/null)"
+expect "a module with a source file is a shard of its own"     0 $? '^\["alpha", "core"\]$' "$out"
+out="$(python3 "$SHARD" --root "$tree" scope core 2>&1)"
+expect "a headers-only module is swept in the core shard"      0 $? "src/contract" "$out"
+out="$(python3 "$SHARD" --root "$tree" scope nothing 2>&1)"
+expect "an unknown shard FAILS"                                1 $? "no shard named" "$out"
+printf '# Reviewed.\nsrc/contract/c.hpp:3:7:cxx_add_to_sub\n' > "$tree/tools/mutation-allowlist.txt"
+out="$(python3 "$SHARD" --root "$tree" plan 2>&1)"
+expect "an entry under a headers-only module has its shard"    0 $? "1 allowlist entry, each in a shard" "$out"
+printf '# Reviewed.\ntests/unit/x_test.cpp:3:7:cxx_add_to_sub\n' > "$tree/tools/mutation-allowlist.txt"
+out="$(python3 "$SHARD" --root "$tree" plan 2>&1)"
+expect "an entry no shard owns FAILS the plan"                 1 $? "lie in no shard" "$out"
+printf 'not a key\n' > "$tree/tools/mutation-allowlist.txt"
+out="$(python3 "$SHARD" --root "$tree" plan 2>&1)"
+expect "a malformed entry FAILS the plan"                      1 $? "is not an allowlist key" "$out"
+: > "$tree/tools/mutation-allowlist.txt"
+out="$(python3 "$SHARD" --root "$tree" mull-config alpha 2>&1)"
+expect "a shard's mull.yml names Mull's default operators"     0 $? '"cxx_default"' "$out"
+# The include path, read back by a YAML parser's rules for a JSON string and
+# matched the way Mull matches it: unanchored, against the absolute path.
+regex="$(sed -n 's/^  - "\(\^.*\)"$/\1/p' <<< "$out" | sed 's/\\\\/\\/g')"
+matches() { python3 -c 'import re,sys; sys.exit(0 if re.search(sys.argv[1], sys.argv[2]) else 1)' "$regex" "$1"; }
+matches "$tree/src/alpha/inner/b.cpp"
+expect "the include path matches the shard's own sources"      0 $?
+matches "$tree/src/alphabet/b.cpp"
+expect "and not a module whose name extends it"                1 $?
+matches "/elsewhere$tree/src/alpha/b.cpp"
+expect "nor the same path under another root"                  1 $?
+mkdir -p "$tree/odd root+(x)[1]/src/core" "$tree/odd root+(x)[1]/tools"
+touch "$tree/odd root+(x)[1]/src/core/a.cpp"
+out="$(python3 "$SHARD" --root "$tree/odd root+(x)[1]" mull-config core 2>&1)"
+regex="$(sed -n 's/^  - "\(\^.*\)"$/\1/p' <<< "$out" | sed 's/\\\\/\\/g')"
+matches "$tree/odd root+(x)[1]/src/core/a.cpp"
+expect "a checkout path full of regex syntax is escaped"       0 $?
+matches "$tree/odd roott(x)1/src/core/a.cpp"
+expect "and matches nothing it merely resembles"               1 $?
+rm -rf "$tree/src/core"
+out="$(python3 "$SHARD" --root "$tree" plan 2>&1)"
+expect "a plan whose header host has no source FAILS"          1 $? "choose another HEADER_ONLY_HOST" "$out"
+rm -rf "$tree/src"/*
+out="$(python3 "$SHARD" --root "$tree" plan 2>&1)"
+expect "an src/ with no module FAILS"                          1 $? "holds no module" "$out"
+rm -rf "$tree"
+
+# check-processes, against stand-in test programs that answer like GoogleTest:
+# the set every mutant runs must create no process, and a RealProcess* test must
+# create one. Bash builtins create none; running /bin/true creates one.
+fake_gtest() { # file, fast-set body, marked-test body, [list output]
+  cat > "$1" <<EOF
+#!/bin/bash
+case "\$1" in
+  --gtest_list_tests) printf '${4:-RealProcessA.\n  Forks\n}';;
+  --gtest_filter=-RealProcess\*) $2;;
+  *) $3;;
+esac
+EOF
+  chmod +x "$1"
+}
+ran='echo "[==========] 3 tests from 1 test suite ran. (1 ms total)"'
+procs="$(mktemp -d)"
+if command -v strace >/dev/null; then
+  fake_gtest "$procs/honest" "$ran" "/bin/true; $ran"
+  out="$(python3 "$SHARD" check-processes "$procs/honest" 2>&1)"
+  expect "an honest split passes"                              0 $? "1 RealProcess\* test(s) each create a process" "$out"
+  fake_gtest "$procs/forks" "/bin/true; $ran" "/bin/true; $ran"
+  out="$(python3 "$SHARD" check-processes "$procs/forks" 2>&1)"
+  expect "a process in the set every mutant runs FAILS"        1 $? "created 1 process(es)" "$out"
+  fake_gtest "$procs/idle" "$ran" "$ran"
+  out="$(python3 "$SHARD" check-processes "$procs/idle" 2>&1)"
+  expect "a RealProcess* test that creates no process FAILS"   1 $? "create no process" "$out"
+  fake_gtest "$procs/skips" "$ran" "echo '[  SKIPPED ] RealProcessA.Forks'; $ran"
+  out="$(python3 "$SHARD" check-processes "$procs/skips" 2>&1)"
+  expect "a RealProcess* test skipped here is reported, not judged" 0 $? "skipped here, so not checked" "$out"
+  fake_gtest "$procs/none" 'echo "[==========] 0 tests from 0 test suites ran. (0 ms total)"' "$ran"
+  out="$(python3 "$SHARD" check-processes "$procs/none" 2>&1)"
+  expect "a filter that runs no test FAILS"                    1 $? "ran no test" "$out"
+  fake_gtest "$procs/mute" "echo hello" "$ran"
+  out="$(python3 "$SHARD" check-processes "$procs/mute" 2>&1)"
+  expect "a run that does not say how many tests ran FAILS"    1 $? "did not report how many" "$out"
+  fake_gtest "$procs/failing" "$ran; exit 1" "$ran"
+  out="$(python3 "$SHARD" check-processes "$procs/failing" 2>&1)"
+  expect "a failing suite FAILS the check"                     1 $? "exited 1 under strace" "$out"
+  # exec, so that bash forks nothing itself: the only clone is the thread's.
+  fake_gtest "$procs/threads" "exec python3 -c 'import threading; t = threading.Thread(target=print); t.start(); t.join(); print(\"[==========] 3 tests from 1 test suite ran.\")'" "/bin/true; $ran"
+  out="$(python3 "$SHARD" check-processes "$procs/threads" 2>&1)"
+  expect "a thread is not a process"                           0 $? "create no process" "$out"
+  out="$(PATH="$procs/no-such-dir" "$(command -v python3)" "$SHARD" check-processes "$procs/honest" 2>&1)"
+  expect "no strace FAILS rather than passing unseen"          1 $? "strace is not installed" "$out"
+else
+  echo "  FAIL  strace is not installed: check-processes cannot be tested"; fail=$((fail + 1))
+fi
+rm -rf "$procs"
 
 echo "check-dependencies.py"
 out="$(python3 "$DEPS" 2>&1)"; expect "real manifest validates" 0 $? "googletest" "$out"

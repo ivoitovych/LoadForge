@@ -73,16 +73,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - run: ./tests/tools/test_tooling.sh
-      - run: ./tests/tools/test_runtime_deps.sh
-      - name: Install linters
+      - name: Install linters and strace
         # Ruff is pinned for the same reason gcovr is: its formatter's output
         # changes between releases, so an unpinned version would make
-        # 'ruff format --diff' fail on a tree nobody touched.
+        # 'ruff format --diff' fail on a tree nobody touched. strace is what
+        # tools/mutation-shard.py watches a test program with; its tests here
+        # fail rather than skip without it.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
+          sudo apt-get install -y -qq shellcheck strace
           pip install --break-system-packages 'ruff==0.15.8'
+      - run: ./tests/tools/test_tooling.sh
+      - run: ./tests/tools/test_runtime_deps.sh
       - name: ShellCheck
         # The C++ is compiled with -Werror and a long warning list; the shell
         # that decides whether the C++ may ship was, until now, unchecked. An
@@ -110,11 +112,12 @@ jobs:
         env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug
       - name: clang-tidy
-        # src/, and the fake worker: a second implementation of the worker
-        # contract, held to the product's bar rather than the tests' (the rest
-        # of tests/ is roadmap item 12). And tests/contracts/headers: one unit
-        # per contract header, so a header no src/ file includes yet is tidied
-        # now, before a stream that may not edit it meets its warnings (ADR 0004).
-        run: >-
-          find src tests/support/fake_worker tests/contracts/headers -name '*.cpp'
-          | xargs clang-tidy-18 -p build/debug
+        # src/ and tests/, minus the tools fixtures (inputs to other programs,
+        # not code of the project). tests/.clang-tidy turns off, with reasons,
+        # the checks whose premise does not hold in test code. Two directories
+        # under tests/ are held to the product's bar instead, by a .clang-tidy
+        # that links to the root one: the fake worker, a second implementation
+        # of the worker contract, and tests/contracts/headers, one unit per
+        # contract header, so a header no src/ file includes yet is tidied now
+        # (ADR 0004).
+        run: find src tests -name '*.cpp' -not -path 'tests/tools/fixtures/*' | xargs clang-tidy-18 -p build/debug
