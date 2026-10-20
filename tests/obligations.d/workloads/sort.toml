@@ -2,13 +2,39 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/sort and nothing else.
 
 [[module]]
-path    = "src/workloads/sort"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the sort specification alone (spec.hpp, ADR 0004): the key generator, \
-the sizes and the output layout, the little-endian loads, the chunk counts, \
-and the order on (key, index) at its ties and at the unsigned boundary, each \
-tested in tests/contracts/workloads/. The sort stream takes this row over \
-with the workload and owes what its brief, docs/streams/17-workload-sort.md, \
-lists -- P4, and T3, T4, T5, T5b, T6 -- with provides = ["WorkloadContract"]."""
+path     = "src/workloads/sort"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+fixtures = ["determinism/workloads/sort/golden.txt"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+A stable least-significant-digit radix sort of 2^17 keys with their input \
+positions (spec.hpp), eight one-byte passes, each split by key range. \
+P1: the pass loop and its three source/destination arms, the first pass's \
+implicit indices against the later passes' stored ones, and the factory's four \
+refusals and the default resolution; the loops run for one range and for 64. \
+P3: the boundaries of the key domain (0, 2^64-1, the top bit, all keys equal, \
+one byte deciding alone for each of the eight bytes), of the footprint (one \
+byte below a unit, exactly one, the largest value) and of the decomposition \
+(0, each chunk count, and the values on either side of them). No P2: nothing \
+here makes a system call, allocates in compute() or can fail once created. \
+No P5: the workload starts no thread and holds no state; the threads are the \
+executor's, the ranges write disjoint bytes, and the order of the passes is the \
+caller's thread's. The executor's own ordering (run() returns after every task, \
+and the caller's writes before run() are visible to the tasks) is an assumption \
+the sort makes and that the T6 tests exercise on real threads. \
+P4: the verification of the output is the checker the tests are written with \
+(tests/oracle/workloads/sort/check.hpp), from the specification and never by \
+sorting; T5 corrupts outputs and breaks the executor on purpose and asserts which \
+classification and which position the specification gives, and T5b gives the \
+checker evidence it cannot use. T3: that checker over every decomposition, thread \
+count and key family, and against an output written by formula. T4: families of \
+inputs (heavy ties, few values, presorted, reversed, full range) and the \
+metamorphic relations. T6: the same bits for every decomposition, thread count, \
+executor order and scratch content, and equal to digests made by an independent \
+Python implementation (tests/fixtures/determinism/workloads/sort/make_golden.py). \
+provides: WorkloadContract, run against the implementation in \
+tests/unit/workloads/sort/sort_test.cpp. consumes: ExecutorContract, run against \
+the sort's own executors (tests/unit/workloads/sort/executors.hpp) in \
+executor_mock_test.cpp."""

@@ -288,6 +288,18 @@ TEST(ClockElapsedTest, EachClockGoingBackwardsIsRefusedAndNamed) {
   }
 }
 
+TEST(ClockElapsedTest, ABackwardsClockIsReportedWithHowFarItWent) {
+  // The amount is the evidence a reader weighs: a nanosecond is a broken
+  // counter, a second is a hypervisor moving the clock. It is end before
+  // start, reported as a positive distance.
+  const TimePoint start{100 * kSecond + 500, 100 * kSecond, 100 * kSecond};
+  const TimePoint end{99 * kSecond, 100 * kSecond, 100 * kSecond};
+
+  auto elapsed = Clock::between(start, end);
+  ASSERT_FALSE(elapsed);
+  EXPECT_EQ(elapsed.error().subject, "CLOCK_MONOTONIC_RAW went backwards by 1000000500ns");
+}
+
 TEST(ClockElapsedTest, ASmallNegativeSuspendIsReadSkewAndIsAccepted) {
   // THE CASE THAT CORRECTED THIS MODULE. An earlier version refused any
   // negative value, reasoning that BOOTTIME is MONOTONIC plus suspend and so
@@ -321,6 +333,19 @@ TEST(ClockElapsedTest, ANegativeSuspendBeyondAWholeSecondIsAContradictionAndIsRe
   ASSERT_FALSE(elapsed);
   EXPECT_EQ(elapsed.error().number, EINVAL);
   EXPECT_NE(elapsed.error().subject.find("beyond the skew"), std::string::npos);
+}
+
+TEST(ClockElapsedTest, TheContradictionIsReportedAsAPositiveShortfall) {
+  // "Advanced less by" names a shortfall, so the figure is its size: the wall
+  // clock 2s short of the running one reads as 2000000000ns, not as minus that.
+  const TimePoint start{0, 0, 0};
+  const TimePoint end{60 * kSecond, 60 * kSecond, 58 * kSecond};
+
+  auto elapsed = Clock::between(start, end);
+  ASSERT_FALSE(elapsed);
+  EXPECT_EQ(elapsed.error().subject,
+            "CLOCK_BOOTTIME advanced less than CLOCK_MONOTONIC by 2000000000ns, far beyond "
+            "the skew between two reads");
 }
 
 TEST(ClockElapsedTest, TheNegativeToleranceIsABoundaryAndIsTestedOnBothSides) {
