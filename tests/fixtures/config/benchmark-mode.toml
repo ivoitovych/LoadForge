@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Valid, and in a mode this build does not run: stress must refuse it by
+# name rather than run it as something else.
+
+schema_version = 1
+
+[run]
+mode     = "benchmark"
+duration = "1s"
+
+[[workload]]
+name    = "null"
+threads = "all"

@@ -5,6 +5,7 @@
 #include <sys/types.h>
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -112,6 +113,12 @@ class WorkerPool {
   /// ordinary end of a run and the caller distinguishes it by the errno, not by
   /// an empty result that could also mean something went wrong.
   [[nodiscard]] core::Result<WorkerDeath, SyscallError> wait_for_next();
+
+  /// The next worker that has stopped running, if one has, without waiting.
+  /// Same matching rule as wait_for_next: a stranger is reaped and skipped.
+  /// Nothing to report is an ordinary answer here, not an error: a controller
+  /// asks on every tick of a loop that must not block.
+  [[nodiscard]] core::Result<std::optional<WorkerDeath>, SyscallError> reap_next_nonblocking();
 
   /// Sends a signal to every worker still believed to be running.
   ///

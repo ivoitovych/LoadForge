@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -88,6 +89,28 @@ core::Result<WorkerDeath, SyscallError> WorkerPool::wait_for_next() {
     // cannot be undone -- but it is not reported as a worker death. Looping
     // rather than returning is the point: the caller asked for the next WORKER,
     // and handing it a stranger would be evidence this tool invented.
+  }
+}
+
+core::Result<std::optional<WorkerDeath>, SyscallError> WorkerPool::reap_next_nonblocking() {
+  while (true) {
+    auto reaped = syscalls_->reap_any_nonblocking();
+    if (!reaped) {
+      return reaped.error();
+    }
+    const std::optional<Reaped> terminated = reaped.value();
+    if (!terminated.has_value()) {
+      return std::optional<WorkerDeath>{};
+    }
+    const Reaped& child = *terminated;
+    for (std::size_t slot = 0; slot < pids_.size(); ++slot) {
+      if (pids_[slot] != 0 && pids_[slot] == child.pid) {
+        pids_[slot] = 0;
+        --live_;
+        return std::optional<WorkerDeath>{WorkerDeath{slot, child.pid, ExitStatus{child.status}}};
+      }
+    }
+    // A stranger, as in wait_for_next: reaped, never reported, ask again.
   }
 }
 

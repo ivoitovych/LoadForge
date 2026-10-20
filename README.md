@@ -15,18 +15,22 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 
 | | |
 |---|---|
-| **Phase** | M0 done; M1 under way — syscall seam, exit-status classification and the worker launcher have landed |
-| **Code** | Build system, CI, config primitives, CLI skeleton, platform seam and worker launcher |
-| **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI |
+| **Phase** | M0 done; M1 under way — the platform layer, topology discovery, configuration, the worker process and its IPC have landed; the controller is next |
+| **Code** | Build system, CI, the syscall seam with every `errno` path injectable, exit-status classification, the worker launcher and pool, clocks, affinity, memory mapping, CPU/cache/NUMA topology, TOML configuration (`loadforge --check-config FILE`), the heartbeat region and record channel, and the worker process behind an internal `--worker` switch |
+| **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI; a per-module test-obligation ledger, also gated |
 | **Public API** | Not defined |
-| **Usable** | Not yet — no workloads until M2a |
+| **Usable** | Not yet — no workloads until M2a; the controller that runs the null workload under supervision has not landed |
 
-What exists is the foundation: CMake with seven presets, eight CI workflows across
-{x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate, and the platform layer M1
-is built on — a substitutable syscall seam that makes every `errno` path testable, a
-classifier for how a worker died rather than merely whether it returned zero, and the
-launcher that creates workers by `fork` and `exec`. The workloads themselves begin at M2a.
-See [`docs/PLAN.md`](docs/PLAN.md) for the milestone sequence.
+What exists is the foundation and most of M1: CMake with seven presets, eight CI
+workflows across {x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate, a
+substitutable syscall seam that makes every `errno` path testable, a classifier for how a
+worker died rather than merely whether it returned zero, the launcher that creates workers
+by `fork` and `exec` and the pool that supervises them, topology discovery with its
+cross-checks, a configuration reader that refuses a typo by name, and the two IPC channels
+a worker and its controller share — a lock-free heartbeat region and a checksummed record
+pipe. The workloads themselves begin at M2a. See [`docs/PLAN.md`](docs/PLAN.md) for the
+milestone sequence and [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) §10 for what
+is on `main` today.
 
 | Document | What it is |
 |---|---|
@@ -234,8 +238,9 @@ vendored component is checked for GPL compatibility in CI.
 **Contributions are welcome — issues, forks and pull requests.** See
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-The project is at the planning stage, so the most useful contribution right now is
-review of [`docs/PLAN.md`](docs/PLAN.md) — particularly the open questions at the end.
+The project is early in implementation, so the most useful contribution right now is
+review of [`docs/PLAN.md`](docs/PLAN.md) — particularly the open questions at the end —
+and of what has landed against it.
 
 Two things worth knowing before you write code, because they are not obvious and are
 strictly enforced: **an implementation is never verified by re-running itself** (every

@@ -1,22 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "main/cli.hpp"
 
+#include <optional>
 #include <ostream>
 #include <string>
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/orchestration.hpp"
 #include "core/duration.hpp"
 #include "main/selftest.hpp"
+#include "platform/process.hpp"
+#include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
+#include "reporters/console.hpp"
 #include "worker/entry.hpp"
 
 namespace loadforge::cli {
 namespace {
 
 constexpr int kOk = 0;
-constexpr int kConfigRefused = 1;
+constexpr int kConfigRefused = 1;  ///< Also: a run that could not start.
 constexpr int kUsageError = 2;
+constexpr int kRunNotClean = 3;  ///< The run ended and at least one worker did not complete.
 
 void print_usage(std::ostream& out) {
   out << "loadforge " << kVersion << "\n"
@@ -25,10 +31,62 @@ void print_usage(std::ostream& out) {
       << "  loadforge --version\n"
       << "  loadforge --help\n"
       << "  loadforge --check-config FILE   parse and validate a configuration\n"
+      << "  loadforge stress --config FILE  run the null workload under supervision\n"
       << "\n"
-      << "No workload commands yet: the controller lands with M1.\n"
+      << "Exit codes: 0 clean; 1 refused (configuration, or the run could not start);\n"
+      << "2 usage; 3 the run ended with a worker that did not complete.\n"
       << "See docs/PLAN.md for what lands when.\n";
 }
+
+}  // namespace
+
+int stress(std::string_view path, const std::string& self_link, std::ostream& out,
+           std::ostream& err) {
+  const auto loaded = config::load(std::string{path});
+  if (!loaded.has_value()) {
+    err << "loadforge: " << config::describe(loaded.error()) << "\n";
+    return kConfigRefused;
+  }
+  const config::Config& config = loaded.value();
+  if (config.run.mode != config::Mode::kStress) {
+    err << "loadforge: " << path << ": mode " << config::describe(config.run.mode)
+        << " lands with a later milestone; stress is the one this build runs\n";
+    return kConfigRefused;
+  }
+  platform::RealSyscalls syscalls;
+  platform::ExecutablePath self(syscalls);
+  auto executable = self.resolve(self_link);
+  if (!executable.has_value()) {
+    err << "loadforge: cannot resolve this executable for the workers: "
+        << describe(executable.error()) << "\n";
+    return kConfigRefused;
+  }
+  return run_stress(syscalls, config, executable.value(), out, err);
+}
+
+int run_stress(platform::Syscalls& syscalls, const config::Config& config,
+               const std::string& executable, std::ostream& out, std::ostream& err) {
+  controller::RunOptions options;
+  options.executable = executable;
+  reporters::ConsoleReporter reporter(out);
+  controller::Controller supervisor(syscalls, reporter);
+  // Flushed before the controller forks, so a child that fails to exec and
+  // exits normally cannot replay buffered output.
+  out.flush();
+  err.flush();
+  auto report = supervisor.run(config, options);
+  if (!report.has_value()) {
+    err << "loadforge: " << describe(report.error()) << "\n";
+    return kConfigRefused;
+  }
+  const std::optional<int> child_code = report.value().worker_exit_code;
+  if (child_code.has_value()) {
+    return *child_code;  // This process is a worker that could not exec.
+  }
+  return controller::all_clean(report.value()) ? kOk : kRunNotClean;
+}
+
+namespace {
 
 /// Reads a configuration and says whether it would be accepted, and why not
 /// if not. Exit 1 on a refusal so a script can rely on it, and the message on
@@ -88,6 +146,13 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
       return kUsageError;
     }
     return check_config(args[1], out, err);
+  }
+  if (command == "stress") {
+    if (args.size() != 3 || args[1] != "--config") {
+      err << "loadforge: stress takes exactly --config FILE\n";
+      return kUsageError;
+    }
+    return stress(args[2], "/proc/self/exe", out, err);
   }
   if (args.size() > 1) {
     err << "loadforge: expected a single argument, got " << args.size() << "\n";

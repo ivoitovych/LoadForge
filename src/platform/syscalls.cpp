@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -398,5 +399,20 @@ core::Result<core::Ok, SyscallError> RealSyscalls::ignore_signal(int signal) {
 }
 
 pid_t RealSyscalls::process_id() { return ::getpid(); }
+
+core::Result<std::optional<Reaped>, SyscallError> RealSyscalls::reap_any_nonblocking() {
+  int status = 0;
+  const pid_t pid = ::waitpid(-1, &status, WNOHANG);
+  if (pid < 0) {
+    // Unlike wait_any, the failing arm is reachable here: a process with no
+    // children asking without blocking is answered ECHILD at once, and the
+    // real-kernel test asks exactly that.
+    return SyscallError{errno, "waitpid", "any child, without waiting"};
+  }
+  if (pid == 0) {
+    return std::optional<Reaped>{};  // Children, but none has terminated.
+  }
+  return std::optional<Reaped>{Reaped{pid, status}};
+}
 
 }  // namespace loadforge::platform

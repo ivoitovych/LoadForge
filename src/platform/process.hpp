@@ -78,9 +78,12 @@ enum class WorkerStartupFailure : std::uint8_t {
 /// A single spawn() would have to call _exit() in the child, and _exit cannot be
 /// driven from a test: it takes the test process with it. Splitting the fork
 /// from what the child does leaves every DECISION above the seam, where a fake
-/// can force it, and reduces the untestable part to one line of glue in main()
-/// that does nothing but call _exit with what become_worker returned. That glue
-/// is covered by the integration tier, which runs the real binary.
+/// can force it. The child of a failed exec then RETURNS the code: through the
+/// controller, cli::run and main, as an ordinary exit. That is safe because the
+/// controller forks before any thread starts, flushes its streams before the
+/// fork, and registers no atexit handler -- and it is the only form a test can
+/// drive, since a _exit in a child flushes no coverage counters and would be a
+/// line no measured process ever runs.
 class WorkerLauncher {
  public:
   /// The signal the kernel sends a worker when the supervisor dies.

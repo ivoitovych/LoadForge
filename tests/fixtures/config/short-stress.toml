@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# A one-second stress run with two null workloads: what the integration
+# tests drive the real binary through, and the smallest run with N >= 2.
+
+schema_version = 1
+
+[run]
+mode     = "stress"
+duration = "1s"
+
+[[workload]]
+name    = "first"
+threads = "all"
+
+[[workload]]
+name    = "second"
+threads = "all"

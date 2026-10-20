@@ -299,8 +299,10 @@ Four facts, each probed from the running machine before the cache module was des
   make `70%` a parseable cache size. So topology has its own, and a test pins the boundary
   in both directions.
 - **A shared cache is published once per CPU that can see it.** `index3/id` reads `0` from
-  all four CPUs — one L3, four directory entries. Deduplication is on `(level, type, id)`,
-  and reading all four *first* is what makes them checkable against each other.
+  all four CPUs — one L3, four directory entries. Deduplication was on `(level, type, id)`
+  when this was written — *superseded three bullets down: `id` is absent on arm64, and the
+  identity is now `(level, type, shared_cpu_list)`* — and reading all four *first* is what
+  makes them checkable against each other.
 - **`id` is unique only within a level, and L1 Data and L1 Instruction share one.** cpu0's
   L1d and L1i are both `id=0`. An identity of `(level, id)` would merge them.
 - **Some virtualised machines publish no `cache/` directory at all.** Zero caches is a fact
@@ -547,6 +549,47 @@ Probed for the record channel, then pinned by the real-kernel tests:
   `Clock::between` refuses, reachable now without a scripted sequence.
 - **A failure on the *N*th read of a clock** (`fail_clock_on_read`) reaches the loop's
   mid-run clock arm without failing its first reading, which is a different line.
+
+### 1.22 What the controller needed, and the two traps the supervision tier set
+
+- **`waitpid(-1, WNOHANG)` is the one reap a loop that owns a `poll` may call.** It is also
+  the one whose failing arm a test process can reach: with no children at all it answers
+  `ECHILD` at once, so `reap_any_nonblocking` carries its own branch where `wait_any` had to
+  move its decision above the seam. A worker's exit closes its record pipe, which wakes the
+  poll, so reaping after the poll sees a death within one tick without ever blocking.
+- **A pipe the test holds across a `fork` of the controller is held by the workers too.** The
+  controller-killed test gives the forked controller a pipe to report worker pids through
+  and reads to end of file. The first version used `pipe()`: the workers inherited the write
+  end through the controller's fork and kept it across their `exec`, and the end of file
+  arrived only when the last worker exited — sixty seconds later, by which time the test
+  had nothing left to kill. `pipe2(O_CLOEXEC)` closes it. The same rule the controller's own
+  pipes already followed, met from the other side.
+- **The fake needed a reference count per pipe end.** One `write_open` flag could not model a
+  worker that holds the write end after the controller closes its own copy, and that is the
+  normal state of every record pipe for the whole run. `worker_holds_end` and
+  `worker_releases_end` are the test's way of saying "the worker has it" and "the worker is
+  gone"; the controller's close then leaves the far side open exactly as the kernel's
+  descriptor table would. The hold must be taken while the number is still open in the
+  controller, which is why the orchestration tests take it from the reporter's
+  `run_starting` callback — the one moment between the pipes' creation and the fork.
+- **In the fake, the child's `getppid` must be the fake's own `getpid`.** The orchestration
+  passes `process_id()` as the supervisor pid; the launcher's orphan check compares it with
+  `parent_pid()`. A fake whose two answers differ makes every modelled child an orphan
+  (code 121), which the first child-path test duly reported instead of the 120 it expected.
+- **Memory the fake hands out as a descriptor is gone once the region is released,** so a
+  test that wants the controller's own beat count must read it *during* the run — from the
+  mapping it already took to write worker beats — not after.
+- **A defaulted comparison in a header can read as uncovered the moment a second
+  translation unit uses it.** `MemoryBudget`'s `operator==` had been at 100% since the
+  config increment; the controller's tests compared budgets from two more units and the
+  gate reported the struct's two member lines at zero. The mechanism, found by decoding the
+  per-unit gcov records: the linker keeps one COMDAT copy of an inline function, the other
+  units' copies are discarded with their counters at zero, and gcc's line table filed the
+  kept copy's member lines under `Config::operator==` while the discarded copies were
+  "unknown function 150" — two records gcovr keeps apart, one of them zero. No test change
+  can execute a discarded copy. The fix is one definition: the comparison is defined in
+  `config.cpp`, so there is one record and it is the one that runs. Other defaulted
+  comparisons in headers have not shown this; when one does, this is the move.
 
 ---
 
@@ -1094,6 +1137,69 @@ terminates, which the controller can classify as "stopped on request" when it wa
 that asked; a handler would add a P5 path (signal during publish) for no new capability
 the control pipe does not already give.
 
+### 2.18 The controller: one loop, one blocking call, and a classification that is a table
+
+M1 exit criterion 1 — the controller runs the null workload for the configured duration and
+honours its limits — is `controller/orchestration`, with `supervision` (what became of a
+worker), `safety` (the escalation ladder and the limits) and `reporters/console` (the one
+voice it has) beside it.
+
+**One tick, in a fixed order, with one call that waits.** Read the clock; publish the
+controller's own beat (slot 0, the one every worker watches); if the deadline has passed and
+no stop has been requested, write a stop byte on every live worker's control pipe; judge
+each live worker's beat and escalate where due; `poll` the record pipes for one interval —
+the only call that blocks; drain what arrived; reap without blocking. The order matters
+twice: the beat goes before the judgement so the controller is never the stale party, and
+the reap comes after the poll because a worker's death closes its record pipe, which is
+what wakes the poll. *Rejected:* a `SIGCHLD` handler. A handler adds a P5 path through every
+line the loop runs and buys nothing the hang-up does not already deliver.
+
+**The controller beats before it forks.** A worker gives a controller that has never beaten
+exactly the staleness allowance and then leaves, so the first beat must exist before the
+first worker can look — and the fork happens before any thread starts (PLAN §4.6; at M1
+there are none, and the rule is written down for the milestone that adds them).
+
+**Three ways a worker is stale, one decision.** Older than the allowance by timestamp (the
+hang); fresh by timestamp but no progress for the allowance (the spin — "working slowly" and
+"not progressing" are the catalogue's required distinction); and a slot that cannot be read
+(a worker that died inside `publish`, which will not beat again). All three send `SIGTERM`
+with `stale_when_signalled` set, and the escalation ladder takes it from there.
+
+**The ladder is a pure function of time.** `escalation_due(step, since, now, grace)` says
+which signal is due; `step_after(signal)` says where that leaves the worker. The request
+waits its grace before `SIGTERM`, `SIGTERM` its grace before `SIGKILL`, and nothing comes
+after `SIGKILL`. IMPLEMENTATION §4's "escalate within a bounded time" is those two numbers.
+
+**The classification is a table, and the table is the point.** `classify(Evidence)` takes
+the status word, the last signal the controller sent and why, whether the finished record
+arrived, and whether the channel went corrupt or ended inside a frame, and returns one of
+eleven fates. The rows that must never be confused each have a test: a fault from a kill; a
+kill the controller sent from one it did not; a stop at the deadline from a timeout; a clean
+exit with its finished record from one without (exit 0 and silence is *evidence truncated*,
+not completion); a corrupt channel over any exit code, because garbage in must never become
+a verdict out. A `SIGKILL` the controller did not send is reported as exactly that — the OOM
+killer's shape, with the kernel's own record to come (exit criterion 3) before it is called
+by its name.
+
+**A channel held open after the worker died is truncated, not waited for.** The final drain
+gives each still-open channel one stop grace per attempt and a bounded number of attempts;
+something a worker started that inherited the write end — the "fork a grandchild" row —
+cannot hold the run hostage.
+
+**The child of a failed exec returns rather than `_exit`s.** `WorkerLauncher`'s comment
+promised `_exit` glue in `main`; the glue would be a line no measured process can run
+(§1.9), and a permanent exclusion. The child is single-threaded, the streams were flushed
+before the fork, and nothing in the controller registers an `atexit`, so returning the
+launcher's code through `cli::run` and `main` is safe — and testable, which the fake does
+with a fork that yields the child and an exec that fails.
+
+**What the `stress` command decides, and what it refuses.** One worker per enabled workload
+(the null workload has no threads to place; `threads` is carried, not used, until M2a);
+`benchmark` and `explore` refused by name rather than run as stress; memory refused at start
+against a budget when one is known and reported *not enforced* when none can be read;
+temperature reported not enforced until telemetry. Exit 0 clean, 1 refused or could not
+start, 2 usage, 3 the run ended with a worker that did not complete.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
@@ -1545,10 +1651,14 @@ Kept short and current; move an item to the relevant document once it is settled
   (`worker/ipc`, §1.19, §2.15), the record channel (§1.20, §2.16) and the worker process
   itself (§1.21, §2.17: the internal `--worker` switch, the null workload loop, four exit
   codes) are in, with the seam calls each needed (memfd, shared map, close-on-exec
-  handover; pipe, write, poll; ignore-signal, getpid). The worker has run for real only
-  in-process so far — the CLI tests hold the controller's side over the real seam.
-  Still to come, in order: controller supervision, safety and
-  orchestration with the console reporter behind a `stress` command (M1 exit criterion 1);
+  handover; pipe, write, poll; ignore-signal, getpid; non-blocking reap). **The controller
+  is implemented and verified, and is the next thing to land** (§1.22, §2.18): `loadforge
+  stress --config FILE` runs the null workload in N worker processes for the configured
+  duration — M1 exit criterion 1 — and the supervision tier (`tests/supervision/`, T7)
+  runs the shipped binary as the worker: two complete, one is killed from outside while
+  the other completes, and the controller itself is killed and every orphan is found dead
+  by the parent-death signal. Until it is merged, `main` has the worker and no controller.
+  Still to come after it, in order:
   the fake-worker executable with the T7 misbehaviour catalogue and the two new gates
   (no test-hook symbol in the shipped binary; a lock obligation per module in the ledger);
   OOM classification from the kernel's own record (`/proc/vmstat oom_kill` or the cgroup's
@@ -1565,6 +1675,28 @@ Kept short and current; move an item to the relevant document once it is settled
   exactly what the workflows run, and is itself checked against the workflow files so the
   two cannot drift, would close it. Deliberately not bundled into the change that
   motivated it.
+- **Contradictions between the documents and the code, found by reading both and not yet
+  resolved** — each is a decision or a one-line fix, recorded here rather than silently
+  made:
+  - PLAN §4.6 promises a fallback for resolving the worker executable on a live medium
+    without `/proc`; `platform::ExecutablePath` refuses with no fallback and says why, and
+    `loadforge stress` refuses the run. The plan now carries an implementation note; which
+    of the two stands is the owner's call (an explicit `--worker-executable` override is the
+    code's suggested answer).
+  - `platform/exit_status.hpp` says the corroboration that turns a `SIGKILL` into an OOM
+    finding "arrives with the crash journal at M5"; IMPLEMENTATION §4 makes OOM-distinct
+    classification M1 exit criterion 3, and that is the plan being followed. The comment is
+    behind the plan.
+  - `platform/fs.cpp` says "the controller installs handlers for `SIGCHLD` and the shutdown
+    signals"; the controller as built installs none — a hang-up on the record pipe wakes
+    its poll (§2.18) — so the bounded `EINTR` retry it justifies is reached by other
+    signals, not that one. The bound is right; the example is wrong.
+  - `platform/process.hpp` says an exec failure's detail "arrives over the error-record pipe
+    at M3"; the record pipe exists at M1, and a worker that fails before exec has no pipe
+    to write on in any milestone — the status word is all the supervisor gets, and the
+    launcher's `last_exec_error` is for the child's own stderr.
+  - IMPLEMENTATION §3 listed `worker/ipc` as owing T5 before `tests/fault_injection` exists;
+    the ledger row and the table now say T1 and why. The tier question returns at M2a.
 - **Deferred, and worth not forgetting:** `Source` has no "counter wraps" state, which the
   P7 taxonomy lists. It is genuinely not needed yet — nothing here reads a monotonic
   counter — but the telemetry sources at M3 will, and the decision about where wrap

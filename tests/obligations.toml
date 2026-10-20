@@ -110,6 +110,35 @@ controller. The worker under a real controller is the supervision tier's \
 (T7), which lands with the controller."""
 
 [[module]]
+path    = "src/controller"
+classes = ["P1", "P2", "P3", "P6"]
+tiers   = ["T1", "T2", "T7"]
+note    = """
+The supervisor. P6 is its whole subject: spawn, the controller's own beat \
+before the first fork, the deadline's stop request, the escalation ladder \
+(request, SIGTERM, SIGKILL, each after its grace), reap, drain, classify. \
+The classification table (supervision) is pure and tested row by row against \
+the misbehaviour catalogue of IMPLEMENTATION 4, including the pairs that must \
+never be confused: a fault from a kill, a kill the controller sent from one \
+it did not, a stop at the deadline from a timeout, a clean exit with its \
+finished record from one without. The ladder (safety) is a function of time \
+and tested as one. P2 is forced through the fake over the whole loop: the \
+region, the pipes (either pipe of a worker), the fork, the close of the \
+child's ends, the clock at every read, poll, the drain, the signal, the reap, \
+the control write, the release. T7 is tests/supervision: the shipped binary \
+as the worker, N >= 2 in every case -- two complete for the duration, one is \
+killed from outside while the other completes, and the controller itself is \
+killed and every orphan is reaped by the test as subreaper and found dead by \
+the parent-death signal within a bounded time. The catalogue's remaining rows \
+need the fake-worker executable, which lands next."""
+
+[[module]]
+path    = "src/reporters"
+classes = ["P1"]
+tiers   = ["T1"]
+note    = "The console voice: banner, timed event lines, summary. Pure formatting, compared line for line."
+
+[[module]]
 path    = "src/main"
 classes = ["P1", "P3"]
 tiers   = ["T1", "T8"]

@@ -150,8 +150,18 @@ struct MemoryBudget {
   std::uint64_t available_bytes = 0;
   std::optional<std::uint64_t> cgroup_limit_bytes;
 
-  [[nodiscard]] friend bool operator==(const MemoryBudget&, const MemoryBudget&) = default;
+  /// Defined out of line, unlike the other comparisons here, because a
+  /// defaulted one was reported uncovered once the controller's tests used
+  /// it from a second translation unit: the linker keeps one copy of an
+  /// inline comparison, the other copies' counters stay at zero, and gcc's
+  /// line table filed the kept copy under a different function, so gcovr
+  /// could not merge the records (journal §1.22). One definition, one record.
+  friend bool operator==(const MemoryBudget& lhs, const MemoryBudget& rhs);
 };
+
+/// The declaration the attribute can appertain to: a friend declaration that
+/// is not a definition cannot carry one.
+[[nodiscard]] bool operator==(const MemoryBudget& lhs, const MemoryBudget& rhs);
 
 /// The ceiling a budget implies: the lower of the two figures.
 [[nodiscard]] std::uint64_t ceiling_of(const MemoryBudget& budget) noexcept;

@@ -10,6 +10,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -137,18 +138,18 @@ class FakeSyscalls final : public platform::Syscalls {
 
   core::Result<core::Ok, platform::SyscallError> close(int fd) override {
     if (const auto reader = pipe_readers_.find(fd); reader != pipe_readers_.end()) {
-      reader->second->read_open = false;
+      --reader->second->readers;
       pipe_readers_.erase(reader);
       inheritable_.erase(fd);
       ++close_count_;
-      return core::Ok{};
+      return close_outcome(fd);
     }
     if (const auto writer = pipe_writers_.find(fd); writer != pipe_writers_.end()) {
-      writer->second->write_open = false;
+      --writer->second->writers;
       pipe_writers_.erase(writer);
       inheritable_.erase(fd);
       ++close_count_;
-      return core::Ok{};
+      return close_outcome(fd);
     }
     if (memory_files_.contains(fd)) {
       // The storage stays alive while a mapping holds it, exactly as a memfd's
@@ -314,6 +315,33 @@ class FakeSyscalls final : public platform::Syscalls {
     return step.reaped;
   }
 
+  /// Script what the non-blocking reaps deliver, in order; an empty queue is
+  /// "children, but none terminated yet", which is what a controller mid-run
+  /// sees on most ticks.
+  void script_nonblocking_reaps(std::vector<WaitStep> steps) {
+    nonblocking_reaps_.assign(steps.begin(), steps.end());
+  }
+  void fail_nonblocking_reap(int error) { nonblocking_reap_error_ = error; }
+  [[nodiscard]] int nonblocking_reap_count() const { return nonblocking_reap_count_; }
+
+  core::Result<std::optional<platform::Reaped>, platform::SyscallError> reap_any_nonblocking()
+      override {
+    ++nonblocking_reap_count_;
+    if (nonblocking_reap_error_ != 0) {
+      return platform::SyscallError{nonblocking_reap_error_, "waitpid",
+                                    "any child, without waiting"};
+    }
+    if (nonblocking_reaps_.empty()) {
+      return std::optional<platform::Reaped>{};
+    }
+    const WaitStep step = nonblocking_reaps_.front();
+    nonblocking_reaps_.pop_front();
+    if (step.error != 0) {
+      return platform::SyscallError{step.error, "waitpid", "any child, without waiting"};
+    }
+    return std::optional<platform::Reaped>{step.reaped};
+  }
+
   /// Set what a given clock id reports. Unset clocks return a fixed value, so a
   /// test states only the clock it is about.
   void set_clock(int clock_id, platform::TimeSpec value) { clocks_[clock_id] = value; }
@@ -332,6 +360,11 @@ class FakeSyscalls final : public platform::Syscalls {
   void fail_clock_on_read(int clock_id, int nth, int error) {
     clock_failures_at_[clock_id] = std::pair{nth, error};
   }
+  /// Report this value on the Nth read of a clock and the stepped value on
+  /// every other: a clock that jumps once, backwards or forwards.
+  void jump_clock_on_read(int clock_id, int nth, platform::TimeSpec value) {
+    clock_jumps_at_[clock_id] = std::pair{nth, value};
+  }
 
   core::Result<platform::TimeSpec, platform::SyscallError> read_clock(int clock_id) override {
     clocks_read_.push_back(clock_id);
@@ -344,6 +377,10 @@ class FakeSyscalls final : public platform::Syscalls {
         scheduled != clock_failures_at_.end() && scheduled->second.first == nth) {
       return platform::SyscallError{scheduled->second.second, "clock_gettime",
                                     "clock " + std::to_string(clock_id)};
+    }
+    if (const auto jump = clock_jumps_at_.find(clock_id);
+        jump != clock_jumps_at_.end() && jump->second.first == nth) {
+      return jump->second.second;
     }
     platform::TimeSpec value{0, 0};
     if (const auto found = clocks_.find(clock_id); found != clocks_.end()) {
@@ -608,6 +645,9 @@ class FakeSyscalls final : public platform::Syscalls {
 
   /// Whether the descriptor would survive exec: cleared of close-on-exec.
   [[nodiscard]] bool inheritable(int fd) const { return inheritable_.contains(fd); }
+  /// Every descriptor ever handed over, in order, whether or not it has
+  /// since been closed: what a child did before its exec, read afterwards.
+  [[nodiscard]] const std::vector<int>& handed_over() const { return handed_over_; }
   [[nodiscard]] std::size_t live_shared_mappings() const { return shared_mappings_.size(); }
   [[nodiscard]] const std::vector<std::string>& memory_file_names() const {
     return memory_file_names_;
@@ -651,6 +691,7 @@ class FakeSyscalls final : public platform::Syscalls {
       return platform::SyscallError{EBADF, "fcntl", describe(fd)};
     }
     inheritable_.insert(fd);
+    handed_over_.push_back(fd);
     return core::Ok{};
   }
 
@@ -686,7 +727,37 @@ class FakeSyscalls final : public platform::Syscalls {
   /// Raise this errno from every write, forever: the caller's interrupt bound.
   void always_fail_write(int error) { persistent_write_error_ = error; }
   void fail_create_pipe(int error) { pipe_error_ = error; }
+  /// Fail only the Nth pipe created (1-based), so a caller that creates two
+  /// per worker can be failed on either.
+  void fail_create_pipe_on(int nth, int error) { pipe_failure_at_ = std::pair{nth, error}; }
   void fail_poll(int error) { poll_error_ = error; }
+  /// Fail only the Nth poll (1-based): a loop's later poll, or the one after it.
+  void fail_poll_on(int nth, int error) { poll_failure_at_ = std::pair{nth, error}; }
+  /// Fail the close of one pipe end and no other.
+  void fail_close_of(int fd, int error) { close_errors_[fd] = error; }
+
+  /// Model a worker process holding this pipe end after exec: the pipe's
+  /// far side stays open when the controller closes its own copy, exactly as
+  /// a real worker keeps the end it inherited. Called while the number is
+  /// still open here; released when the worker is modelled as exiting.
+  void worker_holds_end(int fd) {
+    if (const auto reader = pipe_readers_.find(fd); reader != pipe_readers_.end()) {
+      ++reader->second->readers;
+      held_ends_[fd] = HeldEnd{reader->second, true};
+    } else {
+      ++pipe_writers_.at(fd)->writers;
+      held_ends_[fd] = HeldEnd{pipe_writers_.at(fd), false};
+    }
+  }
+  void worker_releases_end(int fd) {
+    const HeldEnd held = held_ends_.at(fd);
+    held_ends_.erase(fd);
+    if (held.reader) {
+      --held.pipe->readers;
+    } else {
+      --held.pipe->writers;
+    }
+  }
   /// Deliver at most this many bytes per pipe read, so a frame arrives in
   /// pieces. Defaults to everything queued.
   void limit_pipe_reads(std::size_t bytes) { pipe_read_limit_ = bytes; }
@@ -711,8 +782,12 @@ class FakeSyscalls final : public platform::Syscalls {
   }
 
   core::Result<platform::PipeEnds, platform::SyscallError> create_pipe() override {
+    ++pipes_created_;
     if (pipe_error_ != 0) {
       return platform::SyscallError{pipe_error_, "pipe2", "record channel"};
+    }
+    if (pipe_failure_at_.has_value() && pipe_failure_at_->first == pipes_created_) {
+      return platform::SyscallError{pipe_failure_at_->second, "pipe2", "record channel"};
     }
     auto pipe = std::make_shared<FakePipe>();
     const int read_fd = next_pipe_fd_++;
@@ -745,7 +820,7 @@ class FakeSyscalls final : public platform::Syscalls {
       }
       accepted = step.accept < size ? step.accept : size;
     }
-    if (!writer->second->read_open) {
+    if (writer->second->readers <= 0) {
       return platform::SyscallError{EPIPE, "write", describe(fd)};
     }
     for (const std::byte byte : bytes.first(accepted)) {
@@ -760,6 +835,10 @@ class FakeSyscalls final : public platform::Syscalls {
     poll_timeouts_.push_back(timeout_ms);
     if (poll_error_ != 0) {
       return platform::SyscallError{poll_error_, "poll",
+                                    std::to_string(fds.size()) + " descriptors"};
+    }
+    if (poll_failure_at_.has_value() && poll_failure_at_->first == poll_count_) {
+      return platform::SyscallError{poll_failure_at_->second, "poll",
                                     std::to_string(fds.size()) + " descriptors"};
     }
     std::vector<platform::Readiness> readiness;
@@ -812,11 +891,28 @@ class FakeSyscalls final : public platform::Syscalls {
            pipe_readers_.contains(fd) || pipe_writers_.contains(fd);
   }
 
+  /// A pipe: its queue and how many descriptors hold each end, here and in
+  /// the workers a test models (worker_holds_end). An end is open while any
+  /// holder remains, as the kernel counts it.
   struct FakePipe {
     std::string queue;
-    bool read_open = true;
-    bool write_open = true;
+    int readers = 1;
+    int writers = 1;
   };
+
+  struct HeldEnd {
+    std::shared_ptr<FakePipe> pipe;
+    bool reader = false;
+  };
+
+  /// A pipe end's close: counted and released already; the scripted errno,
+  /// if any, is the answer the caller hears.
+  core::Result<core::Ok, platform::SyscallError> close_outcome(int fd) {
+    if (const auto failed = close_errors_.find(fd); failed != close_errors_.end()) {
+      return platform::SyscallError{failed->second, "close", describe(fd)};
+    }
+    return core::Ok{};
+  }
 
   core::Result<std::size_t, platform::SyscallError> read_pipe(int fd, FakePipe& pipe, char* buffer,
                                                               std::size_t size) {
@@ -831,10 +927,10 @@ class FakeSyscalls final : public platform::Syscalls {
       return platform::SyscallError{error, "read", describe(fd)};
     }
     if (pipe.queue.empty()) {
-      if (pipe.write_open) {
+      if (pipe.writers > 0) {
         return platform::SyscallError{EAGAIN, "read", describe(fd)};  // Would block.
       }
-      return std::size_t{0};  // End of file: the writer is gone.
+      return std::size_t{0};  // End of file: every writer is gone.
     }
     std::size_t count = pipe.queue.size() < size ? pipe.queue.size() : size;
     if (count > pipe_read_limit_) {
@@ -854,12 +950,12 @@ class FakeSyscalls final : public platform::Syscalls {
     if (const auto reader = pipe_readers_.find(fd); reader != pipe_readers_.end()) {
       platform::Readiness readiness;
       readiness.readable = !reader->second->queue.empty();
-      readiness.hung_up = !reader->second->write_open;
+      readiness.hung_up = reader->second->writers <= 0;
       return readiness;
     }
     if (const auto writer = pipe_writers_.find(fd); writer != pipe_writers_.end()) {
       platform::Readiness readiness;
-      readiness.error = !writer->second->read_open;  // POLLERR: no reader left.
+      readiness.error = writer->second->readers <= 0;  // POLLERR: no reader left.
       return readiness;
     }
     platform::Readiness readiness;
@@ -907,6 +1003,9 @@ class FakeSyscalls final : public platform::Syscalls {
   std::deque<WaitStep> waits_;
   int persistent_wait_error_ = 0;
   int wait_count_ = 0;
+  std::deque<WaitStep> nonblocking_reaps_;
+  int nonblocking_reap_error_ = 0;
+  int nonblocking_reap_count_ = 0;
 
   int signal_error_ = 0;
   std::map<pid_t, int> signal_errors_;
@@ -929,6 +1028,7 @@ class FakeSyscalls final : public platform::Syscalls {
   std::vector<int> clocks_read_;
   std::map<int, int> reads_per_clock_;
   std::map<int, std::pair<int, int>> clock_failures_at_;
+  std::map<int, std::pair<int, platform::TimeSpec>> clock_jumps_at_;
   std::int64_t clock_step_ns_ = 0;
   int ignore_signal_error_ = 0;
   std::vector<int> signals_ignored_;
@@ -944,6 +1044,7 @@ class FakeSyscalls final : public platform::Syscalls {
   std::map<void*, std::shared_ptr<std::vector<std::byte>>> shared_storage_;
   std::multimap<void*, std::size_t> shared_mappings_;
   std::set<int> inheritable_;
+  std::vector<int> handed_over_;
   std::vector<std::string> memory_file_names_;
   int next_memory_fd_ = kFirstMemoryFd;
   int memory_file_error_ = 0;
@@ -965,10 +1066,15 @@ class FakeSyscalls final : public platform::Syscalls {
 
   std::map<int, std::shared_ptr<FakePipe>> pipe_readers_;
   std::map<int, std::shared_ptr<FakePipe>> pipe_writers_;
+  std::map<int, HeldEnd> held_ends_;
   std::map<int, platform::Readiness> scripted_readiness_;
+  std::map<int, int> close_errors_;
   std::deque<WriteStep> writes_;
   int next_pipe_fd_ = kFirstPipeFd;
   int pipe_error_ = 0;
+  int pipes_created_ = 0;
+  std::optional<std::pair<int, int>> pipe_failure_at_;
+  std::optional<std::pair<int, int>> poll_failure_at_;
   int poll_error_ = 0;
   int persistent_write_error_ = 0;
   int write_count_ = 0;

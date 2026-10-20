@@ -1,6 +1,7 @@
 # LoadForge — Implementation Plan
 
-**Status:** revision 2 — Q10 closed (multiple worker processes); X1, X2 and the
+**Status:** revision 3 — the module ledger reconciled against the tree on `main`
+(§3, §10); revision 2 — Q10 closed (multiple worker processes); X1, X2 and the
 obligation ledger landed
 **Covers:** what "complete" means, how per-path test coverage is made enforceable rather
 than aspirational, the module ledger, and the milestone-by-milestone build order to 1.0.
@@ -227,21 +228,21 @@ those, so a blank there means a real exemption and never an oversight.
 | `main/` | M0 ✅ | P1, P3 | T1, T8 | CLI dispatch, selftest digest |
 | `config/` | M1 ✅ | P1, P3 | T1, T8 | **Shipped.** TOML parse, schema validation, resolution. Corrected against what was built: the failing open is not behind the seam (PLAN §4.2), so it is reached by real files at T8 rather than injected at T2, and the row no longer claims P2 |
 | `platform` (seam, `fs`) | M1 ✅ | P1, P2, P3 | T1, T2, T8 | **Shipped.** The substitutable `Syscalls` and the reader above it. Corrected against what was built: the row previously claimed P7 and omitted P3 and T8. `fs` itself has no capability states — a source being present, absent or forbidden is a property of the *telemetry sources* that use it, and those arrive at M3 |
-| `platform/clock` | M1 | P1, P3 | T1 | Monotonic time; fake clock for the rest of the suite |
-| `platform/process` | M1 | P1, P2, P6 | T1, T7 | fork/exec, signals, reaping, `PR_SET_PDEATHSIG` (F9) |
-| `platform/affinity` | M1 | P1, P2, P7 | T1, T2 | |
+| `platform/clock` | M1 ✅ | P1, P2, P3 | T1, T2, T8 | **Shipped** (JOURNAL §1.11, §1.12). Corrected against what was built: three clocks, not one (`CLOCK_MONOTONIC_RAW` for durations, `CLOCK_MONOTONIC` for timestamps, `CLOCK_BOOTTIME` for suspend detection); P2 because every `clock_gettime` failure is injected; T8 against the real clocks. One directory with `fs`, `process`, `affinity` and `memory`: the ledger row is `src/platform` |
+| `platform/process` | M1 ✅ | P1, P2, P6 | T1, T2, T8 | **Shipped** (JOURNAL §2.1): `WorkerLauncher` (fork, `PR_SET_PDEATHSIG`, the orphan race, close-on-exec handover, exec) and `WorkerPool` (spawn N, reap, signal all, partial-spawn unwind, non-blocking reap). Corrected against what was built: the lifecycle paths are forced through the seam (T2) and real children are forked and reaped at T8; the T7 tier arrives with the controller, which is what a supervision test supervises |
+| `platform/affinity` | M1 ✅ | P1, P2, P7 | T1, T2, T8 | **Shipped.** The P7 state is a cpuset narrower than the topology, built in the fake (JOURNAL §2.12); the kernel's own answers are asserted at T8 against the calling thread only |
 | `platform/memory` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped.** mmap, huge pages, NUMA, mlock — each failure mode injected. Corrected against what was built: the huge-page pool is a P7 state (present, exhausted, unreserved) built in the fake, and T8 corroborates each kernel answer the fake models |
 | `platform/fpenv` | M2b | P1, P2, P3 | T1, T6 | MXCSR/FPCR assert and re-assert (F15) |
 | `platform/sysfs` | M3 | P1, P2, P7 | T1, T2 | |
 | `platform/procfs` | M3 | P1, P2, P7 | T1, T2 | |
 | `platform/perf_events` | M3 | P1, P2, P7 | T1, T2 | `perf_event_paranoid` is a first-class P7 state |
 | `platform/edac` | M3 | P1, P2, P7 | T1, T2 | F13 |
-| `topology/` | M1 | P1, P2, P3, P7 | T1, T2 | Shared immutable snapshot taken before fork |
-| `worker/scheduler` | M1 | P1, P5, P6 | T1, T7 | Pool, affinity, barriers, heartbeat emission |
-| `worker/ipc` | M1 | P1, P2, P5 | T1, T5, T5b, T7 | Shared-memory status, record channel. T5 because the boundary is fuzzed: garbage from a worker must never become a hardware verdict |
-| `controller/orchestration` | M1 | P1, P3, P6 | T1, T8 | Phase schedule, run control |
-| `controller/safety` | M1 | P1, P3, P6 | T1, T7, T8 | Limits, watchdog, e-stop, child kill |
-| `controller/supervision` | M1 | P1, P2, P6 | T1, T7 | Heartbeats, crash classification, OOM versus fault |
+| `topology/` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped** (JOURNAL §2.6–§2.11): CPU lists, the capability-classifying `Source`, CPUs with their cross-checks, caches, NUMA. Corrected against what was built: T8 added, because the real `/sys` of every CI runner is read and checked against `sysconf` — a tree the tests wrote is still a tree the tests believe in (F21). The snapshot-before-fork rule is the controller's to honour |
+| `worker/scheduler` | M1 ✅ | P1, P2, P3, P6 | T1, T2, T8 | **Shipped** as `src/worker` (JOURNAL §2.17): the internal `--worker` switch, its argument parser, the null workload loop and four exit codes. Corrected against what was built: no barriers (nothing to synchronise in a null workload; they arrive with the first workload), no pool (the pool is `platform/process`); affinity placement and heartbeat emission as planned. T7 arrives with the controller, which is what runs this under supervision |
+| `worker/ipc` | M1 ✅ | P1, P2, P3, P4, P5 | T1, T2 | **Shipped** (JOURNAL §2.15, §2.16): the heartbeat region (seqlock slots, no lock, memfd across exec) and the record channel (CRC-32 frames, a reader that never resynchronises). Corrected against what was built: the boundary is fuzzed and every single-byte corruption of a multi-frame stream is tried, but at T1 (`tests/unit`), because `tests/fault_injection` (T5) does not exist until M2a creates it — the row claimed a tier before the tier; P4 added because the frame check is a verification with a classification per corruption |
+| `controller/orchestration` | M1 | P1, P2, P3, P6 | T1, T2, T7 | Run control: one loop, one blocking call; the deadline's stop request; spawn and teardown |
+| `controller/safety` | M1 | P1, P3 | T1 | The escalation ladder as a function of time; the limits a run states and whether each is enforced |
+| `controller/supervision` | M1 | P1, P3 | T1 | Crash classification: the table of fates, OOM to be told from a fault once the kernel's record is read |
 | `controller/results` | M3 | P1, P3 | T1, T8 | Schema, fingerprint, aggregation (F12) |
 | `controller/journal` | M5 | P1, P2, P6 | T1, T7, T10 | Append-only crash journal (F16) |
 | `verification/oracle` | M2a | P1, P3, P4 | T1, T3, T5, T5b | Written **before** the kernel it checks |
@@ -683,23 +684,34 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 
 ## 10. Status
 
-**M0 complete. Every cross-review finding that could be closed without an owner decision
-is closed. M1 is blocked only on Q10.**
+**M0 complete. M1 in progress; on `main`, everything M1 builds except the controller.**
 
-Done since this plan was written: X1 and X2 (§7.1), and the obligation ledger and its gate
-(§2.5), which landed early so M1's modules join a ledger that already exists rather than
-being retrofitted into one.
+Revision 2 of this section said M1 was blocked only on Q10 and listed the order to build
+in: decide Q10, then `platform/fs` and `platform/process` with injection from the first
+commit, then `topology`, then the controller/worker split. That is the order it happened
+in. Q10 closed (PLAN §4.6, revision 14), and `main` now holds, each at 100% line and
+branch with zero exclusions and a ledger row the gate checks: `core`, `main`, the whole of
+`platform` (seam and `fs`, exit status, launcher and pool, clock, affinity, memory),
+`topology`, `config` with `loadforge --check-config FILE`, `worker/ipc` (heartbeat region,
+record channel) and `worker` (the `--worker` switch and the null workload loop). The
+ledger in §3 marks each ✅ with the corrections made against what was actually built.
+
+**Against the M1 exit criteria in §4:** criteria 5 (config round-trips; every rejection
+tested for its message) and 6 (100% / zero exclusions; ledger current) are met on `main`.
+Criterion 1 (the controller runs the null workload for the configured duration and honours
+its limits) is implemented with its T7 tier on a branch and is the next thing to land;
+criteria 2, 3 and 4 wait on the fake-worker executable, the kernel's OOM record, and the
+remaining injected paths.
 
 The next concrete actions, in order:
 
-1. **Decide Q10** (one line from the owner) — worker process granularity. It determines the
-   IPC shape, so M1 cannot start without it.
-2. Build `platform/fs` and `platform/process` with injection from the first commit, since
-   every downstream P2 path depends on that seam, and add both to the ledger in the same
-   change.
-3. `topology` next, since it is the immutable snapshot both processes need before fork.
-4. Then the controller/worker split and the state machine in §4, with a T7 test per
-   transition.
+1. Land the controller (`controller/{orchestration,safety,supervision}`,
+   `reporters/console`, `loadforge stress`, `tests/supervision/`).
+2. The fake-worker executable with the misbehaviour catalogue, and the two gates: no
+   test-hook symbol in the shipped binary; the `EOWNERDEAD` obligation per lock in the
+   ledger (today there are zero locks, by design — PLAN §4.6).
+3. OOM classified distinctly from the kernel's own record, and the memory-budget reader
+   (`MemAvailable` and the cgroup limit under either hierarchy).
 
 Outside the repository, and still owner-only: **branch protection on `main`**, and a
-**Mull release pinned by verified SHA-256** — the latter now a hard prerequisite for M2a.
+**Mull release pinned by verified SHA-256** — the latter a hard prerequisite for M2a.
