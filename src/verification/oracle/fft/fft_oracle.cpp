@@ -9,8 +9,6 @@
 #include <string>
 #include <utility>
 
-#include "verification/oracle/fft/twiddle_table.hpp"
-
 namespace loadforge::verification::oracle::fft {
 namespace {
 
@@ -58,11 +56,6 @@ double load_double(std::span<const std::byte> bytes, std::size_t element) noexce
     bits |= std::to_integer<std::uint64_t>(bytes[element * sizeof(double) + byte]) << (8U * byte);
   }
   return std::bit_cast<double>(bits);
-}
-
-Complex twiddle(std::size_t m) noexcept {
-  const std::span<const std::uint64_t> table(kTwiddleBits);
-  return Complex{std::bit_cast<double>(table[2 * m]), std::bit_cast<double>(table[2 * m + 1])};
 }
 
 std::array<std::uint32_t, spec::kSampledBins> sampled_bins(std::uint64_t index) noexcept {

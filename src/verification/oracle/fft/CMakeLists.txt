@@ -5,7 +5,7 @@
 # Parseval, with tolerances derived in src/workloads/fft/spec.hpp.
 loadforge_component(loadforge_verification_oracle_fft
   SOURCES
-    twiddle_table.cpp
+    twiddle.cpp
     fft_oracle.cpp)
 
 # The oracle is called from several threads at once (OracleContract's
