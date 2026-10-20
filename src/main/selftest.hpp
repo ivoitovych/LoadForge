@@ -22,6 +22,15 @@ namespace loadforge::selftest {
 /// should propagate rather than terminate. The earlier noexcept was accidental.
 [[nodiscard]] std::uint64_t core_digest();
 
+/// `basis` folded with a digest over the SCALAR paths of the compression and dense-linear
+/// workloads: two units of each, generated and computed from a fixed seed on
+/// the calling thread, their outputs folded in. The scalar path is the one that
+/// determinism.md §3 holds bit-identical on x86-64 and ARM64, whatever the
+/// build, so this is the digest that catches a vector kernel, a contraction or
+/// a library that moved a bit between the two. A path other than scalar is
+/// never used here, even where the machine has one.
+[[nodiscard]] std::uint64_t workloads_digest(std::uint64_t basis);
+
 /// The digest rendered as fixed-width hex, for CI to diff.
 [[nodiscard]] std::string core_digest_hex();
 

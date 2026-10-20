@@ -29,6 +29,16 @@ add_executable(loadforge_unit_tests
   unit/worker/ipc/record_test.cpp
   unit/worker/scheduler_test.cpp
   unit/worker/entry_test.cpp
+  unit/worker/model_runner_test.cpp
+  unit/worker/verified_run_test.cpp
+  unit/worker/frames_test.cpp
+  unit/worker/entry_workload_test.cpp
+  unit/worker/model_codec_test.cpp
+  unit/controller/consumer_models_test.cpp
+  unit/controller/plan_test.cpp
+  unit/controller/rerun_test.cpp
+  unit/controller/isolate_test.cpp
+  unit/controller/orchestration_verified_test.cpp
   unit/controller/supervision_test.cpp
   unit/controller/safety_test.cpp
   unit/controller/orchestration_test.cpp
@@ -47,7 +57,10 @@ target_include_directories(loadforge_unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_
 # config and the refused fixtures, by absolute path so ctest's working
 # directory does not matter.
 target_compile_definitions(loadforge_unit_tests PRIVATE
-  LOADFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  LOADFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  LOADFORGE_BINARY="$<TARGET_FILE:loadforge>")
+# The CLI tests run the real binary as the workers of a real run.
+add_dependencies(loadforge_unit_tests loadforge)
 loadforge_set_fp_contract(loadforge_unit_tests)
 loadforge_enable_sanitizers(loadforge_unit_tests)
 loadforge_enable_coverage(loadforge_unit_tests)

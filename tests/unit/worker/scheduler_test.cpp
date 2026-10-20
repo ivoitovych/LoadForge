@@ -78,10 +78,12 @@ TEST(SchedulerWordsTest, EveryReasonHasWordsAndTheLostTableIsExact) {
   EXPECT_EQ(describe(StopReason::kControllerStale), "the controller's heartbeat went stale");
   EXPECT_EQ(describe(StopReason::kControllerUnreadable),
             "the controller's heartbeat could not be read");
+  EXPECT_EQ(describe(StopReason::kRunnerStopped), "the verification runner stopped the run");
   EXPECT_EQ(describe(static_cast<StopReason>(200)), "unrecognised stop reason");
 
   EXPECT_FALSE(controller_lost(StopReason::kDurationElapsed));
   EXPECT_FALSE(controller_lost(StopReason::kStopRequested));
+  EXPECT_FALSE(controller_lost(StopReason::kRunnerStopped)) << "the controller did not go";
   EXPECT_TRUE(controller_lost(StopReason::kControllerHungUp));
   EXPECT_TRUE(controller_lost(StopReason::kControllerStale));
   EXPECT_TRUE(controller_lost(StopReason::kControllerUnreadable));

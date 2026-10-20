@@ -89,6 +89,12 @@ namespace {
 
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
 constexpr std::uint32_t kControllerPhase = 1;
+/// How many reads one tick gives a channel that keeps having more: a worker
+/// with a persistent fault makes a record a unit, and one read a tick would
+/// let its pipe fill, block it in write, and have it judged a hang by the very
+/// controller that was not reading. Bounded, so that a channel which never
+/// stops cannot hold the loop (and every other worker's beat) hostage.
+constexpr int kMaxReadsPerTick = 64;
 /// How many drains a channel is given after its worker is dead before the
 /// controller concludes that something else holds the write end open.
 constexpr int kMaxDrainsAfterDeath = 1024;
@@ -183,6 +189,7 @@ class Run {
                                                              std::int64_t now_ns, bool stale);
   [[nodiscard]] core::Result<core::Ok, ControllerError> poll_and_drain(int timeout_ms);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain(Tracked& worker);
+  [[nodiscard]] core::Result<core::Ok, ControllerError> drain_available(Tracked& worker);
   /// Takes one record a worker sent into the worker's account of itself, or
   /// says why the channel can no longer be believed.
   [[nodiscard]] std::optional<std::string> ingest(Tracked& worker, const ipc::Record& record);
@@ -507,9 +514,30 @@ core::Result<core::Ok, ControllerError> Run::poll_and_drain(int timeout_ms) {
   for (std::size_t index = 0; index < watched.size(); ++index) {
     const platform::Readiness& readiness = ready.value()[index];
     if (wakes(readiness)) {
-      if (auto drained = drain(*watched[index]); !drained.has_value()) {
+      if (auto drained = drain_available(*watched[index]); !drained.has_value()) {
         return drained;
       }
+    }
+  }
+  return core::Ok{};
+}
+
+core::Result<core::Ok, ControllerError> Run::drain_available(Tracked& worker) {
+  for (int reads = 0; reads < kMaxReadsPerTick && worker.channel_open; ++reads) {
+    if (auto drained = drain(worker); !drained.has_value()) {
+      return drained;
+    }
+    if (!worker.channel_open) {
+      break;
+    }
+    // More already waiting? Only a look: a wait here is the tick's, and the
+    // tick has taken its.
+    auto more = syscalls_->poll_readable({worker.records.read_fd}, 0);
+    if (!more.has_value()) {
+      return error_at("record channel", describe(more.error()));
+    }
+    if (!more.value().front().readable) {
+      break;
     }
   }
   return core::Ok{};

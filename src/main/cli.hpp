@@ -57,6 +57,12 @@ inline constexpr std::string_view kVersion = core::kVersion;
 ///   footprint_bytes  a worker's footprint when its configuration names none.
 ///   isolation_limit  the most wrong results of one worker that fault isolation repeats.
 struct StressOptions {
+  /// Whether the telemetry sources are probed and the capability report is
+  /// stated in the banner. Always, for a real run; a test that runs over a
+  /// fake of the system calls turns it off, because a fake that answers every
+  /// path with the same file gives the hwmon scan (which walks every chip
+  /// number) thousands of chips to read.
+  bool capabilities = true;
   std::optional<simd::IsaPath> isa;
   std::uint64_t seed = 1;
   std::uint64_t footprint_bytes = std::uint64_t{32} << 20U;
@@ -82,11 +88,6 @@ struct StressOptions {
 /// that fails and returns a worker's exit code, a run that ends unclean --
 /// are driven with a fake; `run` calls it with the real seam and this
 /// executable, resolved from /proc/self/exe.
-[[nodiscard]] int run_stress(platform::Syscalls& syscalls, const config::Config& config,
-                             const std::string& executable, const topology::Snapshot& snapshot,
-                             std::ostream& out, std::ostream& err);
-
-/// The same, with the choices a command line adds.
 [[nodiscard]] int run_stress(platform::Syscalls& syscalls, const config::Config& config,
                              const std::string& executable, const topology::Snapshot& snapshot,
                              const StressOptions& options, std::ostream& out, std::ostream& err);

@@ -92,7 +92,7 @@ struct WorkerPlan {
 /// kernel set is a third set because select_path takes two: an unrequested
 /// call would otherwise choose AVX-512 for a workload that has no such kernel
 /// (journal fragment 06, question 2).
-[[nodiscard]] core::Result<simd::IsaPath, std::string> choose_isa(
+[[nodiscard]] core::Result<simd::IsaPath, simd::DispatchError> choose_isa(
     std::optional<simd::IsaPath> requested, simd::IsaSet supported, simd::IsaSet compiled,
     simd::IsaSet workload_paths);
 

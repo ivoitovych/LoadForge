@@ -237,7 +237,8 @@ int stress(std::string_view path, const std::string& self_link, std::string_view
   if (!launch.has_value()) {
     return kConfigRefused;
   }
-  return run_stress(syscalls, config, launch->executable, launch->machine, out, err);
+  return run_stress(syscalls, config, launch->executable, launch->machine, StressOptions{}, out,
+                    err);
 }
 
 int stress_test(std::span<const std::string_view> args, const std::string& self_link,
@@ -283,12 +284,6 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
 }
 
 int run_stress(platform::Syscalls& syscalls, const config::Config& config,
-               const std::string& executable, const topology::Snapshot& snapshot, std::ostream& out,
-               std::ostream& err) {
-  return run_stress(syscalls, config, executable, snapshot, StressOptions{}, out, err);
-}
-
-int run_stress(platform::Syscalls& syscalls, const config::Config& config,
                const std::string& executable, const topology::Snapshot& snapshot,
                const StressOptions& stress_options, std::ostream& out, std::ostream& err) {
   controller::RunOptions options;
@@ -326,7 +321,9 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   options.verification.line_bytes = line_bytes_of(snapshot);
   options.verification.cpus = allowed_cpus(syscalls, snapshot);
   options.fp = &fp;
-  options.sources = {&thermal, &fan, &frequency, &memory};
+  if (stress_options.capabilities) {
+    options.sources = {&thermal, &fan, &frequency, &memory};
+  }
 
   reporters::ConsoleReporter reporter(out);
   controller::Controller supervisor(syscalls, reporter);

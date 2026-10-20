@@ -70,7 +70,7 @@ std::vector<std::uint32_t> assign_cpus(std::size_t slot, std::size_t threads,
   return assigned;
 }
 
-core::Result<simd::IsaPath, std::string> choose_isa(std::optional<simd::IsaPath> requested,
+core::Result<simd::IsaPath, simd::DispatchError> choose_isa(std::optional<simd::IsaPath> requested,
                                                     simd::IsaSet supported, simd::IsaSet compiled,
                                                     simd::IsaSet workload_paths) {
   if (!requested.has_value()) {
@@ -80,13 +80,15 @@ core::Result<simd::IsaPath, std::string> choose_isa(std::optional<simd::IsaPath>
     return simd::select_path(std::nullopt, supported, compiled.intersect(workload_paths)).value();
   }
   if (!workload_paths.contains(*requested)) {
-    return "the workload has no " + std::string{simd::describe(*requested)} + " kernel";
+    // The workload's lack is the build's lack, as far as the user can tell:
+    // there is no kernel to run, whatever the machine is.
+    simd::DispatchError refusal;
+    refusal.fault = simd::DispatchFault::kNotCompiled;
+    refusal.requested = *requested;
+    refusal.detail = "the workload has no " + std::string{simd::describe(*requested)} + " kernel";
+    return refusal;
   }
-  auto selected = simd::select_path(requested, supported, compiled);
-  if (!selected.has_value()) {
-    return selected.error().detail;
-  }
-  return selected.value();
+  return simd::select_path(requested, supported, compiled);
 }
 
 std::string describe_state(const fpenv::FpState& state) {
@@ -130,13 +132,17 @@ core::Result<WorkerPlan, std::string> plan_worker(const config::Workload& entry,
   }
 
   std::uint64_t footprint = options.footprint_bytes;
-  if (entry.memory.has_value() && (entry.memory->is_absolute() || budget.has_value())) {
-    auto resolved = config::resolve_memory(*entry.memory, budget.value_or(config::MemoryBudget{}),
-                                           "workload." + entry.name);
+  if (entry.memory.has_value() && budget.has_value()) {
+    auto resolved = config::resolve_memory(*entry.memory, *budget, "workload." + entry.name);
     if (!resolved.has_value()) {
       return config::describe(resolved.error());
     }
     footprint = resolved.value();
+  } else if (entry.memory.has_value() && entry.memory->is_absolute()) {
+    // No budget could be read, so nothing to hold an absolute size against (the
+    // banner says the limit is not enforced); a share has nothing to be a
+    // share of, and the default footprint stands.
+    footprint = entry.memory->byte_count();
   }
 
   worker::WorkloadArgs args;
@@ -164,7 +170,7 @@ core::Result<WorkerPlan, std::string> plan_worker(const config::Workload& entry,
   auto path = choose_isa(options.requested_isa, supported, simd::compiled_paths(),
                          asked.value()->descriptor().paths);
   if (!path.has_value()) {
-    return entry.name + ": " + path.error();
+    return entry.name + ": " + path.error().detail;
   }
   args.isa = path.value();
   config.isa = args.isa;
