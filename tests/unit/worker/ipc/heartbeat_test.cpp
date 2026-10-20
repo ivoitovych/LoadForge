@@ -402,42 +402,62 @@ TEST_F(HeartbeatRegionTest, MovingTransfersOwnershipSoTheRegionIsReleasedOnce) {
 // also what make the concurrent access race-free by the language's definition.
 
 TEST_F(HeartbeatRegionTest, AConcurrentReaderNeverObservesATornBeat) {
+  // The writer publishes at least kBeats beats AND keeps publishing until the
+  // reader has taken kMinSamples consistent samples while it was writing. The
+  // first version stopped at a fixed count, and on a fast machine the writer
+  // could finish all 20000 beats before the reader looked once: the test then
+  // failed on samples > 0, two runs in five, having tested no concurrency at
+  // all. Now every run reads concurrently, however the scheduler orders them.
   HeartbeatRegion region = make(syscalls, 1);
   constexpr std::uint64_t kBeats = 20000;
+  constexpr std::uint64_t kMinSamples = 1000;
+  std::atomic<std::uint64_t> samples{0};
+  std::atomic<std::uint64_t> written{0};
+  std::atomic<bool> stop{false};
   std::atomic<bool> done{false};
 
-  std::thread writer([&region, &done] {
-    for (std::uint64_t n = 1; n <= kBeats; ++n) {
+  std::thread writer([&region, &samples, &written, &stop, &done] {
+    for (std::uint64_t n = 1;; ++n) {
       (void)region.publish(worker_slot(0), beat_number(n));
+      written.store(n, std::memory_order_release);
+      const bool enough = n >= kBeats && samples.load(std::memory_order_acquire) >= kMinSamples;
+      if (enough || stop.load(std::memory_order_acquire)) {
+        break;
+      }
     }
     done.store(true, std::memory_order_release);
   });
 
-  std::uint64_t samples = 0;
-  std::uint64_t torn = 0;
+  // A failure is recorded and the writer told to stop, never asserted inside
+  // the loop: returning from the test with the writer still running would end
+  // the process in std::terminate rather than in a readable failure.
+  std::string wrong;
   std::uint64_t last = 0;
   while (!done.load(std::memory_order_acquire)) {
     auto observed = region.observe(worker_slot(0));
-    if (!observed.has_value()) {
-      ++torn;  // Permitted: the writer was busy for 64 looks. Never a wrong sample.
-      continue;
-    }
-    if (!observed.value().has_value()) {
-      continue;  // Not yet published.
+    if (!observed.has_value() || !observed.value().has_value()) {
+      continue;  // Torn for 64 looks, or not yet published: permitted, never wrong.
     }
     const Heartbeat& beat = observed.value().value();
-    ASSERT_TRUE(consistent(beat)) << "fields from two different beats: progress " << beat.progress;
-    ASSERT_GE(beat.progress, last) << "a sample from the past";
+    if (!consistent(beat)) {
+      wrong = "fields from two different beats: progress " + std::to_string(beat.progress);
+    } else if (beat.progress < last) {
+      wrong = "a sample from the past: progress " + std::to_string(beat.progress);
+    }
+    if (!wrong.empty()) {
+      stop.store(true, std::memory_order_release);
+      break;
+    }
     last = beat.progress;
-    ++samples;
+    samples.fetch_add(1, std::memory_order_acq_rel);
   }
   writer.join();
+  EXPECT_EQ(wrong, "");
+  EXPECT_GE(samples.load(), kMinSamples) << "the reader read concurrently with the writer";
   auto final_beat = region.observe(worker_slot(0));
   ASSERT_TRUE(final_beat.has_value());
   ASSERT_TRUE(final_beat.value().has_value());
-  EXPECT_EQ(final_beat.value().value(), beat_number(kBeats));
-  EXPECT_GT(samples, 0U);
-  (void)torn;
+  EXPECT_EQ(final_beat.value().value(), beat_number(written.load()));
 }
 
 // --- across a real process boundary --------------------------------------------
