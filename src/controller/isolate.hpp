@@ -15,8 +15,10 @@
 //   * a result from a worker that ran on several CPUs: the ladder's first
 //     rung is "the original CPU", and a unit spread over an executor ran on
 //     all of them -- the record names none (journal fragment 11);
-//   * every one past the limit: a machine with a persistent fault finds one
-//     per unit, and the ladder is three processes a rung;
+//   * every one past the limit, counted per worker so that a fault on one
+//     core does not starve the other workers' findings of theirs: a machine
+//     with a persistent fault finds one per unit, and the ladder is three
+//     processes a rung;
 //   * a worker with no topology: the other cores cannot be named.
 // Each is stated on the finding as absence, never as an isolation that was
 // not made.
@@ -41,7 +43,7 @@ struct IsolationSummary {
   std::optional<int> child_exit_code;
 };
 
-/// Isolates up to `limit` wrong results in `report`, writing each result into
+/// Isolates up to `limit` wrong results of each worker in `report`, writing each result into
 /// the finding it is about.
 [[nodiscard]] IsolationSummary isolate_findings(RunReport& report,
                                                 const topology::Snapshot* machine,

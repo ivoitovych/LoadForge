@@ -55,7 +55,7 @@ inline constexpr std::string_view kVersion = core::kVersion;
 ///                    each workload offer.
 ///   seed             the run's seed; worker i runs seed + i * controller::kSeedStride.
 ///   footprint_bytes  a worker's footprint when its configuration names none.
-///   isolation_limit  the most wrong results fault isolation repeats.
+///   isolation_limit  the most wrong results of one worker that fault isolation repeats.
 struct StressOptions {
   std::optional<simd::IsaPath> isa;
   std::uint64_t seed = 1;

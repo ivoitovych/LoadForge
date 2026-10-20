@@ -24,6 +24,7 @@ IsolationSummary isolate_findings(RunReport& report, const topology::Snapshot* m
       continue;
     }
     rerunner.use(*worker.work);
+    std::size_t isolated_here = 0;
     for (FindingReport& finding : worker.findings) {
       const std::optional<verification::WrongResult> wrong =
           verification::as_wrong_result(finding.record);
@@ -31,7 +32,7 @@ IsolationSummary isolate_findings(RunReport& report, const topology::Snapshot* m
         finding.not_isolated = "a check that was not made: there is no wrong result to repeat";
         continue;
       }
-      if (summary.isolated >= limit) {
+      if (isolated_here >= limit) {
         finding.not_isolated = "past the limit of " + std::to_string(limit) + " isolations";
         continue;
       }
@@ -49,6 +50,7 @@ IsolationSummary isolate_findings(RunReport& report, const topology::Snapshot* m
       const verification::Placement placement =
           verification::isolation::placement_for(*machine, *cpu, worker.work->threads);
       finding.isolation = isolator.isolate(*wrong, placement, rerunner);
+      ++isolated_here;
       ++summary.isolated;
       if (const auto child = rerunner.child_exit_code(); child.has_value()) {
         summary.child_exit_code = child;
