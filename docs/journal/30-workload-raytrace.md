@@ -1,6 +1,6 @@
 # Journal fragment 30 — workload: ray tracing
 
-**Written:** 2026-10-20 18:05 UTC
+**Written:** 2026-10-20 18:22 UTC
 **Change:** `src/workloads/raytrace/` (the workload: scene decoding and generation, the
 hierarchy, the packet kernels, the factory), its tests at T1, T3, T4, T5, T5b and T6, the
 independent Python model and its digests (`tests/fixtures/workloads/raytrace/`), and the
