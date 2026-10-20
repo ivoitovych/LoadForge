@@ -28,5 +28,11 @@ OracleContract runs against an exact and a bounded reference oracle. \
 \
 runner.hpp, the slice runner and its F18 bracket: tally arithmetic and the \
 fault names here; SliceRunnerContract, run against a reference runner, \
-drives a scripted workload through every finding the bracket separates.\
+drives a scripted workload through every finding the bracket separates. \
+\
+isolation.hpp, the re-run ladder of verification.md §7: the table from the \
+three answers to a finding, rule by rule, the confidence of each finding, \
+and that a VerificationNotPerformed cannot become a WrongResult. \
+IsolatorContract runs a scripted re-runner through every path of the ladder \
+against a reference isolator.\
 """
