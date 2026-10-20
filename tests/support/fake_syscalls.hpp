@@ -6,8 +6,8 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -155,7 +155,6 @@ class FakeSyscalls final : public platform::Syscalls {
     return count;
   }
 
-
   // --- a tree of files ---------------------------------------------------------
   //
   // The single-content mode above serves one file. A source that reads a
@@ -254,8 +253,8 @@ class FakeSyscalls final : public platform::Syscalls {
       const platform::PerfEventSpec& spec) override {
     perf_opens_.push_back(spec);
     const std::pair<std::uint32_t, std::uint64_t> key{spec.type, spec.config};
-    const std::string subject = "perf event type " + std::to_string(spec.type) + " config " +
-                                std::to_string(spec.config);
+    const std::string subject =
+        "perf event type " + std::to_string(spec.type) + " config " + std::to_string(spec.config);
     if (perf_open_error_all_ != 0) {
       return platform::SyscallError{perf_open_error_all_, "perf_event_open", subject};
     }
@@ -1152,7 +1151,6 @@ class FakeSyscalls final : public platform::Syscalls {
     }
     return readiness;
   }
-
 
   struct TreeFile {
     std::string path;
