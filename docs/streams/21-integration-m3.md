@@ -1,6 +1,6 @@
 # Stream 21 — Integration: full telemetry and the Load Signature
 
-**State:** pushed on `feature/integration-m3`, 2026-10-20 22:20 UTC; pull request not opened (the manager opens it)  
+**State:** pushed on `feature/integration-m3`, 2026-10-20 23:05 UTC; pull request not opened (the manager opens it)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 3  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "main/cli.hpp"
 
+#include <algorithm>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -42,6 +44,11 @@ constexpr int kRunNotClean = 3;   ///< The run ended and at least one worker did
 constexpr int kOutputFailed = 4;  ///< The run ended and a result file could not be written.
 constexpr int kFaultsFound = 5;   ///< The run ended and found a fault: see exit_code_for.
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
+/// The longest a run or an interval may be taken to be in nanoseconds-safe
+/// milliseconds: a quarter of what a signed 64-bit count of nanoseconds holds,
+/// about 73 years, so that sums of a few such lengths do not overflow.
+constexpr std::int64_t kLongestMilliseconds =
+    std::numeric_limits<std::int64_t>::max() / kNanosecondsPerMillisecond / 4;
 
 void print_usage(std::ostream& out) {
   out << "loadforge " << kVersion << "\n"
@@ -83,28 +90,29 @@ struct StressFlags {
   std::optional<std::string_view> output;
   std::optional<std::string_view> output_dir;
   std::optional<std::string_view> interval;
-
-  [[nodiscard]] std::optional<std::string_view>* slot(std::string_view flag) {
-    if (flag == "--config") {
-      return &config;
-    }
-    if (flag == "--output") {
-      return &output;
-    }
-    if (flag == "--output-dir") {
-      return &output_dir;
-    }
-    if (flag == "--sample-interval") {
-      return &interval;
-    }
-    return nullptr;
-  }
 };
+
+/// The place a flag's value goes, or null for a flag stress does not take.
+std::optional<std::string_view>* slot_of(StressFlags& flags, std::string_view flag) {
+  if (flag == "--config") {
+    return &flags.config;
+  }
+  if (flag == "--output") {
+    return &flags.output;
+  }
+  if (flag == "--output-dir") {
+    return &flags.output_dir;
+  }
+  if (flag == "--sample-interval") {
+    return &flags.interval;
+  }
+  return nullptr;
+}
 
 core::Result<StressFlags, std::string> read_stress_flags(std::span<const std::string_view> args) {
   StressFlags flags;
   for (std::size_t at = 0; at < args.size(); at += 2) {
-    std::optional<std::string_view>* slot = flags.slot(args[at]);
+    std::optional<std::string_view>* slot = slot_of(flags, args[at]);
     if (slot == nullptr) {
       return "stress does not take " + std::string{args[at]};
     }
@@ -149,6 +157,9 @@ core::Result<StressArgs, std::string> parse_stress_args(std::span<const std::str
     }
     if (duration.value().count() <= 0) {
       return std::string{"--sample-interval must be above zero"};
+    }
+    if (duration.value().count() > kLongestMilliseconds) {
+      return std::string{"--sample-interval is longer than any run can be"};
     }
     parsed.options.sample_interval_ns = duration.value().count() * kNanosecondsPerMillisecond;
   }
@@ -232,9 +243,9 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   options.sample_interval_ns = stress_options.sample_interval_ns;
   std::unique_ptr<Rig> rig;
   if (stress_options.sample) {
-    const std::int64_t run_ns = (config.run.duration.count() * kNanosecondsPerMillisecond) +
-                                options.grace.stop_ns + options.grace.kill_ns +
-                                options.stale_after_ns;
+    const std::int64_t run_ms = std::min(config.run.duration.count(), kLongestMilliseconds);
+    const std::int64_t run_ns = (run_ms * kNanosecondsPerMillisecond) + options.grace.stop_ns +
+                                options.grace.kill_ns + options.stale_after_ns;
     const RunShape shape{run_ns, options.sample_interval_ns,
                          series_bound(snapshot.cpus.logical_cpu_count())};
     const std::size_t capacity = timeline_capacity(shape);

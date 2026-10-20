@@ -238,7 +238,10 @@ TEST(Cli, StressTakesAConfigAndNothingItDoesNotKnow) {
             "--sample-interval: "},
         std::pair{
             std::vector<std::string_view>{"stress", "--config", "a", "--sample-interval", "0s"},
-            "--sample-interval must be above zero"}}) {
+            "--sample-interval must be above zero"},
+        std::pair{std::vector<std::string_view>{"stress", "--config", "a", "--sample-interval",
+                                                "9223372036854775807ms"},
+                  "--sample-interval is longer than any run can be"}}) {
     const Outcome r = invoke(args);
     EXPECT_EQ(r.code, 2);
     EXPECT_NE(r.err.find(message), std::string::npos) << r.err;

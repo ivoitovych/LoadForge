@@ -76,6 +76,23 @@ rig's bound for a 4-CPU machine (96 series) is 1.7 million points, 207 MB reside
 414 MB. At 10 Hz it is ten times that. A machine with hundreds of CPUs has hundreds of
 `frequency.cpu` series on its own. This is the frozen header's cost, recorded for M5's soak.
 
+### UBSan found a signed overflow in this stream's own sizing code
+
+`timeline_capacity` added a margin to `run_ns / interval` in signed 64-bit arithmetic; a run
+of the longest representable length overflowed (`9223372036854775807 + 8`). The test of
+saturation I had written to *show* the function saturates is what the sanitizer ran. Fixed in
+unsigned arithmetic; the same care went into `--sample-interval`, which `parse_duration`
+accepts up to the largest millisecond count and which would overflow once turned into
+nanoseconds (refused above about 73 years). The controller's own
+`duration * 1'000'000` in `orchestration.cpp` (M1 code) has the same shape for a configured
+duration of centuries; not changed here, recorded.
+
+### TSan is installable here
+
+Stream 13 reported the Clang 18 ThreadSanitizer runtime could not be run in this container.
+`clang++-18 -fsanitize=thread` links and runs here, and the unit, supervision and
+integration binaries of this stream were run under it, clean.
+
 ### The sources do not agree on what their root is
 
 Thermal, fan, frequency and memory take a prefix before `/sys/...` and `/proc/...`; power
@@ -311,11 +328,36 @@ Stream: a worker killed mid-run leaves the telemetry before its death in the res
 (`TelemetrySupervisionTest.AWorkerKilledMidRunLeavesTheTelemetryBeforeItsDeathInTheResult`, real
 workers, real sources: the worker is killed 700 ms into a 1.8 s run, and the result holds at least ten rounds from before the death and some from after it).
 
+## Verified locally (x86-64, GCC 13.3 and Clang 18)
+
+- Debug build, the unit, supervision and M3 integration binaries, `ctest -R '^(cli_|release_gate)'`
+  and the disagreement suite (every disagreement test fails as intended: ctest passes, the
+  binary exits 1).
+- The coverage gate over the whole tree at the last full run: **100.0 % lines, functions and
+  branches** (11,427 lines, 2,062 functions, 8,968 branches), 2,776 ctest tests passed; after
+  the last edits (sizing, the interval guard, the flag reader) `src/main` and the
+  controller's top-level files again at 100.0 % (1,026 lines, 85 functions, 1,164 branches)
+  from the binaries that exercise them.
+- AddressSanitizer + UBSan (found the overflow above) and ThreadSanitizer: unit, supervision and
+  M3 binaries clean. The scalar-only build (`simd-scalar`) and the static build: unit,
+  supervision and M3 binaries pass in the first; the static `loadforge` is statically linked,
+  carries no test hook and runs a real `stress --output json`. `tools/check-runtime-deps.sh`
+  and `tools/check-no-test-hooks.sh` pass on the dynamic build.
+- clang-format-18 over `src` and `tests`, clang-tidy-18 over every file this stream added or
+  changed (it found: a function over the complexity threshold, `strerror` not being thread
+  safe, public member variables, easily swapped parameters; all fixed), `python3
+  tools/check-test-obligations.py` and `tests/tools/test_tooling.sh` (240 passed).
+- Thirty repeated runs, 30 of 30, of the tests that create processes or threads: the
+  worker-killed-mid-run supervision test and the real-binary and real-kernel tests (under GCC
+  with coverage and under ASan + UBSan).
+
+Not run here: ARM64 and the sanitizer, scalar and static builds over the *whole* test tree
+(CI runs them); Mull.
+
 ## Left open
 
 - Mull could not be run, so criterion 7's evidence is the workflow and not a sweep.
 - The seven disagreements are for the manager and the owners of the contracts to settle; none
   was fixed here (rule: other components' code is not edited).
-- TSan, the static build and ARM64 are run by CI; see the stream report for what was run
-  locally.
+- ARM64 and the whole-tree sanitizer builds are CI's.
 - The project still needs an outside reviewer.

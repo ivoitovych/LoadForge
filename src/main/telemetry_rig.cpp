@@ -17,7 +17,7 @@ namespace loadforge::cli {
 namespace {
 /// Beyond the run's own length: the baseline round, the round at the deadline,
 /// the stop's grace and the round after the last reap.
-constexpr std::int64_t kMarginRounds = 8;
+constexpr std::uint64_t kMarginRounds = 8;
 constexpr std::size_t kMachineSeries = 64;
 constexpr std::size_t kSeriesPerCpu = 8;
 }  // namespace
@@ -52,8 +52,11 @@ std::size_t series_bound(std::size_t cpus) noexcept {
 }
 
 std::size_t timeline_capacity(const RunShape& shape) noexcept {
-  const std::int64_t step = std::max<std::int64_t>(shape.interval_ns, 1);
-  const std::int64_t rounds = (std::max<std::int64_t>(shape.run_ns, 0) / step) + kMarginRounds;
+  // Unsigned, because a run that can take the largest signed length plus the
+  // margin overflows a signed sum: a quotient of at most 2^63 plus eight fits.
+  const auto step = static_cast<std::uint64_t>(std::max<std::int64_t>(shape.interval_ns, 1));
+  const auto run = static_cast<std::uint64_t>(std::max<std::int64_t>(shape.run_ns, 0));
+  const std::uint64_t rounds = (run / step) + kMarginRounds;
   // run_capacity takes seconds and hertz; rounds are the product of the two,
   // so ask for `rounds` seconds at one round a second.
   return telemetry::run_capacity(static_cast<std::size_t>(rounds), 1, shape.series);
