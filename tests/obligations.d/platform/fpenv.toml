@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/platform/fpenv and nothing else.
+
+[[module]]
+path     = "src/platform/fpenv"
+classes  = ["P1", "P3"]
+tiers    = ["T1"]
+note     = """
+The floating-point environment contract (determinism.md §3, F15): today the \
+header alone. P1 is the rounding names and required_state() for each shape \
+of architecture, tested in tests/contracts/fpenv/. The numerics stream takes \
+this row over with the real MXCSR and FPCR access and check(): IMPLEMENTATION \
+M2b owes P2 there -- a dirty register forced through an injected FpControl -- \
+and T6, and the stream adds them with FpControlContract and FpCheckContract \
+run against its implementation."""

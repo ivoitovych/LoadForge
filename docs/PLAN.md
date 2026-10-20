@@ -1533,7 +1533,9 @@ LoadForge/
 │   ├── ○ telemetry-sources.md      # M3 — every source, its privilege, its fallback
 │   ├── ○ result-schema.md          # M3 — versioned schema + run fingerprint (F12)
 │   ├── ○ safety.md                 # M1 — limits, watchdog, e-stop
-│   └── adr/0001-record-architecture-decisions.md
+│   ├── adr/                        # 0001-0004; proposed/ for streams' proposals
+│   ├── streams/                    # one self-contained brief per stream (ADR 0004)
+│   └── journal/                    # one journal fragment per stream (ADR 0004)
 │
 ├── src/
 │   ├── main/                       # CLI parsing, mode dispatch
@@ -1543,6 +1545,7 @@ LoadForge/
 │   │   ├── fs/                     #    fixture-swappable reader for sysfs/procfs
 │   │   ├── sysfs/  procfs/  perf_events/  edac/
 │   │   ├── fpenv/                  #    rounding mode, MXCSR/FPCR assertion (F15)
+│   │   ├── isa/                    #    what the CPU and kernel can execute (ADR 0004)
 │   │   ├── affinity/  memory/      #    mmap, huge pages, NUMA, mlock
 │   │   ├── process/                #    fork/exec, signals, reaping (F9)
 │   │   └── clock/
@@ -1556,6 +1559,7 @@ LoadForge/
 │   │
 │   ├── worker/                     # ── worker process ──
 │   │   ├── scheduler/              #    pool, affinity, barriers, heartbeat emit
+│   │   ├── executor/               #    the thread pool behind worker/executor.hpp
 │   │   └── ipc/                    #    shared-memory status, record channel
 │   │
 │   ├── topology/                   # logical CPUs, cores, SMT, cache domains, NUMA, P/E
@@ -1570,6 +1574,7 @@ LoadForge/
 │   │   ├── oracle/                 # independent reference implementations (F11)
 │   │   ├── checksum/  residual/  invariant/
 │   │   ├── golden/                 # regression tripwires, NOT correctness oracles
+│   │   ├── integrity/              # the slice runner and its F18 bracket (ADR 0004)
 │   │   └── isolation/              # failure re-run and classification (F2)
 │   │
 │   ├── statistics/                 # load signature, aggregation, scoring, ranking
@@ -1600,6 +1605,8 @@ LoadForge/
 │   │   ├── test_tooling.sh  mutation_integration.sh
 │   │   └── fixtures/mull/          # taken from Mull's own integration tests (F21)
 │   ├── obligations.toml            # the per-module path-class and tier ledger
+│   ├── obligations.d/              # one ledger fragment per module since ADR 0004
+│   ├── contracts/                  # each contract's provider-side suite and reference
 │   └── fixtures/
 │       ├── sysfs/                  # intel, amd, arm64, no-hwmon, eacces, edac, wrapping
 │       ├── procfs/

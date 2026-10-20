@@ -1,0 +1,10 @@
+# Philox4x32-10 known-answer vectors, copied verbatim from Random123's
+# tests/kat_vectors (https://github.com/DEShawResearch/random123, branch main,
+# fetched 2026-10-20 04:01 UTC; sha256 of the whole upstream file:
+# aab5ebabf40003f63d6d87b24cbd2c8a02652e00cf8bad64226fd50586929183).
+# The lines are the reference implementation's answers, not ours (F21).
+#
+# Columns: name rounds ctr0 ctr1 ctr2 ctr3 key0 key1 expected0..3
+philox4x32 10 00000000 00000000 00000000 00000000 00000000 00000000   6627e8d5 e169c58d bc57ac4c 9b00dbd8
+philox4x32 10 ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff   408f276d 41c83b0e a20bc7c6 6d5451fd
+philox4x32 10 243f6a88 85a308d3 13198a2e 03707344 a4093822 299f31d0   d16cfe09 94fdcceb 5001e420 24126ea1

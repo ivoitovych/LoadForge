@@ -19,16 +19,27 @@ and that the tests it promises exist:
   * every declared fixture exists on disk;
   * every process-shared or robust lock in src/ is declared, with the
     robustness test that kills its holder and proves a survivor recovers via
-    EOWNERDEAD (docs/IMPLEMENTATION.md §4, M1's second new gate).
+    EOWNERDEAD (docs/IMPLEMENTATION.md §4, M1's second new gate);
+  * every contract a module declares it provides or consumes is a contract
+    suite that exists under tests/contracts/, and the module's own tests run
+    that suite -- against the real implementation for a provider, against the
+    module's own mock for a consumer (ADR 0003, cross-execution).
+
+The ledger is tests/obligations.toml plus one fragment per module under
+tests/obligations.d/ (ADR 0004): tests/obligations.d/<a>/<b>.toml declares
+exactly the module src/<a>/<b>, so modules built in parallel never edit the
+same file, and a fragment cannot declare a module it is not named after.
 
 Built to the F20 standard, because a gate is only worth what it does with
-evidence it cannot read: a ledger that does not parse is a failure, and an empty
-ledger beside a populated src/ is a failure. "I found no problems" and "I found
-nothing I understood" do not share an exit code here.
+evidence it cannot read: a ledger or fragment that does not parse is a failure,
+a file in the fragment directory that is not a fragment is a failure, and an
+empty ledger beside a populated src/ is a failure. "I found no problems" and "I
+found nothing I understood" do not share an exit code here.
 """
 
 import argparse
 import pathlib
+import re
 import sys
 import tomllib
 
@@ -37,7 +48,46 @@ CLASSES = {"P1", "P2", "P3", "P4", "P5", "P6", "P7"}
 # universal and deliberately not declarable per module -- see the ledger header.
 TIERS = {"T1", "T2", "T3", "T4", "T5", "T5b", "T6", "T7", "T8", "T10", "T11"}
 REQUIRED_FIELDS = {"path", "classes", "tiers"}
-OPTIONAL_FIELDS = {"fixtures", "fixture_builders", "note", "process_shared_locks"}
+OPTIONAL_FIELDS = {
+    "fixtures",
+    "fixture_builders",
+    "note",
+    "process_shared_locks",
+    "provides",
+    "consumes",
+}
+
+# ONE FRAGMENT PER MODULE (ADR 0004)
+# ----------------------------------
+# Modules built in parallel by separate streams would all edit the one ledger,
+# and every pair of them would conflict. So a module's row may live in a file of
+# its own, named after the module: tests/obligations.d/workloads/compression.toml
+# holds src/workloads/compression and nothing else. The name is checked, so a
+# fragment cannot declare a module it is not named after -- which is what keeps
+# two streams from declaring one module in two files -- and a duplicate across
+# the root ledger and a fragment is refused as a module declared twice.
+#
+# Anything in the directory that is not a .toml file is refused rather than
+# skipped: a fragment saved as .tml would otherwise be a row nobody checks, and
+# a gate that ignores evidence it does not recognise fails open (F20).
+FRAGMENT_DIRECTORY = "tests/obligations.d"
+
+# THE CROSS-EXECUTION OBLIGATION (ADR 0003, ADR 0004)
+# --------------------------------------------------
+# A contract's provider-side suite is a GoogleTest typed suite in a header under
+# tests/contracts/, declared there with TYPED_TEST_SUITE_P(<Name>). A module that
+# provides the contract runs it against its implementation; a module that
+# consumes it runs the same suite against its own mock, which is how two
+# independent readings of one contract are compared by execution rather than by
+# sharing. Either way the module's own tests instantiate the suite, and that
+# instantiation is what this gate looks for. The module's tests are the files
+# under tests/<tier>/<module path below src>/, less those that belong to a more
+# specific module, and never tests/contracts/ itself: the contract's own
+# reference instantiations prove the suite runs, not that any module meets it.
+CONTRACTS_DIRECTORY = "tests/contracts"
+SUITE_DECLARATION = re.compile(r"\bTYPED_TEST_SUITE_P\s*\(\s*(\w+)\s*\)")
+SUITE_INSTANTIATION = re.compile(r"\bINSTANTIATE_TYPED_TEST_SUITE_P\s*\(\s*\w+\s*,\s*(\w+)\s*,")
+NOT_MODULE_TESTS = {"contracts", "fixtures", "tools"}
 
 # A file named as a fixture_builder must SAY it is one. Without a marker the
 # check degenerates into "some file exists", which is the vacuous shape this
@@ -51,7 +101,9 @@ FIXTURE_BUILDER_MARKER = "LOADFORGE P7 FIXTURE BUILDER"
 # because this gate checks that the promised tests EXIST, not that they are
 # good. Mutation testing is what judges whether they are good.
 TIER_DIRECTORIES = {
-    "T1": ["tests/unit"],
+    # tests/contracts holds the contracts' own suites and the unit tests of the
+    # definitions a contract header carries (ADR 0004); they are unit tests.
+    "T1": ["tests/unit", "tests/contracts"],
     "T2": ["tests/unit", "tests/fixtures"],
     "T3": ["tests/oracle"],
     "T4": ["tests/property"],
@@ -261,6 +313,145 @@ def tier_is_served(root: pathlib.Path, tier: str) -> bool:
     return False
 
 
+def load_toml(path: pathlib.Path) -> dict:
+    """A ledger file parsed, or the run ends: a file that does not parse is
+    evidence nobody can read, and that is a failure, never an empty file."""
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+        die(f"{path} does not parse as TOML: {error}")
+    except OSError as error:
+        die(f"{path} cannot be read: {error}")
+    raise AssertionError("unreachable")  # die() does not return
+
+
+def module_entries(document: dict, origin: str) -> list:
+    """The [[module]] tables of one ledger file, refusing anything else in it."""
+    unexpected = set(document) - {"module"}
+    if unexpected:
+        fail(
+            f"{origin}: unexpected top-level key(s) {sorted(unexpected)}; "
+            "the only one is [[module]]"
+        )
+    entries = document.get("module", [])
+    if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
+        die(f"{origin}: 'module' must be an array of tables ([[module]])")
+    return entries
+
+
+def fragment_entries(root: pathlib.Path) -> list[tuple[str, dict]]:
+    """Every row held by a fragment, with the fragment it came from.
+
+    Each fragment holds exactly one module, and it must be the module the
+    fragment is named after. Files that are not fragments are refused.
+    """
+    directory = root / FRAGMENT_DIRECTORY
+    if not directory.exists():
+        return []
+    if not directory.is_dir():
+        die(f"{FRAGMENT_DIRECTORY} exists and is not a directory")
+    rows: list[tuple[str, dict]] = []
+    for path in sorted(directory.rglob("*")):
+        if path.is_dir():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if path.suffix != ".toml":
+            fail(
+                f"{relative} is in the fragment directory and is not a .toml fragment. "
+                "A row the gate does not read is a row nobody checks."
+            )
+            continue
+        entries = module_entries(load_toml(path), relative)
+        expected = "src/" + path.relative_to(directory).with_suffix("").as_posix()
+        if len(entries) != 1:
+            fail(
+                f"{relative} declares {len(entries)} module(s); a fragment declares "
+                f"exactly one, the module it is named after ({expected})"
+            )
+        for entry in entries:
+            if entry.get("path") != expected:
+                fail(
+                    f"{relative} declares {entry.get('path')!r}; a fragment declares only "
+                    f"the module it is named after, {expected!r}"
+                )
+            rows.append((relative, entry))
+    return rows
+
+
+def contract_suites(root: pathlib.Path) -> set[str]:
+    """The contract suites that exist: TYPED_TEST_SUITE_P(<Name>) in a header
+    under tests/contracts/."""
+    suites: set[str] = set()
+    directory = root / CONTRACTS_DIRECTORY
+    if not directory.is_dir():
+        return suites
+    for path in sorted(directory.rglob("*.hpp")):
+        suites.update(SUITE_DECLARATION.findall(path.read_text(encoding="utf-8", errors="replace")))
+    return suites
+
+
+def instantiations_by_module(root: pathlib.Path, modules: set[str]) -> dict[str, set[str]]:
+    """Which contract suites each module's own tests instantiate.
+
+    A test file belongs to the most specific module whose path below src/ is a
+    prefix of the file's path below tests/<tier>/.
+    """
+    found: dict[str, set[str]] = {module: set() for module in modules}
+    tests = root / "tests"
+    if not tests.is_dir():
+        return found
+    below_src = {module.removeprefix("src/"): module for module in modules}
+    for path in sorted(tests.rglob("*")):
+        if not path.is_file() or path.suffix not in {".cpp", ".hpp"}:
+            continue
+        parts = path.relative_to(tests).parts
+        if len(parts) < 3 or parts[0] in NOT_MODULE_TESTS:
+            continue
+        directory = parts[1:-1]
+        owner = None
+        for length in range(len(directory), 0, -1):
+            candidate = "/".join(directory[:length])
+            if candidate in below_src:
+                owner = below_src[candidate]
+                break
+        if owner is None:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        found[owner].update(SUITE_INSTANTIATION.findall(text))
+    return found
+
+
+def check_contracts(root: pathlib.Path, declared: dict[str, dict]) -> str:
+    """The cross-execution obligation. Returns the summary line."""
+    suites = contract_suites(root)
+    instantiated = instantiations_by_module(root, set(declared))
+    pairs = 0
+    for path, entry in sorted(declared.items()):
+        for field in ("provides", "consumes"):
+            names = entry.get(field, [])
+            if not isinstance(names, list) or any(
+                not isinstance(name, str) or not name for name in names
+            ):
+                fail(f"{path}: '{field}' must be a list of contract suite names")
+                continue
+            for name in names:
+                pairs += 1
+                if name not in suites:
+                    fail(
+                        f"{path}: {field} {name!r}, which is not a contract suite: no header "
+                        f"under {CONTRACTS_DIRECTORY}/ declares TYPED_TEST_SUITE_P({name})"
+                    )
+                elif name not in instantiated.get(path, set()):
+                    role = "its implementation" if field == "provides" else "its own mock"
+                    fail(
+                        f"{path}: {field} {name} but none of its tests instantiates that suite "
+                        f"against {role} (INSTANTIATE_TYPED_TEST_SUITE_P(..., {name}, ...) under "
+                        f"tests/<tier>/{path.removeprefix('src/')}/). Two readings of a contract "
+                        "are compared by running one against the other (ADR 0003)."
+                    )
+    return f"contracts: {len(suites)} suite(s) defined, {pairs} provides/consumes declaration(s)"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -282,18 +473,9 @@ def main() -> int:
             "project has no record of which execution paths each module was judged to have."
         )
 
-    try:
-        document = tomllib.loads(ledger_path.read_text(encoding="utf-8"))
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        die(f"{ledger_path} does not parse as TOML: {error}")
-
-    unexpected = set(document) - {"module"}
-    if unexpected:
-        fail(f"unexpected top-level key(s) {sorted(unexpected)}; the only one is [[module]]")
-
-    entries = document.get("module", [])
-    if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
-        die("'module' must be an array of tables ([[module]])")
+    entries = module_entries(load_toml(ledger_path), ledger_path.name)
+    fragments = fragment_entries(root)
+    entries = entries + [entry for _, entry in fragments]
 
     modules = source_modules(root)
     if not entries and modules:
@@ -442,7 +624,8 @@ def main() -> int:
 
     for path in sorted(modules - declared.keys()):
         fail(
-            f"{path} holds source but is absent from {ledger_path.name}. "
+            f"{path} holds source but is absent from {ledger_path.name} and from "
+            f"{FRAGMENT_DIRECTORY}/{path.removeprefix('src/')}.toml. "
             "Every module records which execution-path classes it contains."
         )
     for path in sorted(declared.keys() - modules):
@@ -452,6 +635,7 @@ def main() -> int:
         )
 
     locks = check_locks(root, declared)
+    contracts = check_contracts(root, declared)
 
     for path in sorted(declared):
         if not failed:
@@ -462,6 +646,8 @@ def main() -> int:
             )
 
     print(f"\n{locks}")
+    print(contracts)
+    print(f"ledger: {ledger_path.name} and {len(fragments)} fragment(s) in {FRAGMENT_DIRECTORY}/")
     print(f"test-obligation check: {len(declared)} module(s), {'FAILED' if failed else 'ok'}")
     return 1 if failed else 0
 

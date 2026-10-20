@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/controller and nothing else.
+
+[[module]]
+path    = "src/controller"
+classes = ["P1", "P2", "P3", "P6"]
+tiers   = ["T1", "T2", "T7"]
+note    = """
+The supervisor. P6 is its whole subject: the topology snapshot the stress \
+command takes before the run and the plan carries before the first fork \
+(START to RUNNING; refused by the command when /sys will not describe the \
+machine), spawn, the controller's own beat before the first fork, the deadline's stop request, the escalation ladder \
+(request, SIGTERM, SIGKILL, each after its grace), reap, drain, classify. \
+The classification table (supervision) is pure and tested row by row against \
+the misbehaviour catalogue of IMPLEMENTATION 4, including the pairs that must \
+never be confused: a fault from a kill, a kill the controller sent from one \
+it did not, a stop at the deadline from a timeout, a clean exit with its \
+finished record from one without. The ladder (safety) is a function of time \
+and tested as one. P2 is forced through the fake over the whole loop: the \
+region, the pipes (either pipe of a worker), the fork, the close of the \
+child's ends, the clock at every read, poll, the drain, the signal, the reap, \
+the control write, the release. T7 is tests/supervision: the shipped binary \
+as the worker, N >= 2 in every case -- two complete for the duration, one is \
+killed from outside while the other completes, and the controller itself is \
+killed and every orphan is reaped by the test as subreaper and found dead by \
+the parent-death signal within a bounded time; and a real snapshot of this \
+machine's /sys is in the plan before the spawn of two real workers, its CPU \
+count checked against sysconf. \
+\
+The misbehaviour catalogue of IMPLEMENTATION 4 is tests/supervision/catalogue_test.cpp: \
+the controller runs tests/support/fake_worker, a second implementation of the \
+worker contract that misbehaves on demand, and every reachable row is a test \
+with N >= 2 -- exit 0 with no zombie, exit non-zero, SIGSEGV, SIGBUS and SIGABRT \
+with the timeline kept, a silent hang holding its descriptors, a spin beside a \
+slow worker that completes, a record pipe closed early, a truncated record, a \
+bad checksum, a stop byte written to a control pipe nobody reads (EPIPE, \
+never death by SIGPIPE: the row "exit just before the deadline stop" without \
+its race), SIGTERM ignored and SIGKILL one grace later, and (N = 3) \
+grandchildren left spinning, which the controller now kills with their worker's \
+process group as it reaps the worker. A worker deaf to its control pipe is \
+ended by the parent-death signal alone when the controller is killed: the one \
+test of that signal no hang-up can pass for. OOM is \
+below; the process-shared lock row has no lock to test (see the header). \
+\
+OOM is told from a fault and from a plain kill by the kernel's own record: \
+a SIGKILL the controller did not send is kOomKilled only when the workers' \
+cgroup's OOM-kill count, read before the first fork and after the last reap, \
+rose by at least as many as there are such deaths; otherwise every one stays \
+kKilled and its report says why. The table row, the candidate rule and the \
+judgement (every outcome: enough, none, too few, a count that went back, \
+unreadable at either end) are pure and tested row by row; the loop is driven \
+against the controller's own fake of the record's contract \
+(resources/oom_kill_record.hpp), never the reader's tests (docs/adr/0003). \
+End to end, T7 in catalogue_test.cpp: three fake workers in a memory \
+cgroup the test makes and moves itself into, limited to 256 MiB, so the \
+workers are born there and the record the controller opens before the first \
+fork reads that cgroup's count; one allocates until the kernel's OOM killer \
+ends it (kOomKilled, the count moved by one), one dies by SIGSEGV beside it \
+(kFault), one completes. It skips, quoting the kernel's refusal, where no \
+such cgroup can be made (cgroup v2 without delegation and not root). Its \
+companion runs wherever a count can be read: a SIGKILL from outside, the \
+same record consulted, stays kKilled and says the count did not move. The \
+kernel's side alone -- a child really OOM-killed moves its cgroup's count by \
+one, and a kill -9 moves it by none -- is the reader's T8, in \
+tests/unit/resources."""

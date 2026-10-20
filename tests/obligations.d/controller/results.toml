@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/controller/results and nothing else.
+
+[[module]]
+path    = "src/controller/results"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+The result schema and fingerprint contract (F12): today the header alone \
+(ADR 0004). P1 here is the verdict words and the schema version a default \
+result carries; a default result's verdict is incomplete, never clean. The \
+results stream takes this row over with aggregation, the fingerprint reader \
+and derive_verdict(), adds P2 and P7 for the fingerprint's reads of /proc \
+and /sys (T2, with fixtures), T8 for reproducing a fingerprint across two \
+runs on one machine (M3 exit criterion 5), and runs VerdictContract against \
+its implementation; the suite runs against a reference in \
+tests/contracts/results/."""

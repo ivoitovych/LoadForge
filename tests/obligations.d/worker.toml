@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/worker and nothing else.
+
+[[module]]
+path    = "src/worker"
+classes = ["P1", "P2", "P3", "P6"]
+tiers   = ["T1", "T2", "T8"]
+note    = """
+The worker process itself: the internal switch's argument parser, the null \
+workload loop, and the entry point from attach to exit code. P6 is the point: \
+this is the worker's lifecycle from the inside -- attach, report started, run, \
+and the four ways out (complete, setup failed, controller lost, bad arguments), \
+each its own exit code chosen not to collide with the launcher's 120-123 (a \
+static_assert says so). Every way out is forced through the fake (T2): a signal \
+that cannot be ignored, a descriptor that is not a region, a started or \
+finished record the channel refuses (setup failed), a record pipe with no \
+reader at either record (controller lost: EPIPE says the reader is gone), a \
+CPU no mask can name, a cpuset that withholds the CPU asked for, a poll that \
+fails. P3 is the argument \
+parser: every key required once, every value with a stated domain and its \
+boundary refused by name, and the argv the controller builds parses back to \
+the same arguments. The loop's own P6 -- stop on time, stop on request, leave \
+on hang-up, staleness, or a controller that died mid-publish -- is driven by a \
+clock that advances per read, so a run of several ticks happens inside one \
+call. T8: the real binary refuses a misused switch with the bad-arguments code \
+and names the argument; and the CLI tests run a real worker in-process, over \
+the real seam, against a memfd region and two pipes the test holds as the \
+controller. The worker under a real controller is the supervision tier's \
+(T7), which lands with the controller."""

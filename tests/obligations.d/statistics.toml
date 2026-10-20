@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/statistics and nothing else.
+
+[[module]]
+path    = "src/statistics"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+The Load Signature contract: today the header alone (ADR 0004). P1 here is \
+the fault names and member-by-member equality of the summary types. The \
+statistics stream takes this row over with the Summarizer, adds T4 \
+(metamorphic relations: a window split in two, a constant series, a series \
+shifted in time) and runs SummarizerContract against its implementation; \
+the suite's exact expectations -- a window's open end, one reading, a \
+counter across a wrap and not across a gap, a metric with no reading that \
+stays unavailable -- already run against a reference in \
+tests/contracts/statistics/."""

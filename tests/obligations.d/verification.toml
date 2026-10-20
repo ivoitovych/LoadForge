@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification and nothing else.
+
+[[module]]
+path    = "src/verification"
+classes = ["P1", "P3", "P4"]
+tiers   = ["T1"]
+note    = """
+The verification contracts: header-only, frozen (ADR 0004). The components \
+that implement them live in subdirectories, each a module of its own with its \
+own fragment. What this directory holds and tests now: \
+\
+record.hpp, the error-record model of verification.md §8. P4 is its subject: \
+three kinds, one with bits, and the classification of a delta into single \
+bit, multiple bits in one word, within a line and across lines, tested at \
+every boundary including the line size changing the answer. P3: the largest \
+window and the longest text accepted and one more refused, a NaN and an \
+infinite residual kept, a zero, negative, infinite and NaN tolerance refused, \
+enumerations outside their values refused. The validity rules the codec \
+applies are definitions here, each rule broken alone in a test. The codec \
+itself is declared and provided by the verification-core stream; \
+RecordCodecContract runs against a reference in tests/contracts/verification/. \
+\
+oracle.hpp, the independent oracle: verdict validity -- an agreement that \
+compared nothing, a mismatch of the other contract's kind, a tolerance that \
+is not finite and positive, a residual within it -- each rule broken alone. \
+OracleContract runs against an exact and a bounded reference oracle. \
+\
+runner.hpp, the slice runner and its F18 bracket: tally arithmetic and the \
+fault names here; SliceRunnerContract, run against a reference runner, \
+drives a scripted workload through every finding the bracket separates. \
+\
+isolation.hpp, the re-run ladder of verification.md §7: the table from the \
+three answers to a finding, rule by rule, the confidence of each finding, \
+and that a VerificationNotPerformed cannot become a WrongResult. \
+IsolatorContract runs a scripted re-runner through every path of the ladder \
+against a reference isolator.\
+"""

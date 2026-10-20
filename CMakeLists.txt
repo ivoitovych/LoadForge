@@ -39,6 +39,7 @@ include(FloatingPoint)
 include(Sanitizers)
 include(Coverage)
 include(Dependencies)
+include(Components)
 
 # ---- core -------------------------------------------------------------------
 add_library(loadforge_core STATIC
@@ -95,30 +96,13 @@ loadforge_set_fp_contract(loadforge_topology)
 loadforge_enable_sanitizers(loadforge_topology)
 loadforge_enable_coverage(loadforge_topology)
 
-# ---- resources --------------------------------------------------------------
-# What the kernel lets this process use and what it records when that runs
-# out: MemAvailable, the memory cgroup's limit under either hierarchy, and the
-# cgroup's OOM-kill count. Platform-level knowledge read through the seam, but
-# classified with topology's capability model, so it sits above topology
-# rather than inside platform, which nothing may make depend on topology.
-add_library(loadforge_resources STATIC
-  src/resources/decimal.cpp
-  src/resources/cgroup.cpp
-  src/resources/memory_budget.cpp
-  src/resources/cgroup_oom_record.cpp
-)
-target_link_libraries(loadforge_resources PUBLIC loadforge_topology loadforge_config)
-loadforge_set_warnings(loadforge_resources)
-loadforge_set_fp_contract(loadforge_resources)
-loadforge_enable_sanitizers(loadforge_resources)
-loadforge_enable_coverage(loadforge_resources)
-
 # ---- controller -------------------------------------------------------------
 # The supervisor: spawns the workers, judges their beats and their records,
 # stops them at the deadline and classifies what became of each. Depends on
 # worker (the IPC and the argv it execs workers with) and config, and on the
-# OOM-kill record's contract in resources; the console reporter is the one
-# voice it has at M1.
+# OOM-kill record's contract in resources (src/resources/CMakeLists.txt, below
+# by glob: a link names a target, so it may precede the definition); the
+# console reporter is the one voice it has at M1.
 add_library(loadforge_controller STATIC
   src/controller/supervision.cpp
   src/controller/safety.cpp
@@ -191,6 +175,13 @@ loadforge_enable_coverage(loadforge)
 if(LOADFORGE_STATIC)
   target_link_options(loadforge PRIVATE -static)
 endif()
+
+# ---- components built in parallel streams ------------------------------------
+# Every component since ADR 0004 -- src/resources the first, then each from M2a
+# on -- owns a CMakeLists.txt in its own directory under src/ and is found here
+# by glob, so no stream edits this file to add itself (cmake/Components.cmake).
+# The modules above predate the mechanism and stay listed explicitly.
+loadforge_add_fragments("${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 # ---- tests ------------------------------------------------------------------
 if(LOADFORGE_BUILD_TESTS)
