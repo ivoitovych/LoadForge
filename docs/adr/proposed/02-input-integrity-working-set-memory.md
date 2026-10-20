@@ -1,7 +1,7 @@
 # ADR (proposed) — The slice runner's working set is populated, locked, and of ordinary pages
 
 **Status:** proposed by stream 02 (input integrity); numbered by the manager when it lands
-**Date:** 2026-10-20 11:45 UTC
+**Date:** 2026-10-20 11:25 UTC
 
 ## Context
 

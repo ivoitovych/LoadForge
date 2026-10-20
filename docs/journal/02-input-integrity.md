@@ -1,6 +1,6 @@
 # Journal fragment 02 — input integrity
 
-**Written:** 2026-10-20 11:40 UTC
+**Written:** 2026-10-20 11:25 UTC
 **Change:** the provider of `verification/runner.hpp` — the slice runner, the
 input-integrity bracket of verification.md §4a around every unit, its working set, and
 the triplicated control state of PLAN F18 rule 3 (`src/verification/integrity/`).
