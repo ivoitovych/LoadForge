@@ -121,9 +121,11 @@ this is the worker's lifecycle from the inside -- attach, report started, run, \
 and the four ways out (complete, setup failed, controller lost, bad arguments), \
 each its own exit code chosen not to collide with the launcher's 120-123 (a \
 static_assert says so). Every way out is forced through the fake (T2): a signal \
-that cannot be ignored, a descriptor that is not a region, a record pipe with \
-no reader, a CPU no mask can name, a cpuset that withholds the CPU asked for, a \
-poll that fails, a finished record that cannot be sent. P3 is the argument \
+that cannot be ignored, a descriptor that is not a region, a started or \
+finished record the channel refuses (setup failed), a record pipe with no \
+reader at either record (controller lost: EPIPE says the reader is gone), a \
+CPU no mask can name, a cpuset that withholds the CPU asked for, a poll that \
+fails. P3 is the argument \
 parser: every key required once, every value with a stated domain and its \
 boundary refused by name, and the argv the controller builds parses back to \
 the same arguments. The loop's own P6 -- stop on time, stop on request, leave \

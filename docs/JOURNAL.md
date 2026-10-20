@@ -1659,6 +1659,32 @@ signal, the test process dies by signal 13 (status 141) in that test, every time
 meets a closed pipe depends on whether the controller reaped the worker in the tick before
 the deadline's, which is the scheduler's choice: the race §2.19 forbids in these tests.
 
+### 2.27 A record pipe with no reader is the controller lost, not the worker's setup failure
+
+Found by the M1 exit review, repeating the supervision tier 30 times under `ctest -j4`:
+`SupervisionTest.AControllerKilledLeavesNoWorkerBehind` failed once with a worker that
+exited 119, "record channel: write(fd 11): Broken pipe". The controller had been killed
+before that worker sent its started record, the write met a pipe with no reader, and §2.17's
+rule ("could not report" is a setup failure) called it the worker's own failure. The test
+accepted the death signal and 124, the two ways out it knew of.
+
+**Chosen:** the worker classifies an unsent record by its errno. `EPIPE` means nothing holds
+the read end any more: the controller is gone (or stopped reading, which it does only after
+a frame fault, when its own verdict on the channel takes precedence anyway), which is what
+124 already means -- "hung up, stale or unreadable". Any other refusal, and a frame the
+writer would not encode, stays 119. Both records the worker sends on its own account, the
+started and the finished, follow the rule. `WorkerRunTest.ARecordPipeWithNoReaderIsTheController
+LostNotASetupFailure` forces both; the setup-failure cases now use `EIO`.
+
+*Rejected:* widening the supervision test to accept 119. It would also have accepted a
+worker that failed its setup for any other reason, which that test exists to tell apart
+from a worker ended by its controller's death; and it would have left the exit code saying
+the worker failed when the kernel said its controller had gone.
+
+*Consequence for the controller:* none while it runs. It holds every record pipe's read end
+until it has reaped that worker or found a bad frame on it, so a live controller never
+causes the EPIPE; a 124 from a worker it reaps is `kControllerLostReported` as before.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned

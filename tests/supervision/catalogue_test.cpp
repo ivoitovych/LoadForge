@@ -391,7 +391,7 @@ TEST(MisbehaviourCatalogue, AStopByteToAPipeNobodyReadsIsEpipeAndNotDeathBySigpi
   // process -- by signal 13 (review R-02); ignored, it is EPIPE, which the
   // stop request tolerates. Worker 1 finishes on its own three controller
   // ticks after its duration, well inside a stop grace long enough that no
-  // escalation comes into it; worker 0 answers the stop byte.
+  // escalation comes into it; worker 0 completes as the protocol says.
   const Selector selector{"0=complete,1=close-control"};
   Recorder recorder;
   RunOptions options = fake_options(2000);
@@ -402,8 +402,11 @@ TEST(MisbehaviourCatalogue, AStopByteToAPipeNobodyReadsIsEpipeAndNotDeathBySigpi
   for (const WorkerReport& worker : report.workers) {
     expect_completed(worker);
     EXPECT_EQ(worker.termination, "exited with code 0");
-    EXPECT_EQ(worker.stop, "stop requested") << "worker " << worker.slot;
   }
+  // Worker 1 was alive when the deadline came, so the byte was written to
+  // its pipe. Worker 0 may have finished its own duration and been reaped
+  // first, which is why only worker 1's step is asserted.
+  EXPECT_EQ(report.workers[1].stop, "stop requested");
   EXPECT_FALSE(recorder.when("worker 1: sent signal 15").has_value());
   EXPECT_TRUE(all_clean(report));
 }

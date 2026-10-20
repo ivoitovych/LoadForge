@@ -255,7 +255,9 @@ TEST(SupervisionTest, AControllerKilledLeavesNoWorkerBehind) {
     // closes its end of the control pipe, which wakes the worker's poll. Which
     // lands first is the scheduler's choice: an earlier version of this test
     // accepted only SIGKILL and failed in about one run in ten when the worker
-    // left first, exiting 124, controller lost. What this test cannot show is
+    // left first, exiting 124, controller lost. A worker whose started record
+    // meets the dead controller's pipe leaves with 124 too (EPIPE: the reader
+    // is gone; journal §2.27). What this test cannot show is
     // that the death signal works for a worker that never looks at its pipe:
     // with the signal disarmed it still passes, every worker leaving on the
     // hang-up. MisbehaviourCatalogue.AWorkerDeafToItsControlPipeIsEndedByThe-
