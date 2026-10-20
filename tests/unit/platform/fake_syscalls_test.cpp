@@ -6,14 +6,15 @@
 // pinned here, and the kernel side of each row is pinned in
 // real_syscalls_test.cpp (KillSucceedsOnAnUnreapedZombieAndOnlyTheReapMakesItESRCH).
 
+#include "support/fake_syscalls.hpp"
+
 #include <gtest/gtest.h>
-#include <csignal>
 
 #include <cerrno>
+#include <csignal>
 #include <vector>
 
 #include "platform/syscalls.hpp"
-#include "support/fake_syscalls.hpp"
 
 namespace loadforge::testing {
 namespace {
