@@ -243,6 +243,14 @@ nuisances. Use the **unsupported platform** template; a capture of your `/sys` t
 (there will be a `tools/capture-sysfs.sh` for this) can become a permanent test fixture,
 which is one of the most useful contributions available.
 
+## Dated documents
+
+Anything that carries a date carries the time with it, in UTC: `2026-10-20 03:52 UTC`
+inside a document, and `YYYY-MM-DD-HHMM-UTC` in a file name. A document that can recur --
+a review, a reaction plan, a review request -- is one file per occurrence, named with its
+timestamp and kept, never overwritten; the newest is the current one. A date alone says
+nothing about the order of two things that happened on the same day.
+
 ## Building
 
 ```bash

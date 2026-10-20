@@ -1,7 +1,7 @@
 # ADR 0002 — Continuous development: decide, record, keep moving
 
 **Status:** accepted
-**Date:** 2026-10-20
+**Date:** 2026-10-20 01:22 UTC
 
 ## Context
 

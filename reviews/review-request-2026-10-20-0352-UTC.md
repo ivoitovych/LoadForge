@@ -1,5 +1,8 @@
 # Review request
 
+- **Date and time:** 2026-10-20 03:52 UTC.
+- **Series:** review requests are dated and kept, one file each, in `reviews/`; the newest is the current one.
+
 LoadForge has had no outside review. Every pull request so far was checked by CI gates
 and by the author, and one internal read-through of the whole tree (`reviews/`) found a
 real memory-ordering defect that every gate had passed. That is the case for asking you.
@@ -102,7 +105,7 @@ Each item names the files and the questions. "Is this right?" is always in scope
 
 ## Already known, so you need not report them
 
-`reviews/comprehensive-project-review-2026-10-19-0449.md` lists what the internal review
+`reviews/comprehensive-project-review-2026-10-19-0449-UTC.md` lists what the internal review
 found; most of it is fixed and the rest is queued in `docs/ROADMAP.md`. `docs/JOURNAL.md`
 §6 lists known open threads, including one known gap: a worker's grandchild survives when
 the controller itself is SIGKILLed.

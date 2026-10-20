@@ -240,7 +240,8 @@ vendored component is checked for GPL compatibility in CI.
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 The most useful contribution right now is **review**: nothing here has had an outside
-reviewer yet. [`docs/REVIEW-REQUEST.md`](docs/REVIEW-REQUEST.md) lists what to look at,
+reviewer yet. The current review request, the newest
+`reviews/review-request-*.md` ([this one](reviews/review-request-2026-10-20-0352-UTC.md)), lists what to look at,
 area by area, with the files and the questions, and how to report what you find.
 
 Two things worth knowing before you write code, because they are not obvious and are

@@ -1,7 +1,7 @@
 # ADR 0003 — Components share contracts, never tests or mocks
 
 **Status:** accepted
-**Date:** 2026-10-20
+**Date:** 2026-10-20 01:58 UTC
 
 ## Context
 

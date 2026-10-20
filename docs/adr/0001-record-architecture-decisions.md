@@ -1,7 +1,7 @@
 # ADR 0001 — Record architecture decisions
 
 **Status:** accepted
-**Date:** 2026-08-24
+**Date:** 2026-08-24 20:35 UTC
 
 ## Context
 
