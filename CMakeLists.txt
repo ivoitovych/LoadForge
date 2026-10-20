@@ -132,7 +132,7 @@ loadforge_enable_coverage(loadforge_controller)
 
 # ---- cli --------------------------------------------------------------------
 add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp)
-target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller)
+target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller loadforge_resources)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)

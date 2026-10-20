@@ -95,6 +95,15 @@ add_test(NAME cli_stress_runs
          COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress.toml")
 set_tests_properties(cli_stress_runs PROPERTIES
                      PASS_REGULAR_EXPRESSION "2 of 2 worker\\(s\\) completed")
+# The memory budget through the real binary on the real machine: a run that
+# configures memory must find the budget this machine offers and say the limit
+# is enforced. NOT ENFORCED here would mean the reader refused a real machine,
+# which is the failure a reader of /proc and the cgroup files is most likely
+# to have and least likely to show anywhere else.
+add_test(NAME cli_stress_enforces_memory
+         COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/short-stress-memory.toml")
+set_tests_properties(cli_stress_enforces_memory PROPERTIES
+                     PASS_REGULAR_EXPRESSION "limit memory: enforced \\(checked at start against a ceiling of")
 add_test(NAME cli_stress_refuses_other_modes
          COMMAND loadforge stress --config "${CMAKE_SOURCE_DIR}/tests/fixtures/config/benchmark-mode.toml")
 set_tests_properties(cli_stress_refuses_other_modes PROPERTIES WILL_FAIL TRUE)
