@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <time.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <csignal>
 #include <cstddef>
@@ -203,6 +204,8 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   };
   auto result = rig.run();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(rig.syscalls.signals_ignored(), std::vector<int>{SIGPIPE})
+      << "a stop byte to a worker that just died must be EPIPE, not signal 13";
   const RunReport& report = result.value();
   EXPECT_FALSE(report.worker_exit_code.has_value());
   ASSERT_EQ(report.workers.size(), 2U);
@@ -222,8 +225,11 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
                                              {"finished: done too"}}));
   EXPECT_TRUE(all_clean(report));
   EXPECT_EQ(clean_count(report), 2U);
-  // Five ticks reach the 50 ms deadline; the finish reads the clock once more.
-  EXPECT_EQ(report.elapsed_ns, 60 * kMs);
+  // Five ticks reach the 50 ms deadline. Both record channels are still open
+  // when the last worker is reaped, so the final drain reads the clock twice
+  // for each (when it starts, and after the drain that ends it), and the
+  // finish reads it once more.
+  EXPECT_EQ(report.elapsed_ns, 100 * kMs);
   EXPECT_EQ(
       rig.reporter.events,
       (std::vector<std::string>{
@@ -477,12 +483,20 @@ TEST(ControllerTest, AChannelHeldOpenAfterTheWorkerDiedIsTruncatedNotWaitedForFo
 TEST(ControllerTest, AChannelThatNeverEndsIsGivenABoundedNumberOfDrains) {
   Rig rig;
   rig.config.run.duration = core::Duration{1000};
+  // A stop grace far longer than 1024 drains take on the fake clock, so the
+  // count is the bound that stops it; the time bound has its own test below.
+  rig.options.grace.stop_ns = 3600 * 1000 * kMs;
+  int reads_when_last_reaped = 0;
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
-  rig.reporter.on_event = [&rig](const std::string& line) {
+  rig.reporter.on_event = [&rig, &reads_when_last_reaped](const std::string& line) {
+    // The last event of the run is the last reap; every read after it belongs
+    // to the final drain, which is what the bound governs.
+    reads_when_last_reaped = rig.syscalls.reads_of(kRecordRead1);
     if (starts_with(line, "spawned")) {
       rig.deliver(0, ipc::RecordType::kFinished, "done");
       rig.worker_exits(0, 0);
-      // Most of a large frame, a byte per read, from a writer that stays.
+      // Most of a large frame, a byte per read, from a writer that stays:
+      // more bytes than the bound allows drains, so only the bound stops it.
       const std::string big = frame_text(ipc::RecordType::kFinished, std::string(2000, 'x'));
       rig.syscalls.deliver_to_pipe(kRecordRead1, big.substr(0, 1500));
       rig.syscalls.limit_pipe_reads(1);
@@ -496,7 +510,77 @@ TEST(ControllerTest, AChannelThatNeverEndsIsGivenABoundedNumberOfDrains) {
   EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTruncatedEvidence);
   EXPECT_EQ(result.value().workers[1].records.back(),
             "record channel: held open after the worker died");
-  EXPECT_GT(rig.syscalls.read_count(), 1000) << "the bound, not the stream's end, stopped it";
+  // Exactly the bound: 1024 drains of one byte each, with bytes still waiting.
+  // A bound that only had to be "more than 1000" let a bound a thousand times
+  // larger pass, which is the same as no bound at all.
+  EXPECT_EQ(rig.syscalls.reads_of(kRecordRead1) - reads_when_last_reaped, 1024)
+      << "the bound, not the stream's end, stopped it";
+}
+
+TEST(ControllerTest, AChannelThatTricklesIsGivenOneStopGraceInAllNotOnePerDrain) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  int reads_when_last_reaped = 0;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig, &reads_when_last_reaped](const std::string& line) {
+    reads_when_last_reaped = rig.syscalls.reads_of(kRecordRead1);
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      // Bytes always waiting, a byte per read, from a writer that stays: a
+      // channel that would never end by itself and never goes quiet.
+      const std::string big = frame_text(ipc::RecordType::kFinished, std::string(2000, 'x'));
+      rig.syscalls.deliver_to_pipe(kRecordRead1, big.substr(0, 1500));
+      rig.syscalls.limit_pipe_reads(1);
+      rig.syscalls.worker_releases_end(kControlRead1);
+      rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+      rig.syscalls.script_nonblocking_reaps(rig.reaps);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTruncatedEvidence);
+  // The stop grace is 20 ms and the fake clock moves 10 ms per reading: the
+  // first poll may wait the whole grace, the second only what is left of it,
+  // and then the grace is spent. Two drains, not 1024.
+  EXPECT_EQ(rig.syscalls.reads_of(kRecordRead1) - reads_when_last_reaped, 2);
+  const std::vector<int>& timeouts = rig.syscalls.poll_timeouts();
+  ASSERT_GE(timeouts.size(), 2U);
+  EXPECT_EQ(timeouts[timeouts.size() - 2], 20);
+  EXPECT_EQ(timeouts.back(), 10);
+}
+
+TEST(ControllerTest, AClockThatFailsDuringTheFinalDrainIsTheControllersFailure) {
+  // The final drain reads the clock when it starts on a held channel and after
+  // each drain; either reading failing ends the run as the controller's own
+  // failure, after the workers are gone.
+  for (const int extra : {1, 2}) {
+    Rig rig;
+    rig.config.run.duration = core::Duration{1000};
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    rig.reporter.on_event = [&rig, extra](const std::string& line) {
+      if (starts_with(line, "worker ")) {
+        // A reap, and the last event before the final drain is the last reap:
+        // the next raw reading is the drain's first, the one after its second.
+        const auto raw_reads =
+            static_cast<int>(std::count(rig.syscalls.clocks_read().begin(),
+                                        rig.syscalls.clocks_read().end(), CLOCK_MONOTONIC_RAW));
+        rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, raw_reads + extra, EIO);
+      }
+      if (starts_with(line, "spawned")) {
+        rig.deliver(0, ipc::RecordType::kFinished, "done");
+        rig.worker_exits(0, 0);
+        rig.syscalls.deliver_to_pipe(kRecordRead1, "xx");
+        rig.syscalls.limit_pipe_reads(1);
+        rig.syscalls.worker_releases_end(kControlRead1);
+        rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+        rig.syscalls.script_nonblocking_reaps(rig.reaps);
+      }
+    };
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value()) << extra;
+    EXPECT_EQ(result.error().stage, "clock") << extra;
+  }
 }
 
 TEST(ControllerTest,
@@ -603,6 +687,15 @@ TEST(ControllerTest, RefusesBeforeSpawningWhenTheConfigurationCannotBeRun) {
 }
 
 TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehind) {
+  {
+    Rig rig;
+    rig.syscalls.fail_ignore_signal(EINVAL);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "signals");
+    EXPECT_TRUE(rig.reporter.plans.empty()) << "refused before the run was announced";
+    EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  }
   {
     Rig rig;
     rig.syscalls.fail_create_memory_file(ENOMEM);
@@ -745,7 +838,9 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
   {
     Rig rig;
     complete_at_deadline(rig);
-    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 7, EIO);  // The finish's reading.
+    // The finish's reading: the eleventh, after six in the run and four in the
+    // final drain (two for each record channel still open).
+    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 11, EIO);
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "clock");
@@ -755,7 +850,7 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
     complete_at_deadline(rig);
     // The finish's reading is earlier than the start's: a clock that jumped.
     rig.syscalls.set_clock(CLOCK_MONOTONIC_RAW, platform::TimeSpec{10, 0});
-    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 7, platform::TimeSpec{0, 0});
+    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 11, platform::TimeSpec{0, 0});
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "clock");

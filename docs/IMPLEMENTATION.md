@@ -380,6 +380,7 @@ The fake worker's **misbehaviour catalogue**, each entry a T7 test:
 | Spin without progress | Distinguish "working slowly" from "not progressing" |
 | Allocate until OOM-killed | Classify as OOM **distinctly** from a fault, by reading the kernel's own record |
 | Close the record pipe early | Report truncated evidence as truncated, never as clean |
+| Exit just before the deadline stop | Survive writing the stop byte to a pipe nobody reads: `EPIPE`, never death by `SIGPIPE` |
 | Emit a truncated record | Reject it; a partial record is not a record |
 | Emit a record with a bad checksum | Reject and report — a corrupt worker is what this tool exists to detect |
 | Die holding a process-shared lock | Recover via `EOWNERDEAD`; survivors must not deadlock |
