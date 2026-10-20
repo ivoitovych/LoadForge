@@ -154,19 +154,32 @@ LOADFORGE_WIDE_INLINE void narrow(VRange& range, const Interval& box, const VAxi
   range.t_far = lesser(range.t_far, greater(t0, t1));
 }
 
+/// One component of the four lanes' directions, and of their reciprocals, as a
+/// vector. (Assigning the lanes of a vector member one by one reads the vector
+/// first, which GCC at -O3 reports as use before initialisation.)
+LOADFORGE_WIDE_INLINE V direction_of(const std::array<LaneRay, kLanes>& lanes,
+                                     double Vec3::*axis) noexcept {
+  return V{lanes.at(0).ray.direction.*axis, lanes.at(1).ray.direction.*axis,
+           lanes.at(2).ray.direction.*axis, lanes.at(3).ray.direction.*axis};
+}
+LOADFORGE_WIDE_INLINE V inverse_of(const std::array<LaneRay, kLanes>& lanes,
+                                   double Vec3::*axis) noexcept {
+  return V{lanes.at(0).inverse.*axis, lanes.at(1).inverse.*axis, lanes.at(2).inverse.*axis,
+           lanes.at(3).inverse.*axis};
+}
+
 class Packet {
  public:
   [[gnu::always_inline]] Packet(std::uint32_t x0, std::uint32_t y) noexcept {
-    rays_.origin = splat3(kEye);
+    std::array<LaneRay, kLanes> lanes{};
     for (std::uint32_t lane = 0; lane < kLanes; ++lane) {
-      const LaneRay ray = lane_ray(x0 + lane, y);
-      rays_.direction.x[lane] = ray.ray.direction.x;
-      rays_.direction.y[lane] = ray.ray.direction.y;
-      rays_.direction.z[lane] = ray.ray.direction.z;
-      inverse_.x[lane] = ray.inverse.x;
-      inverse_.y[lane] = ray.inverse.y;
-      inverse_.z[lane] = ray.inverse.z;
+      lanes.at(lane) = lane_ray(x0 + lane, y);
     }
+    rays_.origin = splat3(kEye);
+    rays_.direction = V3{direction_of(lanes, &Vec3::x), direction_of(lanes, &Vec3::y),
+                         direction_of(lanes, &Vec3::z)};
+    inverse_ =
+        V3{inverse_of(lanes, &Vec3::x), inverse_of(lanes, &Vec3::y), inverse_of(lanes, &Vec3::z)};
     best_t_ = splat(kNoHitDistance);
     best_id_ = M{} + static_cast<std::int64_t>(kNoHit);
   }
