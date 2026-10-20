@@ -1823,6 +1823,29 @@ gate would refuse those mutants without an allowlist entry -- but it adds a path
 Mull (reading the profile, and matching it to mutants by file name when the paths differ)
 that nothing has run against the real tool (F21). Worth revisiting when the sweep grows.
 
+**The first sharded run** (run 39416345694, 2026-10-20 11:38 UTC, on the branch before it
+merged) did what the six-hour run could not: every shard finished in four minutes or less,
+set-up included, against the ten-minute estimate of §1.26. The gate ran on the real Mull
+in every shard, and refused no report as malformed or out of scope. It found 56 unexplained
+survivors in six of nine shards. Shards `core`, `main` and `reporters` passed.
+
+| Shard | Mutants | Survivors |
+|---|---|---|
+| `platform` | 146 | 23 (`syscalls.cpp` 16, `worker_pool.cpp` 3, `clock.cpp` 2, `syscall_error.cpp` 2) |
+| `controller` | 97 | 10 (`orchestration.cpp` 9, `safety.cpp` 1) |
+| `topology` | 133 | 10 (`cache.cpp` 6, `numa.cpp` 3, `cpu_topology.cpp` 1) |
+| `worker` | 117 | 8 (`heartbeat.cpp` 4, `record.cpp` 2, `entry.cpp` 1, `scheduler.cpp` 1) |
+| `resources` | 70 | 4 (`cgroup.cpp`) |
+| `config` | 39 | 1 (`config.cpp`) |
+
+The `fork_process` and `reap_any_nonblocking` survivors predicted above are among the
+platform shard's (`syscalls.cpp:91`, `:99`, `:410` and `:416`). Most of the others are
+boundary mutants (`<` to `<=`, `>` to `>=`) that the 100% branch coverage reaches but no
+test discriminates. That is the gap mutation testing exists to find. Each is killed by a
+test at the boundary, or allowlisted with a written reason if it is equivalent, in
+follow-up changes per module (ROADMAP item 11b). The sweep merges first: it is weekly and
+gates no pull request, so a red sweep holds nothing up and names exactly what is left.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
