@@ -21,26 +21,28 @@ namespace {
 
 class MinimalSyscalls final : public Syscalls {
  public:
-  core::Result<int, SyscallError> open_read(const std::string&) override {
+  core::Result<int, SyscallError> open_read(const std::string& /*path*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<std::size_t, SyscallError> read(int, char*, std::size_t) override {
+  core::Result<std::size_t, SyscallError> read(int /*fd*/, char* /*buffer*/,
+                                               std::size_t /*size*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> close(int) override {
+  core::Result<core::Ok, SyscallError> close(int /*fd*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<std::size_t, SyscallError> read_link(const std::string&, char*,
-                                                    std::size_t) override {
+  core::Result<std::size_t, SyscallError> read_link(const std::string& /*path*/, char* /*buffer*/,
+                                                    std::size_t /*size*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
   core::Result<pid_t, SyscallError> fork_process() override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  SyscallError exec(const std::string&, const std::vector<std::string>&) override {
+  SyscallError exec(const std::string& /*path*/,
+                    const std::vector<std::string>& /*argv*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> set_parent_death_signal(int) override {
+  core::Result<core::Ok, SyscallError> set_parent_death_signal(int /*signal*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
   pid_t parent_pid() override { return 0; }
@@ -48,53 +50,60 @@ class MinimalSyscalls final : public Syscalls {
   core::Result<Reaped, SyscallError> wait_any() override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> send_signal(pid_t, int) override {
+  core::Result<core::Ok, SyscallError> send_signal(pid_t /*pid*/, int /*signal*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<TimeSpec, SyscallError> read_clock(int) override {
+  core::Result<TimeSpec, SyscallError> read_clock(int /*clock_id*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<CpuMask, SyscallError> get_affinity(pid_t) override {
+  core::Result<CpuMask, SyscallError> get_affinity(pid_t /*pid*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> set_affinity(pid_t, const CpuMask&) override {
+  core::Result<core::Ok, SyscallError> set_affinity(pid_t /*pid*/,
+                                                    const CpuMask& /*mask*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<void*, SyscallError> map_anonymous(std::size_t, int) override {
+  core::Result<void*, SyscallError> map_anonymous(std::size_t /*length*/,
+                                                  int /*extra_flags*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> unmap(void*, std::size_t) override {
+  core::Result<core::Ok, SyscallError> unmap(void* /*address*/, std::size_t /*length*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> lock_memory(void*, std::size_t) override {
+  core::Result<core::Ok, SyscallError> lock_memory(void* /*address*/,
+                                                   std::size_t /*length*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> advise_memory(void*, std::size_t, int) override {
+  core::Result<core::Ok, SyscallError> advise_memory(void* /*address*/, std::size_t /*length*/,
+                                                     int /*advice*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> bind_memory(void*, std::size_t, const NodeMask&) override {
+  core::Result<core::Ok, SyscallError> bind_memory(void* /*address*/, std::size_t /*length*/,
+                                                   const NodeMask& /*nodes*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<int, SyscallError> create_memory_file(const std::string&, std::size_t) override {
+  core::Result<int, SyscallError> create_memory_file(const std::string& /*name*/,
+                                                     std::size_t /*length*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<void*, SyscallError> map_shared(int, std::size_t) override {
+  core::Result<void*, SyscallError> map_shared(int /*fd*/, std::size_t /*length*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> inherit_across_exec(int) override {
+  core::Result<core::Ok, SyscallError> inherit_across_exec(int /*fd*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
   core::Result<PipeEnds, SyscallError> create_pipe() override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<std::size_t, SyscallError> write(int, std::span<const std::byte>) override {
+  core::Result<std::size_t, SyscallError> write(int /*fd*/,
+                                                std::span<const std::byte> /*bytes*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<std::vector<Readiness>, SyscallError> poll_readable(const std::vector<int>&,
-                                                                   int) override {
+  core::Result<std::vector<Readiness>, SyscallError> poll_readable(const std::vector<int>& /*fds*/,
+                                                                   int /*timeout_ms*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
-  core::Result<core::Ok, SyscallError> ignore_signal(int) override {
+  core::Result<core::Ok, SyscallError> ignore_signal(int /*signal*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
   pid_t process_id() override { return 0; }
