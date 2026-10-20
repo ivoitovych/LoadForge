@@ -3,3 +3,8 @@
 loadforge_test_suite(loadforge_unit_primitives_floating_tests
   SOURCES floating_test.cpp
   LINK loadforge_primitives_floating)
+
+# Threads run the module's code under the coverage build; see src/primitives/floating.
+if(LOADFORGE_COVERAGE)
+  target_compile_options(loadforge_unit_primitives_floating_tests PRIVATE -fprofile-update=atomic)
+endif()

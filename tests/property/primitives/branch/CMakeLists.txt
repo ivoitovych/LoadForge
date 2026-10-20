@@ -3,3 +3,8 @@
 loadforge_test_suite(loadforge_property_primitives_branch_tests
   SOURCES branch_property_test.cpp
   LINK loadforge_primitives_branch)
+
+# Threads run the module's code under the coverage build; see src/primitives/branch.
+if(LOADFORGE_COVERAGE)
+  target_compile_options(loadforge_property_primitives_branch_tests PRIVATE -fprofile-update=atomic)
+endif()
