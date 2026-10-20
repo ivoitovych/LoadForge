@@ -167,6 +167,9 @@ TEST(WorkerArgsTest, EveryValueHasADomainAndTheBoundaryIsRefusedByKey) {
   EXPECT_EQ(refusal_of(with(argv, "--interval-ms", "0")), "--interval-ms: must be at least 1");
   EXPECT_EQ(refusal_of(with(argv, "--stale-after-ms", "49")),
             "--stale-after-ms: must be at least the interval");
+  auto equal = parse_args(views_of(with(argv, "--stale-after-ms", "50")));
+  ASSERT_TRUE(equal.has_value()) << "an allowance of exactly the interval: " << equal.error();
+  EXPECT_EQ(equal.value().pacing.stale_after_ns, equal.value().pacing.interval_ns);
   // One millisecond past what fits in nanoseconds.
   EXPECT_EQ(refusal_of(with(argv, "--duration-ms", "9223372036855")),
             "--duration-ms: 9223372036855 is past the limit of 9223372036854");
