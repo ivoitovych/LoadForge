@@ -162,16 +162,16 @@ TEST(MonteCarloOracleFaults, ABatchCorruptedIsCaughtInExactlyTheUnitsThatSampleI
 
 TEST(MonteCarloOracleFaults, ABatchKeyCorruptedBeforeComputeAgreesAndAfterComputeIsCaught) {
   const auto oracle = make_oracle();
-  OracleCase unit = mc_units::unit_of(0, 1024);
+  const OracleCase unit = mc_units::unit_of(0, 1024);
   const std::uint64_t flipped = mc_units::key_of(unit, 16) ^ (std::uint64_t{1} << 40U);
   // Before: the workload read the flipped key and summed its samples.
   OracleCase before = unit;
-  mc_units::put64(before.input, 16 * 8, flipped);
+  mc_units::put64(before.input, std::size_t{16} * 8, flipped);
   mc_units::set_output(before, 16, mc_units::chunked_sum(mc_units::terms_of(flipped), 1024));
   EXPECT_TRUE(std::holds_alternative<Agreement>(check(*oracle, before)));
   // After: the output is the sum for the original key, the input now says otherwise.
   OracleCase after = unit;
-  mc_units::put64(after.input, 16 * 8, flipped);
+  mc_units::put64(after.input, std::size_t{16} * 8, flipped);
   const Verdict verdict = check(*oracle, after);
   ASSERT_TRUE(std::holds_alternative<BoundedMismatch>(verdict));
   EXPECT_EQ(*std::get<BoundedMismatch>(verdict).element, 16U);

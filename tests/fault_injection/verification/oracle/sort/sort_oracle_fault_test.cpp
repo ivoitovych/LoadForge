@@ -34,7 +34,8 @@ using verification::NotChecked;
 using verification::Verdict;
 
 std::unique_ptr<verification::Oracle> make_oracle() {
-  workloads::Plan plan{spec::kInputBytes, spec::kOutputBytes, 0, 1, spec::kDefaultChunkCount, 0, 0};
+  const workloads::Plan plan{
+      spec::kInputBytes, spec::kOutputBytes, 0, 1, spec::kDefaultChunkCount, 0, 0};
   return verification::oracle::make_sort_oracle({}, plan).value();
 }
 
@@ -120,8 +121,8 @@ TEST(SortOracleFaults, EveryBitOfAnIndexFlippedIsCaughtAsARangeOrARepeat) {
     const Verdict verdict = contracts::oracle_suite::check(*oracle, unit);
     const ExactMismatch mismatch = mismatch_of(verdict);
     EXPECT_FALSE(mismatch.difference.has_value()) << bit;
-    const bool range = mismatch.check.rfind("index out of range at position ", 0) == 0;
-    const bool repeat = mismatch.check.rfind("index repeated at position ", 0) == 0;
+    const bool range = mismatch.check.starts_with("index out of range at position ");
+    const bool repeat = mismatch.check.starts_with("index repeated at position ");
     EXPECT_TRUE(range || repeat) << bit << ": " << mismatch.check;
     if (bit >= 17) {
       EXPECT_EQ(mismatch.check, "index out of range at position 1234") << bit;
@@ -174,7 +175,7 @@ TEST(SortOracleUnrun, ScratchThatCannotBeObtainedIsNotCheckedWhateverTheOutputHo
       workloads::Plan{spec::kInputBytes, spec::kOutputBytes, 0, 1, spec::kDefaultChunkCount, 0, 0},
       [&asked](std::size_t words) {
         asked = words;
-        return std::unique_ptr<std::uint64_t[]>();
+        return verification::oracle::Scratch();
       });
   ASSERT_TRUE(oracle.has_value());
   const OracleCase& good_unit = good();
@@ -191,11 +192,14 @@ TEST(SortOracleUnrun, ScratchThatCannotBeObtainedIsNotCheckedWhateverTheOutputHo
   EXPECT_EQ(asked, spec::kKeys / 64);  // one bit per input position
 }
 
-TEST(SortOracleUnrun, TheDefaultScratchIsZeroedAndTheSizeAsked) {
-  const std::unique_ptr<std::uint64_t[]> scratch = verification::oracle::allocate_scratch(2048);
+TEST(SortOracleUnrun, TheDefaultScratchHoldsTheWordsAsked) {
+  const verification::oracle::Scratch scratch = verification::oracle::allocate_scratch(2048);
   ASSERT_NE(scratch, nullptr);
   for (std::size_t word = 0; word < 2048; ++word) {
-    EXPECT_EQ(scratch[word], 0U);
+    scratch.get()[word] = word;
+  }
+  for (std::size_t word = 0; word < 2048; ++word) {
+    EXPECT_EQ(scratch.get()[word], word);
   }
 }
 

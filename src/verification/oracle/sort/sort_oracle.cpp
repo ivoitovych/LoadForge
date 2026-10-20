@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <new>
 #include <optional>
 #include <string>
 #include <utility>
@@ -25,6 +24,10 @@ ExactMismatch indices_mismatch(const char* what, std::size_t position) {
   return ExactMismatch{std::string(what) + std::to_string(position), std::nullopt, position + 1};
 }
 
+// Built inside a noexcept function so the caller carries no cleanup for the
+// two strings, which would hold a branch no test can take.
+Verdict unchecked(const char* what, const char* why) noexcept { return NotChecked{what, why, 0}; }
+
 class SortOracle final : public Oracle {
  public:
   explicit SortOracle(ScratchAllocator allocator) : allocator_(std::move(allocator)) {}
@@ -35,13 +38,15 @@ class SortOracle final : public Oracle {
   [[nodiscard]] Verdict check(const UnitEvidence& evidence) const override {
     if (evidence.input.size() != spec::kInputBytes ||
         evidence.output.size() != spec::kOutputBytes) {
-      return NotChecked{"sort unit", "evidence is not a sort unit's input and output size", 0};
+      return unchecked("sort unit", "evidence is not a sort unit's input and output size");
     }
-    const std::unique_ptr<std::uint64_t[]> seen = allocator_(kSeenWords);
+    const Scratch seen = allocator_(kSeenWords);
     if (seen == nullptr) {
-      return NotChecked{"sort indices", "no memory for the permutation check's scratch", 0};
+      return unchecked("sort indices", "no memory for the permutation check's scratch");
     }
-    if (auto bad = check_indices(evidence.output, seen.get())) {
+    std::fill_n(seen.get(), kSeenWords, std::uint64_t{0});
+    if (auto bad =
+            check_indices(evidence.output, std::span<std::uint64_t>(seen.get(), kSeenWords))) {
       return *std::move(bad);
     }
     if (auto bad = check_keys(evidence)) {
@@ -57,7 +62,7 @@ class SortOracle final : public Oracle {
   // Step 1: the indices are a permutation of 0 .. kKeys - 1. The smallest
   // position at which one is out of range, or equal to an earlier one.
   static std::optional<ExactMismatch> check_indices(std::span<const std::byte> output,
-                                                    std::uint64_t* seen) {
+                                                    std::span<std::uint64_t> seen) {
     for (std::size_t position = 0; position < spec::kKeys; ++position) {
       const std::uint32_t index = spec::load_le32(output, spec::index_offset(position));
       if (index >= spec::kKeys) {
@@ -143,8 +148,10 @@ class SortOracle final : public Oracle {
 
 }  // namespace
 
-std::unique_ptr<std::uint64_t[]> allocate_scratch(std::size_t words) {
-  return std::unique_ptr<std::uint64_t[]>(new (std::nothrow) std::uint64_t[words]());
+Scratch allocate_scratch(std::size_t words) {
+  // malloc, not new (std::nothrow): the latter leaves a null-check branch no test can take.
+  // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
+  return Scratch(static_cast<std::uint64_t*>(std::malloc(words * sizeof(std::uint64_t))));
 }
 
 core::Result<std::unique_ptr<Oracle>, OracleError> make_sort_oracle(

@@ -151,7 +151,7 @@ void expect_same_verdict(const verification::Oracle& oracle, const OracleCase& u
 
 TEST(SortOracleDifferential, RightUnitsAgreeUnderEveryChunkCountAndSeed) {
   for (const std::uint32_t chunks : spec::kChunkCounts) {
-    workloads::Plan plan{spec::kInputBytes, spec::kOutputBytes, 0, 1, chunks, 0, 0};
+    const workloads::Plan plan{spec::kInputBytes, spec::kOutputBytes, 0, 1, chunks, 0, 0};
     const auto oracle = verification::oracle::make_sort_oracle({}, plan);
     ASSERT_TRUE(oracle.has_value());
     const OracleCase unit =

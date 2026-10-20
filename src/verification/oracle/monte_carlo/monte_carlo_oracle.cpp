@@ -32,6 +32,10 @@ struct Failure {
   double tolerance = 0.0;
 };
 
+// Built inside a noexcept function so the caller carries no cleanup for the
+// two strings, which would hold a branch no test can take.
+Verdict unchecked(const char* what, const char* why) noexcept { return NotChecked{what, why, 0}; }
+
 class MonteCarloOracle final : public Oracle {
  public:
   [[nodiscard]] std::string_view workload() const noexcept override { return spec::kName; }
@@ -40,14 +44,14 @@ class MonteCarloOracle final : public Oracle {
   [[nodiscard]] Verdict check(const UnitEvidence& evidence) const override {
     if (evidence.input.size() != spec::kInputBytes ||
         evidence.output.size() != spec::kOutputBytes) {
-      return NotChecked{"monte carlo unit",
-                        "evidence is not a monte carlo unit's input and output size", 0};
+      return unchecked("monte carlo unit",
+                       "evidence is not a monte carlo unit's input and output size");
     }
     std::optional<Failure> worst;
     for (std::size_t m = 0; m < spec::kSampledBatches; ++m) {
       const std::uint64_t batch = spec::sampled_batch(evidence.index, m);
       const double reference = replay_batch_sum(load_le64(evidence.input, batch * 8));
-      const double computed =
+      const auto computed =
           std::bit_cast<double>(load_le64(evidence.output, batch * sizeof(double)));
       const double residual = std::abs(computed - reference);
       const double tolerance = spec::tolerance(reference);

@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 
@@ -25,12 +26,21 @@
 
 namespace loadforge::verification::oracle {
 
-/// Gives `words` zero-initialised 64-bit words, or nothing when it cannot.
-using ScratchAllocator = std::function<std::unique_ptr<std::uint64_t[]>(std::size_t words)>;
+/// Releases scratch obtained from allocate_scratch.
+struct ScratchDeleter {
+  // The deleter of malloc'd scratch; see allocate_scratch.
+  void operator()(std::uint64_t* words) const noexcept {
+    std::free(words);  // NOLINT(cppcoreguidelines-no-malloc,cppcoreguidelines-owning-memory)
+  }
+};
+using Scratch = std::unique_ptr<std::uint64_t, ScratchDeleter>;
 
-/// The allocator make_sort_oracle(config, plan) uses: operator new, which
+/// Gives `words` 64-bit words (the oracle clears them), or nothing when it cannot.
+using ScratchAllocator = std::function<Scratch(std::size_t words)>;
+
+/// The allocator make_sort_oracle(config, plan) uses: malloc, which
 /// reports failure as nothing rather than by throwing.
-[[nodiscard]] std::unique_ptr<std::uint64_t[]> allocate_scratch(std::size_t words);
+[[nodiscard]] Scratch allocate_scratch(std::size_t words);
 
 /// The sort oracle for units of `plan`, or kConfiguration when the
 /// configuration's decomposition is neither 0 nor a chunk count, or the plan's
