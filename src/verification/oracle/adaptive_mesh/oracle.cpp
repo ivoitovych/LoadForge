@@ -137,7 +137,8 @@ OracleError refused(std::string detail) {
 }  // namespace
 
 std::size_t sampled_cell(std::uint64_t index, std::size_t j) noexcept {
-  return j * kSampleWidth + static_cast<std::size_t>(mix(mix(index) + j) % kSampleWidth);
+  const std::uint64_t within = mix(mix(index) + j) % kSampleWidth;
+  return j * kSampleWidth + within;
 }
 
 AdaptiveMeshOracle::AdaptiveMeshOracle() noexcept = default;
