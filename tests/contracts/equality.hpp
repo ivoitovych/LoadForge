@@ -20,6 +20,8 @@ namespace loadforge::contracts {
 template <typename T>
 void expect_memberwise_equality(
     const T& base, std::initializer_list<std::function<void(std::type_identity_t<T>&)>> changes) {
+  // The copy is the point: equality is asserted between two distinct objects.
+  // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
   const T copy = base;
   EXPECT_TRUE(copy == base);
   EXPECT_FALSE(copy != base);

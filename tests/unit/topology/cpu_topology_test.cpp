@@ -53,7 +53,7 @@ class CpuTopologyTest : public ::testing::Test {
     std::filesystem::remove_all(root, ignored);
   }
 
-  void write(const std::filesystem::path& path, const std::string& contents) {
+  static void write(const std::filesystem::path& path, const std::string& contents) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream out(path);
     out << contents << "\n";

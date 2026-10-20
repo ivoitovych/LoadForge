@@ -103,7 +103,7 @@ class RecordTest : public ::testing::Test {
   platform::RealSyscalls syscalls;
   platform::FileSystem filesystem{syscalls};
 
-  DiscoveryFailure failure_of(CgroupOomKillRecord& record) {
+  static DiscoveryFailure failure_of(CgroupOomKillRecord& record) {
     auto count = record.read();
     EXPECT_FALSE(count.has_value()) << "read a count it should have refused";
     return count.has_value() ? DiscoveryFailure{} : count.error();
@@ -213,7 +213,7 @@ TEST(RecordDeniedTest, ADeniedCountIsDeniedAndNamed) {
 
 // --- the real kernel (T8) ----------------------------------------------------------------
 
-TEST(RecordRealTest, ThisMachinesCountIsReadAndASigkillThatIsNotAnOomKillDoesNotMoveIt) {
+TEST(RealProcessOomRecord, ThisMachinesCountIsReadAndASigkillThatIsNotAnOomKillDoesNotMoveIt) {
   platform::RealSyscalls syscalls;
   platform::FileSystem filesystem(syscalls);
   CgroupOomKillRecord record(filesystem, kMachineRoot);
@@ -253,7 +253,7 @@ bool control(const std::string& path, const std::string& value) {
   return out.good();
 }
 
-TEST(RecordRealTest, AChildReallyOomKilledInAV1CgroupMovesThatCgroupsCountByOne) {
+TEST(RealProcessOomRecord, AChildReallyOomKilledInAV1CgroupMovesThatCgroupsCountByOne) {
   // The kernel's record against the kernel's act. A v1 memory cgroup is made
   // under this process's own, limited to 16 MiB with swapping off; a child is
   // moved into it before it allocates, and allocates until the OOM killer
@@ -305,8 +305,9 @@ TEST(RecordRealTest, AChildReallyOomKilledInAV1CgroupMovesThatCgroupsCountByOne)
     }
     // Four times the limit, every page touched so it is really charged.
     constexpr std::size_t kBytes = std::size_t{64} << 20U;
-    auto* memory = static_cast<volatile char*>(std::malloc(kBytes));
-    for (std::size_t i = 0; memory != nullptr && i < kBytes; i += 4096) {
+    std::vector<char> backing(kBytes);
+    volatile char* memory = backing.data();
+    for (std::size_t i = 0; i < kBytes; i += 4096) {
       memory[i] = 1;
     }
     ::_exit(3);  // Reached only if the limit did not hold.

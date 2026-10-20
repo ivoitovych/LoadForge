@@ -7,12 +7,12 @@
 #include "worker/scheduler.hpp"
 
 #include <gtest/gtest.h>
-#include <time.h>
 
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <optional>
 #include <string>
 #include <utility>

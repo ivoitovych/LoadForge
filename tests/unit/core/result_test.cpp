@@ -54,8 +54,10 @@ TEST(Result, AMoveOnlyValueLeavesAnRvalueResultByMove) {
   const std::unique_ptr<int> taken = std::move(ok).value();
   ASSERT_NE(taken, nullptr);
   EXPECT_EQ(*taken, 7);
-  EXPECT_EQ(ok.value(), nullptr)
-      << "moved from, and still a valid Result";  // NOLINT(bugprone-use-after-move)
+  // This test inspects a moved-from object on purpose: what a moved-from
+  // Result reports is the assertion.
+  // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+  EXPECT_EQ(ok.value(), nullptr) << "moved from, and still a valid Result";
 
   Result<std::unique_ptr<int>, ParseError> bad{ParseError::Empty};
   EXPECT_THROW((void)std::move(bad).value(), std::bad_variant_access);
