@@ -40,6 +40,22 @@ std::uint64_t env_number(const char* name, std::uint64_t fallback) {
   return text == nullptr ? fallback : std::strtoull(text, nullptr, 10);
 }
 
+// AddressSanitizer parks freed blocks in a quarantine of up to 256 MiB, so
+// resident memory climbs under it whatever the code does; there the leak
+// check is LeakSanitizer's, at exit, and the resident-memory bound is not
+// asserted.
+#if defined(__SANITIZE_ADDRESS__)
+constexpr bool kQuarantine = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+constexpr bool kQuarantine = true;
+#else
+constexpr bool kQuarantine = false;
+#endif
+#else
+constexpr bool kQuarantine = false;
+#endif
+
 std::uint64_t resident_bytes() {
   std::ifstream statm("/proc/self/statm");
   std::uint64_t size = 0;
@@ -112,7 +128,7 @@ TEST(JournalSoak, AppendingForHoursGrowsTheFileAndNothingElse) {
   // 256 KiB of slack for the allocator and the page cache's accounting;
   // a leak of even one entry per append is 100 bytes x thousands, far above.
   constexpr std::uint64_t kSlack = std::uint64_t{256} * 1024;
-  EXPECT_LE(resident_bytes(), resident_warm + kSlack)
+  EXPECT_TRUE(kQuarantine || resident_bytes() <= resident_warm + kSlack)
       << "resident memory after " << entries << " appends against " << warm << " warm";
 
   const Replay replayed = replay(*storage.value()).value();
