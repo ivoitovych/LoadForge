@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/workloads/raytrace and nothing else.
+
+[[module]]
+path    = "src/workloads/raytrace"
+classes = ["P1", "P3"]
+tiers   = ["T1"]
+note    = """
+Today the ray tracing specification alone (spec.hpp, ADR 0004): the sizes and \
+offsets, the decoders of the generator's draws at both ends of every range, \
+the camera, and the two intersection tests with each of their branches, \
+tested in tests/contracts/workloads/. The ray tracing stream takes this row \
+over with the workload and owes what IMPLEMENTATION §3 lists for it -- P4 \
+and P5, and T3, T4, T5, T5b, T6 -- with provides = ["WorkloadContract"]."""

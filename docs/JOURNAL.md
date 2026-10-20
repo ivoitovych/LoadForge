@@ -1947,6 +1947,60 @@ decomposition, where the T6 comparison across decompositions needs one bound).
 less about versions than these two. Bringing them level is a contract change of its own,
 between waves.
 
+### 2.31 Wave 4's specifications: ray tracing and adaptive mesh (2026-10-20 13:05 UTC)
+
+Both headers (`src/workloads/raytrace/spec.hpp`, `src/workloads/adaptive_mesh/spec.hpp`) are
+contracts under ADR 0004. Their definitions are tested in
+`tests/contracts/workloads/spec_raytrace_test.cpp` and `spec_adaptive_mesh_test.cpp`, each in
+its own file so that the specifications other sessions add beside them cannot conflict.
+
+**Ray tracing.** A unit is one 64 x 64 frame of 128 spheres and 128 triangles, seen from a
+fixed pinhole; the output is a 16-byte record per pixel (t, primitive index) and one sum of
+t per tile. *Chosen:* the arithmetic is shared and the algorithm is not. The draws'
+decoding, the camera ray and the two intersection tests are defined once, as code in the
+header, in an exact sequence of binary64 operations (no fused multiply-add, no reciprocal);
+the workload's hierarchy and the oracle's brute force then have to produce the same bits,
+so the check is exact (`Contract::kExact`), not bounded. *Rejected:* each stream writing the
+intersection arithmetic from prose. A different dot-product order is one last bit, and one
+last bit is a false corruption report on healthy hardware; the independence that matters is
+hierarchy against brute force, and it is untouched. Shared code can share a typo, which is
+why every branch of both tests is taken in the contract tests and two values are checked
+against a computation made outside C++. *Also rejected:* secondary rays, shading and a
+camera in the input. Each adds operations to pin and nothing the oracle needs; the camera
+and the eye are fixed so every hit is at t >= 3.75 and the near root of a sphere is the hit.
+*Tie rule:* the lower primitive index wins an equal t, so brute force in index order is
+unambiguous. *Oracle sampling:* 64 pixels, one in each tile of the 8 x 8 tiling, so every
+region is sampled whichever tile edge is configured. *Failure and count:* the items are
+evaluated in a fixed order, the first failure is named, and `blocks_compared` counts the
+items evaluated, the failing one included.
+
+**Adaptive mesh.** A unit is 256 hotspots on a 512 x 512 lattice; a quadtree is refined
+around them (integers only), and the output is, for each of 16 x 16 coarse cells, the
+integral of a rational field over its leaves and the leaf count. *Chosen:* everything is
+exact or pinned except one thing, the order in which a coarse cell's leaves are added by
+the threads that finish them. That is the dynamic load balancing that makes the class
+`kBoundedResidual`, and it is also what the tolerance is derived from: any order of m
+positive terms is within gamma_{m-1} of the exact sum (Higham 4.2), the oracle's fixed
+order likewise, so the two differ by at most 2 gamma_m c' / (1 - gamma_m); the header derives
+it step by step, including that the subtraction is exact where it matters (Sterbenz), that
+the denominator 1 - 2mu is exact, and a slack of 1 + 2^-40 that keeps the computed tolerance
+above the real one whatever its roundings. The contract tests check that excess on both
+sides for every m from 1 to 1024. *Rejected:* a stencil or an advected field, whose
+oracle would be the workload run again; a field using exp(), which determinism.md §3 rules
+out; a tolerance left for the oracle stream to derive, which is how dense-linear's spec was
+left open and why this one is not. *Leaf counts* are compared exactly by a bounded oracle
+(`BoundedMismatch`, tolerance 0.5, residual the integer difference), because
+`ExactMismatch` is not valid for a bounded contract; all 256 are checked, the integrals of
+32 sampled cells.
+
+**Contract question for the manager.** The roadmap declares ray tracing
+`kBitExactFixedDecomposition`. The specification makes its pixel records identical on every
+ISA path and architecture, and only the tile sums depend on the tile edge, so the workload
+would hold `kBitExact` over the pixels. The tile sums were added so that the declared class
+is true and the decomposition (the tile edge, 8, 16 or 32) is real; if the manager prefers
+`kBitExact`, the tile sums and the decomposition come out of the header and nothing else
+changes.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
