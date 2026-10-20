@@ -10,9 +10,9 @@
 
 #include <filesystem>
 #include <functional>
-#include <utility>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "platform/fs.hpp"
@@ -28,8 +28,11 @@ using Edit = std::function<void(MemFs&)>;
 template <typename Inner>
 class OwnedSource final : public Source {
  public:
-  explicit OwnedSource(const Edit& prepare, Edit after_probe = {})
-      : files_(fs_), inner_(files_), after_probe_(std::move(after_probe)) {
+  explicit OwnedSource(const Edit& prepare, Edit after_probe = {}, Edit after_sample = {})
+      : files_(fs_),
+        inner_(files_),
+        after_probe_(std::move(after_probe)),
+        after_sample_(std::move(after_sample)) {
     if (prepare) {
       prepare(fs_);
     }
@@ -45,7 +48,12 @@ class OwnedSource final : public Source {
     return statuses;
   }
 
-  void sample(std::vector<Reading>& out) override { inner_.sample(out); }
+  void sample(std::vector<Reading>& out) override {
+    inner_.sample(out);
+    if (after_sample_) {
+      after_sample_(fs_);
+    }
+  }
 
   [[nodiscard]] MemFs& fs() { return fs_; }
 
@@ -54,6 +62,7 @@ class OwnedSource final : public Source {
   platform::FileSystem files_;
   Inner inner_;
   Edit after_probe_;
+  Edit after_sample_;
 };
 
 /// A source over the machine this process runs on, with the real seam: the

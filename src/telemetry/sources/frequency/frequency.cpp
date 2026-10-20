@@ -31,7 +31,7 @@ constexpr std::size_t kIowaitField = 4;
 const char* const kStatPath = "/proc/stat";
 
 Remedies frequency_remedies() {
-  return make_remedies(
+  return {
       "this machine does not offer cpufreq for this CPU: a virtual machine, a kernel without a "
       "cpufreq driver, or a CPU that is offline; nothing LoadForge can change here",
       "this CPU's cpufreq directory disappeared during the run (the CPU was taken offline or "
@@ -43,11 +43,11 @@ Remedies frequency_remedies() {
       "the cpufreq driver returned something that is not a frequency, and LoadForge does not "
       "guess; update the kernel or driver",
       "the read of this cpufreq attribute failed; check the kernel log (dmesg) for the "
-      "driver's complaint");
+      "driver's complaint"};
 }
 
 Remedies stat_remedies() {
-  return make_remedies(
+  return {
       "this kernel does not provide /proc/stat (procfs is not mounted, as in some "
       "containers and chroots); mount procfs at /proc to get CPU utilisation",
       "/proc/stat disappeared during the run (procfs was unmounted); re-run with procfs "
@@ -57,11 +57,11 @@ Remedies stat_remedies() {
       "/proc and any security module",
       "the first line of /proc/stat is not CPU tick counters, and LoadForge does not guess; "
       "this is a kernel or sandbox fault, so report the kernel version",
-      "the read of /proc/stat failed; check the kernel log (dmesg)");
+      "the read of /proc/stat failed; check the kernel log (dmesg)"};
 }
 
 Remedies online_remedies() {
-  return make_remedies(
+  return {
       "this kernel does not publish the online CPU list, so the CPUs cpufreq could be read "
       "for cannot be named; nothing LoadForge can change here",
       "the online CPU list disappeared during the run; re-run once the machine is stable",
@@ -69,23 +69,21 @@ Remedies online_remedies() {
       "by default); check the file's mode and any security module",
       "the online CPU list is not a CPU list, and LoadForge does not guess; this is a kernel "
       "or sandbox fault, so report the kernel version",
-      "the read of the online CPU list failed; check the kernel log (dmesg)");
+      "the read of the online CPU list failed; check the kernel log (dmesg)"};
 }
 
 Metric frequency_metric(std::uint32_t cpu) {
-  return Metric{"frequency.cpu", Unit::kHertz,      Kind::kGauge, Scope::kCpu,
-                cpu,             std::nullopt,      "cpufreq"};
+  return make_metric("frequency.cpu", Unit::kHertz, Kind::kGauge, Scope::kCpu, cpu, "cpufreq");
 }
 
-Metric tick_metric(std::string name) {
-  return Metric{std::move(name), Unit::kCount, Kind::kCounter,    Scope::kMachine,
-                0,               std::nullopt, "procfs:stat"};
+Metric tick_metric(std::string_view name) {
+  return make_metric(name, Unit::kCount, Kind::kCounter, Scope::kMachine, 0, "procfs:stat");
 }
 
 /// The aggregate line's counters, or why the line is not one.
 core::Result<CpuTicks, std::string> parse_stat_line(std::string_view line) {
   if (!line.starts_with("cpu ")) {
-    return "the first line does not start with \"cpu \": \"" + std::string{line} + "\"";
+    return R"(the first line does not start with "cpu ": ")" + std::string{line} + "\"";
   }
   line.remove_prefix(std::string_view{"cpu"}.size());
   CpuTicks ticks;
@@ -130,7 +128,9 @@ core::Result<CpuTicks, topology::Unavailable> read_ticks(topology::Source& stat)
   }
   auto ticks = parse_stat_line(line.value());
   if (!ticks.has_value()) {
-    return topology::Unavailable{topology::Availability::kMalformed, stat.path(), ticks.error()};
+    std::string detail = ticks.error();
+    return topology::Unavailable{topology::Availability::kMalformed, stat.path(),
+                                 std::move(detail)};
   }
   return ticks.value();
 }
@@ -158,9 +158,17 @@ std::vector<MetricStatus> FrequencySource::probe() {
   const std::string cpu_directory = root_ + "/sys/devices/system/cpu";
   topology::Source online(*filesystem_, cpu_directory + "/online");
   auto cpus = online.cpu_list();
+  if (cpus.has_value() && cpus.value().ids().empty()) {
+    // An empty list is a reading for `offline` and nonsense for `online`: this
+    // process is running on one of them. Refused, not read as "no CPUs".
+    std::string detail = "the online CPU list is empty, and this process runs on a CPU";
+    cpus =
+        topology::Unavailable{topology::Availability::kMalformed, online.path(), std::move(detail)};
+  }
   if (!cpus.has_value()) {
-    statuses.push_back(MetricStatus{frequency_metric(0),
-                                    make_unavailable(cpus.error(), online_remedies())});
+    MetricStatus& status = statuses.emplace_back();
+    status.metric = frequency_metric(0);
+    status.unavailable = make_unavailable(cpus.error(), online_remedies());
   } else {
     for (const std::uint32_t cpu : cpus.value().ids()) {
       GaugeSpec spec;
@@ -181,12 +189,12 @@ std::vector<MetricStatus> FrequencySource::probe() {
 
   stat_.emplace(*filesystem_, root_ + kStatPath);
   auto ticks = read_ticks(*stat_);
-  for (const char* const name : {"frequency.busy_ticks", "frequency.total_ticks"}) {
-    std::optional<Unavailable> unavailable;
+  for (const std::string_view name : {"frequency.busy_ticks", "frequency.total_ticks"}) {
+    MetricStatus& status = statuses.emplace_back();
+    status.metric = tick_metric(name);
     if (!ticks.has_value()) {
-      unavailable = make_unavailable(ticks.error(), stat_remedies());
+      status.unavailable = make_unavailable(ticks.error(), stat_remedies());
     }
-    statuses.push_back(MetricStatus{tick_metric(name), std::move(unavailable)});
   }
   if (!ticks.has_value()) {
     stat_.reset();

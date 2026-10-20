@@ -16,31 +16,25 @@ namespace {
 constexpr std::int64_t kMaxRpm = 1'000'000;
 
 Remedies fan_remedies(const std::string& provider) {
-  return make_remedies(
-      "this machine does not offer this fan input: " + provider +
-          " publishes no such file; nothing LoadForge can change here",
-      "the fan input behind " + provider +
-          " disappeared during the run (driver unloaded or device removed); re-run once the "
-          "hardware is stable",
-      "read access to this " + provider +
-          " attribute is refused; fan inputs are normally world-readable, so check the file's "
-          "mode, owner and any udev rule rather than running privileged",
-      "the " + provider +
-          " driver returned something that is not a fan speed, and LoadForge does not guess; "
-          "update the kernel or driver, or report the board",
-      "the read of this " + provider +
-          " attribute failed; check the kernel log (dmesg) for the driver's complaint");
+  return {"this machine does not offer this fan input: " + provider +
+              " publishes no such file; nothing LoadForge can change here",
+          "the fan input behind " + provider +
+              " disappeared during the run (driver unloaded or device removed); re-run once the "
+              "hardware is stable",
+          "read access to this " + provider +
+              " attribute is refused; fan inputs are normally world-readable, so check the file's "
+              "mode, owner and any udev rule rather than running privileged",
+          "the " + provider +
+              " driver returned something that is not a fan speed, and LoadForge does not guess; "
+              "update the kernel or driver, or report the board",
+          "the read of this " + provider +
+              " attribute failed; check the kernel log (dmesg) for the driver's complaint"};
 }
 
 GaugeSpec fan_spec(const HwmonChip& chip, std::uint32_t input, std::string path) {
   GaugeSpec spec;
-  spec.metric = Metric{"fan.speed",
-                       Unit::kRpm,
-                       Kind::kGauge,
-                       Scope::kDevice,
-                       hwmon_series_index(chip, input),
-                       std::nullopt,
-                       hwmon_provider(chip)};
+  spec.metric = make_metric("fan.speed", Unit::kRpm, Kind::kGauge, Scope::kDevice,
+                            hwmon_series_index(chip, input), hwmon_provider(chip));
   spec.remedies = fan_remedies(spec.metric.provider);
   spec.path = std::move(path);
   spec.minimum = 0;
@@ -58,9 +52,9 @@ std::vector<MetricStatus> FanSource::probe() {
   std::vector<MetricStatus> statuses;
   for (const HwmonChip& chip : find_hwmon_chips(*filesystem_, root_)) {
     for (std::uint32_t input = 1; input <= kMaxHwmonChannels; ++input) {
-      Channel channel(*filesystem_,
-                      fan_spec(chip, input, chip.directory + "/fan" + std::to_string(input) +
-                                                "_input"));
+      Channel channel(
+          *filesystem_,
+          fan_spec(chip, input, chip.directory + "/fan" + std::to_string(input) + "_input"));
       MetricStatus status = channel.probe();
       if (status.unavailable.has_value() &&
           status.unavailable->kind == topology::Availability::kAbsent) {
@@ -82,9 +76,9 @@ std::vector<MetricStatus> FanSource::probe() {
         "this machine exposes no fan speed to read; laptops, virtual machines, containers and "
         "most single-board computers have none, and on a desktop the Super I/O driver for the "
         "board (nct6775, it87) may not be loaded";
-    statuses.push_back(MetricStatus{
-        Metric{"fan.speed", Unit::kRpm, Kind::kGauge, Scope::kDevice, 0, std::nullopt, "hwmon"},
-        std::move(none)});
+    MetricStatus& status = statuses.emplace_back();
+    status.metric = make_metric("fan.speed", Unit::kRpm, Kind::kGauge, Scope::kDevice, 0, "hwmon");
+    status.unavailable = std::move(none);
   }
   return statuses;
 }

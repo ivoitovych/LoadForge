@@ -29,7 +29,7 @@ namespace loadforge::telemetry {
 /// state: these are gauges.
 class MemorySource final : public Source {
  public:
-  explicit MemorySource(platform::FileSystem& filesystem, std::string root = {});
+  explicit MemorySource(platform::FileSystem& filesystem, const std::string& root = {});
 
   [[nodiscard]] std::string_view name() const noexcept override { return "memory"; }
   [[nodiscard]] std::vector<MetricStatus> probe() override;

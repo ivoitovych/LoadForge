@@ -27,22 +27,21 @@ constexpr std::int64_t kMaxMilliCelsius = 1'000'000;
 constexpr double kMilliPerCelsius = 1000.0;
 
 Remedies thermal_remedies(const std::string& provider) {
-  return make_remedies(
-      "this machine does not offer this sensor: " + provider +
-          " publishes no such input; nothing LoadForge can change here",
-      "the sensor behind " + provider +
-          " disappeared during the run (driver unloaded, device removed or CPU taken offline); "
-          "readings before and after belong to different hardware, so re-run once it is stable",
-      "read access to this " + provider +
-          " attribute is refused; hwmon and thermal-zone temperatures are normally "
-          "world-readable, so check the file's mode, owner and any udev rule rather than "
-          "running privileged",
-      "the " + provider +
-          " driver returned something that is not a temperature, and LoadForge does not guess; "
-          "update the kernel or driver, or report the board",
-      "the read of this " + provider +
-          " attribute failed; a sensor that cannot be read usually means a driver or device in "
-          "trouble, so check the kernel log (dmesg)");
+  return {"this machine does not offer this sensor: " + provider +
+              " publishes no such input; nothing LoadForge can change here",
+          "the sensor behind " + provider +
+              " disappeared during the run (driver unloaded, device removed or CPU taken offline); "
+              "readings before and after belong to different hardware, so re-run once it is stable",
+          "read access to this " + provider +
+              " attribute is refused; hwmon and thermal-zone temperatures are normally "
+              "world-readable, so check the file's mode, owner and any udev rule rather than "
+              "running privileged",
+          "the " + provider +
+              " driver returned something that is not a temperature, and LoadForge does not guess; "
+              "update the kernel or driver, or report the board",
+          "the read of this " + provider +
+              " attribute failed; a sensor that cannot be read usually means a driver or device in "
+              "trouble, so check the kernel log (dmesg)"};
 }
 
 GaugeSpec gauge_spec(Metric metric, std::string path) {
@@ -56,9 +55,9 @@ GaugeSpec gauge_spec(Metric metric, std::string path) {
   return spec;
 }
 
-Metric make_metric(std::string name, Scope scope, std::uint32_t index, std::string provider) {
-  return Metric{std::move(name), Unit::kCelsius, Kind::kGauge, scope, index, std::nullopt,
-                std::move(provider)};
+Metric temperature(std::string_view name, Scope scope, std::uint32_t index,
+                   std::string_view provider) {
+  return make_metric(name, Unit::kCelsius, Kind::kGauge, scope, index, provider);
 }
 
 /// The number after `prefix` in `label`, when the label is exactly that.
@@ -75,7 +74,7 @@ std::optional<std::uint32_t> numbered(std::string_view label, std::string_view p
 }
 
 Metric unidentified(const HwmonChip& chip, std::uint32_t channel) {
-  return make_metric("thermal.sensor", Scope::kDevice, hwmon_series_index(chip, channel),
+  return temperature("thermal.sensor", Scope::kDevice, hwmon_series_index(chip, channel),
                      hwmon_provider(chip));
 }
 
@@ -83,13 +82,13 @@ Metric unidentified(const HwmonChip& chip, std::uint32_t channel) {
 Metric identify(const HwmonChip& chip, std::string_view label, std::uint32_t channel) {
   if (chip.name == "coretemp") {
     if (const auto package = numbered(label, "Package id ")) {
-      return make_metric("thermal.package", Scope::kPackage, *package, hwmon_provider(chip));
+      return temperature("thermal.package", Scope::kPackage, *package, hwmon_provider(chip));
     }
     if (const auto core = numbered(label, "Core ")) {
-      return make_metric("thermal.core", Scope::kCore, *core, hwmon_provider(chip));
+      return temperature("thermal.core", Scope::kCore, *core, hwmon_provider(chip));
     }
   } else if (chip.name == "k10temp" && label == "Tdie") {
-    return make_metric("thermal.package", Scope::kPackage, 0, hwmon_provider(chip));
+    return temperature("thermal.package", Scope::kPackage, 0, hwmon_provider(chip));
   }
   return unidentified(chip, channel);
 }
@@ -150,7 +149,7 @@ std::vector<MetricStatus> ThermalSource::probe() {
       provider += ":" + type;
     }
     Channel channel(*filesystem_,
-                    gauge_spec(make_metric("thermal.zone", Scope::kDevice, zone, provider),
+                    gauge_spec(temperature("thermal.zone", Scope::kDevice, zone, provider),
                                directory + "/temp"));
     MetricStatus status = channel.probe();
     if (is_absent(status)) {
@@ -169,8 +168,9 @@ std::vector<MetricStatus> ThermalSource::probe() {
         "container that is the platform's choice and nothing inside it can change that, while "
         "on bare metal the platform's hwmon driver (coretemp on Intel, k10temp on AMD) may not "
         "be loaded";
-    statuses.push_back(MetricStatus{
-        make_metric("thermal.package", Scope::kPackage, 0, "hwmon"), std::move(none)});
+    MetricStatus& status = statuses.emplace_back();
+    status.metric = temperature("thermal.package", Scope::kPackage, 0, "hwmon");
+    status.unavailable = std::move(none);
   }
   return statuses;
 }

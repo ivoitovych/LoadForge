@@ -230,7 +230,7 @@ TEST_F(FanTest, NothingIsSampledBeforeTheProbeAndProbingAgainStartsOver) {
   EXPECT_TRUE(sample(source).empty());
 }
 
-// --- the source contract, once per state (ADR 0003) -------------------------------------------------
+// --- the source contract, once per state (ADR 0003)
 
 fixtures::Edit with_fans() {
   return [](MemFs& fs) {
@@ -279,8 +279,8 @@ struct MalformedState {
 struct VanishedState {
   static constexpr int kRounds = 3;
   static std::unique_ptr<Source> make() {
-    return std::make_unique<OwnedSource<FanSource>>(
-        with_fans(), [](MemFs& fs) { fs.remove(fan_path(1, 1)); });
+    return std::make_unique<OwnedSource<FanSource>>(with_fans(),
+                                                    [](MemFs& fs) { fs.remove(fan_path(1, 1)); });
   }
 };
 

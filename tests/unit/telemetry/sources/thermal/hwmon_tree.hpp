@@ -20,9 +20,7 @@
 
 namespace loadforge::telemetry::fixtures {
 
-inline std::string hwmon_dir(int chip) {
-  return "/sys/class/hwmon/hwmon" + std::to_string(chip);
-}
+inline std::string hwmon_dir(int chip) { return "/sys/class/hwmon/hwmon" + std::to_string(chip); }
 
 inline void add_chip(MemFs& fs, int chip, const std::string& name) {
   fs.set(hwmon_dir(chip) + "/name", name + "\n");

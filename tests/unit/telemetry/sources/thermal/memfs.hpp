@@ -137,7 +137,8 @@ class MemFs final : public platform::Syscalls {
     if (entry.read_error != 0) {
       return platform::SyscallError{entry.read_error, "read", open->second.path};
     }
-    const std::size_t left = entry.content.size() - std::min(open->second.offset, entry.content.size());
+    const std::size_t left =
+        entry.content.size() - std::min(open->second.offset, entry.content.size());
     const std::size_t count = std::min(left, size);
     entry.content.copy(buffer, count, open->second.offset);
     open->second.offset += count;
@@ -153,17 +154,19 @@ class MemFs final : public platform::Syscalls {
 
   // --- everything else: not a file operation, so not available here ---------------
 
-  core::Result<std::size_t, platform::SyscallError> read_link(const std::string& path, char*,
-                                                              std::size_t) override {
+  core::Result<std::size_t, platform::SyscallError> read_link(const std::string& path,
+                                                              char* /*buffer*/,
+                                                              std::size_t /*size*/) override {
     return unsupported("readlink", path);
   }
   core::Result<pid_t, platform::SyscallError> fork_process() override {
     return unsupported("fork", {});
   }
-  platform::SyscallError exec(const std::string& path, const std::vector<std::string>&) override {
+  platform::SyscallError exec(const std::string& path,
+                              const std::vector<std::string>& /*argv*/) override {
     return unsupported("exec", path);
   }
-  core::Result<core::Ok, platform::SyscallError> set_parent_death_signal(int) override {
+  core::Result<core::Ok, platform::SyscallError> set_parent_death_signal(int /*signal*/) override {
     return unsupported("prctl", {});
   }
   pid_t parent_pid() override { return 0; }
@@ -171,57 +174,64 @@ class MemFs final : public platform::Syscalls {
   core::Result<platform::Reaped, platform::SyscallError> wait_any() override {
     return unsupported("wait", {});
   }
-  core::Result<core::Ok, platform::SyscallError> send_signal(pid_t, int) override {
+  core::Result<core::Ok, platform::SyscallError> send_signal(pid_t /*pid*/,
+                                                             int /*signal*/) override {
     return unsupported("kill", {});
   }
-  core::Result<platform::TimeSpec, platform::SyscallError> read_clock(int) override {
+  core::Result<platform::TimeSpec, platform::SyscallError> read_clock(int /*clock_id*/) override {
     return unsupported("clock_gettime", {});
   }
-  core::Result<platform::CpuMask, platform::SyscallError> get_affinity(pid_t) override {
+  core::Result<platform::CpuMask, platform::SyscallError> get_affinity(pid_t /*pid*/) override {
     return unsupported("sched_getaffinity", {});
   }
-  core::Result<core::Ok, platform::SyscallError> set_affinity(pid_t,
-                                                              const platform::CpuMask&) override {
+  core::Result<core::Ok, platform::SyscallError> set_affinity(
+      pid_t /*pid*/, const platform::CpuMask& /*mask*/) override {
     return unsupported("sched_setaffinity", {});
   }
-  core::Result<void*, platform::SyscallError> map_anonymous(std::size_t, int) override {
+  core::Result<void*, platform::SyscallError> map_anonymous(std::size_t /*length*/,
+                                                            int /*extra_flags*/) override {
     return unsupported("mmap", {});
   }
-  core::Result<core::Ok, platform::SyscallError> unmap(void*, std::size_t) override {
+  core::Result<core::Ok, platform::SyscallError> unmap(void* /*address*/,
+                                                       std::size_t /*length*/) override {
     return unsupported("munmap", {});
   }
-  core::Result<core::Ok, platform::SyscallError> lock_memory(void*, std::size_t) override {
+  core::Result<core::Ok, platform::SyscallError> lock_memory(void* /*address*/,
+                                                             std::size_t /*length*/) override {
     return unsupported("mlock", {});
   }
-  core::Result<core::Ok, platform::SyscallError> advise_memory(void*, std::size_t, int) override {
+  core::Result<core::Ok, platform::SyscallError> advise_memory(void* /*address*/,
+                                                               std::size_t /*length*/,
+                                                               int /*advice*/) override {
     return unsupported("madvise", {});
   }
-  core::Result<core::Ok, platform::SyscallError> bind_memory(void*, std::size_t,
-                                                             const platform::NodeMask&) override {
+  core::Result<core::Ok, platform::SyscallError> bind_memory(
+      void* /*address*/, std::size_t /*length*/, const platform::NodeMask& /*nodes*/) override {
     return unsupported("mbind", {});
   }
   core::Result<int, platform::SyscallError> create_memory_file(const std::string& name,
-                                                               std::size_t) override {
+                                                               std::size_t /*length*/) override {
     return unsupported("memfd_create", name);
   }
-  core::Result<void*, platform::SyscallError> map_shared(int, std::size_t) override {
+  core::Result<void*, platform::SyscallError> map_shared(int /*fd*/,
+                                                         std::size_t /*length*/) override {
     return unsupported("mmap", {});
   }
-  core::Result<core::Ok, platform::SyscallError> inherit_across_exec(int) override {
+  core::Result<core::Ok, platform::SyscallError> inherit_across_exec(int /*fd*/) override {
     return unsupported("fcntl", {});
   }
   core::Result<platform::PipeEnds, platform::SyscallError> create_pipe() override {
     return unsupported("pipe2", {});
   }
-  core::Result<std::size_t, platform::SyscallError> write(int,
-                                                          std::span<const std::byte>) override {
+  core::Result<std::size_t, platform::SyscallError> write(
+      int /*fd*/, std::span<const std::byte> /*bytes*/) override {
     return unsupported("write", {});
   }
   core::Result<std::vector<platform::Readiness>, platform::SyscallError> poll_readable(
-      const std::vector<int>&, int) override {
+      const std::vector<int>& /*fds*/, int /*timeout_ms*/) override {
     return unsupported("poll", {});
   }
-  core::Result<core::Ok, platform::SyscallError> ignore_signal(int) override {
+  core::Result<core::Ok, platform::SyscallError> ignore_signal(int /*signal*/) override {
     return unsupported("sigaction", {});
   }
   pid_t process_id() override { return 1; }

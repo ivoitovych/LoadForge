@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "core/result.hpp"
@@ -11,20 +12,34 @@
 
 namespace loadforge::telemetry {
 
-Remedies make_remedies(std::string absent, std::string vanished, std::string denied,
-                       std::string malformed, std::string unreadable) {
-  Remedies remedies;
-  remedies.by_availability[static_cast<std::size_t>(topology::Availability::kAbsent)] =
-      std::move(absent);
-  remedies.by_availability[static_cast<std::size_t>(topology::Availability::kVanished)] =
-      std::move(vanished);
-  remedies.by_availability[static_cast<std::size_t>(topology::Availability::kDenied)] =
-      std::move(denied);
-  remedies.by_availability[static_cast<std::size_t>(topology::Availability::kMalformed)] =
-      std::move(malformed);
-  remedies.by_availability[static_cast<std::size_t>(topology::Availability::kUnreadable)] =
-      std::move(unreadable);
-  return remedies;
+const std::string& Remedies::for_availability(topology::Availability kind) const noexcept {
+  switch (kind) {
+    case topology::Availability::kAbsent:
+      return absent_;
+    case topology::Availability::kVanished:
+      return vanished_;
+    case topology::Availability::kDenied:
+      return denied_;
+    case topology::Availability::kMalformed:
+      return malformed_;
+    case topology::Availability::kUnreadable:
+      return unreadable_;
+    case topology::Availability::kPresent:
+      break;
+  }
+  return none_;
+}
+
+Metric make_metric(std::string_view name, Unit unit, Kind kind, Scope scope, std::uint32_t index,
+                   std::string_view provider) {
+  Metric metric;
+  metric.name = name;
+  metric.unit = unit;
+  metric.kind = kind;
+  metric.scope = scope;
+  metric.scope_index = index;
+  metric.provider = provider;
+  return metric;
 }
 
 Unavailable make_unavailable(const topology::Unavailable& failure, const Remedies& remedies) {
@@ -49,18 +64,19 @@ core::Result<double, topology::Unavailable> Channel::value() {
     std::string detail = "value " + std::to_string(number) + " is outside the " +
                          std::to_string(spec_.minimum) + " to " + std::to_string(spec_.maximum) +
                          " a sensor of this kind reports";
-    return topology::Unavailable{topology::Availability::kMalformed, spec_.path,
-                                 std::move(detail)};
+    return topology::Unavailable{topology::Availability::kMalformed, spec_.path, std::move(detail)};
   }
   return static_cast<double>(number) * spec_.multiplier / spec_.divisor;
 }
 
 MetricStatus Channel::probe() {
+  MetricStatus status;
+  status.metric = spec_.metric;
   auto found = value();
-  if (found.has_value()) {
-    return MetricStatus{spec_.metric, std::nullopt};
+  if (!found.has_value()) {
+    status.unavailable = make_unavailable(found.error(), spec_.remedies);
   }
-  return MetricStatus{spec_.metric, make_unavailable(found.error(), spec_.remedies)};
+  return status;
 }
 
 Reading Channel::read() {

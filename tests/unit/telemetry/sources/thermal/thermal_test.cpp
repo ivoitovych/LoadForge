@@ -80,7 +80,7 @@ class ThermalTest : public ::testing::Test {
   ThermalSource source{files};
 };
 
-// --- the machine this was written on: nothing to read ------------------------------------
+// --- the machine this was written on: nothing to read
 
 TEST_F(ThermalTest, TheCapturedMachineHasNoSensorAndSaysSoWithARemedy) {
   fs.load(fixtures::fixture("sysfs/thermal/absent"));
@@ -110,7 +110,7 @@ TEST_F(ThermalTest, ARootPrefixesEveryPath) {
   EXPECT_EQ(empty.probe()[0].unavailable->path, "/mnt/nothing/sys/class/hwmon");
 }
 
-// --- present: what each driver says an input is ----------------------------------------------
+// --- present: what each driver says an input is
 
 TEST_F(ThermalTest, CoretempNamesThePackageAndEveryCore) {
   add_chip(fs, 0, "coretemp");
@@ -136,7 +136,15 @@ TEST_F(ThermalTest, CoretempNamesThePackageAndEveryCore) {
   ASSERT_EQ(readings.size(), 3U);
   EXPECT_DOUBLE_EQ(gauge_of(readings[0]), 52.0);
   EXPECT_DOUBLE_EQ(gauge_of(readings[1]), 48.5);
-  EXPECT_DOUBLE_EQ(gauge_of(readings[2]), 43.7) << "divided, so the nearest double to 43.7";
+  EXPECT_DOUBLE_EQ(gauge_of(readings[2]), 43.7);
+}
+
+TEST_F(ThermalTest, AMillidegreeCountIsDividedSoItIsTheNearestDoubleToTheTemperature) {
+  add_chip(fs, 0, "nct6775");
+  add_temp(fs, 0, 1, "20016");
+  static_cast<void>(source.probe());
+  // 20016 * 0.001 is 20.016000000000002; 20016 / 1000.0 is the double 20.016.
+  EXPECT_EQ(gauge_of(sample(source)[0]), 20.016);
 }
 
 TEST_F(ThermalTest, K10tempTdieIsThePackageAndOtherInputsAreNotGuessedAt) {
@@ -205,7 +213,8 @@ TEST_F(ThermalTest, EveryLabelThatIsNotExactlyTheDriversIsASensor) {
     ASSERT_EQ(statuses.size(), 1U) << c.chip << " / " << c.label;
     EXPECT_EQ(statuses[0].metric.name, c.name) << c.chip << " / " << c.label;
     EXPECT_EQ(statuses[0].metric.scope, c.scope) << c.chip << " / " << c.label;
-    EXPECT_EQ(statuses[0].metric.scope_index, c.name == "thermal.sensor" ? ((0U << 8U) | 1U) : c.index)
+    EXPECT_EQ(statuses[0].metric.scope_index,
+              c.name == "thermal.sensor" ? ((0U << 8U) | 1U) : c.index)
         << c.chip << " / " << c.label;
   }
 }
@@ -263,7 +272,7 @@ TEST_F(ThermalTest, ANegativeTemperatureIsAReadingBelowAbsoluteZeroIsNot) {
   EXPECT_EQ(statuses[4].unavailable->kind, Availability::kMalformed);
 }
 
-// --- discovery: what is looked at, and what is not a finding -------------------------------------
+// --- discovery: what is looked at, and what is not a finding
 
 TEST_F(ThermalTest, InputsAreFoundWhereverTheyAreNumberedUpTo255) {
   add_chip(fs, 0, "nct6775");
@@ -308,7 +317,8 @@ TEST_F(ThermalTest, AChipWhoseNameCannotBeReadIsKeptUnnamedAndItsSensorsAreUnide
     }
     const std::vector<MetricStatus> statuses = probing.probe();
     ASSERT_EQ(statuses.size(), 1U) << "errno " << error;
-    EXPECT_EQ(statuses[0].metric.name, "thermal.sensor") << "nothing is identified by a chip with no name";
+    EXPECT_EQ(statuses[0].metric.name, "thermal.sensor")
+        << "nothing is identified by a chip with no name";
     EXPECT_EQ(statuses[0].metric.provider, "hwmon:hwmon2");
     EXPECT_FALSE(statuses[0].unavailable.has_value()) << "but its temperature is still read";
   }
@@ -337,7 +347,8 @@ TEST_F(ThermalTest, ZonesAreFoundFromZero) {
   add_zone(fs, 63, "acpitz", "27900");
   add_zone(fs, 64, "acpitz", "28000");
   const std::vector<MetricStatus> statuses = source.probe();
-  EXPECT_EQ(statuses.size(), 2U) << "a gap in the numbering is not a finding; zone 64 is past the bound";
+  EXPECT_EQ(statuses.size(), 2U)
+      << "a gap in the numbering is not a finding; zone 64 is past the bound";
 }
 
 TEST_F(ThermalTest, ProbingAgainStartsFromTheMachineAsItIsNow) {
@@ -364,7 +375,7 @@ TEST_F(ThermalTest, NothingIsSampledBeforeTheProbeAndSamplingAppends) {
   EXPECT_EQ(source.name(), "thermal");
 }
 
-// --- the states of one sensor, at the probe -------------------------------------------------------
+// --- the states of one sensor, at the probe
 
 TEST_F(ThermalTest, ASensorThatCannotBeReadIsReportedWithItsStateAndARemedyForThatState) {
   add_chip(fs, 0, "coretemp");
@@ -393,8 +404,8 @@ TEST_F(ThermalTest, ASensorThatCannotBeReadIsReportedWithItsStateAndARemedyForTh
 }
 
 TEST_F(ThermalTest, EveryMalformedValueIsRefusedWithTheReason) {
-  const std::string values[] = {"",        "abc",         "12.5",       "50000 ",  " 50000", "+50000",
-                                "0x1388", "4294967295",  "-5-",     "99999999999999999999",
+  const std::string values[] = {"",       "abc",    "12.5",       "50000 ", " 50000",
+                                "+50000", "0x1388", "4294967295", "-5-",    "99999999999999999999",
                                 "1e3"};
   add_chip(fs, 0, "nct6775");
   int input = 1;
@@ -446,7 +457,7 @@ TEST_F(ThermalTest, ASignalStormOnTheReadIsUnreadableNeverAbsent) {
   EXPECT_TRUE(fs.all_closed()) << "no descriptor is left behind by a failed read";
 }
 
-// --- the states of one sensor, in the run ----------------------------------------------------------
+// --- the states of one sensor, in the run
 
 TEST_F(ThermalTest, ASensorThatDisappearsMidRunIsVanishedAndReadAgainWhenItReturns) {
   add_chip(fs, 0, "coretemp");
@@ -491,7 +502,8 @@ TEST_F(ThermalTest, ASensorThatTurnsBadMidRunIsReportedAsWhatItNowIsNeverAbsent)
   fs.make_directory(fixtures::temp_path(0, 4));
   const std::vector<Reading> readings = sample(source);
   ASSERT_EQ(readings.size(), 4U);
-  EXPECT_EQ(unavailable_of(readings[0]).kind, Availability::kDenied) << "a permission does not vanish";
+  EXPECT_EQ(unavailable_of(readings[0]).kind, Availability::kDenied)
+      << "a permission does not vanish";
   EXPECT_EQ(unavailable_of(readings[1]).kind, Availability::kMalformed);
   EXPECT_EQ(unavailable_of(readings[2]).kind, Availability::kUnreadable);
   EXPECT_EQ(unavailable_of(readings[3]).kind, Availability::kUnreadable);
@@ -500,26 +512,29 @@ TEST_F(ThermalTest, ASensorThatTurnsBadMidRunIsReportedAsWhatItNowIsNeverAbsent)
   }
 }
 
-// --- Channel and the remedies -----------------------------------------------------------------------
+// --- Channel and the remedies
 
 TEST(ThermalRemedyTest, EachStateHasItsOwnWordsAndPresentHasNone) {
-  const Remedies remedies = make_remedies("a", "v", "d", "m", "u");
+  const Remedies remedies("a", "v", "d", "m", "u");
   EXPECT_EQ(remedies.for_availability(Availability::kAbsent), "a");
   EXPECT_EQ(remedies.for_availability(Availability::kVanished), "v");
   EXPECT_EQ(remedies.for_availability(Availability::kDenied), "d");
   EXPECT_EQ(remedies.for_availability(Availability::kMalformed), "m");
   EXPECT_EQ(remedies.for_availability(Availability::kUnreadable), "u");
   EXPECT_TRUE(remedies.for_availability(Availability::kPresent).empty());
+  EXPECT_TRUE(remedies.for_availability(static_cast<Availability>(99)).empty())
+      << "a value outside the enumeration has no remedy either";
+  EXPECT_TRUE(Remedies().for_availability(Availability::kDenied).empty());
 }
 
 TEST(ThermalRemedyTest, AnUnavailableCarriesTheFailureAndTheRemedyForItsKind) {
-  const Remedies remedies = make_remedies("a", "v", "d", "m", "u");
+  const Remedies remedies("a", "v", "d", "m", "u");
   const Unavailable made = make_unavailable(
       topology::Unavailable{Availability::kDenied, "/sys/x", "Permission denied"}, remedies);
   EXPECT_EQ(made, (Unavailable{Availability::kDenied, "/sys/x", "Permission denied", "d"}));
 }
 
-// --- the source contract, once per state (ADR 0003) -------------------------------------------------
+// --- the source contract, once per state (ADR 0003)
 
 fixtures::Edit with_coretemp() {
   return [](MemFs& fs) {
@@ -604,10 +619,10 @@ GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TimelineContract);
 
 namespace {
 
-using ThermalStates = ::testing::Types<telemetry::PresentState, telemetry::AbsentState,
-                                       telemetry::DeniedState, telemetry::MalformedState,
-                                       telemetry::VanishedState, telemetry::UnreadableState,
-                                       telemetry::RealMachine>;
+using ThermalStates =
+    ::testing::Types<telemetry::PresentState, telemetry::AbsentState, telemetry::DeniedState,
+                     telemetry::MalformedState, telemetry::VanishedState,
+                     telemetry::UnreadableState, telemetry::RealMachine>;
 
 INSTANTIATE_TYPED_TEST_SUITE_P(ThermalSource, SourceContract, ThermalStates);
 
