@@ -236,7 +236,7 @@ class Claiming final : public worker::Executor {
 /// Whether this CPU and kernel run AVX2 with FMA3 (always false off x86-64).
 inline bool avx2_runs_here() {
 #if defined(__x86_64__)
-  return __builtin_cpu_supports("avx2") != 0 && __builtin_cpu_supports("fma") != 0;
+  return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
 #else
   return false;
 #endif

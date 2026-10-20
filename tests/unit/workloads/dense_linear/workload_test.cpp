@@ -237,8 +237,16 @@ struct Call {
   bool tile_was_zero;  ///< the tile's rows of C were all +0.0 when the call began
 };
 
-std::mutex calls_lock;
-std::vector<Call> calls;  // guarded by calls_lock
+/// The calls the recording kernel has seen, with the lock that guards them.
+struct CallLog {
+  std::mutex lock;
+  std::vector<Call> calls;  // guarded by lock
+};
+
+CallLog& call_log() {
+  static CallLog log;
+  return log;
+}
 
 /// Records its arguments, checks the zeroing that precedes the first panel,
 /// and marks each entry of its tile by adding 1, so that the test can see
@@ -254,14 +262,16 @@ void recording_kernel(const Panel& panel) noexcept {
       std::memcpy(&panel.c[(i * kN + j) * sizeof(double)], &value, sizeof value);
     }
   }
-  const std::scoped_lock lock(calls_lock);
-  calls.push_back(Call{panel.row, panel.k0, panel.depth, zero});
+  CallLog& log = call_log();
+  const std::scoped_lock lock(log.lock);
+  log.calls.push_back(Call{panel.row, panel.k0, panel.depth, zero});
 }
 
 std::vector<Call> take_calls() {
-  const std::scoped_lock lock(calls_lock);
+  CallLog& log = call_log();
+  const std::scoped_lock lock(log.lock);
   std::vector<Call> taken;
-  taken.swap(calls);
+  taken.swap(log.calls);
   return taken;
 }
 

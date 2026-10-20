@@ -17,7 +17,7 @@ struct Avx2Kernel {
   /// (GCC and Clang check XGETBV for AVX). A machine without them fails the
   /// suite rather than skipping it.
   static bool runs_here() {
-    return __builtin_cpu_supports("avx2") != 0 && __builtin_cpu_supports("fma") != 0;
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
   }
   static void kernel(const Panel& panel) { simd::x86::gemm_panel_avx2(panel); }
 };
