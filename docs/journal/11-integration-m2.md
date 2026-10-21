@@ -407,3 +407,85 @@ would never exercise it there.
 workload at 8 MiB as it does locally. The refusal an unprivileged user meets stays
 disagreement 2; its fix is a lock policy in `RunnerSetup`, in the next contract
 change. Sort's working set of about 3.2 units is a question for that change too.
+
+## Merging the M3 integration (2026-10-21 10:50 UTC)
+
+Main took #87 (the M3 integration) while this branch was open. Both extended the controller
+and the command line, in different directions. Every conflicting file is resolved by keeping
+both, and the places where the two disagreed are decided here.
+
+**What each side added, and where it landed.**
+
+* `controller/orchestration`: M2's verification options (`verification`, `fp`, `sources`) and
+  M3's (`sampler`, `timeline`, `sample_interval_ns`) are all in `RunOptions`; the private
+  state of the run holds both (`environment_`, `sampling_`). Nothing in the loop was in both.
+* `main/cli`: one `StressOptions` holds what M3 wrote (formats, directory, interval, roots,
+  host, sink, `sample`, source factory, summarizer) and what M2 wrote (`capabilities`, `isa`,
+  `seed`, `footprint_bytes`, `isolation_limit`). `stress` and `stress_test` both take it;
+  `stress_test` takes `--output`, `--output-dir` and `--sample-interval` as `stress --config`
+  does, so `stress --test sort --output json` samples, verifies and writes. A flag given on the
+  command line overrides the options passed in.
+* The order in `run_stress`: the output directory is checked first (M3: refused before the
+  run); then the verification setup, which raises the hang allowance for a verifying run; then
+  the telemetry rig, whose timeline is sized from that allowance (so M2's longer allowance
+  is in the capacity); then the run; then the re-runs of wrong results (M2, after the workers
+  are gone); then the result, the console summary, and the files (M3).
+* `assemble_result` starts from M2's `to_run_result` (tallies, findings with what isolation
+  made of them, a worker's CPU) and adds M3's fingerprint, capabilities, signature and
+  observers. The null workload's idle `WorkloadResult`s are added only when no worker ran a
+  verified workload. A configuration that mixes registered and unregistered names reports
+  only the registered ones, as M2 did on its own; M3's idle entries for the rest are
+  dropped in that mixed case. Nothing configures such a run yet.
+
+**Probed once (disagreement 7 of M3, which this merge would have made real).** M2's controller
+probes `RunOptions::sources` for its banner; M3's rig probes the same kind of sources for its
+sampler, and `telemetry/source.hpp` says a source's `probe()` is called once. The command line
+therefore gives the controller `sources` only for a run that samples nothing (`sample` false,
+the tests over a fake); a run that samples states the rig's capability report, printed before
+the banner (M3's test: "the capabilities come first"), and the controller probes nothing. Two
+tests of M2 that asserted the report inside the banner (`capabilities:` then the report) now
+assert it before the run and once. The disagreement test itself is a component-level one
+(a sampler that re-probes) and still fails for its stated reason.
+
+**The exit codes.** The two sides gave 4 and 5 different meanings:
+
+| code | M2 | M3 | now |
+|---|---|---|---|
+| 3 | a worker did not complete | the same | the same |
+| 4 | a wrong result | a result file could not be written | a result file could not be written |
+| 5 | a check was not made | a fault verdict (findings or hardware errors) | a fault: a wrong result, or an error the hardware reported |
+| 6 | | | a check was not made |
+
+Reasoning. A wrong result is what M3 calls a fault: its verdict is `kFindings`, and
+`results::derive_verdict` is the one function that says so for both sides. Two names for one
+event are one code. Main is the older contract and already had 4 and 5 in its usage text and
+its tests; this branch's numbers are unreleased, so M2's "a check was not made" moves to a new
+code, 6, and M2's "wrong result" joins M3's fault at 5. The alternative (keeping M2's numbers
+and moving M3's) would have changed the meaning of two codes a caller of main may already
+test. The usage text, the ledger note and `main/outcome.hpp` carry the table.
+
+*Precedence, when several apply: 5, then 4, then 3, then 6, then 0.* A fault is the finding
+and outranks everything (M2: "outranks 3 and 5"; M3: "whatever the workers did"). A result
+that could not be written (4) outranks a worker that did not complete (3), as M3 had it; but
+M3 returned 4 whatever the verdict, which would have hidden a fault behind the failure to
+write about it, so a fault now survives it (`with_output_failure`). A worker that did not
+complete (3) outranks a check not made (6) (M2: "unfinished outranks unchecked"). A run with
+nothing to verify (the null workload) has an incomplete verdict and no check to have missed;
+it is 0 or 3 by its workers (M3's `exit_code_for(Verdict, bool)` keeps that meaning, its
+third argument defaulting to "nothing verified").
+
+**The mutation plan.** M2 gave a shard every test executable that holds tests of its modules
+and merged the runs by mutant; M3 gave each module that owns a test program its own unit, so
+that a mutant is swept by the program that runs it. Both were true, and are one scheme now: a
+unit is a set of scopes and what it leaves out (M3's derivation, unchanged), and its test
+programs are every executable that holds tests of those scopes less the excludes
+(`mutation-shard.py unit-targets`, the M2 rule generalised from a shard's name to a path, so a
+fragment below a module is named by its own path and the module around it leaves its tests to
+it). The plan step computes the list for each unit; the job builds them all, checks the
+filter against each, and the gate merges the runs by mutant. `targets SHARD` stays. A unit no
+executable tests fails the plan, as it would fail its sweep. Tests: `tests/tools/test_tooling.sh`
+(five cases for `unit-targets`).
+
+**Smaller things.** The milestone suffix stays `m2` (M3 did not move it). Every `Reporter` in
+M3's tests gained `isolation_finished`. The version is unchanged.
+
