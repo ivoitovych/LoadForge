@@ -135,8 +135,6 @@ INSTANTIATE_TYPED_TEST_SUITE_P(InputIntegrity, ExecutorContract, Executors);
 
 // The registries are the integration stream's to provide and consume; this
 // module includes their headers for the suites above and uses neither.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 
 }  // namespace
 }  // namespace loadforge::contracts

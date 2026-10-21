@@ -25,12 +25,12 @@ The classes and tiers are a starting point taken from `docs/IMPLEMENTATION.md` �
 
 **You provide** — run each suite against your implementation, from your own tests:
 
-- `TimelineContract` — `tests/contracts/telemetry/telemetry_contract.hpp`
+- `TimelineContract` — `tests/contracts/telemetry/timeline_contract.hpp`
 - `SamplerContract` — `tests/contracts/telemetry/sampler_contract.hpp`
 
 **You consume** — write your own mock of each, as you read its contract, and run the suite against your mock (ADR 0003):
 
-- `SourceContract` — `tests/contracts/telemetry/telemetry_contract.hpp`
+- `SourceContract` — `tests/contracts/telemetry/source_contract.hpp`
 
 **Headers you build against** (frozen):
 

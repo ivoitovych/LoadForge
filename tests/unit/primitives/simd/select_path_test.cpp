@@ -8,7 +8,7 @@
 #include <optional>
 #include <string>
 
-#include "contracts/simd/dispatch_contract.hpp"
+#include "contracts/simd/select_path_contract.hpp"
 #include "primitives/simd/dispatch.hpp"
 
 namespace loadforge::simd {
@@ -91,7 +91,6 @@ struct RealSelect {
 INSTANTIATE_TYPED_TEST_SUITE_P(Real, SelectPathContract, ::testing::Types<RealSelect>);
 
 // The header also declares the probe's suite, which belongs to src/platform/isa.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(IsaProbeContract);
 
 }  // namespace
 }  // namespace loadforge::contracts

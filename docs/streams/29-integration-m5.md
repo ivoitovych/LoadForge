@@ -30,7 +30,7 @@ The classes and tiers are a starting point taken from `docs/IMPLEMENTATION.md` �
 **You consume** — write your own mock of each, as you read its contract, and run the suite against your mock (ADR 0003):
 
 - `JournalContract` — `tests/contracts/journal/journal_contract.hpp`
-- `RegistryContract` — `tests/contracts/workloads/workload_contract.hpp`
+- `RegistryContract` — `tests/contracts/workloads/registry_contract.hpp`
 
 **Headers you build against** (frozen):
 

@@ -26,9 +26,5 @@ struct GoldenMock {
 
 INSTANTIATE_TYPED_TEST_SUITE_P(GoldenMock, WorkloadContract, ::testing::Types<GoldenMock>);
 
-// The registry suite is the integration stream's to run; this module uses no
-// registry.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-
 }  // namespace
 }  // namespace loadforge::contracts

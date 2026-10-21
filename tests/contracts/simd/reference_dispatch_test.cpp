@@ -8,7 +8,8 @@
 #include <optional>
 #include <string>
 
-#include "contracts/simd/dispatch_contract.hpp"
+#include "contracts/simd/isa_probe_contract.hpp"
+#include "contracts/simd/select_path_contract.hpp"
 #include "primitives/simd/dispatch.hpp"
 
 namespace loadforge::contracts {

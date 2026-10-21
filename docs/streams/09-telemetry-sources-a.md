@@ -28,7 +28,7 @@ The classes and tiers are a starting point taken from `docs/IMPLEMENTATION.md` �
 
 **You provide** — run each suite against your implementation, from your own tests:
 
-- `SourceContract` — `tests/contracts/telemetry/telemetry_contract.hpp`
+- `SourceContract` — `tests/contracts/telemetry/source_contract.hpp`
 
 **Headers you build against** (frozen):
 
