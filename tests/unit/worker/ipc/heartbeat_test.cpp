@@ -173,8 +173,11 @@ TEST_F(HeartbeatRegionTest, TooManyWorkersIsRefusedBeforeAnyCall) {
   auto attached = HeartbeatRegion::attach(syscalls, 100, kMaxWorkers + 1);
   ASSERT_FALSE(attached.has_value());
   EXPECT_EQ(attached.error().fault, RegionFault::kTooManyWorkers);
-  EXPECT_TRUE(HeartbeatRegion::create(syscalls, kMaxWorkers).has_value())
-      << "the limit itself is allowed";
+  auto at_limit = HeartbeatRegion::create(syscalls, kMaxWorkers);
+  ASSERT_TRUE(at_limit.has_value()) << "the limit itself is allowed";
+  auto attached_at_limit = HeartbeatRegion::attach(syscalls, at_limit.value().fd(), kMaxWorkers);
+  ASSERT_TRUE(attached_at_limit.has_value()) << describe(attached_at_limit.error());
+  EXPECT_EQ(attached_at_limit.value().slots(), kMaxWorkers + 1) << "by the worker's side too";
 }
 
 TEST_F(HeartbeatRegionTest, AFailedMemoryFileIsReportedWithTheKernelsWords) {
@@ -465,7 +468,7 @@ TEST_F(HeartbeatRegionTest, AConcurrentReaderNeverObservesATornBeat) {
 
 // --- across a real process boundary --------------------------------------------
 
-TEST(RealHeartbeatRegion, AForkedChildPublishesThroughItsOwnMappingAndTheParentSeesIt) {
+TEST(RealProcessHeartbeatRegion, AForkedChildPublishesThroughItsOwnMappingAndTheParentSeesIt) {
   // The real kernel, a real memfd, two processes, two mappings of one file.
   // The child maps the inherited descriptor afresh (as a worker does after
   // exec) rather than reusing the parent's mapping, so this proves the FILE

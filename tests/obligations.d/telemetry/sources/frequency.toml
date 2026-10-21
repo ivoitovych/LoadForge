@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry/sources/frequency and nothing else.
+
+[[module]]
+path             = "src/telemetry/sources/frequency"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2"]
+fixtures         = ["sysfs/frequency/absent", "procfs/stat/present"]
+fixture_builders = ["tests/unit/telemetry/sources/frequency/frequency_test.cpp"]
+provides         = ["SourceContract"]
+note             = """
+cpufreq's current frequency per online CPU (a gauge in hertz) and the two \
+utilisation counters of /proc/stat's aggregate line (busy and total ticks), \
+plus utilisation(), which turns two readings of them into a share. \
+\
+P1: guest ticks are inside user and nice and are not added twice; the fields \
+past the eighth are ignored; a CPU list that names no CPU is refused. \
+\
+P2: every errno a read can fail with reaches the source through the \
+substituted seam, for the online list, each CPU's cpufreq file and /proc/stat, \
+at the probe and in the run. \
+\
+P3: a frequency of 0 and of 100 GHz and one past it, a negative one; a tick \
+count at 2^64 - 1 and one past it; an advance of 2^63 - 1 ticks and of 2^63 \
+(where a wrap becomes a step back); a total that did not move; more busy than \
+the total. \
+\
+P7: present, absent (the captured machine, with four CPUs and no cpufreq), \
+denied, malformed, unreadable, vanished mid-run, and wrapped: /proc/stat's \
+counters wrap, and a test makes them wrap between two rounds (M3 exit \
+criterion 4) and shows counter_delta and utilisation() advance across it. \
+Each state runs SourceContract. The present cpufreq trees are BUILT in the \
+kernel's layout; the machine had none."""

@@ -30,8 +30,11 @@ std::string describe(const SyscallError& error) {
   // it is what makes a bug report from an unfamiliar machine actionable.
   const std::string number = std::to_string(error.number);
 
+  // No reserve() ahead of the appends. This runs once, on a path where a call
+  // has already failed, so the reallocations it saved were worth nothing; and
+  // its size sum was arithmetic whose mistakes no test could see, since any
+  // capacity yields the same message (or, summed wrongly, a length_error).
   std::string message;
-  message.reserve(error.call.size() + error.subject.size() + buffer.size() + number.size());
   message.append(error.call);
   if (!error.subject.empty()) {
     message.append("(").append(error.subject).append(")");

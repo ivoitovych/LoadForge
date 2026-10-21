@@ -1,6 +1,6 @@
 # Stream 12 — Results, the fingerprint, and the JSON and CSV reporters
 
-**State:** not started  
+**State:** built; pull request not yet opened  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier A — a bounded component built against a written contract  

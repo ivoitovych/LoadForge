@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/invariant and nothing else.
+
+[[module]]
+path    = "src/verification/invariant"
+classes = ["P1", "P3", "P4"]
+tiers   = ["T1", "T4", "T5", "T5b"]
+note    = """
+Invariant and conservation checks for later oracles. Bounded ones -- a \
+claimed sum, a claimed squared 2-norm, a total conserved between two \
+collections -- each judged by residual's derived tolerance under the model \
+the header derives for it; exact ones -- the first descent of an order, a \
+multiset fingerprint for permutation (the count and two 64-bit sums of \
+Philox4x32-10 under a fixed key, so nothing is sorted). \
+\
+P1: each check's held and breached outcomes, a tolerance derived or not, \
+the descent loop at zero, one and many elements, each member of the \
+fingerprint's comparison. P3: empty and single-value sums (the floor alone; \
+the claim must equal the value), NaN, infinite and past-2^1000 values \
+refused, a NaN claim measured and failed, squares that underflow to zero \
+covered, equal neighbours in order, a descent at the first and the last \
+element, a zero key, keys with many duplicates. \
+\
+P4: within, breached, or not derivable. T5b is added to the tiers the \
+brief's table gave, because the not-derivable arm is a verification \
+outcome like the others and owes its unrun-check test. T4: sums of up to 2,048 values in eight orders within the bound, \
+and each order's error within gamma_(n-1) S against 128-bit exact \
+arithmetic; squared norms in eight orders and fused; totals conserved \
+under permutation and exact halving; permutations always fingerprint equal \
+and sorted sequences never descend. T5: every bit of claimed sums and norms \
+flipped, sign and exponent always caught and the comparison sharp around \
+the bound; one value of a conserved collection corrupted bit by bit, caught \
+or (past 2^1000) refused, never passed; every one of 16,384 single-bit \
+flips of 256 keys breaks the fingerprint in both sums, as do a dropped, a \
+duplicated, a substituted and an extra key; a swap, a raised and a lowered \
+key are found where the order breaks. T5b: a NaN or an infinity among the \
+values of each bounded check gives the Underivable arm, and the record is \
+VerificationNotPerformed. Tests: tests/unit, tests/property and \
+tests/fault_injection under verification/invariant.\
+"""

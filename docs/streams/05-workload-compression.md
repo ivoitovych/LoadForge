@@ -1,6 +1,6 @@
 # Stream 05 — Workload: compression
 
-**State:** not started  
+**State:** complete on `feature/workload-compression`, awaiting review (2026-10-20 11:34 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

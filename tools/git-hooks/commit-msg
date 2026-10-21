@@ -1,0 +1,37 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# LOADFORGE-REPO-HOOK
+#
+# Message gate: the only trailer a message may carry is Signed-off-by, and one
+# Signed-off-by must name the author identity about to be recorded. This is
+# tools/check-commit-identity.sh and tools/check-dco.sh, applied before the
+# commit exists. Trailers are allowlisted, never listed by name.
+set -uo pipefail
+
+msg="${1:?usage: commit-msg <message-file>}"
+top="$(git rev-parse --show-toplevel)" || exit 1
+# The sign-off rule is shared with pre-push and CI (tools/lib/commit-policy.sh).
+# shellcheck source=/dev/null
+. "$top/tools/lib/commit-policy.sh" || { echo "commit-msg: cannot read the shared policy; refusing." >&2; exit 1; }
+bad=0
+trailers="$(git stripspace --strip-comments < "$msg" | git interpret-trailers --parse)"
+
+while IFS= read -r key; do
+  [ -z "$key" ] || [ "$key" = "Signed-off-by" ] || {
+    echo "commit-msg: trailer '$key'; only Signed-off-by is allowed." >&2; bad=1; }
+done < <(sed -n 's/^\([^:]*\):.*/\1/p' <<< "$trailers")
+
+# A "-by:" line above the closing paragraph is not a trailer to git, but it
+# reads as one to a person and to every tool that greps for it. Anywhere in the
+# message, the only line of that shape allowed is Signed-off-by.
+while IFS= read -r key; do
+  echo "commit-msg: a '$key' line; only Signed-off-by is allowed." >&2; bad=1
+done < <(git stripspace --strip-comments < "$msg" | grep -oiE '^[a-z][a-z0-9-]*-by:' | grep -viE '^signed-off-by:$')
+
+ident="$(git var GIT_AUTHOR_IDENT)" || { echo "commit-msg: git has no author identity." >&2; exit 1; }
+author="$(sed -n 's/.*<\(.*\)>.*/\1/p' <<< "$ident")"
+if ! cp_signoff_matches "$author" < "$msg"; then
+  echo "commit-msg: no Signed-off-by for <$author>; commit with 'git commit -s'." >&2
+  bad=1
+fi
+exit "$bad"

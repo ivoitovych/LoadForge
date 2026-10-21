@@ -1,6 +1,6 @@
 # Stream 04 — Bounded verification: derived tolerances, invariants, and the dense-linear oracle
 
-**State:** not started  
+**State:** built and pushed on `feature/bounded-verification` (2026-10-20 11:33 UTC); awaiting its pull request  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

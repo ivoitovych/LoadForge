@@ -3,13 +3,31 @@
 
 [[module]]
 path     = "src/platform/fpenv"
-classes  = ["P1", "P3"]
-tiers    = ["T1"]
+classes  = ["P1", "P2", "P3"]
+tiers    = ["T1", "T2", "T6"]
+provides = ["FpControlContract", "FpCheckContract"]
 note     = """
-The floating-point environment contract (determinism.md §3, F15): today the \
-header alone. P1 is the rounding names and required_state() for each shape \
-of architecture, tested in tests/contracts/fpenv/. The numerics stream takes \
-this row over with the real MXCSR and FPCR access and check(): IMPLEMENTATION \
-M2b owes P2 there -- a dirty register forced through an injected FpControl -- \
-and T6, and the stream adds them with FpControlContract and FpCheckContract \
-run against its implementation."""
+The floating-point environment (determinism.md §3, F15): check(), the two \
+register layouts, the real MXCSR / FPCR access, and establish and assert. \
+\
+P1 is check() (each departure alone and all together, in the fixed order), \
+the layouts' rounding tables (all four values of each two-bit field, both \
+ways) and the flag bits. The layouts are pure functions compiled on both \
+architectures, so each is a unit test wherever the tests run; the register \
+instruction alone is per architecture, and the layout the code assumes is \
+compared with the hardware by reading the register back with the test's own \
+instruction. P2 is the assertion failing (M2b P2 row): a dirty register is \
+FORCED through an injected FpControl -- a register left dirty by a library, a \
+register that refuses the write -- and the error must name every flag (T2); \
+the real functions have no errno, because MXCSR and FPCR accesses cannot \
+fail. P3 is the edges: every other bit of the register carried through a \
+write untouched, an absent flag left alone, a rounding value outside the \
+enumeration landing on a defined field rather than past a table. \
+\
+T6: with the state established a subnormal result and a subnormal input give \
+the IEEE answers (double and float), and the same computation under flush-to-zero \
+or denormals-are-zero gives zero, so the test can fail; a new thread inherits \
+the state of the thread that starts it and its own writes stay its own \
+(confirming against the real kernel what the contract states, F21). \
+FpControlContract runs against the real registers and against this module's \
+own in-memory mock of FpControl; FpCheckContract against check()."""
