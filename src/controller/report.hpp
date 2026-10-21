@@ -79,6 +79,28 @@ struct FindingReport {
 
 [[nodiscard]] bool operator==(const FindingReport& lhs, const FindingReport& rhs);
 
+/// What became of the controller's messages to one worker (worker/control.hpp).
+///
+///   sent            written to the worker's control pipe.
+///   done            acknowledged kDone.
+///   refused         acknowledged kRefused; each is also a line in the worker's
+///                   records, with the worker's reason.
+///   unacknowledged  still unanswered when the worker was gone: a worker that
+///                   died, or was stopped, with a message unread.
+///   dropped         not sent, because the worker had too many unanswered
+///                   already (a worker that does not read its pipe).
+struct CommandReport {
+  std::uint64_t sent = 0;
+  std::uint64_t done = 0;
+  std::uint64_t refused = 0;
+  std::uint64_t unacknowledged = 0;
+  std::uint64_t dropped = 0;
+
+  [[nodiscard]] friend bool operator==(const CommandReport&, const CommandReport&) = default;
+};
+
+[[nodiscard]] std::string describe(const CommandReport& commands);
+
 /// One worker's story, as the controller will tell it.
 struct WorkerReport {
   std::size_t slot = 0;
@@ -110,6 +132,9 @@ struct WorkerReport {
   std::uint64_t wrong_results = 0;
   std::uint64_t not_performed = 0;
   std::uint64_t findings_dropped = 0;
+  /// What became of the messages the controller sent it.
+  // NOLINTNEXTLINE(readability-redundant-member-init)
+  CommandReport commands{};
 
   [[nodiscard]] friend bool operator==(const WorkerReport&, const WorkerReport&) = default;
 };
@@ -167,9 +192,26 @@ struct SamplingReport {
   friend bool operator==(const SamplingReport& lhs, const SamplingReport& rhs) noexcept;
 };
 
+/// What the crash journal did during the run (controller/journal/journal.hpp).
+///
+///   enabled   a writer was offered.
+///   entries   entries appended and synced.
+///   fault     the first thing the journal could not do; journaling stops at a
+///             refused append or sync, and the run does not.
+struct JournalReport {
+  bool enabled = false;
+  std::uint64_t entries = 0;
+  std::optional<std::string> fault;
+
+  friend bool operator==(const JournalReport& lhs, const JournalReport& rhs) noexcept;
+};
+
 struct RunReport {
   std::vector<WorkerReport> workers;
   SamplingReport sampling;
+  /// How many of the schedule's steps were carried out (RunOptions::schedule).
+  std::uint64_t steps_run = 0;
+  JournalReport journal;
   std::int64_t elapsed_ns = 0;
   std::optional<int> worker_exit_code;
 

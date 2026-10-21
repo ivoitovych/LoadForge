@@ -120,6 +120,7 @@ add_library(loadforge_controller STATIC
   src/reporters/console.cpp
 )
 target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config loadforge_resources
+  loadforge_workloads_mixed
   loadforge_verification_record loadforge_verification_isolation loadforge_telemetry_capability
   loadforge_primitives_simd loadforge_platform_fpenv)
 loadforge_set_warnings(loadforge_controller)
