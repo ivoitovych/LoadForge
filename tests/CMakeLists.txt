@@ -10,6 +10,13 @@ add_executable(loadforge_unit_tests
   unit/core/crc32_test.cpp
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
+  unit/main/result_files_test.cpp
+  unit/main/telemetry_rig_test.cpp
+  unit/main/cli_telemetry_test.cpp
+  unit/main/run_result_test.cpp
+  unit/main/contract_mocks_test.cpp
+  unit/controller/contract_mocks_test.cpp
+  unit/controller/orchestration_telemetry_test.cpp
   unit/config/config_test.cpp
   unit/platform/syscall_error_test.cpp
   unit/platform/syscalls_defaults_test.cpp

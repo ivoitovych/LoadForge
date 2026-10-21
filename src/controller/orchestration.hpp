@@ -12,6 +12,8 @@
 #include "core/result.hpp"
 #include "platform/syscalls.hpp"
 #include "resources/oom_kill_record.hpp"
+#include "telemetry/sampler.hpp"
+#include "telemetry/timeline.hpp"
 #include "topology/snapshot.hpp"
 
 namespace loadforge::controller {
@@ -42,6 +44,23 @@ struct RunOptions {
   /// without one. Null when none is offered, which the plan then says. Not
   /// owned; it must outlive the run.
   const topology::Snapshot* topology = nullptr;
+  /// The telemetry sampler (telemetry/sampler.hpp), already probed by the
+  /// caller, which states the capability report before the run and keeps it
+  /// for the result. The controller calls round() on its own tick, so sampling
+  /// adds no thread (the sampler's contract): once before the first fork, so
+  /// that a counter has its baseline before any worker can move it; then every
+  /// `sample_interval_ns`; once at the deadline, on the boundary of the phase
+  /// it ends; and once after the last reap. A round the timeline refuses ends
+  /// sampling and is reported; it never ends the run. Not owned. Null: no
+  /// telemetry.
+  telemetry::Sampler* sampler = nullptr;
+  /// The timeline the sampler writes, for the phase marks (F13: a counter is
+  /// reported per phase). Marks "run" at the first round and "stop" at the
+  /// deadline. Not owned; may be null even with a sampler.
+  telemetry::TimelineSink* timeline = nullptr;
+  /// The interval between rounds. A tick comes at least this often (the poll
+  /// interval above), so a value below `interval_ns` samples at that rate.
+  std::int64_t sample_interval_ns = 100'000'000;
 
   [[nodiscard]] friend bool operator==(const RunOptions&, const RunOptions&) = default;
 };
