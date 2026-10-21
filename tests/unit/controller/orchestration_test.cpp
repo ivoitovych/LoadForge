@@ -39,7 +39,9 @@
 #include "support/fake_syscalls.hpp"
 #include "topology/cpu_topology.hpp"
 #include "topology/snapshot.hpp"
+#include "unit/controller/control_frames.hpp"
 #include "unit/controller/telemetry_mocks.hpp"
+#include "worker/control.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -259,12 +261,15 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
       rig.beat(0, 7, 10 * kMs);
       rig.beat(1, 9, 10 * kMs);
     } else if (starts_with(line, "deadline")) {
-      // The stop byte is on each control pipe before the event is told, and
+      // The Stop is on each control pipe before the event is told, and
       // the controller's own beat has gone into slot 0 once before the fork
       // once in each of the two launches, and on each of the five ticks since:
       // eight beats of two writes each, sequence 16.
-      EXPECT_EQ(rig.syscalls.pipe_contents(kControlWrite0), "s") << "the stop byte";
-      EXPECT_EQ(rig.syscalls.pipe_contents(kControlWrite1), "s");
+      EXPECT_EQ(controller_testing::messages_in(rig.syscalls.pipe_contents(kControlWrite0)),
+                (std::vector<worker::ControlMessage>{{1, worker::Stop{}}}))
+          << "the stop, as the first message";
+      EXPECT_EQ(controller_testing::messages_in(rig.syscalls.pipe_contents(kControlWrite1)),
+                (std::vector<worker::ControlMessage>{{1, worker::Stop{}}}));
       std::uint64_t sequence = 0;
       std::memcpy(&sequence,
                   static_cast<std::byte*>(rig.region_bytes) + ipc::HeartbeatRegion::kHeaderBytes,
@@ -286,24 +291,19 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   auto result = rig.run();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(rig.syscalls.signals_ignored(), std::vector<int>{SIGPIPE})
-      << "a stop byte to a worker that just died must be EPIPE, not signal 13";
+      << "a stop to a worker that just died must be EPIPE, not signal 13";
   const RunReport& report = result.value();
   EXPECT_FALSE(report.worker_exit_code.has_value());
   ASSERT_EQ(report.workers.size(), 2U);
-  EXPECT_EQ(report.workers[0], (WorkerReport{0,
-                                             kFirstPid,
-                                             WorkerFate::kCompleted,
-                                             "exited with code 0",
-                                             "stop requested",
-                                             7,
-                                             {"finished: done"}}));
-  EXPECT_EQ(report.workers[1], (WorkerReport{1,
-                                             kSecondPid,
-                                             WorkerFate::kCompleted,
-                                             "exited with code 0",
-                                             "stop requested",
-                                             9,
-                                             {"finished: done too"}}));
+  WorkerReport first{0, kFirstPid, WorkerFate::kCompleted, "exited with code 0",
+                     "stop requested", 7, {"finished: done"}};
+  WorkerReport second{1, kSecondPid, WorkerFate::kCompleted, "exited with code 0",
+                      "stop requested", 9, {"finished: done too"}};
+  // The one message each was sent, the Stop, which these workers never answered.
+  first.commands.sent = 1;
+  second.commands.sent = 1;
+  EXPECT_EQ(report.workers[0], first);
+  EXPECT_EQ(report.workers[1], second);
   EXPECT_TRUE(all_clean(report));
   EXPECT_EQ(clean_count(report), 2U);
   // Five ticks reach the 50 ms deadline. Both record channels are still open

@@ -37,6 +37,8 @@ add_executable(loadforge_unit_tests
   unit/worker/ipc/heartbeat_test.cpp
   unit/worker/ipc/record_test.cpp
   unit/worker/scheduler_test.cpp
+  unit/worker/duty_test.cpp
+  unit/worker/control_channel_test.cpp
   unit/worker/entry_test.cpp
   unit/worker/model_runner_test.cpp
   unit/worker/verified_run_test.cpp

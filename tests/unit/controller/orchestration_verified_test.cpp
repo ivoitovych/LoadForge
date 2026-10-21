@@ -25,6 +25,7 @@
 #include "unit/controller/consumer_models.hpp"
 #include "unit/controller/machine_tree.hpp"
 #include "verification/record.hpp"
+#include "worker/control.hpp"
 #include "worker/entry.hpp"
 #include "worker/frames.hpp"
 #include "worker/ipc/record.hpp"
@@ -390,18 +391,22 @@ TEST(ControllerVerified, WhatIsNotARecordTheContractAllowsIsACorruptChannelNever
        "an error record that does not decode (invalid record)"},
       {"a record about another workload",
        [](Rig& rig) { rig.deliver_record(0, a_wrong_result("sort")); },
-       "an error record about workload 'sort' from a worker that runs 'compression'"},
+       "an error record about workload 'sort' from a worker that was never told to run it"},
       {"a memory frame that is not one",
        [](Rig& rig) { rig.deliver(0, worker::kMemoryFrameType, std::vector<std::byte>(1)); },
        "memory frame: 1 byte(s)"},
-      {"a second memory frame",
+      {"an acknowledgement that does not decode",
        [](Rig& rig) {
-         rig.deliver(0, worker::kMemoryFrameType,
-                     worker::encode_memory(verification::MemoryLock{}));
-         rig.deliver(0, worker::kMemoryFrameType,
-                     worker::encode_memory(verification::MemoryLock{}));
+         rig.deliver(0, worker::kControlAckFrameType,
+                     std::vector<std::byte>{std::byte{1}, std::byte{0x80}});
        },
-       "a second memory frame"},
+       "an acknowledgement that does not decode: ends inside the message"},
+      {"an acknowledgement of a message nobody sent",
+       [](Rig& rig) {
+         rig.deliver(0, worker::kControlAckFrameType,
+                     worker::encode(worker::ControlAck{5, worker::AckStatus::kDone, ""}));
+       },
+       "an acknowledgement of message 5 when none is unanswered"},
       {"a tally of the wrong size",
        [](Rig& rig) { rig.deliver(0, worker::kTallyFrameType, std::vector<std::byte>(3)); },
        "tally frame: 3 byte(s)"},
