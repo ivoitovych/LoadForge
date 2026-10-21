@@ -388,3 +388,22 @@ changes, and sharded static analysis. The merge had no textual conflict. Two thi
 * **M2a exit criterion 6, the mutation gate over `verification/` with every test executable.**
   See the entry for the gate's change below; the first full sweep has not run (roadmap item
   10), which the brief names as the precondition.
+
+## CI's lock allowance (2026-10-21 09:11 UTC)
+
+The sweep failed on every CI job that runs the debug, scalar or sanitizer tests:
+`compression: working set: cannot map 8392448 bytes ... mlock(8392448 bytes): Cannot
+allocate memory`. The jobs run as an unprivileged user with the default 8 MiB
+RLIMIT_MEMLOCK, and the slice runner always locks its working set (disagreement 2).
+Reproduced here with `setpriv --reuid=65534 ... prlimit --memlock=8388608`.
+
+No footprint fixes it in the test: sort's smallest unit is 2621440 bytes, so it
+accepts nothing under 3 MiB, and at 3 MiB its runner maps 8437824 bytes, 49216 over
+the allowance; the other workloads fit at 6 MiB. A sweep that skipped sort on CI
+would never exercise it there.
+
+**Decision.** The CI steps that run ctest lift the lock allowance for their shell
+(`sudo prlimit --pid $$ --memlock=unlimited:unlimited`), so the sweep runs every
+workload at 8 MiB as it does locally. The refusal an unprivileged user meets stays
+disagreement 2; its fix is a lock policy in `RunnerSetup`, in the next contract
+change. Sort's working set of about 3.2 units is a question for that change too.

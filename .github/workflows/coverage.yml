@@ -36,7 +36,15 @@ jobs:
         run: cmake --preset coverage
       - run: cmake --build --preset coverage
       - run: find build/coverage -name '*.gcda' -delete
-      - run: ctest --preset coverage
+      - name: Test
+        # The slice runner locks its working set (disagreement 2 of the M2
+        # integration), and a runner's default lock allowance is 8 MiB: no
+        # sort configuration fits. Lift the allowance for this shell and the
+        # tests it starts. The refusal an unprivileged user meets is recorded
+        # as that disagreement, for the next contract change to resolve.
+        run: |
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited
+          ctest --preset coverage
       - name: Coverage-gate tooling tests
         # The completeness check decides whether the coverage number describes
         # the whole source tree, so a bug in it silently weakens the gate it
