@@ -28,6 +28,13 @@ jobs:
       - env: { CC: gcc-13, CXX: g++-13 }
         run: cmake --preset static
       - run: cmake --build --preset static
+      - name: The contract headers compile under the artifact's flags
+        # A header function inlined into a consumer can fail at -O3 where the
+        # header alone does not (journal fragment 02, question 9); the units in
+        # tests/contracts/headers/ use such functions, and this builds them
+        # with the static artifact's optimisation level.
+        env: { CC: gcc-13, CXX: g++-13 }
+        run: cmake --preset static-headers && cmake --build --preset static-headers
       - name: Verify it is genuinely static and runs
         run: |
           bin=build/static/loadforge

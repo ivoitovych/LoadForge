@@ -19,11 +19,11 @@ The sampler in the controller's loop, the timeline kept through a worker's death
 **You consume** — write your own mock of each, as you read its contract, and run the suite against your mock (ADR 0003):
 
 - `SamplerContract` — `tests/contracts/telemetry/sampler_contract.hpp`
-- `TimelineContract` — `tests/contracts/telemetry/telemetry_contract.hpp`
+- `TimelineContract` — `tests/contracts/telemetry/timeline_contract.hpp`
 - `SummarizerContract` — `tests/contracts/statistics/signature_contract.hpp`
 - `VerdictContract` — `tests/contracts/results/results_contract.hpp`
 - `ResultWriterContract` — `tests/contracts/results/writer_contract.hpp`
-- `SourceContract` — `tests/contracts/telemetry/telemetry_contract.hpp`
+- `SourceContract` — `tests/contracts/telemetry/source_contract.hpp`
 
 **Headers you build against** (frozen):
 

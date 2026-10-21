@@ -297,6 +297,5 @@ TEST(SortCompute, TheUnitIndexIsNotAnInputOfTheSort) {
 // The contract header registers the registry suite too; this binary
 // instantiates WorkloadContract only.
 namespace loadforge::contracts {
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
 INSTANTIATE_TYPED_TEST_SUITE_P(Sort, WorkloadContract, workloads::sort::testing::SortSubject);
 }  // namespace loadforge::contracts
