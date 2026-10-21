@@ -1,6 +1,6 @@
 # Stream 24 — Workload: sparse (conjugate gradient)
 
-**State:** not started  
+**State:** complete — branch `feature/workload-sparse`, 2026-10-20 17:31 UTC; the scalar path only (journal fragment 24, "Contract questions" 1)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 3  
 **Tier:** Tier A — a bounded component built against a written contract  
