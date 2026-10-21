@@ -209,7 +209,7 @@ TEST(PlanWorker, ARealWorkloadGetsEveryChoiceMadeOnceAndSaysWhatTheyAre) {
 TEST(PlanWorker, ACoreIsAPackageAndACoreBecauseCoreIdsRepeatAcrossPackages) {
   const MachineTree tree(MachineShape{4, 64, true, 2});
   const topology::Snapshot machine = tree.accepted();
-  Planning planning;
+  const Planning planning;
   auto first = plan_worker(entry("compression"), 0, std::nullopt, planning.options, &machine);
   auto third = plan_worker(entry("compression"), 2, std::nullopt, planning.options, &machine);
   ASSERT_TRUE(first.has_value() && third.has_value());

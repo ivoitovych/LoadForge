@@ -86,9 +86,9 @@ TEST(MemoryFrame, EveryOutcomeSurvivesTheRoundTripAndTheLayoutIsTheDocumentedOne
 }
 
 TEST(MemoryFrame, ALongDetailIsCutOnTheWayOutAndRefusedOnTheWayIn) {
-  verification::MemoryLock lock{verification::LockPolicy::kTry,
-                                verification::LockOutcome::kFellBack,
-                                std::string(kMaxMemoryDetailBytes + 50, 'x')};
+  const verification::MemoryLock lock{verification::LockPolicy::kTry,
+                                      verification::LockOutcome::kFellBack,
+                                      std::string(kMaxMemoryDetailBytes + 50, 'x')};
   const std::vector<std::byte> bytes = encode_memory(lock);
   EXPECT_EQ(bytes.size(), 3U + kMaxMemoryDetailBytes);
   EXPECT_TRUE(decode_memory(bytes).has_value());
