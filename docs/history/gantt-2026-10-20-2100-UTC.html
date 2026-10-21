@@ -1,0 +1,307 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Project timeline as of 2026-10-20 21:00 UTC: done, in-progress and forecast work. A dated snapshot, kept for history; later snapshots are new files. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LoadForge Gantt</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one column of two timelines (whole project by day, then today by hour), a status key, and a table view. */
+:root {
+  --bg: #f7f8f9;
+  --surface: #ffffff;
+  --ink: #15191d;
+  --ink-2: #4a525a;
+  --ink-3: #79828b;
+  --rule: #e2e6ea;
+  --grid: #eef1f3;
+  --done: #2a78d6;
+  --active: #2a78d6;
+  --plan: #2a78d6;
+  --pause: #eda100;
+  --now: #e34948;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --surface: #1a1d20; --ink: #eef0f2; --ink-2: #b8bfc6; --ink-3: #8a939c;
+    --rule: #2c3136; --grid: #22262a; --done: #3987e5; --active: #3987e5; --plan: #3987e5;
+    --pause: #c98500; --now: #e66767; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121416; --surface: #1a1d20; --ink: #eef0f2; --ink-2: #b8bfc6; --ink-3: #8a939c;
+  --rule: #2c3136; --grid: #22262a; --done: #3987e5; --active: #3987e5; --plan: #3987e5;
+  --pause: #c98500; --now: #e66767; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 28px; }
+header { display: grid; gap: 6px; }
+h1 { font-size: 1.6rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 1.05rem; font-weight: 600; margin: 0; text-wrap: balance; }
+.lede { color: var(--ink-2); margin: 0; max-width: 68ch; }
+.meta { font-family: var(--font-data); font-size: 0.78rem; color: var(--ink-3); letter-spacing: 0.02em; }
+.key { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; font-size: 0.85rem; color: var(--ink-2); }
+.key span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 26px; height: 10px; border-radius: 3px; display: inline-block; }
+.sw.done { background: var(--done); }
+.sw.active { background: repeating-linear-gradient(135deg, var(--active) 0 4px, transparent 4px 7px); border: 1.5px solid var(--active); }
+.sw.plan { background: transparent; border: 1.5px dashed var(--plan); }
+.sw.pause { background: color-mix(in srgb, var(--pause) 22%, transparent); border: 1px solid var(--pause); }
+.sw.now { width: 2px; height: 14px; background: var(--now); border-radius: 0; }
+section.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 18px 12px; display: grid; gap: 12px; min-width: 0; }
+.panel-head { display: grid; gap: 2px; }
+.panel-head p { margin: 0; color: var(--ink-2); font-size: 0.88rem; max-width: 72ch; }
+.chart { overflow-x: auto; }
+svg { display: block; }
+svg text { font-family: var(--font-body); fill: var(--ink-2); }
+svg .tick { font-family: var(--font-data); font-size: 11px; fill: var(--ink-3); }
+svg .row-label { font-size: 12.5px; fill: var(--ink); }
+svg .row-sub { font-size: 11px; fill: var(--ink-3); }
+svg .bar { cursor: default; }
+svg .bar:focus { outline: none; }
+svg .bar:focus .shape, svg .bar:hover .shape { stroke: var(--ink); stroke-width: 1.5; }
+.tip {
+  position: fixed; pointer-events: none; z-index: 20; max-width: 300px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--rule); border-radius: 6px;
+  padding: 8px 10px; font-size: 0.82rem; box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+}
+.tip b { display: block; font-weight: 600; margin-bottom: 2px; }
+.tip .t { font-family: var(--font-data); font-size: 0.76rem; color: var(--ink-3); display: block; margin-bottom: 4px; }
+.notes { display: grid; gap: 8px; color: var(--ink-2); font-size: 0.9rem; max-width: 76ch; }
+.notes p { margin: 0; }
+details { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; }
+summary { cursor: pointer; font-weight: 500; }
+.tablewrap { overflow-x: auto; margin-top: 10px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { color: var(--ink-3); font-weight: 500; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }
+td.mono { font-family: var(--font-data); font-size: 0.78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: no-preference) { svg .bar .shape { transition: stroke-width 120ms; } }
+</style>
+</head><body>
+
+<div class="wrap">
+  <header>
+    <div class="meta">ivoitovych/LoadForge · as of 2026-10-20 21:00 UTC</div>
+    <h1>LoadForge, from first commit to 1.0</h1>
+    <p class="lede">Seven weeks of one-at-a-time work, then one day in which every component of milestones M2 to M4 was built in parallel streams. The remaining work is merging, integration and hardening; those bars are forecasts at today's pace, not commitments.</p>
+  </header>
+
+  <div class="key" aria-label="Key">
+    <span><i class="sw done"></i>Done</span>
+    <span><i class="sw active"></i>In progress</span>
+    <span><i class="sw plan"></i>Forecast</span>
+    <span><i class="sw pause"></i>Usage-limit pause</span>
+    <span><i class="sw now"></i>Now</span>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>The whole project, by day</h2>
+      <p>The gap from late September to mid October is real: no merges landed then. Everything from milestone M1's controller onward happened on 20 October, so it is drawn in detail below.</p>
+    </div>
+    <div class="chart" id="chart-days"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>20 October, by hour (UTC)</h2>
+      <p>Thirty-two streams were built by parallel sessions, each against frozen contracts, with its own tests. Merging them, fixing what CI and two outside reviews found, and integration are the work in flight now.</p>
+    </div>
+    <div class="chart" id="chart-hours"></div>
+  </section>
+
+  <div class="notes">
+    <p><strong>What the forecasts assume.</strong> Integration streams 11 and 21 finish overnight, streams 29 and 33 follow once they land, and stream 34 hardens for 1.0. Integration is the first test of whether independently built pieces fit, so it is the likeliest place for the schedule to slip.</p>
+    <p><strong>Outside review</strong> runs alongside everything: two independent reviews found eight defects that every automated gate had passed. A third request (wave 2 and the wave-3 and wave-4 specifications) is open.</p>
+  </div>
+
+  <details>
+    <summary>Table view</summary>
+    <div class="tablewrap"><table id="table"><thead><tr><th>Scale</th><th>Work</th><th>Start (UTC)</th><th>End (UTC)</th><th>Status</th><th>Detail</th></tr></thead><tbody></tbody></table></div>
+  </details>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+const NOW_DAY = "2026-10-20T21:00";
+const NOW_HOUR = "2026-10-20T21:00";
+
+// status: done | active | plan | pause
+const DAYS = [
+  { label: "Design and plan", sub: "docs, PLAN, ADRs", s: "2026-08-24T15:00", e: "2026-09-13T12:00", st: "done", d: "Design document, development plan, maintainer review." },
+  { label: "M0: platform and topology", sub: "PRs #1–#17", s: "2026-09-13T12:00", e: "2026-09-29T08:00", st: "done", d: "Syscall seam, process supervision, worker pool, clock, CPU/cache/NUMA topology, affinity, memory, config." },
+  { label: "M1: worker IPC", sub: "PRs #18–#20", s: "2026-10-18T12:00", e: "2026-10-18T19:00", st: "done", d: "Heartbeat seqlock, record channel, worker entry." },
+  { label: "M1: controller, reviews, gates", sub: "PRs #21–#36", s: "2026-10-20T00:00", e: "2026-10-20T12:16", st: "done", d: "Controller, internal review, identity gate, OOM budget, M1 exit, contracts and stream plan." },
+  { label: "Waves 1–4 built", sub: "32 parallel streams", s: "2026-10-20T10:45", e: "2026-10-20T18:35", st: "done", d: "Every component of M2–M4 built against frozen contracts by parallel sessions." },
+  { label: "Merge, fix CI, act on reviews", sub: "PRs #37–#79", s: "2026-10-20T12:16", e: "2026-10-21T06:00", st: "active", d: "About 35 PRs merged so far; the rest wait on CI or on fixes." },
+  { label: "Integration M2 and M3", sub: "streams 11, 21", s: "2026-10-20T20:55", e: "2026-10-21T08:00", st: "active", d: "First real test of whether independently built pieces fit together." },
+  { label: "Integration M5, explore on controller", sub: "streams 29, 33", s: "2026-10-21T08:00", e: "2026-10-22T06:00", st: "plan", d: "Mixed workload, cycling, worker control, the journal; explore driven by the controller." },
+  { label: "Hardening and 1.0", sub: "stream 34", s: "2026-10-22T06:00", e: "2026-10-24T18:00", st: "plan", d: "Every earlier stream merged; release hardening. Forecast at today's pace." },
+  { label: "Outside review rounds", sub: "requests #1–#3", s: "2026-10-20T01:52", e: "2026-10-24T18:00", st: "active", d: "Two independent reviews so far, eight findings, all verified and fixed or in progress." },
+];
+
+const HOURS = [
+  { label: "M1 lands", sub: "#21–#35", s: "2026-10-20T01:30", e: "2026-10-20T06:15", st: "done", d: "Controller, reviews, identity gate, seqlock fence, OOM budget, M1 exit, contracts and stream plan." },
+  { label: "Tidy over tests", sub: "#36", s: "2026-10-20T06:15", e: "2026-10-20T12:16", st: "done", d: "clang-tidy extended to test code; merged 12:16." },
+  { label: "Wave 1 built", sub: "10 streams", s: "2026-10-20T10:46", e: "2026-10-20T11:46", st: "done", d: "Verification core, input integrity, compression oracle, bounded verification, two workloads, numerics, executor, telemetry A, isolation." },
+  { label: "Mutation sweep sharded, 56 survivors killed", sub: "#46, #53–#55", s: "2026-10-20T11:38", e: "2026-10-20T18:36", st: "done", d: "Six-hour sweep cut to minutes per shard; all 56 surviving mutants killed or refactored away." },
+  { label: "Review 1: supervision", sub: "EXT-01–03", s: "2026-10-20T12:29", e: "2026-10-20T22:30", st: "active", d: "Review arrived 12:29. EXT-01 fixed (PR #79), EXT-02 in progress, EXT-03 next." },
+  { label: "Wave 2 built", sub: "9 streams + 2 spec sessions", s: "2026-10-20T12:42", e: "2026-10-20T16:34", st: "done", d: "Results and reporters, telemetry B and pipeline, statistics, journal, sort, Monte Carlo and their oracles, primitives, explore; wave-3 and wave-4 specifications." },
+  { label: "Usage limit reached", sub: "everything paused", s: "2026-10-20T13:05", e: "2026-10-20T15:40", st: "pause", d: "All sessions stopped by the five-hour limit; resumed with a continue at the reset." },
+  { label: "Review 2: wave-1 PRs", sub: "W1-01–05", s: "2026-10-20T13:09", e: "2026-10-20T20:03", st: "done", d: "Five findings, all confirmed and fixed in the PRs the review read." },
+  { label: "Wave 1 merged", sub: "#37–#45", s: "2026-10-20T17:27", e: "2026-10-20T23:30", st: "active", d: "Seven merged; #38 and #39 wait on a rerun after the coverage-counter fix (#67)." },
+  { label: "Wave 3 built", sub: "6 streams", s: "2026-10-20T16:55", e: "2026-10-20T18:33", st: "done", d: "FFT, stencil, sparse, graph, particles, and their oracles." },
+  { label: "Wave 4 built", sub: "3 streams", s: "2026-10-20T17:30", e: "2026-10-20T18:33", st: "done", d: "Ray tracing, adaptive mesh, and their oracles." },
+  { label: "Wave 2 merged", sub: "#51–#64", s: "2026-10-20T16:51", e: "2026-10-20T22:30", st: "active", d: "Ten merged; #57 and #63 in CI." },
+  { label: "Waves 3–4 merged", sub: "#65, #69–#77", s: "2026-10-20T22:00", e: "2026-10-21T03:00", st: "plan", d: "After #65 lands, the wave-3 branches take main and merge; wave 4 follows." },
+  { label: "Contract corrections, EXT-02", sub: "agents running", s: "2026-10-20T20:30", e: "2026-10-21T00:00", st: "active", d: "One suite per contract header, specification wording, release-build checks; startup supervision." },
+  { label: "Integration M2 and M3", sub: "streams 11, 21", s: "2026-10-20T20:55", e: "2026-10-21T08:00", st: "active", d: "Started on main plus the last pending PRs, so they do not wait for those merges." },
+];
+
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const t = (s) => new Date(s + "Z").getTime();
+const fmt = (ms, withDate) => {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, "0");
+  const hm = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  return withDate ? `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${hm}` : hm;
+};
+const STATUS = { done: "Done", active: "In progress", plan: "Forecast", pause: "Paused" };
+
+const NS = "http://www.w3.org/2000/svg";
+function el(name, attrs, parent) {
+  const n = document.createElementNS(NS, name);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+
+const tip = document.getElementById("tip");
+function showTip(ev, r, withDate) {
+  tip.innerHTML = `<b>${r.label}</b><span class="t">${fmt(t(r.s), withDate)} → ${fmt(t(r.e), withDate)} UTC · ${STATUS[r.st]}</span>${r.d}`;
+  tip.hidden = false;
+  const x = Math.min(ev.clientX + 14, window.innerWidth - tip.offsetWidth - 12);
+  const y = Math.min(ev.clientY + 14, window.innerHeight - tip.offsetHeight - 12);
+  tip.style.left = Math.max(8, x) + "px";
+  tip.style.top = Math.max(8, y) + "px";
+}
+function hideTip() { tip.hidden = true; }
+
+function draw(target, rows, opt) {
+  const host = document.getElementById(target);
+  host.innerHTML = "";
+  const labelW = 250, rowH = 34, top = 30, bottom = 8, right = 16;
+  const W = Math.max(720, host.clientWidth || 720);
+  const plotW = W - labelW - right;
+  const H = top + rows.length * rowH + bottom;
+  const x0 = t(opt.from), x1 = t(opt.to);
+  const X = (ms) => labelW + (Math.min(Math.max(ms, x0), x1) - x0) / (x1 - x0) * plotW;
+  const svg = el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opt.aria }, host);
+
+  const defs = el("defs", {}, svg);
+  const pat = el("pattern", { id: target + "-stripe", width: 7, height: 7, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+  el("rect", { width: 7, height: 7, fill: "transparent" }, pat);
+  el("rect", { width: 3.5, height: 7, fill: css("--active") }, pat);
+
+  // ticks and grid; a tick label that would collide with the "now" label is left off
+  const nowX = X(t(opt.now));
+  for (const tk of opt.ticks) {
+    const xx = X(t(tk.at));
+    el("line", { x1: xx, x2: xx, y1: top - 6, y2: H - bottom, stroke: css("--grid"), "stroke-width": 1 }, svg);
+    if (xx + 3 < nowX + 6 && xx + 48 > nowX - 34) continue;
+    const tx = el("text", { x: xx + 3, y: top - 12, class: "tick" }, svg);
+    tx.textContent = tk.label;
+  }
+  if (opt.gap) {
+    const gx0 = X(t(opt.gap.s)), gx1 = X(t(opt.gap.e));
+    el("rect", { x: gx0, y: top - 4, width: gx1 - gx0, height: H - top - bottom + 4, fill: css("--grid"), opacity: 0.6 }, svg);
+    const gl = el("text", { x: (gx0 + gx1) / 2, y: H - bottom - 6, class: "tick", "text-anchor": "middle" }, svg);
+    gl.textContent = opt.gap.label;
+  }
+
+  rows.forEach((r, i) => {
+    const y = top + i * rowH;
+    el("line", { x1: 0, x2: W - right, y1: y + rowH, y2: y + rowH, stroke: css("--rule"), "stroke-width": 1 }, svg);
+    const lb = el("text", { x: 0, y: y + 15, class: "row-label" }, svg);
+    lb.textContent = r.label;
+    const sb = el("text", { x: 0, y: y + 28, class: "row-sub" }, svg);
+    sb.textContent = r.sub;
+
+    const xa = X(t(r.s)), xb = X(t(r.e));
+    const w = Math.max(4, xb - xa);
+    const g = el("g", { class: "bar", tabindex: 0, role: "img", "aria-label": `${r.label}, ${fmt(t(r.s), opt.withDate)} to ${fmt(t(r.e), opt.withDate)} UTC, ${STATUS[r.st]}` }, svg);
+    const bh = 14, by = y + (rowH - bh) / 2;
+    el("rect", { x: xa - 2, y: y + 2, width: w + 4, height: rowH - 4, fill: "transparent" }, g); // larger hit target
+    let shape;
+    if (r.st === "done") shape = el("rect", { x: xa, y: by, width: w, height: bh, rx: 4, fill: css("--done"), class: "shape" }, g);
+    else if (r.st === "active") shape = el("rect", { x: xa, y: by, width: w, height: bh, rx: 4, fill: `url(#${target}-stripe)`, stroke: css("--active"), "stroke-width": 1.5, class: "shape" }, g);
+    else if (r.st === "plan") shape = el("rect", { x: xa + 0.75, y: by + 0.75, width: Math.max(2, w - 1.5), height: bh - 1.5, rx: 4, fill: css("--surface"), stroke: css("--plan"), "stroke-width": 1.5, "stroke-dasharray": "4 3", class: "shape" }, g);
+    else shape = el("rect", { x: xa, y: y + 3, width: w, height: rowH - 6, rx: 3, fill: css("--pause"), "fill-opacity": 0.22, stroke: css("--pause"), "stroke-width": 1, class: "shape" }, g);
+    g.addEventListener("mousemove", (ev) => showTip(ev, r, opt.withDate));
+    g.addEventListener("mouseleave", hideTip);
+    g.addEventListener("focus", () => { const b = g.getBoundingClientRect(); showTip({ clientX: b.left, clientY: b.bottom }, r, opt.withDate); });
+    g.addEventListener("blur", hideTip);
+  });
+
+  // pause band across all rows, behind nothing: drawn as a faint column
+  if (opt.pauseBand) {
+    const pa = X(t(opt.pauseBand.s)), pb = X(t(opt.pauseBand.e));
+    const band = el("rect", { x: pa, y: top - 4, width: pb - pa, height: H - top - bottom + 4, fill: css("--pause"), opacity: 0.07 }, svg);
+    svg.insertBefore(band, svg.children[1]);
+  }
+
+  const nx = X(t(opt.now));
+  el("line", { x1: nx, x2: nx, y1: top - 8, y2: H - bottom, stroke: css("--now"), "stroke-width": 2 }, svg);
+  const nl = el("text", { x: nx - 4, y: top - 12, class: "tick", "text-anchor": "end" }, svg);
+  nl.textContent = "now";
+  nl.setAttribute("style", `fill:${css("--now")}`);
+}
+
+const dayTicks = [
+  ["2026-08-24", "24 Aug"], ["2026-09-01", "1 Sep"], ["2026-09-08", "8 Sep"], ["2026-09-15", "15 Sep"],
+  ["2026-09-22", "22 Sep"], ["2026-09-29", "29 Sep"], ["2026-10-06", "6 Oct"], ["2026-10-13", "13 Oct"],
+  ["2026-10-20", "20 Oct"],
+].map(([at, label]) => ({ at: at + "T00:00", label }));
+const hourTicks = [];
+for (let h = 0; h <= 30; h += 3) {
+  const d = new Date(Date.UTC(2026, 9, 20, h));
+  const p = (n) => String(n).padStart(2, "0");
+  hourTicks.push({ at: `2026-10-${p(d.getUTCDate())}T${p(d.getUTCHours())}:00`, label: h === 24 ? "21 Oct" : `${p(d.getUTCHours())}:00` });
+}
+
+function render() {
+  draw("chart-days", DAYS, {
+    from: "2026-08-24T00:00", to: "2026-10-25T00:00", now: NOW_DAY, ticks: dayTicks, withDate: true,
+    gap: { s: "2026-09-29T08:00", e: "2026-10-18T12:00", label: "no merges" },
+    aria: "Gantt chart of the whole project by day",
+  });
+  draw("chart-hours", HOURS, {
+    from: "2026-10-20T00:00", to: "2026-10-21T08:00", now: NOW_HOUR, ticks: hourTicks, withDate: false,
+    pauseBand: { s: "2026-10-20T13:05", e: "2026-10-20T15:40" },
+    aria: "Gantt chart of 20 October by hour",
+  });
+}
+
+const tbody = document.querySelector("#table tbody");
+for (const [scale, rows, wd] of [["Project", DAYS, true], ["20 Oct", HOURS, true]]) {
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${scale}</td><td>${r.label}<br><span style="color:var(--ink-3)">${r.sub}</span></td><td class="mono">${fmt(t(r.s), wd)}</td><td class="mono">${fmt(t(r.e), wd)}</td><td>${STATUS[r.st]}</td><td>${r.d}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+render();
+let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(render, 120); });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
+</body></html>

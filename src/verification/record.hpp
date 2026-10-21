@@ -283,6 +283,21 @@ enum class Domain : std::uint8_t { kStored = 0, kDerived = 1 };
 ///   expected, actual   the bytes from window_offset on, the same length:
 ///                 min(kMaxWindowBytes, compared length - window_offset).
 ///
+/// What a record can be checked against, from its own bytes (contract change,
+/// external review 2026-10-20 12:51 UTC, W1-05). The window is an excerpt, and
+/// a valid difference is consistent with it:
+///   * the window covers first_offset, and expected and actual DIFFER at that
+///     byte -- the record's own claim of where the first difference is;
+///   * when last_offset lies inside the window, they differ at that byte too.
+/// What an excerpt cannot show, and so is NOT checked: that no byte before
+/// first_offset differs; that last_offset is the last differing byte when it
+/// lies beyond the window; that popcount is the number of differing bits over
+/// the whole comparison (the excerpt gives at most a lower bound, which is not
+/// enforced); that the bytes outside the window agree; that the compared length
+/// is what the check says. Those claims rest on the producer, and on the
+/// record channel's checksum against corruption in transit -- a checksum is
+/// not a proof the producer was right.
+///
 /// The XOR delta and the classification are derived (below), never stored: a
 /// record cannot hold a delta that disagrees with its own bytes.
 struct Difference {
@@ -355,24 +370,53 @@ struct ExactBitCorruption {
   return delta;
 }
 
+/// Whether `offset` (from the start of the compared bytes) lies inside the
+/// difference's window, judged by the expected bytes.
+[[nodiscard]] inline bool in_window(const Difference& difference, std::uint64_t offset) noexcept {
+  return offset >= difference.window_offset &&
+         offset - difference.window_offset < difference.expected.size();
+}
+
+/// Whether the window holds `offset` and the two windows differ at it. False
+/// when `offset` is outside the window. Precondition: expected and actual are
+/// the same length (is_valid and broken_rule test that first).
+[[nodiscard]] inline bool differs_at(const Difference& difference, std::uint64_t offset) noexcept {
+  return in_window(difference, offset) && difference.expected[offset - difference.window_offset] !=
+                                              difference.actual[offset - difference.window_offset];
+}
+
 /// Whether a difference keeps the rules above. Line size is the record's.
 [[nodiscard]] inline bool is_valid(const Difference& difference) noexcept {
   return difference.domain <= Domain::kDerived && difference.popcount >= 1 &&
          difference.first_offset <= difference.last_offset &&
          difference.window_offset == difference.first_offset / kWordBytes * kWordBytes &&
          difference.expected.size() == difference.actual.size() && !difference.expected.empty() &&
-         difference.expected.size() <= kMaxWindowBytes;
+         difference.expected.size() <= kMaxWindowBytes &&
+         differs_at(difference, difference.first_offset) &&
+         (!in_window(difference, difference.last_offset) ||
+          differs_at(difference, difference.last_offset));
 }
 
 /// A bounded check exceeded its derived tolerance (verification.md §5, §8).
 ///
 ///   check            which invariant or norm failed: "residual 2-norm",
 ///                    "componentwise |C - AB|", "momentum".
-///   residual         what was measured. NaN or infinite when the corruption
+///   residual         what was measured. NaN or +infinity when the corruption
 ///                    produced one; that is a failure, not a pass.
 ///   tolerance        the derived bound: finite and strictly positive. A
 ///                    tolerance that cannot be derived is not this record --
 ///                    it is VerificationNotPerformed.
+///
+/// A record is a FAILURE only if the residual exceeds the tolerance
+/// (exceeds_tolerance below): residual > tolerance, or residual NaN. A residual
+/// at or below the tolerance is a check that PASSED and is not this record. A
+/// negative residual (-infinity included) is no residual at all, since a norm
+/// or an absolute difference is never negative, and is not a failure either
+/// (external review 2026-10-20 12:51 UTC, W1-01).
+/// Signed zero: -0.0 equals 0.0, is below any positive tolerance, and so is
+/// not a failure. NaN: any NaN is a failure whatever its sign bit or payload --
+/// the sign of a NaN carries no meaning, and the codec keeps the bits as they
+/// were.
 ///   condition_number where meaningful.
 ///   element          which output element failed, where one did.
 ///
@@ -391,6 +435,13 @@ struct NumericalVerificationFailure {
   return std::tie(lhs.provenance, lhs.check, lhs.residual, lhs.tolerance, lhs.condition_number,
                   lhs.element) == std::tie(rhs.provenance, rhs.check, rhs.residual, rhs.tolerance,
                                            rhs.condition_number, rhs.element);
+}
+
+/// Whether a measured residual is a failure against its tolerance: NaN, or
+/// strictly greater than the tolerance (+infinity included). False for a
+/// residual at or below the tolerance, and for every negative one.
+[[nodiscard]] inline bool exceeds_tolerance(double residual, double tolerance) noexcept {
+  return std::isnan(residual) || residual > tolerance;
 }
 
 /// residual / tolerance: > 1 for every decodable record, or NaN.
@@ -520,7 +571,14 @@ struct DecodeError {
 ///     domain, popcount >= 1, first_offset <= last_offset, window_offset equal
 ///     to first_offset rounded down to kWordBytes, and expected and actual of
 ///     equal length from 1 to kMaxWindowBytes;
-///   * a NumericalVerificationFailure has a finite tolerance > 0.
+///   * a Difference also keeps its own bytes consistent: the window covers
+///     first_offset, expected and actual differ at it, and differ at
+///     last_offset when that lies inside the window (what an excerpt cannot
+///     show is listed at Difference);
+///   * a NumericalVerificationFailure has a finite tolerance > 0 and is a
+///     failure: its residual is NaN (any sign or payload) or greater than the
+///     tolerance, +infinity included. A residual at or below the tolerance, or
+///     negative, is no failure and does not decode.
 /// The bytes of an invalid record decode to kInvalid, never to the record.
 /// A garbled byte stream decodes to an error, never to a different valid
 /// record silently -- the frame's checksum is what makes that hold in
@@ -549,7 +607,8 @@ struct DecodeError {
   }
   if (const auto* numerical = std::get_if<NumericalVerificationFailure>(&record)) {
     return numerical->check.size() <= kMaxTextBytes && std::isfinite(numerical->tolerance) &&
-           numerical->tolerance > 0.0;
+           numerical->tolerance > 0.0 &&
+           exceeds_tolerance(numerical->residual, numerical->tolerance);
   }
   const auto* not_performed = std::get_if<VerificationNotPerformed>(&record);
   return not_performed->what.size() <= kMaxTextBytes && not_performed->why.size() <= kMaxTextBytes;
