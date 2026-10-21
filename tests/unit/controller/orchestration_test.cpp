@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -258,21 +259,22 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
     } else if (starts_with(line, "deadline")) {
       // The stop byte is on each control pipe before the event is told, and
       // the controller's own beat has gone into slot 0 once before the fork
-      // and on each of the five ticks since: sequence 12.
+      // once in each of the two launches, and on each of the five ticks since:
+      // eight beats of two writes each, sequence 16.
       EXPECT_EQ(rig.syscalls.pipe_contents(kControlWrite0), "s") << "the stop byte";
       EXPECT_EQ(rig.syscalls.pipe_contents(kControlWrite1), "s");
       std::uint64_t sequence = 0;
       std::memcpy(&sequence,
                   static_cast<std::byte*>(rig.region_bytes) + ipc::HeartbeatRegion::kHeaderBytes,
                   sizeof sequence);
-      EXPECT_EQ(sequence, 12U);
-      // And six beats, counted up from one: the progress a worker reads.
+      EXPECT_EQ(sequence, 16U);
+      // And eight beats, counted up from one: the progress a worker reads.
       std::uint64_t progress = 0;
       std::memcpy(
           &progress,
           static_cast<std::byte*>(rig.region_bytes) + ipc::HeartbeatRegion::kHeaderBytes + 16,
           sizeof progress);
-      EXPECT_EQ(progress, 6U);
+      EXPECT_EQ(progress, 8U);
       rig.deliver(0, ipc::RecordType::kFinished, "done");
       rig.deliver(1, ipc::RecordType::kFinished, "done too");
       rig.worker_exits(0, 0);
@@ -400,15 +402,20 @@ TEST(ControllerTest, AWorkerWhoseSignalsAreRefusedAsGoneIsNeitherCountedSignalle
   rig.config.run.duration = core::Duration{1000};
   rig.options.stale_after_ns = 30 * kMs;
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
-  // Worker 0 beat once, at 0: stale by timestamp once the allowance passes.
-  // Worker 1 never beat: stale once the allowance has passed since the start.
-  // Both at tick 4. Worker 1's signals are refused with ESRCH, which the
+  // Worker 0 beat once, stamped with the last launch: stale by timestamp once
+  // the allowance passes. Worker 1 never beat: stale once the allowance has
+  // passed since its launch, which is that same instant. Both on one tick.
+  // Worker 1's signals are refused with ESRCH, which the
   // kernel gives only for a child already reaped: tolerated, but no signal
   // was sent, so none is recorded, and the worker is signalled again on the
   // next tick until the reap says how it went.
-  rig.reporter.on_event = [&rig](const std::string& line) {
+  std::int64_t last_launch_ns = 0;
+  rig.syscalls.on_fork_returned([&rig, &last_launch_ns](int) {
+    last_launch_ns = rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC);
+  });
+  rig.reporter.on_event = [&rig, &last_launch_ns](const std::string& line) {
     if (starts_with(line, "spawned")) {
-      rig.beat(0, 1, 0);
+      rig.beat(0, 1, last_launch_ns);
     } else if (line == "worker 0: sent signal 9 (heartbeat stale)") {
       rig.worker_exits(0, SIGKILL);
       rig.worker_exits(1, SIGKILL);
@@ -452,20 +459,158 @@ TEST(ControllerTest, AWorkerWhoseBeatGoesStaleIsTerminatedThenKilledAndTimedOut)
   }
   // Each escalation looked first: SIGTERM and SIGKILL for two workers.
   EXPECT_EQ(rig.syscalls.exit_peeks(),
-            (std::vector<pid_t>{kFirstPid, kSecondPid, kFirstPid, kSecondPid}));
-  // Stale at tick 4 (40 ms past a 30 ms allowance), SIGKILL 20 ms of grace
-  // later (tick 6).
+            (std::vector<pid_t>{kFirstPid, kFirstPid, kSecondPid, kSecondPid}));
+  // Neither worker beats, and each is stale 30 ms after its own launch; the
+  // first was launched first, so it is told first (its SIGTERM at 20 ms from
+  // the last launch) and its SIGKILL comes a 20 ms grace later, before the
+  // second has been told anything.
   EXPECT_EQ(rig.syscalls.signals_sent(),
             (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGTERM},
-                                                {kSecondPid, SIGTERM},
                                                 {kFirstPid, SIGKILL},
+                                                {kSecondPid, SIGTERM},
                                                 {kSecondPid, SIGKILL},
                                                 {-kFirstPid, SIGKILL},
                                                 {-kSecondPid, SIGKILL}}));
   EXPECT_EQ(rig.reporter.events[1], "worker 0: sent signal 15 (heartbeat stale)");
-  EXPECT_EQ(rig.reporter.elapsed[1], 40 * kMs);
-  EXPECT_EQ(rig.reporter.elapsed[3], 60 * kMs);
+  EXPECT_EQ(rig.reporter.elapsed[1], 20 * kMs);
+  EXPECT_EQ(rig.reporter.elapsed[3], 40 * kMs);
   EXPECT_FALSE(all_clean(result.value()));
+}
+
+// --- startup is its own supervised phase (EXT-02) ---------------------------------
+//
+// Every fork takes 60 ms of the fake clock against a 100 ms allowance: two
+// forks are 120 ms, longer than any worker may wait for the controller's beat.
+
+constexpr std::int64_t kForkDelay = 60 * kMs;
+
+/// The raw and running readings the next clock read will give, taken at the
+/// fork boundary: the controller's next read is its record of the launch.
+struct Launch {
+  std::int64_t raw_ns = 0;
+  std::int64_t running_ns = 0;
+};
+
+TEST(ControllerStartupTest, AWorkerAlreadyRunningNeverFindsTheControllersBeatStaleWhileItForks) {
+  Rig rig;
+  rig.syscalls.delay_each_fork(kForkDelay);
+  struct Look {
+    int fork = 0;
+    ipc::Liveness liveness = ipc::Liveness::kNeverBeat;
+  };
+  std::vector<Look> looks;
+  rig.syscalls.on_fork_returned([&rig, &looks](int index) {
+    if (rig.region_bytes == nullptr) {
+      auto mapped = rig.syscalls.map_shared(kRegionFd, ipc::HeartbeatRegion::bytes_for(2));
+      ASSERT_TRUE(mapped.has_value());
+      rig.region_bytes = mapped.value();
+    }
+    // What a worker started by fork 0 would read of slot 0 at this instant.
+    std::int64_t timestamp = 0;
+    std::memcpy(&timestamp,
+                static_cast<std::byte*>(rig.region_bytes) + ipc::HeartbeatRegion::kHeaderBytes + 8,
+                sizeof timestamp);
+    const ipc::Heartbeat beat{timestamp, 1, 1, 7};
+    looks.push_back(Look{index, ipc::liveness(beat, rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC),
+                                              rig.options.stale_after_ns)});
+  });
+  rig.config.run.duration = core::Duration{20};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC));
+      rig.beat(1, 1, rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC));
+    } else if (starts_with(line, "deadline")) {
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_EQ(looks.size(), 2U);
+  for (const Look& look : looks) {
+    EXPECT_NE(look.liveness, ipc::Liveness::kStale)
+        << "after fork " << look.fork << " the beat a running worker reads is already stale";
+  }
+}
+
+TEST(ControllerStartupTest, AWorkerForkedLateIsGivenItsAllowanceFromItsOwnLaunch) {
+  Rig rig;
+  rig.syscalls.delay_each_fork(kForkDelay);
+  rig.config.run.duration = core::Duration{1000};
+  std::vector<Launch> launches;
+  rig.syscalls.on_fork_returned([&rig, &launches](int) {
+    launches.push_back(Launch{rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC_RAW),
+                              rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC)});
+  });
+  // The raw clock when each worker was first told to stop for staleness. The
+  // event follows the tick's own read of the clock, so the next read would be
+  // one step (10 ms) further on.
+  std::map<std::size_t, std::int64_t> told_at;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig, &told_at](const std::string& line) {
+    for (std::size_t slot = 0; slot < 2; ++slot) {
+      if (line == "worker " + std::to_string(slot) + ": sent signal 15 (heartbeat stale)") {
+        told_at[slot] = rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC_RAW) - 10 * kMs;
+      }
+    }
+    if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_EQ(launches.size(), 2U);
+  // Neither worker ever beats. Each is judged stale only once the allowance
+  // has passed since ITS launch, and both are judged in the end.
+  ASSERT_EQ(told_at.size(), 2U);
+  for (std::size_t slot = 0; slot < 2; ++slot) {
+    EXPECT_GT(told_at[slot] - launches[slot].raw_ns, rig.options.stale_after_ns)
+        << "worker " << slot << " was judged stale before its own allowance had passed";
+  }
+}
+
+TEST(ControllerStartupTest, TheDurationCountsFromTheLastLaunchNotFromPreparation) {
+  Rig rig;
+  rig.syscalls.delay_each_fork(kForkDelay);
+  std::int64_t last_launch_ns = 0;
+  rig.syscalls.on_fork_returned([&rig, &last_launch_ns](int) {
+    last_launch_ns = rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC);
+  });
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig, &last_launch_ns](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, last_launch_ns);
+      rig.beat(1, 1, last_launch_ns);
+    } else if (starts_with(line, "deadline")) {
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_GE(rig.reporter.events.size(), 2U);
+  EXPECT_EQ(rig.reporter.events[0], "spawned 2 worker(s): pids 1001 1002");
+  EXPECT_EQ(rig.reporter.elapsed[0], 0) << "the run begins when the last worker is launched";
+  EXPECT_EQ(rig.reporter.events[1], "deadline reached: stop requested");
+  EXPECT_EQ(rig.reporter.elapsed[1], 50 * kMs)
+      << "the whole configured duration, after the 120 ms the forks took";
+}
+
+TEST(ControllerStartupTest, AClockThatFailsBetweenForksIsTheControllersFailureAndStopsTheSpawn) {
+  Rig rig;
+  // Reads of the raw clock: preparation, then one per launch. The second
+  // fails, with the first worker already running.
+  rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 3, EIO);
+  rig.syscalls.script_waits({{Reaped{kFirstPid, SIGKILL}, 0}, {Reaped{kSecondPid, SIGKILL}, 0}});
+  auto result = rig.run();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().stage, "clock");
+  EXPECT_EQ(rig.syscalls.signals_sent(),
+            (std::vector<std::pair<pid_t, int>>{{kFirstPid, SIGKILL}, {kSecondPid, SIGKILL}}))
+      << "both workers had been forked, and the pool unwound them";
+  EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
 }
 
 TEST(ControllerTest, AWorkerThatBeatsWithoutProgressIsASpinAndTimesOut) {
@@ -521,10 +666,10 @@ TEST(ControllerTest, AWorkerThatDiedInsideAPublishIsTreatedAsStale) {
     EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kFault)
         << "SIGTERM was sent, but what killed it was the fault";
     // Unreadable from the start, and stale once that has lasted longer than
-    // the 100 ms allowance: the tick at 110 ms, not the first one.
+    // the 100 ms allowance: the tick at 100 ms from the last launch, not the first one.
     ASSERT_GE(rig.reporter.events.size(), 2U) << base_s;
     EXPECT_EQ(rig.reporter.events[1], "worker 0: sent signal 15 (heartbeat stale)") << base_s;
-    EXPECT_EQ(rig.reporter.elapsed[1], 110 * kMs) << "unreadable past the allowance, " << base_s;
+    EXPECT_EQ(rig.reporter.elapsed[1], 100 * kMs) << "unreadable past the allowance, " << base_s;
   }
 }
 
@@ -1001,6 +1146,20 @@ TEST(ControllerExitedTest, AWorkerKilledFromOutsideBeforeItsEscalationIsNeverSig
     rig.worker_exits(0, SIGKILL);  // The controller's kill landing.
     rig.worker_exits(1, SIGKILL);  // An outside SIGKILL, unreaped.
   });
+  // Each worker's allowance runs from its own launch, so a worker that never
+  // beat would be due a tick before the one forked after it. One beat stamped
+  // with the second launch makes both due on the same tick, as this test needs.
+  std::int64_t second_launch_ns = 0;
+  rig.syscalls.on_fork_returned([&rig, &second_launch_ns](int) {
+    second_launch_ns = rig.syscalls.peek_clock_ns(CLOCK_MONOTONIC);
+  });
+  const auto escalate = rig.reporter.on_event;
+  rig.reporter.on_event = [&rig, &second_launch_ns, escalate](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, second_launch_ns);
+    }
+    escalate(line);
+  };
   auto result = rig.run();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   const WorkerReport& controllers = result.value().workers[0];
@@ -1299,8 +1458,8 @@ TEST(ControllerTest, AWorkerThatGoesStaleAfterTheStopRequestIsTerminatedForStale
   EXPECT_EQ(rig.reporter.events[1], "deadline reached: stop requested");
   EXPECT_EQ(rig.reporter.elapsed[1], 30 * kMs);
   EXPECT_EQ(rig.reporter.events[2], "worker 0: sent signal 15 (heartbeat stale)");
-  EXPECT_EQ(rig.reporter.elapsed[2], 50 * kMs);
-  EXPECT_EQ(rig.reporter.elapsed[4], 70 * kMs) << "SIGKILL 20 ms after SIGTERM";
+  EXPECT_EQ(rig.reporter.elapsed[2], 40 * kMs);
+  EXPECT_EQ(rig.reporter.elapsed[4], 60 * kMs) << "SIGKILL 20 ms after SIGTERM";
 }
 
 // --- the controller's own failures ---------------------------------------------------
@@ -1467,7 +1626,7 @@ TEST(ControllerTest, EveryFailureInsideTheLoopNamesItsStageAndKillsTheWorkers) {
   }
   {
     Rig rig;
-    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 2, EIO);
+    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 4, EIO);  // The first tick's.
     rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
     expect_stage(rig, "clock");
   }
@@ -1497,9 +1656,9 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
   {
     Rig rig;
     complete_at_deadline(rig);
-    // The finish's reading: the eleventh, after six in the run and four in the
-    // final drain (two for each record channel still open).
-    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 11, EIO);
+    // The finish's reading: the thirteenth, after eight in the run (the first beat, one per launch,
+    // five ticks) and four in the final drain (two for each record channel still open).
+    rig.syscalls.fail_clock_on_read(CLOCK_MONOTONIC_RAW, 13, EIO);
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "clock");
@@ -1509,7 +1668,7 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
     complete_at_deadline(rig);
     // The finish's reading is earlier than the start's: a clock that jumped.
     rig.syscalls.set_clock(CLOCK_MONOTONIC_RAW, platform::TimeSpec{10, 0});
-    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 11, platform::TimeSpec{0, 0});
+    rig.syscalls.jump_clock_on_read(CLOCK_MONOTONIC_RAW, 13, platform::TimeSpec{0, 0});
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "clock");

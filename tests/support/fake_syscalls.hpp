@@ -11,6 +11,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -405,8 +406,30 @@ class FakeSyscalls final : public platform::Syscalls {
   /// the fourth fork failing, the third returning 0 -- are positional.
   void script_forks(std::vector<ForkStep> steps) { forks_.assign(steps.begin(), steps.end()); }
 
+  /// Every successful fork takes this long: all clocks jump forward by it
+  /// before the fork returns, as they would in a supervisor whose fork and
+  /// exec are slow. The delay sits at the fork boundary, which is where a
+  /// loaded machine puts it, and costs a test no real time.
+  void delay_each_fork(std::int64_t nanoseconds) { fork_delay_ns_ = nanoseconds; }
+
+  /// Called as each successful fork returns to the parent, after its delay and
+  /// before the caller's next instruction; `index` counts forks from zero.
+  void on_fork_returned(std::function<void(int)> hook) { fork_hook_ = std::move(hook); }
+
   core::Result<pid_t, platform::SyscallError> fork_process() override {
+    const int index = fork_count_;
     ++fork_count_;
+    auto result = scripted_fork();
+    if (result.has_value() && result.value() != 0) {
+      clock_offset_ns_ += fork_delay_ns_;
+      if (fork_hook_) {
+        fork_hook_(index);
+      }
+    }
+    return result;
+  }
+
+  core::Result<pid_t, platform::SyscallError> scripted_fork() {
     if (!forks_.empty()) {
       const ForkStep step = forks_.front();
       forks_.pop_front();
@@ -608,7 +631,33 @@ class FakeSyscalls final : public platform::Syscalls {
         value.nanoseconds += 1'000'000'000;
       }
     }
+    return shifted(value);
+  }
+
+  [[nodiscard]] platform::TimeSpec shifted(platform::TimeSpec value) const {
+    if (clock_offset_ns_ == 0) {
+      return value;  // A reading set on purpose is given back exactly as set.
+    }
+    value.seconds += clock_offset_ns_ / 1'000'000'000;
+    value.nanoseconds += clock_offset_ns_ % 1'000'000'000;
+    if (value.nanoseconds >= 1'000'000'000) {
+      value.seconds += 1;
+      value.nanoseconds -= 1'000'000'000;
+    }
     return value;
+  }
+
+  /// What the next read of a clock will report, without reading it: for a
+  /// test that needs the time a call is about to be given.
+  [[nodiscard]] std::int64_t peek_clock_ns(int clock_id) const {
+    platform::TimeSpec value{0, 0};
+    if (const auto found = clocks_.find(clock_id); found != clocks_.end()) {
+      value = found->second;
+    }
+    const auto reads = reads_per_clock_.find(clock_id);
+    const int nth = (reads == reads_per_clock_.end() ? 0 : reads->second) + 1;
+    const std::int64_t advance = clock_step_ns_ * (nth - 1) + clock_offset_ns_;
+    return value.seconds * 1'000'000'000 + value.nanoseconds + advance;
   }
 
   // --- signals and identity --------------------------------------------------------
@@ -1260,6 +1309,9 @@ class FakeSyscalls final : public platform::Syscalls {
   int read_link_count_ = 0;
 
   std::deque<ForkStep> forks_;
+  std::int64_t fork_delay_ns_ = 0;
+  std::int64_t clock_offset_ns_ = 0;
+  std::function<void(int)> fork_hook_;
   pid_t fork_result_ = 0;
   int fork_error_ = 0;
   int fork_count_ = 0;
