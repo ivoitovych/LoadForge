@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/sparse and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/sparse"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The independent oracle of the sparse workload, written from \
+src/workloads/sparse/spec.hpp alone: the explicit residual r~ = b - A x^ of \
+the output's iterate by a plain scalar product, every one of its 16384 rows \
+compared with the residual the workload wrote against 2 gamma_{m+1} / (1 - \
+gamma_{m+1}) times the row's sum of absolute products, and then its 2-norm \
+against 3 * 5^-16 times the norm of b (Contract::kBounded). P1: each decision \
+of the check -- a row that fails first, the norm reached only when every row \
+held, the structure of the input validated entry by entry, a tolerance \
+limited from below, from above and for a NaN. P3: both tolerances at the \
+boundary, breached at (1 + 2^-20) times T' and held at (1 - 2^-20) times it, \
+at rows of 7, 5 and 4 stored entries (both rows of a pair, so the mirrored \
+entry's contribution to s is in the sum) and for the norm; every row's \
+columns against the plain statement of the structure; the tolerance floored \
+for a row with nothing to sum (any nonzero residual fails, one below the \
+floor does not) and raised to the largest double for a sum that overflows; \
+an off-diagonal value of magnitude exactly 1/8 and the next double above \
+it, a diagonal of 2.0 and its neighbours, a right-hand side of exactly -1 \
+and the next double above, an all-zero right-hand side. P4 is the module's \
+subject. T5: an exponent flip in the iterate is named at the FIRST row that \
+reads that column, one in the reported residual at its own row, of several \
+failing rows the first; an iterate that is no solution but is consistent \
+with its residual is caught by the norm and by nothing else; a NaN or an \
+infinity in either vector fails; an error below the roundoff of a product \
+goes unseen and one above it does not; a changed matrix value is judged by \
+the output it did not produce. T3: scipy's conjugate gradients, sixteen \
+iterations, on a generated system (a fixture from the real tool, \
+tests/fixtures/verification/oracle/sparse/, with the command and the machine \
+that made it; its ||r|| / ||b|| is 2.2e-16, as the specification measured) is \
+agreed with at every chunk size. T5b: evidence of the wrong size on either \
+side, a row_ptr or a column that is not the fixed structure, a value the \
+tolerance does not cover, a right-hand side entry that is NaN, infinite or \
+above 1, a right-hand side of all zeros -- each is NotChecked with nothing \
+compared, never an agreement -- while a NaN in the OUTPUT is a mismatch and \
+an asymmetric matrix is not an input problem the oracle looks for. No P2: \
+the oracle allocates nothing, so there is no allocation to fail.\
+"""
