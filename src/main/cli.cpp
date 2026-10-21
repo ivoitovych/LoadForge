@@ -501,6 +501,66 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
   return run_stress(syscalls, config, launch->executable, launch->machine, options, out, err);
 }
 
+namespace {
+
+/// Everything a run's ending needs from the run.
+struct Ending {
+  const config::Config* config = nullptr;
+  const controller::RunReport* report = nullptr;
+  platform::FileSystem* machine = nullptr;
+  const StressOptions* options = nullptr;
+  const Rig* rig = nullptr;  ///< Null when nothing was sampled.
+  const telemetry::BoundedTimeline* timeline = nullptr;
+  ResultSink* sink = nullptr;
+};
+
+/// The result of a run, said and written (M3), and the exit code it comes to.
+int conclude_run(const Ending& ending, std::ostream& out, std::ostream& err) {
+  const StressOptions& stress_options = *ending.options;
+  const controller::RunReport& report = *ending.report;
+  const HostFacts host = stress_options.host.has_value() ? *stress_options.host : read_host_facts();
+  const statistics::CompensatedSummarizer real_summarizer;
+  const statistics::Summarizer& summarizer =
+      stress_options.summarizer != nullptr ? *stress_options.summarizer : real_summarizer;
+  results::FingerprintContext context;
+  context.build = results::this_build();
+  context.fp_environment = host.fp_environment;
+  context.isa_path = host.isa_path;
+  auto reading = results::read_fingerprint(*ending.machine, "", context);
+  ResultInputs inputs;
+  inputs.config = ending.config;
+  inputs.report = &report;
+  inputs.fingerprint = reading.fingerprint;
+  if (ending.rig != nullptr) {
+    inputs.capabilities = ending.rig->capabilities();
+  }
+  inputs.timeline = ending.timeline;
+  inputs.summarizer = &summarizer;
+  auto result = assemble_result(inputs);
+  if (!result.has_value()) {
+    err << "loadforge: cannot compute the result: " << result.error() << "\n";
+    return with_output_failure(exit_code_for(report, *ending.config));
+  }
+  out << summary_text(result.value(), report, *ending.timeline, summarizer, reading.gaps);
+  const int code = exit_code_for(result.value().verdict, controller::all_clean(report),
+                                 has_verified_worker(report));
+  if (stress_options.formats.empty()) {
+    return code;
+  }
+  auto written = write_results(result.value(), stress_options.formats, stress_options.output_dir,
+                               *ending.sink);
+  if (!written.has_value()) {
+    err << "loadforge: cannot write the result: " << written.error() << "\n";
+    return with_output_failure(code);
+  }
+  for (const std::string& file : written.value()) {
+    out << "result written: " << file << "\n";
+  }
+  return code;
+}
+
+}  // namespace
+
 int run_stress(platform::Syscalls& syscalls, const config::Config& config,
                const std::string& executable, const topology::Snapshot& snapshot,
                const StressOptions& stress_options, std::ostream& out, std::ostream& err) {
@@ -604,56 +664,14 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   if (child_code.has_value()) {
     return *child_code;  // This process is a worker that could not exec.
   }
-  const bool workers_clean = controller::all_clean(report);
-
   // The workers are gone: what is left to do is repeat the units that came
   // out wrong, in processes of their own and say what that shows (M2); then
   // put the result together, say it, and write it (M3). A re-run that could
   // not exec is this process, and ends it.
   verification::isolation::LadderIsolator isolator;
   controller::RealRerunner rerunner(syscalls, executable, controller::RerunOptions{});
-  const auto conclude = [&]() -> int {
-    const HostFacts host =
-        stress_options.host.has_value() ? *stress_options.host : read_host_facts();
-    const statistics::CompensatedSummarizer real_summarizer;
-    const statistics::Summarizer& summarizer =
-        stress_options.summarizer != nullptr ? *stress_options.summarizer : real_summarizer;
-    results::FingerprintContext context;
-    context.build = results::this_build();
-    context.fp_environment = host.fp_environment;
-    context.isa_path = host.isa_path;
-    auto reading = results::read_fingerprint(machine, "", context);
-    ResultInputs inputs;
-    inputs.config = &config;
-    inputs.report = &report;
-    inputs.fingerprint = reading.fingerprint;
-    if (rig != nullptr) {
-      inputs.capabilities = rig->capabilities();
-    }
-    inputs.timeline = &timeline;
-    inputs.summarizer = &summarizer;
-    auto result = assemble_result(inputs);
-    if (!result.has_value()) {
-      err << "loadforge: cannot compute the result: " << result.error() << "\n";
-      return with_output_failure(exit_code_for(report, config));
-    }
-    out << summary_text(result.value(), report, timeline, summarizer, reading.gaps);
-    const int code =
-        exit_code_for(result.value().verdict, workers_clean, has_verified_worker(report));
-    if (stress_options.formats.empty()) {
-      return code;
-    }
-    auto written =
-        write_results(result.value(), stress_options.formats, stress_options.output_dir, sink);
-    if (!written.has_value()) {
-      err << "loadforge: cannot write the result: " << written.error() << "\n";
-      return with_output_failure(code);
-    }
-    for (const std::string& file : written.value()) {
-      out << "result written: " << file << "\n";
-    }
-    return code;
-  };
+  const Ending ending{&config, &report, &machine, &stress_options, rig.get(), &timeline, &sink};
+  const auto conclude = [&ending, &out, &err] { return conclude_run(ending, out, err); };
   return after_isolation(report, &snapshot, isolator, rerunner, stress_options.isolation_limit,
                          reporter, conclude);
 }
