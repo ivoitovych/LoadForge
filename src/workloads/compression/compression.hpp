@@ -41,11 +41,10 @@
 #include <string_view>
 
 #include "core/result.hpp"
+#include "workloads/compression/spec.hpp"
 #include "workloads/workload.hpp"
 
 namespace loadforge::workloads::compression {
-
-inline constexpr std::string_view kName = "compression";
 
 /// One unit's output from its input, in spec.hpp's layout: kMagic and the
 /// block's length, little-endian, the block, and every byte after it zero.

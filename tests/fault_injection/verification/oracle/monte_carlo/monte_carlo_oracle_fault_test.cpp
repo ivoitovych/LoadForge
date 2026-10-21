@@ -5,6 +5,8 @@
 // through, shown to be let through exactly at that bound; and every way the
 // check can fail to happen is NotChecked, never an Agreement.
 
+#include <gtest/gtest.h>
+
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -14,15 +16,13 @@
 #include <variant>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_case.hpp"
 #include "monte_carlo_units.hpp"
 #include "verification/oracle/monte_carlo/monte_carlo_oracle.hpp"
 #include "workloads/monte_carlo/spec.hpp"
 
 namespace loadforge::contracts {
 // The contract header registers both suites; this binary runs neither.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleContract);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 }  // namespace loadforge::contracts
 
 namespace loadforge::tests {

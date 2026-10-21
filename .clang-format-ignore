@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# clang-format formats C++ only. Named on its command line, it rewrites a
+# CMakeLists.txt as C++ (it did to four streams on 2026-10-20, each time
+# breaking the SPDX line), so build files are ignored. clang-format 18 has no
+# '**', hence one pattern per depth.
+CMakeLists.txt
+*/CMakeLists.txt
+*/*/CMakeLists.txt
+*/*/*/CMakeLists.txt
+*/*/*/*/CMakeLists.txt
+*/*/*/*/*/CMakeLists.txt
+*/*/*/*/*/*/CMakeLists.txt
+*/*/*/*/*/*/*/CMakeLists.txt
+*/*/*/*/*/*/*/*/CMakeLists.txt
+*.cmake
+cmake/*.cmake

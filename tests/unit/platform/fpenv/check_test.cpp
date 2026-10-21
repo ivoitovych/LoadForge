@@ -7,7 +7,7 @@
 #include <optional>
 #include <vector>
 
-#include "contracts/fpenv/fpenv_contract.hpp"
+#include "contracts/fpenv/fp_check_contract.hpp"
 #include "platform/fpenv/fpenv.hpp"
 
 namespace loadforge::fpenv {

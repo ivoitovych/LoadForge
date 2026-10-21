@@ -25,17 +25,17 @@ The classes and tiers are a starting point taken from `docs/IMPLEMENTATION.md` �
 
 **You provide** — run each suite against your implementation, from your own tests:
 
-- `RegistryContract` — `tests/contracts/workloads/workload_contract.hpp`
-- `OracleRegistryContract` — `tests/contracts/verification/oracle_contract.hpp`
+- `RegistryContract` — `tests/contracts/workloads/registry_contract.hpp`
+- `OracleRegistryContract` — `tests/contracts/verification/oracle_registry_contract.hpp`
 
 **You consume** — write your own mock of each, as you read its contract, and run the suite against your mock (ADR 0003):
 
 - `SliceRunnerContract` — `tests/contracts/verification/runner_contract.hpp`
 - `RecordCodecContract` — `tests/contracts/verification/record_contract.hpp`
 - `IsolatorContract` — `tests/contracts/verification/isolation_contract.hpp`
-- `SourceContract` — `tests/contracts/telemetry/telemetry_contract.hpp`
-- `FpControlContract` — `tests/contracts/fpenv/fpenv_contract.hpp`
-- `IsaProbeContract` — `tests/contracts/simd/dispatch_contract.hpp`
+- `SourceContract` — `tests/contracts/telemetry/source_contract.hpp`
+- `FpControlContract` — `tests/contracts/fpenv/fp_control_contract.hpp`
+- `IsaProbeContract` — `tests/contracts/simd/isa_probe_contract.hpp`
 
 **Headers you build against** (frozen):
 

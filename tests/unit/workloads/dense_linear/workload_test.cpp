@@ -434,6 +434,5 @@ TEST(DenseLinearCompute, AnEmptyScratchIsAllItNeeds) {
 namespace loadforge::contracts {
 // The registry that links every workload is the integration stream's, and
 // runs RegistryContract there.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
 INSTANTIATE_TYPED_TEST_SUITE_P(DenseLinear, WorkloadContract, workloads::dense_linear::Subjects);
 }  // namespace loadforge::contracts
