@@ -53,7 +53,7 @@ class Threads {
 struct Run {
   Mode mode = Mode::kStress;
   /// How long the workers run, counted from the moment the last of them has
-  /// been started (journal §2.31). Starting them is not part of it.
+  /// been started (journal §2.33). Starting them is not part of it.
   core::Duration duration{0};
 
   [[nodiscard]] friend bool operator==(const Run&, const Run&) = default;

@@ -12,6 +12,7 @@ add_executable(loadforge_unit_tests
   unit/main/selftest_test.cpp
   unit/config/config_test.cpp
   unit/platform/syscall_error_test.cpp
+  unit/platform/syscalls_defaults_test.cpp
   unit/platform/fs_test.cpp
   unit/platform/exit_status_test.cpp
   unit/platform/process_test.cpp

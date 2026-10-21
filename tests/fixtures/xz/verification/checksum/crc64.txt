@@ -1,0 +1,50 @@
+# CRC-64 values read from xz, the reference tool for CRC-64/XZ (F21).
+#
+# Produced 2026-10-20 11:02 UTC on Linux 6.18.44 x86_64, Ubuntu 24.04, xz (XZ Utils) 5.4.5.
+#
+# Each input is the first LENGTH bytes of Philox stream STREAM under seed
+# 0x0C4C64 (src/primitives/rng/philox.hpp, rng::fill_stream), written to a
+# file by this program, compiled with g++ -std=c++20 -I src:
+#
+#   #include <cstdio>
+#   #include <cstdlib>
+#   #include <vector>
+#   #include "primitives/rng/philox.hpp"
+#   int main(int argc, char** argv) {
+#     const auto stream = std::strtoull(argv[1], nullptr, 10);
+#     const auto length = std::strtoull(argv[2], nullptr, 10);
+#     std::vector<std::byte> bytes(length);
+#     loadforge::rng::fill_stream(0x0C4C64, stream, bytes);
+#     std::fwrite(bytes.data(), 1, bytes.size(), stdout);
+#   }
+#
+# then, for each file:
+#
+#   xz -k -f --check=crc64 FILE
+#   xz --robot --list -vv FILE.xz    # the block line's check value, column 11
+#
+# Every file is one xz block, so the block's check value is the CRC-64 of the
+# whole input. The line "check" is printf '123456789', the catalogue's check
+# input, through the same two commands. An empty file has no block in xz and
+# so no value; the empty input's CRC is pinned by the definition, not here.
+#
+# STREAM LENGTH CRC64
+check 9 995dc9bbdf1939fa
+0 1 cd5b15e575e1c3d0
+1 2 750c4a663bfa5d20
+2 7 8fc6072c9a281d84
+3 8 544219b5ae173604
+4 9 e574c15ca1732bb6
+5 15 db4968cb34ce7728
+6 16 514c04f4ab7857fe
+7 17 0265ee52160a04a6
+8 63 e281f9c123744ae5
+9 64 bc4e6b4a327049b1
+10 65 4b0b6cb2cfc04f60
+11 127 1d19d8f6cacabf09
+12 128 5f4956f1b362bfe5
+13 129 0a46d521b75b7870
+14 1000 3be258fe9764903f
+15 4096 0483db3811a5edfd
+16 65537 9c597903e0a478ea
+17 1000003 7daee5e554984fc4

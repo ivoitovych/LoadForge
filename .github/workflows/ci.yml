@@ -100,11 +100,21 @@ jobs:
           ruff format --diff tools/
 
   format-and-tidy:
+    # clang-tidy over the whole tree, one file after another, took 60 to 100
+    # minutes by 2026-10-20 and held every pull request behind it while the
+    # other checks finished in minutes. The files are dealt round-robin to four
+    # shards, and each shard runs one clang-tidy per core.
+    name: format-and-tidy (${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build clang-format-18 clang-tidy-18
       - name: clang-format
+        if: matrix.shard == 1
         run: find src tests -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror
       - name: Configure for compile_commands.json
         # Configure with clang: CompilerWarnings.cmake adds GCC-only flags
@@ -121,4 +131,8 @@ jobs:
         # of the worker contract, and tests/contracts/headers, one unit per
         # contract header, so a header no src/ file includes yet is tidied now
         # (ADR 0004).
-        run: find src tests -name '*.cpp' -not -path 'tests/tools/fixtures/*' | xargs clang-tidy-18 -p build/debug
+        # xargs exits non-zero if any clang-tidy did, including one that crashed.
+        run: |
+          find src tests -name '*.cpp' -not -path 'tests/tools/fixtures/*' | sort \
+            | awk -v shards=4 -v shard=${{ matrix.shard }} 'NR % shards == shard % shards' \
+            | xargs -r -n 1 -P "$(nproc)" clang-tidy-18 -p build/debug --quiet
