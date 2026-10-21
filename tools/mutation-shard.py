@@ -211,9 +211,7 @@ def under(path: str, base: str) -> bool:
     return path == base or path.startswith(base + "/")
 
 
-def targets_of(
-    root: pathlib.Path, paths: list[str], excludes: list[str], label: str
-) -> list[str]:
+def targets_of(root: pathlib.Path, paths: list[str], excludes: list[str], label: str) -> list[str]:
     """The test executables whose tests exercise the code under `paths`, less
     what is under `excludes`, by CMake target.
 
