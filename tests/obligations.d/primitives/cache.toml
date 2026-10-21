@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/cache and nothing else.
+
+[[module]]
+path     = "src/primitives/cache"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T4", "T6"]
+consumes = ["ExecutorContract"]
+note     = """
+The pointer chase over a Sattolo cycle sized from a cache level. P7 is not owed: the \
+capability states belong to the topology module, which reads the source; this \
+module is handed a description. P3 is the description's unknowns as this \
+module meets them: a level absent, an \
+instruction-only level, a size the kernel did not publish, a line size it did \
+not publish or published as zero, and the running machine's own sysfs \
+(tests/unit/primitives/cache reads it through platform::FileSystem and checks \
+the line is a power of two). Cache-line geometry is read, never assumed (PLAN \
+§4.5). P1 is the three loops and the configuration checks; P3 is each \
+refusal (too few nodes, too many, every line-size class, scratch one word \
+short, exactly enough), the cycle through every node at several sizes, whole \
+laps, the largest cache without overflow, and the digest's independence of the \
+line size. T4 draws configurations; T6 is the BitExact sweep including the \
+line sizes. Consumes the Executor, run against the module's own mocks."""

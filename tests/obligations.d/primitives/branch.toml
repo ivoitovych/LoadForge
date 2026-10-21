@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/branch and nothing else.
+
+[[module]]
+path     = "src/primitives/branch"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T4", "T6"]
+consumes = ["ExecutorContract"]
+note     = """
+One data-dependent branch per generated value, tallied by commutative \
+reductions. P1 is both outcomes of the branch, the sort-or-not choice and the \
+loops at zero, one and many iterations. P3 is threshold zero (nothing taken) \
+and the largest value (all but an equal value), a value exactly equal to the \
+threshold (not taken, the comparison is strict), no elements (no scratch), \
+scratch one value short and exactly enough, and a sum that wraps. The \
+metamorphic invariant is that sorting the values changes what the predictor \
+sees and nothing in the result; the oracle filters and reduces with the \
+standard algorithms instead of branching per element. T4 draws configurations \
+and checks monotonicity in the threshold; T6 is the BitExact sweep and the \
+sorted-equals-unsorted identity. Consumes the Executor, run against the \
+module's own mocks."""
