@@ -2,8 +2,7 @@
 //
 // The contract this module provides, run against the workload at each radix;
 // and the contract it consumes, run against this module's own stand-ins for an
-// executor (ADR 0003). The suite of the registry is the integration stream's:
-// this binary instantiates only the workload suite.
+// executor (ADR 0003).
 
 #include <gtest/gtest.h>
 
@@ -20,8 +19,6 @@
 #include "workloads/workload.hpp"
 
 namespace loadforge::contracts {
-
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
 
 namespace {
 
