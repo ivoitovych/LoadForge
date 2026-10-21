@@ -149,5 +149,4 @@ INSTANTIATE_TYPED_TEST_SUITE_P(CompressionOracle, OracleContract, CompressionOra
 
 // The registry's suite comes with the header; the registry is the
 // integration stream's to provide (oracle.hpp), not this module's.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 }  // namespace loadforge::contracts

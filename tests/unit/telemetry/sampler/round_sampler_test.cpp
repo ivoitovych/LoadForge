@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "contracts/telemetry/sampler_contract.hpp"
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/telemetry/source_contract.hpp"
 #include "telemetry/sampler.hpp"
 #include "telemetry/timeline/bounded_timeline.hpp"
 
@@ -111,7 +111,6 @@ INSTANTIATE_TYPED_TEST_SUITE_P(RoundSampler, SamplerContract,
                                ::testing::Types<telemetry::SamplerSubject>);
 INSTANTIATE_TYPED_TEST_SUITE_P(Mock, SourceContract, telemetry::MockSources);
 // The timeline's suite belongs to the timeline's tests.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TimelineContract);
 
 }  // namespace loadforge::contracts
 

@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/telemetry/source_contract.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
 #include "telemetry/sample.hpp"
@@ -325,9 +325,6 @@ struct MockMixed {
 }  // namespace loadforge::telemetry
 
 namespace loadforge::contracts {
-
-// This file runs the source suite only.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TimelineContract);
 
 namespace {
 
