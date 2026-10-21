@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
 #include <set>
 #include <utility>
 #include <vector>
@@ -134,13 +135,14 @@ inline double leaf_order_sum(const std::vector<Leaf>& leaves) {
 /// late would have produced.
 inline double reverse_order_sum(const std::vector<Leaf>& leaves) {
   double total = 0.0;
-  for (auto leaf = leaves.rbegin(); leaf != leaves.rend(); ++leaf) {
-    total += leaf->value;
+  for (const Leaf& leaf : std::views::reverse(leaves)) {
+    total += leaf.value;
   }
   return total;
 }
 
 /// The same leaves added pairwise.
+// NOLINTNEXTLINE(misc-no-recursion): divide and conquer of bounded depth log2(n)
 inline double pairwise_sum(const std::vector<double>& values, std::size_t from, std::size_t to) {
   if (to - from == 1) {
     return values[from];
@@ -151,6 +153,7 @@ inline double pairwise_sum(const std::vector<double>& values, std::size_t from, 
 
 inline double pairwise_order_sum(const std::vector<Leaf>& leaves) {
   std::vector<double> values;
+  values.reserve(leaves.size());
   for (const Leaf& leaf : leaves) {
     values.push_back(leaf.value);
   }
@@ -189,8 +192,8 @@ inline contracts::OracleCase unit_of(std::uint64_t index, const Hotspots& hotspo
 /// it splits down to the finest level, and it has kMaxLeavesPerCell leaves.
 inline Hotspots crowded(std::size_t c) {
   Hotspots hotspots{};
-  const std::uint32_t cx = static_cast<std::uint32_t>(c % spec::kBaseCells);
-  const std::uint32_t cy = static_cast<std::uint32_t>(c / spec::kBaseCells);
+  const auto cx = static_cast<std::uint32_t>(c % spec::kBaseCells);
+  const auto cy = static_cast<std::uint32_t>(c / spec::kBaseCells);
   for (std::uint32_t h = 0; h < spec::kHotspots; ++h) {
     hotspots[h] = spec::Hotspot{cx * 32 + (h % 16) * 2 + 1, cy * 32 + (h / 16) * 2};
   }

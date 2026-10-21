@@ -185,13 +185,13 @@ bool well_formed(const rt::Bytes& output, std::size_t p) {
   if (primitive == spec::kNoHit) {
     return bits == spec::kNoHitDistanceBits;
   }
-  const double t = std::bit_cast<double>(bits);
+  const auto t = std::bit_cast<double>(bits);
   return primitive < spec::kPrimitives && std::isfinite(t) && t > 0.0;
 }
 
 /// What the specification says about tile 0 of edge 16: nullopt when nothing
 /// in it is wrong, otherwise whether the failure carries a difference.
-enum class Expected { kNothing, kSumDiffers, kMalformed };
+enum class Expected : std::uint8_t { kNothing, kSumDiffers, kMalformed };
 
 Expected expectation_for_tile_zero(const rt::Bytes& output) {
   double sum = 0.0;
@@ -281,7 +281,13 @@ bool in_range_after(const rt::Bytes& input) {
     spec::Interval range;
     if (i < rt::kSphereValues) {
       const std::size_t c = i % 4;
-      range = c < 2 ? spec::kSphereXy : (c == 2 ? spec::kSphereZ : spec::kRadius);
+      if (c < 2) {
+        range = spec::kSphereXy;
+      } else if (c == 2) {
+        range = spec::kSphereZ;
+      } else {
+        range = spec::kRadius;
+      }
     } else {
       range = (i - rt::kSphereValues) % 3 < 2 ? spec::kVertexXy : spec::kVertexZ;
     }
@@ -302,7 +308,7 @@ TEST(RaytraceCorruption, ABitOfTheInputIsNotCheckedWhenItLeavesTheRangeAndJudged
     const std::size_t value = bit / 64;
     const bool listed = value < 12 ||
                         (value >= rt::kSphereValues - 4 && value < rt::kSphereValues + 27) ||
-                        value >= rt::kSphereValues + 9 * 127 || bit % 29 == 0;
+                        value >= rt::kSphereValues + std::size_t{9} * 127 || bit % 29 == 0;
     if (!listed) {
       continue;
     }

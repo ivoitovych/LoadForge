@@ -137,7 +137,7 @@ TEST(AdaptiveMeshOracle, AgreesAfterComparingEveryCountAndEverySampledIntegral) 
 TEST(AdaptiveMeshOracle, AnyOrderOfAddingTheLeavesIsRight) {
   const mesh::Hotspots hotspots = mesh::generated(2, 3);
   const mesh::Model model = mesh::model_of(hotspots);
-  mesh::Bytes forward = mesh::render(model);
+  const mesh::Bytes forward = mesh::render(model);
   mesh::Bytes backward = forward;
   mesh::Bytes pairwise = forward;
   bool differed = false;

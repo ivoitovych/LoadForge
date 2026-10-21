@@ -134,7 +134,7 @@ TEST(RaytraceGeometry, GeneratedScenesAgreeWithAnExtendedPrecisionSolutionPixelB
       }
       ++judged;
       const std::uint32_t stored = rt::get32(output, spec::pixel_offset(p) + 8);
-      const double t = std::bit_cast<double>(rt::get64(output, spec::pixel_offset(p)));
+      const auto t = std::bit_cast<double>(rt::get64(output, spec::pixel_offset(p)));
       if (tight.primitive == spec::kNoHit) {
         EXPECT_EQ(stored, spec::kNoHit) << "unit " << index << " pixel " << p;
         EXPECT_EQ(t, spec::kNoHitDistance);
@@ -176,7 +176,7 @@ TEST(RaytraceGeometry, ATriangleInThePlaneOfTheOriginIsMetAtFourWhereTheRayFalls
     }
     const bool by_hand = (s0 > 0 && s1 > 0 && s2 > 0) || (s0 < 0 && s1 < 0 && s2 < 0);
     const std::uint32_t stored = rt::get32(output, spec::pixel_offset(p) + 8);
-    const double t = std::bit_cast<double>(rt::get64(output, spec::pixel_offset(p)));
+    const auto t = std::bit_cast<double>(rt::get64(output, spec::pixel_offset(p)));
     if (by_hand) {
       ++inside;
       EXPECT_EQ(stored, spec::kSpheres) << "pixel " << p;
@@ -204,7 +204,7 @@ TEST(RaytraceGeometry, ASphereIsMetAtTheNearerRootOfTheQuadratic) {
     const Ld c = 25.0L - 0.125L * 0.125L;
     const Ld disc = b * b - 4 * a * c;
     const std::uint32_t stored = rt::get32(output, spec::pixel_offset(p) + 8);
-    const double t = std::bit_cast<double>(rt::get64(output, spec::pixel_offset(p)));
+    const auto t = std::bit_cast<double>(rt::get64(output, spec::pixel_offset(p)));
     if (disc > 1e-9L) {
       ++met;
       EXPECT_EQ(stored, 3U) << "pixel " << p;

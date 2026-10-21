@@ -221,7 +221,7 @@ TEST(AdaptiveMeshNotChecked, AHotspotOffTheLatticeComparesNothingEvenOverACorrup
 }
 
 TEST(AdaptiveMeshNotChecked, APlanThatIsNotAnAdaptiveMeshUnitGivesNoOracleAtAll) {
-  workloads::Plan plan{spec::kInputBytes, spec::kOutputBytes, 0, 1, 4, 0, 0};
+  const workloads::Plan plan{spec::kInputBytes, spec::kOutputBytes, 0, 1, 4, 0, 0};
   const auto refused = create(workloads::WorkloadConfig{}, plan);
   ASSERT_FALSE(refused.has_value());
   EXPECT_EQ(refused.error().fault, OracleFault::kConfiguration);

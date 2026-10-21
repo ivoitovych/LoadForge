@@ -443,14 +443,14 @@ TEST(RaytraceOracle, EveryRangeOfTheInputIsHeldAtBothEndsAndRefusedBeyond) {
       {1, spec::kSphereXy, "sphere 0 centre y"},
       {2, spec::kSphereZ, "sphere 0 centre z"},
       {3, spec::kRadius, "sphere 0 radius"},
-      {4 * 127, spec::kSphereXy, "sphere 127 centre x"},
-      {4 * 127 + 3, spec::kRadius, "sphere 127 radius"},
+      {std::size_t{4} * 127, spec::kSphereXy, "sphere 127 centre x"},
+      {std::size_t{4} * 127 + 3, spec::kRadius, "sphere 127 radius"},
       {rt::kSphereValues, spec::kVertexXy, "triangle 0 vertex 0 x"},
       {rt::kSphereValues + 1, spec::kVertexXy, "triangle 0 vertex 0 y"},
       {rt::kSphereValues + 2, spec::kVertexZ, "triangle 0 vertex 0 z"},
       {rt::kSphereValues + 3, spec::kVertexXy, "triangle 0 vertex 1 x"},
       {rt::kSphereValues + 7, spec::kVertexXy, "triangle 0 vertex 2 y"},
-      {rt::kSphereValues + 9 * 127 + 8, spec::kVertexZ, "triangle 127 vertex 2 z"},
+      {rt::kSphereValues + std::size_t{9} * 127 + 8, spec::kVertexZ, "triangle 127 vertex 2 z"},
   };
   const rt::Values base = rt::generated(4, 4);
   for (const Kind& kind : kinds) {
