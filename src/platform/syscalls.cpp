@@ -65,6 +65,10 @@ bool operator==(const PerfCount& lhs, const PerfCount& rhs) noexcept {
 // genuine paths in a temporary directory, including genuine failures: a missing
 // file for ENOENT, a directory for EISDIR, and a closed descriptor for EBADF.
 
+core::Result<bool, SyscallError> Syscalls::has_exited(pid_t /*pid*/) {
+  return SyscallError{ENOSYS, "waitid", ""};
+}
+
 core::Result<int, SyscallError> Syscalls::open_perf_event(const PerfEventSpec& /*spec*/) {
   return SyscallError{ENOSYS, "perf_event_open", ""};
 }
@@ -142,6 +146,15 @@ core::Result<std::optional<Reaped>, SyscallError> reap_result(pid_t pid, int sta
   return std::optional<Reaped>{Reaped{pid, status}};
 }
 
+// Two ints in a row, for the reason fork_result has two.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+core::Result<bool, SyscallError> exit_peek_result(int returned, pid_t reported_pid, int number) {
+  if (returned < 0) {
+    return SyscallError{number, "waitid", "exit status, without reaping"};
+  }
+  return reported_pid != 0;
+}
+
 core::Result<pid_t, SyscallError> RealSyscalls::fork_process() {
   // The bare call. What its answer means is fork_result's to decide, above the
   // seam, where a test reaches every arm without creating a process. In the
@@ -214,6 +227,16 @@ core::Result<core::Ok, SyscallError> RealSyscalls::send_signal(pid_t pid, int si
   const int number = errno;
   return result_or_error<core::Ok>(core::Ok{}, failed, number, "kill",
                                    "pid " + std::to_string(pid));
+}
+
+core::Result<bool, SyscallError> RealSyscalls::has_exited(pid_t pid) {
+  // siginfo is zeroed so that "nothing to report" reads as si_pid 0, which is
+  // how WNOHANG says the child is still running. The bare call: what the
+  // answer means is exit_peek_result's to decide.
+  siginfo_t info{};
+  const int returned = ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT);
+  const int number = errno;
+  return exit_peek_result(returned, info.si_pid, number);
 }
 
 core::Result<TimeSpec, SyscallError> RealSyscalls::read_clock(int clock_id) {

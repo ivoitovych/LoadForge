@@ -2,7 +2,10 @@
 name: ci
 on:
   push: { branches: [main] }
+  # A pull request that changes only documentation builds nothing these jobs
+  # check; licensing.yml still runs on it. Every push to main runs in full.
   pull_request:
+    paths-ignore: ['docs/**', 'reviews/**', '**/*.md', '*.md']
 
 concurrency:
   group: ci-${{ github.ref }}

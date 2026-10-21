@@ -15,4 +15,8 @@ this kernel): the loops at every depth including 1; first and last tile and \
 panel; odd addresses; subnormal, NaN, infinity, signed zeros; fused, not \
 rounded. T1 is PanelKernelSuite and T6 PanelKernelDeterminism, both against \
 the std::fma model of panel.hpp, which makes this kernel's bits the AVX2 \
-kernel's too."""
+kernel's too. The graph workload's NEON PageRank sweep \
+(graph_sweep_neon.cpp) lives here as well, two, four or eight accumulators \
+as q registers with the ranks loaded one lane at a time; it has no suite of \
+its own and is covered through the graph workload's tiers on AArch64 \
+(tests/obligations.d/workloads/graph.toml)."""

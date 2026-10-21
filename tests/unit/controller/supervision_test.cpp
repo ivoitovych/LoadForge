@@ -72,7 +72,7 @@ TEST(FateWordsTest, EvidenceComparesFieldByField) {
   b.status = exited(1);
   EXPECT_NE(a, b);
   b = a;
-  b.signal_sent = SIGTERM;
+  b.signal_attempted = SIGTERM;
   EXPECT_NE(a, b);
   b = a;
   b.stale_when_signalled = true;
@@ -88,6 +88,9 @@ TEST(FateWordsTest, EvidenceComparesFieldByField) {
   EXPECT_NE(a, b);
   b = a;
   b.oom_kill_recorded = true;
+  EXPECT_NE(a, b);
+  b = a;
+  b.oom_inconclusive = true;
   EXPECT_NE(a, b);
 }
 
@@ -128,11 +131,11 @@ TEST(ClassifyTest, SignalsAreFaultsKillsOrTheControllersOwn) {
       << "a SIGTERM the controller did not send";
 
   Evidence stopped = after(signalled(SIGTERM));
-  stopped.signal_sent = SIGTERM;
+  stopped.signal_attempted = SIGTERM;
   EXPECT_EQ(classify(stopped), WorkerFate::kStoppedByController);
 
   Evidence killed_stale = after(signalled(SIGKILL));
-  killed_stale.signal_sent = SIGKILL;
+  killed_stale.signal_attempted = SIGKILL;
   killed_stale.stale_when_signalled = true;
   EXPECT_EQ(classify(killed_stale), WorkerFate::kTimedOut);
 
@@ -143,13 +146,13 @@ TEST(ClassifyTest, SignalsAreFaultsKillsOrTheControllersOwn) {
   // The controller sent SIGTERM; the worker died of SIGSEGV meanwhile. The
   // fault is the fact; the signal the controller sent is not what killed it.
   Evidence crashed_while_stopping = after(signalled(SIGSEGV));
-  crashed_while_stopping.signal_sent = SIGTERM;
+  crashed_while_stopping.signal_attempted = SIGTERM;
   EXPECT_EQ(classify(crashed_while_stopping), WorkerFate::kFault);
 
   // Exited 0 after the controller asked: the request was honoured, and with
   // the finished record that is a completion, not a stop.
   Evidence honoured = after(exited(0));
-  honoured.signal_sent = SIGTERM;
+  honoured.signal_attempted = SIGTERM;
   honoured.finished_seen = true;
   EXPECT_EQ(classify(honoured), WorkerFate::kCompleted);
 }
@@ -170,7 +173,7 @@ TEST(OomClassifyTest, ASigkillNobodyHereSentIsAnOomKillOnlyWithTheKernelsRecord)
 
   // The controller had asked it to stop with SIGTERM; the SIGKILL was not its.
   Evidence terminated = recorded(signalled(SIGKILL));
-  terminated.signal_sent = SIGTERM;
+  terminated.signal_attempted = SIGTERM;
   EXPECT_EQ(classify(terminated), WorkerFate::kOomKilled);
 }
 
@@ -181,12 +184,14 @@ TEST(OomClassifyTest, TheRecordExplainsNoOtherDeath) {
     EXPECT_EQ(classify(recorded(signalled(signal))), WorkerFate::kFault)
         << "a fault stays a fault: " << signal;
   }
-  // A SIGKILL the controller sent is the controller's, record or not.
+  // A SIGKILL the controller attempted does not outrank the record: kill(2)
+  // succeeds on a zombie, so the attempt proves nothing about the cause. The
+  // rise in the count explains the death (EXT-01).
   Evidence escalated = recorded(signalled(SIGKILL));
-  escalated.signal_sent = SIGKILL;
-  EXPECT_EQ(classify(escalated), WorkerFate::kStoppedByController);
+  escalated.signal_attempted = SIGKILL;
+  EXPECT_EQ(classify(escalated), WorkerFate::kOomKilled);
   escalated.stale_when_signalled = true;
-  EXPECT_EQ(classify(escalated), WorkerFate::kTimedOut);
+  EXPECT_EQ(classify(escalated), WorkerFate::kOomKilled);
   // An exit is an exit.
   EXPECT_EQ(classify(recorded(exited(1))), WorkerFate::kWorkerError);
   Evidence finished = recorded(exited(0));
@@ -199,15 +204,16 @@ TEST(OomClassifyTest, TheRecordExplainsNoOtherDeath) {
   EXPECT_EQ(classify(recorded(ExitStatus{0xff})), WorkerFate::kUnrecognised);
 }
 
-TEST(OomCandidateTest, OnlyASigkillTheControllerDidNotSendOnAnIntactChannel) {
+TEST(OomCandidateTest, AnySigkillDeathOnAnIntactChannelIncludingOneTheControllerAttempted) {
   EXPECT_TRUE(oom_candidate(after(signalled(SIGKILL))));
   Evidence after_term = after(signalled(SIGKILL));
-  after_term.signal_sent = SIGTERM;
+  after_term.signal_attempted = SIGTERM;
   EXPECT_TRUE(oom_candidate(after_term)) << "the controller sent SIGTERM, not this SIGKILL";
 
   Evidence sent = after(signalled(SIGKILL));
-  sent.signal_sent = SIGKILL;
-  EXPECT_FALSE(oom_candidate(sent)) << "the controller's own SIGKILL";
+  sent.signal_attempted = SIGKILL;
+  EXPECT_TRUE(oom_candidate(sent))
+      << "the controller's attempted SIGKILL does not take the death out of the count's reach";
   Evidence corrupt = after(signalled(SIGKILL));
   corrupt.channel_corrupt = true;
   EXPECT_FALSE(oom_candidate(corrupt));
@@ -221,12 +227,75 @@ TEST(OomCandidateTest, OnlyASigkillTheControllerDidNotSendOnAnIntactChannel) {
 using Count = core::Result<std::uint64_t, std::string>;
 constexpr std::string_view kScope = "/sys/fs/cgroup/run.scope/memory.events";
 
+// --- a controller SIGKILL is an attempt, not a cause (EXT-01) -------------------------
+
+/// The controller attempted SIGKILL and the worker was reaped dead of SIGKILL.
+Evidence attempted_kill(bool stale) {
+  Evidence evidence = after(signalled(SIGKILL));
+  evidence.signal_attempted = SIGKILL;
+  evidence.stale_when_signalled = stale;
+  return evidence;
+}
+
+TEST(AttemptedKillTest, WithTheCountReadAndUnmovedItIsTheControllersStop) {
+  // Nothing consulted, or the count read and not moved: the attempt is the
+  // best-supported reading and is reported as before.
+  EXPECT_EQ(classify(attempted_kill(false)), WorkerFate::kStoppedByController);
+  EXPECT_EQ(classify(attempted_kill(true)), WorkerFate::kTimedOut);
+}
+
+TEST(AttemptedKillTest, ARiseInTheCountOutranksTheAttempt) {
+  Evidence stop = attempted_kill(false);
+  stop.oom_kill_recorded = true;
+  EXPECT_EQ(classify(stop), WorkerFate::kOomKilled);
+  Evidence timeout = attempted_kill(true);
+  timeout.oom_kill_recorded = true;
+  EXPECT_EQ(classify(timeout), WorkerFate::kOomKilled);
+}
+
+TEST(AttemptedKillTest, ACountThatCannotAccountForTheDeathLeavesTheProvenanceAmbiguous) {
+  // The count was consulted and neither explains the death nor rules an OOM
+  // kill out. The attempt and an OOM kill (or another SIGKILL) cannot be told
+  // apart, and the verdict is the neutral one: killed.
+  for (const bool stale : {false, true}) {
+    Evidence ambiguous = attempted_kill(stale);
+    ambiguous.oom_inconclusive = true;
+    EXPECT_EQ(classify(ambiguous), WorkerFate::kKilled) << stale;
+  }
+}
+
+TEST(AttemptedKillTest, OnlyASigkillDeathMatchingASigkillAttemptIsAmbiguous) {
+  // A SIGTERM attempt that killed by SIGTERM is the controller's, whatever the
+  // count: the OOM killer sends SIGKILL and nothing else.
+  Evidence term = after(signalled(SIGTERM));
+  term.signal_attempted = SIGTERM;
+  term.oom_inconclusive = true;
+  EXPECT_EQ(classify(term), WorkerFate::kStoppedByController);
+  term.oom_kill_recorded = true;
+  EXPECT_EQ(classify(term), WorkerFate::kStoppedByController);
+  // A worker that was sent SIGKILL and died of a fault is a fault.
+  Evidence crashed = after(signalled(SIGSEGV));
+  crashed.signal_attempted = SIGKILL;
+  crashed.oom_inconclusive = true;
+  EXPECT_EQ(classify(crashed), WorkerFate::kFault);
+}
+
+TEST(OomFindingTest, OnlyACountReadAtBothEndsAndUnmovedRulesAnOomKillOut) {
+  EXPECT_TRUE(judge_oom_kills(Count{7}, Count{7}, 1, "scope").ruled_out);
+  EXPECT_FALSE(judge_oom_kills(Count{7}, Count{7}, 1, "scope").attributed);
+  EXPECT_FALSE(judge_oom_kills(Count{4}, Count{5}, 1, "scope").ruled_out);
+  EXPECT_FALSE(judge_oom_kills(Count{0}, Count{1}, 2, "scope").ruled_out);
+  EXPECT_FALSE(judge_oom_kills(Count{5}, Count{2}, 1, "scope").ruled_out);
+  EXPECT_FALSE(judge_oom_kills(std::string{"no"}, Count{2}, 1, "scope").ruled_out);
+  EXPECT_FALSE(judge_oom_kills(Count{2}, std::string{"no"}, 1, "scope").ruled_out);
+}
+
 TEST(JudgeOomTest, EnoughKillsCountedAttributesEveryCandidate) {
   const OomFinding one = judge_oom_kills(Count{4}, Count{5}, 1, kScope);
   EXPECT_TRUE(one.attributed);
   EXPECT_EQ(one.note,
             "OOM kill: /sys/fs/cgroup/run.scope/memory.events counted 1 during the run, one or "
-            "more for each of the 1 worker(s) killed by a SIGKILL the controller did not send");
+            "more for each of the 1 worker(s) killed by a SIGKILL");
   EXPECT_TRUE(judge_oom_kills(Count{0}, Count{2}, 2, kScope).attributed) << "exactly as many";
   EXPECT_TRUE(judge_oom_kills(Count{0}, Count{3}, 2, kScope).attributed)
       << "more: something else in the cgroup was killed too, and each worker still has one";
@@ -245,8 +314,8 @@ TEST(JudgeOomTest, FewerKillsThanCandidatesAttributesNoneBecauseACountDoesNotSay
   EXPECT_FALSE(few.attributed);
   EXPECT_EQ(few.note,
             "not attributed to the OOM killer: /sys/fs/cgroup/run.scope/memory.events counted 1 "
-            "OOM kill(s) during the run for 2 workers killed by a SIGKILL the controller did not "
-            "send, and a count does not say which");
+            "OOM kill(s) during the run for 2 workers killed by a SIGKILL, and a count does not "
+            "say which");
 }
 
 TEST(JudgeOomTest, ACountThatWentBackIsNotTheSameCount) {

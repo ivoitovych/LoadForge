@@ -2,8 +2,8 @@
 //
 // The seam's defaults. A call added after M1 has an ENOSYS default so that
 // adding it breaks no implementation. This is the smallest Syscalls that
-// compiles: every call that is still pure is stubbed, and the perf-event calls
-// are left alone, so what is asserted is the base class's own answer.
+// compiles: every call that is still pure is stubbed, and the calls with a
+// default are left alone, so what is asserted is the base class's own answer.
 
 #include <gtest/gtest.h>
 
@@ -111,6 +111,16 @@ class MinimalSyscalls final : public Syscalls {
     return SyscallError{ENOSYS, "stub", ""};
   }
 };
+
+TEST(SyscallsDefaults, AskingWhetherAChildHasExitedIsNotImplemented) {
+  MinimalSyscalls calls;
+
+  const auto result = calls.has_exited(1);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().number, ENOSYS);
+  EXPECT_EQ(result.error().call, "waitid");
+}
 
 TEST(SyscallsDefaults, OpeningACounterIsNotImplemented) {
   MinimalSyscalls calls;

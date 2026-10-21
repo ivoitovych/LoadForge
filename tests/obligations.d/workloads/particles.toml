@@ -2,11 +2,58 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/particles and nothing else.
 
 [[module]]
-path    = "src/workloads/particles"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the particles specification alone (spec.hpp, ADR 0004): the coordinate generator, the cells per cutoff and the term error and force tolerance, each tested in tests/contracts/workloads/. \
-The particles stream takes this row over with the workload and owes what \
-IMPLEMENTATION §3 lists for it -- P4 and P5, and T3, T4, T5, T5b, T6 -- with \
-provides = ["WorkloadContract"]."""
+path     = "src/workloads/particles"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+fixtures = ["determinism/workloads/particles/golden.txt"]
+note     = """
+The particles workload: a cell-list neighbour search and a short-range force \
+sum, with a scalar kernel and one vector kernel (four lanes for AVX2, two for \
+NEON) behind the dispatch seam. Declared class BitExactFixedDecomposition, \
+contract Bounded. \
+\
+P1 is the search and the kernels: the cell of a coordinate (below zero, NaN, \
+at or beyond the box edge, exactly on a cell boundary), the rows of cells a \
+cell looks at and the pruning of cells that cannot hold a neighbour (checked \
+against the cell geometry for every offset, and by a pair placed at every \
+offset a decomposition reaches), the empty and the whole-cell runs, the \
+masked tail of a run in a vector, and the term that is exactly zero at the \
+cutoff and active a double below it. \
+\
+P3 is the domain: the corners and faces of the box, all particles at one \
+point (one cell, n^2 terms at most, all zero), particles on a lattice at \
+exactly the cutoff, a dense cluster with hundreds of neighbours, and every \
+double that is not a coordinate in the box -- NaN, infinity, negative, \
+subnormal, 16 itself -- which compute() takes as input, deterministically, \
+without leaving the spans. \
+\
+P4 is not a verification path the workload owns -- the verified runner and \
+the oracle stream own those -- but the workload's output is what they \
+classify, so the tests do what a verification path would do to it: T5 flips \
+each of the 64 bits of each of the 48 checked output entries and asserts the \
+verdict the specification's bound gives (caught above twice the tolerance, \
+unseen below a quarter of it), names the first failing entry in checking \
+order, and corrupts the input between generate and compute; T5b shows an \
+unrun check -- evidence of the wrong size, an input with no derivable \
+tolerance -- is never an agreement. The check used is the stream's own \
+reading of the specification, in tests/oracle/workloads/particles/. \
+\
+P5 is absent by design: the workload starts no thread and holds no atomic. \
+Its tasks read the sorted structure and write distinct slots, and what they \
+write happens-before run() returns by the Executor contract; the tests that \
+run it on a real thread pool run under ThreadSanitizer. \
+\
+T3 is the direct O(n^2) force summation on a subset of the particles, with \
+the tolerance derived in spec.hpp, for every decomposition and path. T4 is the \
+balance of the forces (Newton's third law, to the bound of the summation), \
+relabelling and mirroring the box, independence of the unit index, locality, \
+and totality over bit-flipped and special-valued inputs. T6 is the thread \
+sweep 1, 2, 3, 4, 7 with repeat runs, the difference across decompositions \
+and paths within the derived tolerance, and golden units per path, whose \
+scalar rows are also the cross-architecture check. \
+\
+The tests run ExecutorContract against their own executors (a serial one and \
+a thread pool taking indices dynamically) and WorkloadContract against the \
+workload, on both paths and three decompositions."""
