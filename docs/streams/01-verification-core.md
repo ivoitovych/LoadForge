@@ -1,6 +1,6 @@
 # Stream 01 — Verification core: records on the wire, exact comparison, checksums, golden vectors
 
-**State:** not started  
+**State:** complete, 2026-10-20 11:40 UTC, on `feature/verification-core`; the pull request is the manager's to open  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

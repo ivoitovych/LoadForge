@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry/sources/edac and nothing else.
+
+[[module]]
+path             = "src/telemetry/sources/edac"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2"]
+fixtures         = ["sysfs/edac/two-controllers", "sysfs/edac/absent", "sysfs/edac/malformed"]
+fixture_builders = ["tests/unit/telemetry/sources/edac/edac_test.cpp"]
+provides         = ["SourceContract"]
+note             = """
+Corrected and uncorrected memory errors per controller (F13), the names \
+result.hpp's verdict reads. P7 is the six states: present, absent (a \
+committed tree, and the sandbox's own /sys), malformed (a committed tree and \
+six more hostile counts built per test), denied, vanished and wraps (built by \
+the test: a refused open, a removed file, a count that passes 2^32). Absent \
+is unsupported and its remedy advises nothing, never permission (F3's table); \
+a test asserts that no word of privilege appears in it. P1 is the controller \
+walk (the first controller without a corrected count ends it; a denial does \
+not) and the remedy switch, every arm taken. P2 is the read of a count that \
+fails with EIO at probe and at sample and the driver's refusal after a \
+successful open: the read goes through FileSystem, whose own errnos are \
+injected in src/platform, so here the failures are those the source must \
+classify (denied, unreadable, vanished). P3 is the 32-bit counter boundary: \
+4294967295 accepted, 4294967296 refused, and the text forms of a bad count \
+(sign, fraction, empty, trailing characters, overflow of 64 bits)."""

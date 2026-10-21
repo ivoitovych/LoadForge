@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/integer and nothing else.
+
+[[module]]
+path     = "src/primitives/integer"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T4", "T6"]
+consumes = ["ExecutorContract"]
+note     = """
+Four lock-step LCG chains per unit; the digest is a pure function of \
+(seed, unit, steps). P1 is the step loop at zero, one and many iterations and \
+the run's loop over zero, one and many units. P3 is zero steps, a step count \
+that is a power of two and one either side, a unit index past 2^32, and a \
+total that wraps modulo 2^64 (unsigned throughout, so no undefined behaviour; \
+UBSan runs it). The oracle does not step: it squares the affine map x -> A*x + \
+C, derived from the algebra (tests/unit/primitives/integer). T4 draws \
+configurations from the project's own generator; T6 is the BitExact sweep: \
+byte-identical at 1, 2, 3, 4 and 7 threads and across repeats. Consumes the \
+Executor, run against the module's own serial and threaded mocks."""

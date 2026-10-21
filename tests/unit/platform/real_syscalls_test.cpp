@@ -1379,5 +1379,97 @@ TEST_F(RealSyscallsTest, MappingZeroBytesOfAMemoryFileIsEINVAL) {
   EXPECT_TRUE(syscalls.close(fd.value()).has_value());
 }
 
+// --- performance counters ------------------------------------------------------
+//
+// Whether this machine grants a counter depends on its PMU, on
+// perf_event_paranoid and on a container's seccomp filter, so a test cannot
+// choose between success and refusal. It asserts what holds either way -- a
+// granted counter works end to end, a refused one carries the kernel's errno
+// and names the call -- and the arms the machine does not take are reached
+// through the files and descriptors below, which behave the same everywhere.
+
+TEST_F(RealSyscallsTest, ASoftwareCounterIsGrantedAndWorksOrIsRefusedWithTheKernelsErrno) {
+  PerfEventSpec spec;
+  spec.type = 1;    // PERF_TYPE_SOFTWARE
+  spec.config = 3;  // PERF_COUNT_SW_CONTEXT_SWITCHES
+  for (const bool user_only : {false, true}) {
+    spec.user_only = user_only;
+    spec.inherit = user_only;
+    auto opened = syscalls.open_perf_event(spec);
+    if (!opened.has_value()) {
+      EXPECT_EQ(opened.error().call, "perf_event_open");
+      EXPECT_EQ(opened.error().subject, "perf event type 1 config 3");
+      EXPECT_TRUE(opened.error().number == EACCES || opened.error().number == EPERM ||
+                  opened.error().number == ENOSYS || opened.error().number == ENOENT)
+          << describe(opened.error());
+      continue;
+    }
+    const int fd = opened.value();
+    EXPECT_TRUE(syscalls.control_perf_event(fd, PerfAction::kReset).has_value());
+    EXPECT_TRUE(syscalls.control_perf_event(fd, PerfAction::kEnable).has_value());
+    EXPECT_TRUE(syscalls.control_perf_event(fd, PerfAction::kDisable).has_value());
+    auto count = syscalls.read_perf_count(fd);
+    ASSERT_TRUE(count.has_value());
+    EXPECT_LE(count.value().time_running, count.value().time_enabled);
+    EXPECT_TRUE(syscalls.close(fd).has_value());
+  }
+}
+
+TEST_F(RealSyscallsTest, ACounterOnAPmuThatDoesNotExistIsRefused) {
+  PerfEventSpec spec;
+  spec.type = 0xFFFFFF;
+  auto opened = syscalls.open_perf_event(spec);
+  ASSERT_FALSE(opened.has_value());
+  EXPECT_EQ(opened.error().call, "perf_event_open");
+  EXPECT_EQ(opened.error().subject, "perf event type 16777215 config 0");
+  EXPECT_NE(opened.error().number, 0);
+}
+
+TEST_F(RealSyscallsTest, ControllingADescriptorThatIsNotACounterIsRefused) {
+  const std::string path = write("plain", "x");
+  auto plain = syscalls.open_read(path);
+  ASSERT_TRUE(plain.has_value());
+  for (const PerfAction action : {PerfAction::kReset, PerfAction::kEnable, PerfAction::kDisable}) {
+    auto refused = syscalls.control_perf_event(plain.value(), action);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().number, ENOTTY);
+    EXPECT_EQ(refused.error().call, "ioctl");
+    auto closed_fd = syscalls.control_perf_event(-1, action);
+    ASSERT_FALSE(closed_fd.has_value());
+    EXPECT_EQ(closed_fd.error().number, EBADF);
+  }
+  EXPECT_TRUE(syscalls.close(plain.value()).has_value());
+}
+
+TEST_F(RealSyscallsTest, AnActionOutsideTheEnumerationIsEINVALWithoutCallingTheKernel) {
+  auto refused = syscalls.control_perf_event(-1, static_cast<PerfAction>(99));
+  ASSERT_FALSE(refused.has_value());
+  EXPECT_EQ(refused.error().number, EINVAL) << "not EBADF: the request was never issued";
+  EXPECT_EQ(refused.error().subject, "fd -1");
+}
+
+TEST_F(RealSyscallsTest, ACounterReadIsThreeWordsAndNothingShorter) {
+  std::array<std::uint64_t, 3> words{7, 900, 450};
+  const std::string whole(reinterpret_cast<const char*>(words.data()), sizeof(words));
+  auto whole_fd = syscalls.open_read(write("whole", whole));
+  ASSERT_TRUE(whole_fd.has_value());
+  auto count = syscalls.read_perf_count(whole_fd.value());
+  ASSERT_TRUE(count.has_value());
+  EXPECT_EQ(count.value(), (PerfCount{7, 900, 450}));
+  EXPECT_TRUE(syscalls.close(whole_fd.value()).has_value());
+
+  auto short_fd = syscalls.open_read(write("short", whole.substr(0, 16)));
+  ASSERT_TRUE(short_fd.has_value());
+  auto torn = syscalls.read_perf_count(short_fd.value());
+  ASSERT_FALSE(torn.has_value());
+  EXPECT_EQ(torn.error().number, EIO);
+  EXPECT_EQ(torn.error().call, "read");
+  EXPECT_TRUE(syscalls.close(short_fd.value()).has_value());
+
+  auto bad = syscalls.read_perf_count(-1);
+  ASSERT_FALSE(bad.has_value());
+  EXPECT_EQ(bad.error().number, EBADF);
+}
+
 }  // namespace
 }  // namespace loadforge::platform

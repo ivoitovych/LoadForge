@@ -1,6 +1,6 @@
 # Stream 08 — The executor: a worker's thread pool
 
-**State:** not started  
+**State:** complete on `feature/executor`, awaiting review and merge (2026-10-20 11:30 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  
