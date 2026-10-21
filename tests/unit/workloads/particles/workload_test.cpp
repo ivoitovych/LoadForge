@@ -230,10 +230,6 @@ namespace {
 
 namespace particles = ::loadforge::workloads::particles;
 
-// The contract header registers the registry suite too; a binary that
-// instantiates only the workload suite must say so.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-
 template <std::uint32_t kCells, bool kVector>
 struct Subject {
   static constexpr std::string_view kName = "particles";
