@@ -172,12 +172,10 @@ stream's models (`journal_model_test.cpp`; `roster_test.cpp`).
    provenance, so the judgement is not lost, but the run's summary of what each worker did
    is. Reading chosen: the report states the initial workload and, in the worker's story, the
    count of Switch commands done; a field for the workloads run (in order) is wanted.
-2. **`control.hpp` says a second memory frame is corruption in the old reading.** A worker
-   that replaces its runner sends the memory frame again; the controller now accepts a repeat
-   and keeps the weakest. If the frame's contract means exactly one, a Switch must not repeat it.
-3. **`Pause` and the heartbeat.** A paused worker beats phase 2 with progress unchanged. The
-   header says progress must change for a worker to be told from a stuck one; the controller
-   here refreshes a paused worker's stall clock on a Done Pause instead. The two readings give the
-   same classification but the header should say which holds.
-4. **The timeline refuses phase marks in the same millisecond** (see above): a limit of
+2. **How often a worker states its working set.** `control.hpp` says nothing about the
+   memory frame (type 18); the M2 controller took a second one for corruption. A Switch
+   changes the working set, so the worker sends the frame again and the controller now
+   accepts a repeat and keeps the weakest outcome. If the frame is meant to be sent exactly
+   once, the contract should say so and a Switch should not repeat it.
+3. **The timeline refuses phase marks in the same millisecond** (see above): a limit of
    `TimelineSink::mark_phase`, not mine to change.
