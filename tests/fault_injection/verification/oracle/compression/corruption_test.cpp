@@ -345,10 +345,3 @@ TEST(CompressionOracleNotChecked, AMalformedHeaderOrPaddingIsReportedWithoutScra
 
 }  // namespace
 }  // namespace loadforge::verification::oracle::compression
-
-namespace loadforge::contracts {
-// lz4_support.hpp brings the oracle suites for OracleCase; this module runs
-// OracleContract in its T1 suite, and the registry is not its to provide.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleContract);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
-}  // namespace loadforge::contracts

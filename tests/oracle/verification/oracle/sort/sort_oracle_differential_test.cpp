@@ -5,6 +5,8 @@
 // std::sort and compares bytes), over many units and many corruptions, every
 // one of them a different place for a fault to be.
 
+#include <gtest/gtest.h>
+
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -14,15 +16,13 @@
 #include <variant>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_case.hpp"
 #include "sort_units.hpp"
 #include "verification/oracle/sort/sort_oracle.hpp"
 #include "workloads/sort/spec.hpp"
 
 namespace loadforge::contracts {
 // The contract header registers both suites; this binary runs neither.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleContract);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 }  // namespace loadforge::contracts
 
 namespace loadforge::tests {
