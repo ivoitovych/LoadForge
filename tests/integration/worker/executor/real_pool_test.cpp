@@ -24,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include "contracts/fpenv/fpenv_contract.hpp"
+#include "contracts/fpenv/fp_control_contract.hpp"
 #include "contracts/worker/executor_contract.hpp"
 #include "platform/affinity.hpp"
 #include "platform/fpenv/fpenv.hpp"
@@ -362,8 +362,5 @@ INSTANTIATE_TYPED_TEST_SUITE_P(RealPinnedPool, ExecutorContract, worker::PinnedP
 INSTANTIATE_TYPED_TEST_SUITE_P(RealRegisters, FpControlContract, worker::Registers);
 
 }  // namespace
-
-// check() is not the executor's to call; see fp_control_contract_test.cpp.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(FpCheckContract);
 
 }  // namespace loadforge::contracts

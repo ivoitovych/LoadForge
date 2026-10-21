@@ -40,12 +40,10 @@
 #include "core/result.hpp"
 #include "primitives/simd/dispatch.hpp"
 #include "workloads/dense_linear/panel.hpp"
+#include "workloads/dense_linear/spec.hpp"
 #include "workloads/workload.hpp"
 
 namespace loadforge::workloads::dense_linear {
-
-/// The name configuration and reports use.
-inline constexpr std::string_view kName = "dense_linear";
 
 using Kernels = simd::KernelTable<PanelKernel>;
 

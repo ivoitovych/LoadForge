@@ -241,8 +241,6 @@ TEST(MonteCarloCompute, CoversTheEdgesOfTheKeyDomain) {
 // stream's, not this module's.
 namespace loadforge::contracts {
 
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-
 using MonteCarloSubjects =
     ::testing::Types<workloads::monte_carlo::ScalarSubject, workloads::monte_carlo::NativeSubject>;
 INSTANTIATE_TYPED_TEST_SUITE_P(MonteCarlo, WorkloadContract, MonteCarloSubjects);

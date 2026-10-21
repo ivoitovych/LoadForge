@@ -54,6 +54,16 @@
         "LOADFORGE_STATIC": "ON",
         "LOADFORGE_BUILD_TESTS": "OFF"
       }
+    },
+    {
+      "name": "static-headers",
+      "inherits": "base",
+      "displayName": "The contract headers under the static artifact's flags (compile only)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LOADFORGE_STATIC": "ON",
+        "LOADFORGE_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -63,7 +73,12 @@
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "coverage", "configurePreset": "coverage" },
     { "name": "simd-scalar", "configurePreset": "simd-scalar" },
-    { "name": "static", "configurePreset": "static" }
+    { "name": "static", "configurePreset": "static" },
+    {
+      "name": "static-headers",
+      "configurePreset": "static-headers",
+      "targets": ["loadforge_contract_headers"]
+    }
   ],
   "testPresets": [
     { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },

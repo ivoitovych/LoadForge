@@ -22,7 +22,8 @@
 //           2 n^2 * 8 bytes. Element e of the unit (A's entries first, then
 //           B's) is entry_value(u64_of(block_at(seed, index, e))): a multiple
 //           of 2^-52 in [-1, 1). Every correctly generated entry is finite
-//           with magnitude below 1 -- the tolerance derivation relies on it.
+//           and lies in [-1, 1) -- the range includes -1 and excludes 1; the
+//           tolerance derivation needs only |entry| <= 1.
 //   output  C, row-major, n*n little-endian doubles.
 //
 // DECOMPOSITION: the k-panel depth kc, one of kPanelDepths, default
@@ -48,20 +49,36 @@
 // the oracle stream writes that derivation in full in its header, and tests
 // the bound breached at (1 + epsilon) times it and held at (1 - epsilon)
 // (M2b exit criterion 3). Sampling: which entries is a function of the unit
-// index alone; blocks_compared counts entries checked.
+// index alone; blocks_compared counts the whole sample, whether or not an
+// entry fails.
+//
+// Underflow: the derivation above is Higham's, which ignores underflow. Inputs
+// the range check admits can underflow, so the tolerance carries an absolute
+// term of n * 2^-1074 per evaluation (gradual underflow), for the kernel's
+// evaluation and the oracle's alike.
 //
 //   * an entry outside its tolerance, or a NaN or infinity in C, is a
-//     BoundedMismatch naming the entry (element = i * n + j);
+//     BoundedMismatch naming the entry (element = i * n + j); when several
+//     sampled entries fail, it names the worst failing one;
 //   * a non-finite or out-of-range entry in the INPUT means the tolerance
 //     cannot be derived: NotChecked. The input-integrity bracket is what
 //     reports the corrupt input itself.
+//
+// VERSIONS: kVersion versions this specification's format and check. The bits
+// a workload produces are versioned separately, by its Descriptor::version
+// (workload.hpp), which is raised whenever a configuration's bits change; a
+// workload may change them without this specification changing.
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace loadforge::workloads::dense_linear {
+
+/// The workload's name, as the registry and the oracle registry know it.
+inline constexpr std::string_view kName = "dense_linear";
 
 inline constexpr std::uint32_t kVersion = 1;
 inline constexpr std::size_t kOrder = 256;

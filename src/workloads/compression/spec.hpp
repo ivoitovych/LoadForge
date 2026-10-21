@@ -38,7 +38,8 @@
 //
 // DETERMINISM: BitExact. One unit is compressed by one thread; the output is
 // a function of the input alone. The workload has no decomposition: its plan
-// reports 1, and any other configured value is refused as kConfiguration.
+// reports 1, a configured decomposition of 0 (the default) or 1 is accepted,
+// and anything else is refused as kConfiguration.
 //
 // WHAT THE ORACLE ANSWERS
 // -----------------------
@@ -46,7 +47,9 @@
 //   * the magic, L <= compress_bound(kInputBytes), the zero padding, every
 //     token, offset and length, and the end-of-block rules (the last five
 //     bytes are literals; the last match starts at least twelve bytes before
-//     the end) are checked as the format document states them. Any breach is
+//     the end OF THE DECODED DATA; the last token's match field is 0, as the
+//     last token carries literals only) are checked as the format document
+//     states them. Any breach is
 //     an ExactMismatch with no difference, its check naming what was wrong
 //     and at which byte of the output: the output is wrong, and has no bits
 //     to compare.
@@ -55,12 +58,21 @@
 //     a difference is an ExactMismatch with a Difference in Domain::kDerived
 //     (the decoded bytes), and none is an Agreement with blocks_compared 1.
 //   * evidence of the wrong size is NotChecked.
+//
+// VERSIONS: kVersion versions this specification's format and check. The bits
+// a workload produces are versioned separately, by its Descriptor::version
+// (workload.hpp), which is raised whenever a configuration's bits change; a
+// workload may change them without this specification changing.
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace loadforge::workloads::compression {
+
+/// The workload's name, as the registry and the oracle registry know it.
+inline constexpr std::string_view kName = "compression";
 
 inline constexpr std::uint32_t kVersion = 1;
 inline constexpr std::size_t kInputBytes = std::size_t{64} << 10U;

@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_case.hpp"
 #include "verification/oracle/compression/decoder.hpp"
 #include "workloads/compression/spec.hpp"
 

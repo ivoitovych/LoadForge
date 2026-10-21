@@ -89,39 +89,51 @@ struct NotChecked {
 
 using Verdict = std::variant<Agreement, ExactMismatch, BoundedMismatch, NotChecked>;
 
+namespace detail {
+
+// One overload per alternative, so is_valid() and blocks_of() can visit the verdict: a
+// get_if dereferenced in a last arm, or a std::get, fails the static release build (GCC
+// at -O3 reports a possible null dereference once inlined into a consumer) or
+// bugprone-exception-escape; a visit does neither (journal fragment 02, question 9).
+[[nodiscard]] inline bool keeps_rules(const Agreement& agreement, Contract /*contract*/) noexcept {
+  return agreement.blocks_compared >= 1;
+}
+
+[[nodiscard]] inline bool keeps_rules(const ExactMismatch& exact, Contract contract) noexcept {
+  return contract == Contract::kExact && exact.blocks_compared >= 1 && !exact.check.empty() &&
+         exact.check.size() <= kMaxTextBytes &&
+         (!exact.difference.has_value() || is_valid(*exact.difference));
+}
+
+[[nodiscard]] inline bool keeps_rules(const BoundedMismatch& bounded, Contract contract) noexcept {
+  return contract == Contract::kBounded && bounded.blocks_compared >= 1 && !bounded.check.empty() &&
+         bounded.check.size() <= kMaxTextBytes && std::isfinite(bounded.tolerance) &&
+         bounded.tolerance > 0.0 && !(bounded.residual <= bounded.tolerance);
+}
+
+[[nodiscard]] inline bool keeps_rules(const NotChecked& unchecked, Contract /*contract*/) noexcept {
+  return !unchecked.what.empty() && !unchecked.why.empty() &&
+         unchecked.what.size() <= kMaxTextBytes && unchecked.why.size() <= kMaxTextBytes;
+}
+
+}  // namespace detail
+
 /// Whether a verdict keeps the rules above, for an oracle of `contract`.
+// visit throws only for a valueless variant, which no Verdict is (its alternatives are
+// nothrow-movable) and which a caller cannot make.
+// NOLINTNEXTLINE(bugprone-exception-escape)
 [[nodiscard]] inline bool is_valid(const Verdict& verdict, Contract contract) noexcept {
-  if (const auto* agreement = std::get_if<Agreement>(&verdict)) {
-    return agreement->blocks_compared >= 1;
-  }
-  if (const auto* exact = std::get_if<ExactMismatch>(&verdict)) {
-    return contract == Contract::kExact && exact->blocks_compared >= 1 && !exact->check.empty() &&
-           exact->check.size() <= kMaxTextBytes &&
-           (!exact->difference.has_value() || is_valid(*exact->difference));
-  }
-  if (const auto* bounded = std::get_if<BoundedMismatch>(&verdict)) {
-    return contract == Contract::kBounded && bounded->blocks_compared >= 1 &&
-           !bounded->check.empty() && bounded->check.size() <= kMaxTextBytes &&
-           std::isfinite(bounded->tolerance) && bounded->tolerance > 0.0 &&
-           !(bounded->residual <= bounded->tolerance);
-  }
-  const auto* unchecked = std::get_if<NotChecked>(&verdict);
-  return !unchecked->what.empty() && !unchecked->why.empty() &&
-         unchecked->what.size() <= kMaxTextBytes && unchecked->why.size() <= kMaxTextBytes;
+  return std::visit(
+      [contract](const auto& held) noexcept { return detail::keeps_rules(held, contract); },
+      verdict);
 }
 
 /// The blocks a verdict says were compared.
-[[nodiscard]] constexpr std::uint64_t blocks_of(const Verdict& verdict) noexcept {
-  if (const auto* agreement = std::get_if<Agreement>(&verdict)) {
-    return agreement->blocks_compared;
-  }
-  if (const auto* exact = std::get_if<ExactMismatch>(&verdict)) {
-    return exact->blocks_compared;
-  }
-  if (const auto* bounded = std::get_if<BoundedMismatch>(&verdict)) {
-    return bounded->blocks_compared;
-  }
-  return std::get_if<NotChecked>(&verdict)->blocks_compared;
+// visit throws only for a valueless variant, which no Verdict is (its alternatives are
+// nothrow-movable) and which a caller cannot make.
+// NOLINTNEXTLINE(bugprone-exception-escape)
+[[nodiscard]] inline std::uint64_t blocks_of(const Verdict& verdict) noexcept {
+  return std::visit([](const auto& held) noexcept { return held.blocks_compared; }, verdict);
 }
 
 /// The independent check for one workload.
