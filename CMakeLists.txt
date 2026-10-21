@@ -128,11 +128,25 @@ loadforge_enable_sanitizers(loadforge_controller)
 loadforge_enable_coverage(loadforge_controller)
 
 # ---- cli --------------------------------------------------------------------
-add_library(loadforge_cli STATIC src/main/cli.cpp src/main/selftest.cpp src/main/outcome.cpp)
+# Everything a run is made of meets here: the supervisor, every telemetry
+# source and the pipeline behind them, the statistics, the result and its
+# writers, and the registry of workloads a verified run draws on. The
+# libraries below are found by glob (src/*/CMakeLists.txt).
+add_library(loadforge_cli STATIC
+  src/main/cli.cpp
+  src/main/selftest.cpp
+  src/main/outcome.cpp
+  src/main/telemetry_rig.cpp
+  src/main/run_result.cpp
+  src/main/result_files.cpp
+)
 target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller loadforge_resources
-  loadforge_controller_results loadforge_workloads_registry loadforge_platform_isa
-  loadforge_telemetry_sources_thermal loadforge_telemetry_sources_fan
-  loadforge_telemetry_sources_frequency loadforge_telemetry_sources_memory)
+  loadforge_telemetry_sources_thermal loadforge_telemetry_sources_fan loadforge_telemetry_sources_frequency
+  loadforge_telemetry_sources_memory loadforge_telemetry_sources_power loadforge_telemetry_sources_counters
+  loadforge_telemetry_sources_edac loadforge_telemetry_sampler loadforge_telemetry_timeline
+  loadforge_telemetry_capability loadforge_statistics loadforge_controller_results
+  loadforge_reporters_json loadforge_reporters_csv loadforge_platform_fpenv loadforge_platform_isa
+  loadforge_primitives_simd loadforge_workloads_registry)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)

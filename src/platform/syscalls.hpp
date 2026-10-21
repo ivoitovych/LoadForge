@@ -62,6 +62,14 @@ struct Reaped {
 [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_result(pid_t pid, int status,
                                                                             int number);
 
+/// What waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT)'s return value means: a
+/// negative return is the failure `number` names (ECHILD for a pid that is not
+/// an unreaped child); otherwise `reported_pid` is what the kernel wrote into
+/// siginfo, which is 0 when the child has not terminated and the pid when it
+/// has. Above the seam for the reason fork_result is.
+[[nodiscard]] core::Result<bool, SyscallError> exit_peek_result(int returned, pid_t reported_pid,
+                                                                int number);
+
 /// One clock reading, exactly as clock_gettime(2) reports it.
 ///
 /// The seconds and nanoseconds stay separate here rather than being combined
@@ -313,7 +321,20 @@ class Syscalls {
   [[nodiscard]] virtual core::Result<Reaped, SyscallError> wait_any() = 0;
 
   /// kill(2).
+  ///
+  /// A success proves only that the signal was queued. A child that has
+  /// terminated and has not been reaped is a zombie, and the kernel accepts a
+  /// signal to a zombie and discards it: success here says nothing about the
+  /// signal having caused, or even preceded, the child's death (journal §1.27).
+  /// ESRCH comes only once the child is reaped.
   [[nodiscard]] virtual core::Result<core::Ok, SyscallError> send_signal(pid_t pid, int signal) = 0;
+
+  /// waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT): whether the child has
+  /// terminated, without reaping it. True for a zombie. ECHILD -- not a child,
+  /// or already reaped -- is an error, as in the reaps: a supervisor asking
+  /// about a worker it still tracks has lost track of it. The default fails
+  /// with ENOSYS, so that adding the call broke no fake.
+  [[nodiscard]] virtual core::Result<bool, SyscallError> has_exited(pid_t pid);
 
   /// clock_gettime(2) for the given clock id.
   ///
@@ -462,6 +483,7 @@ class RealSyscalls final : public Syscalls {
   void start_session() override;
   [[nodiscard]] core::Result<Reaped, SyscallError> wait_any() override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> send_signal(pid_t pid, int signal) override;
+  [[nodiscard]] core::Result<bool, SyscallError> has_exited(pid_t pid) override;
   [[nodiscard]] core::Result<TimeSpec, SyscallError> read_clock(int clock_id) override;
   [[nodiscard]] core::Result<CpuMask, SyscallError> get_affinity(pid_t pid) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> set_affinity(pid_t pid,

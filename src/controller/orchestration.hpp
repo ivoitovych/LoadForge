@@ -15,6 +15,8 @@
 #include "platform/fpenv/fpenv.hpp"
 #include "platform/syscalls.hpp"
 #include "resources/oom_kill_record.hpp"
+#include "telemetry/sampler.hpp"
+#include "telemetry/timeline.hpp"
 #include "telemetry/source.hpp"
 #include "topology/snapshot.hpp"
 
@@ -32,9 +34,11 @@ struct RunOptions {
   std::optional<config::MemoryBudget> budget;
   std::string budget_unread;
   /// The kernel's OOM-kill count for the workers' cgroup, read before the
-  /// first fork and, when a worker died of a SIGKILL the controller did not
-  /// send, after the last reap (judge_oom_kills has the rule). Null when none
-  /// is consulted: such a death is then reported as a kill, which is the fact.
+  /// first fork and, when a worker died of a SIGKILL -- one the controller
+  /// attempted too, since an attempt proves nothing about the cause
+  /// (journal §1.27) -- after the last reap (judge_oom_kills has the rule).
+  /// Null when none is consulted: such a death is then reported as a kill,
+  /// or as the controller's stop where it attempted the SIGKILL.
   /// Not owned; it must outlive the run.
   resources::OomKillRecord* oom_record = nullptr;
   /// The machine, described once before the first fork (docs/PLAN.md §4.1;
@@ -54,6 +58,23 @@ struct RunOptions {
   /// The telemetry sources probed once before the first fork, whose
   /// capability report the banner states (M2a exit criterion 5). Not owned.
   std::vector<telemetry::Source*> sources;
+  /// The telemetry sampler (telemetry/sampler.hpp), already probed by the
+  /// caller, which states the capability report before the run and keeps it
+  /// for the result. The controller calls round() on its own tick, so sampling
+  /// adds no thread (the sampler's contract): once before the first fork, so
+  /// that a counter has its baseline before any worker can move it; then every
+  /// `sample_interval_ns`; once at the deadline, on the boundary of the phase
+  /// it ends; and once after the last reap. A round the timeline refuses ends
+  /// sampling and is reported; it never ends the run. Not owned. Null: no
+  /// telemetry.
+  telemetry::Sampler* sampler = nullptr;
+  /// The timeline the sampler writes, for the phase marks (F13: a counter is
+  /// reported per phase). Marks "run" at the first round and "stop" at the
+  /// deadline. Not owned; may be null even with a sampler.
+  telemetry::TimelineSink* timeline = nullptr;
+  /// The interval between rounds. A tick comes at least this often (the poll
+  /// interval above), so a value below `interval_ns` samples at that rate.
+  std::int64_t sample_interval_ns = 100'000'000;
 
   [[nodiscard]] friend bool operator==(const RunOptions&, const RunOptions&) = default;
 };
@@ -82,13 +103,27 @@ struct ControllerError {
 /// arrived, and reap without blocking. A worker's exit closes its record
 /// pipe, which wakes the poll, so a death is seen within one tick.
 ///
-/// WHAT THE CONTROLLER DOES BEFORE IT FORKS
-/// ----------------------------------------
+/// WHAT THE CONTROLLER DOES BEFORE IT FORKS, AND BETWEEN FORKS
+/// -----------------------------------------------------------
 /// It publishes its first beat. A worker gives a controller that has never
 /// beaten exactly the staleness allowance and then leaves, so the beat must
 /// exist before the first worker can look. And it forks before any thread
 /// starts (docs/PLAN.md §4.6): at M1 there are none; the rule is stated here
 /// for the milestone that adds them.
+///
+/// It beats again after every fork, in the spawn loop, because workers that
+/// are already running watch slot 0 while the rest are still being created,
+/// and a spawn can take longer than the staleness allowance (journal §2.33).
+/// Each worker's allowance for a first heartbeat, and the clock for its lack
+/// of progress, run from its own launch.
+///
+/// WHEN THE CONFIGURED DURATION STARTS
+/// -----------------------------------
+/// `run.duration` is the time the workers run, counted from the moment the
+/// last worker has been launched. Starting them is not part of it. Each
+/// worker also paces itself by the same duration from its own start, so every
+/// worker runs the full duration and the whole run lasts the time it took to
+/// start them, plus the duration.
 class Controller {
  public:
   Controller(platform::Syscalls& syscalls, Reporter& reporter) noexcept

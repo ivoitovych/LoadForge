@@ -19,4 +19,12 @@ panel.hpp. T6 is its PanelKernelDeterminism: the whole product at every \
 depth equal to the same model, which is architecture-neutral, so this \
 kernel and the NEON one give each other's bits; the workload's committed \
 digests check that across machines. No AVX-512 kernel: CI's x86-64 runners \
-do not all have AVX-512, so one could not be measured to 100% there."""
+do not all have AVX-512, so one could not be measured to 100% there. \
+The graph workload's PageRank sweep (graph_sweep_avx2.cpp) lives here too, \
+for the same reason: gathered four ranks to a vector, four or eight \
+accumulators, the tail of terms that fill no whole vector left to the \
+shared add_tail. It has no suite of its own: it is exercised through the \
+graph workload's table, whose T1 WorkloadContract and oracle tests run every \
+decomposition on this path and whose T6 tests hold its bits equal to the \
+scalar sweep's, so its lines and branches are covered by those tiers \
+(tests/obligations.d/workloads/graph.toml)."""

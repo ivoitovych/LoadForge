@@ -10,6 +10,7 @@
 // controller, not the other way), so this is where the two meet.
 
 #include <cstddef>
+#include <optional>
 
 #include "config/config.hpp"
 #include "controller/isolate.hpp"
@@ -20,20 +21,42 @@
 
 namespace loadforge::cli {
 
-/// The exit code of a stress run that ended and was reported.
+/// The exit codes of a stress run that ended and was reported. M2 and M3 each
+/// assigned 4 and 5 and meant different things by them; main already said what
+/// 4 and 5 are (M3), so they stay, and the wrong result M2 reported as 4 is a
+/// fault, which is 5 (docs/journal/11-integration-m2.md).
 ///
 ///   0  clean: every worker completed, nothing was wrong, and every verifying
 ///      worker's oracle and input bracket compared something.
 ///   3  a worker did not complete.
-///   4  a wrong result was found. Outranks 3 and 5: it is the finding.
-///   5  nothing was wrong that was seen, and something was not seen: a check
+///   4  the run ended and a result file could not be written.
+///   5  a fault: a wrong result, or an error the hardware reported, corrected
+///      or not (the verdict is findings or corrected errors). It outranks
+///      every other, 3 and 4 included: it is the finding.
+///   6  nothing was wrong that was seen, and something was not seen: a check
 ///      was not performed, or a verifying worker never compared anything. A
 ///      run that checked nothing is not a pass (verification.md §5).
-/// A run of nothing but null workloads (M1) has nothing to verify and is 0 or
-/// 3 by its workers alone.
+/// When several apply the first of 5, 4, 3, 6 is the code. A run of nothing but
+/// null workloads (M1) has nothing to verify and is 0 or 3 by its workers.
 inline constexpr int kExitUnclean = 3;
-inline constexpr int kExitWrongResult = 4;
-inline constexpr int kExitNotVerified = 5;
+inline constexpr int kExitOutputFailed = 4;
+inline constexpr int kExitFault = 5;
+inline constexpr int kExitWrongResult = kExitFault;
+inline constexpr int kExitNotVerified = 6;
+
+/// The code of a run whose verdict is known. `verified` is whether any worker
+/// ran a verified workload: only then is an incomplete verdict a check not
+/// made, and only then 6. Without one (the null workload) an incomplete verdict
+/// is what a run with nothing to check always is.
+[[nodiscard]] int exit_code_for(results::Verdict verdict, bool workers_clean,
+                                bool verified = false) noexcept;
+
+/// Whether any worker of the report ran a verified workload.
+[[nodiscard]] bool has_verified_worker(const controller::RunReport& report) noexcept;
+
+/// `code` once a result file could not be written: a fault still outranks the
+/// failure to write about it.
+[[nodiscard]] int with_output_failure(int code) noexcept;
 
 /// The report in the results' types: one WorkloadResult per verifying worker,
 /// one WorkerResult per worker. The telemetry, signature and fingerprint are
@@ -42,6 +65,18 @@ inline constexpr int kExitNotVerified = 5;
                                                const config::Config& config);
 
 [[nodiscard]] int exit_code_for(const controller::RunReport& report, const config::Config& config);
+
+/// What follows a run whose workers are gone, without the exit code. When any
+/// wrong result was found, repeats up to `limit` of each worker's in processes
+/// of their own, writes what that shows into the report, and tells the
+/// reporter. A re-run whose exec failed in this process is a failed child: its
+/// exit code is returned at once, and nothing is reported.
+[[nodiscard]] std::optional<int> isolate_wrong_results(controller::RunReport& report,
+                                                       const topology::Snapshot* machine,
+                                                       verification::Isolator& isolator,
+                                                       controller::ChildAwareRerunner& rerunner,
+                                                       std::size_t limit,
+                                                       controller::Reporter& reporter);
 
 /// What follows a run whose workers are gone, and the process's exit code.
 /// When any wrong result was found, repeats up to `limit` of each worker's in

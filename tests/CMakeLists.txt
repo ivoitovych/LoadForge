@@ -11,6 +11,13 @@ add_executable(loadforge_unit_tests
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
   unit/main/outcome_test.cpp
+  unit/main/result_files_test.cpp
+  unit/main/telemetry_rig_test.cpp
+  unit/main/cli_telemetry_test.cpp
+  unit/main/run_result_test.cpp
+  unit/main/contract_mocks_test.cpp
+  unit/controller/contract_mocks_test.cpp
+  unit/controller/orchestration_telemetry_test.cpp
   unit/config/config_test.cpp
   unit/platform/syscall_error_test.cpp
   unit/platform/syscalls_defaults_test.cpp
@@ -46,6 +53,7 @@ add_executable(loadforge_unit_tests
   unit/controller/orchestration_test.cpp
   unit/reporters/console_test.cpp
   unit/platform/real_syscalls_test.cpp
+  unit/platform/fake_syscalls_test.cpp
   unit/platform/result_instantiations_test.cpp
   unit/third_party/tomlplusplus_smoke_test.cpp
 )
@@ -140,7 +148,7 @@ add_test(NAME cli_stress_test_states_the_capabilities_first
          COMMAND loadforge stress --test compression --duration 1s --workers 2 --footprint 6MiB)
 set_tests_properties(cli_stress_test_states_the_capabilities_first PROPERTIES
                      PASS_REGULAR_EXPRESSION
-                     "capabilities:\ntelemetry capability: [0-9]+ of [0-9]+ metric\\(s\\) present.*spawned 2 worker")
+                     "telemetry capability: [0-9]+ of [0-9]+ metric\\(s\\) present.*spawned 2 worker")
 add_test(NAME cli_stress_test_unknown_workload COMMAND loadforge stress --test no_such)
 set_tests_properties(cli_stress_test_unknown_workload PROPERTIES WILL_FAIL TRUE)
 

@@ -2,6 +2,7 @@
 #include "main/outcome.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 #include "config/config.hpp"
@@ -48,34 +49,58 @@ results::RunResult to_run_result(const controller::RunReport& report,
   return result;
 }
 
-int exit_code_for(const controller::RunReport& report, const config::Config& config) {
-  const bool verified = std::ranges::any_of(
+int exit_code_for(results::Verdict verdict, bool workers_clean, bool verified) noexcept {
+  if (verdict == results::Verdict::kFindings || verdict == results::Verdict::kCorrectedErrors) {
+    return kExitFault;
+  }
+  if (!workers_clean) {
+    return kExitUnclean;
+  }
+  return verified && verdict == results::Verdict::kIncomplete ? kExitNotVerified : 0;
+}
+
+bool has_verified_worker(const controller::RunReport& report) noexcept {
+  return std::ranges::any_of(
       report.workers,
       [](const controller::WorkerReport& worker) { return worker.work.has_value(); });
-  if (!verified) {
-    return controller::all_clean(report) ? 0 : kExitUnclean;
+}
+
+int with_output_failure(int code) noexcept {
+  return code == kExitFault ? kExitFault : kExitOutputFailed;
+}
+
+int exit_code_for(const controller::RunReport& report, const config::Config& config) {
+  const bool verified = has_verified_worker(report);
+  const results::Verdict verdict =
+      verified ? to_run_result(report, config).verdict : results::Verdict::kClean;
+  return exit_code_for(verdict, controller::all_clean(report), verified);
+}
+
+std::optional<int> isolate_wrong_results(controller::RunReport& report,
+                                         const topology::Snapshot* machine,
+                                         verification::Isolator& isolator,
+                                         controller::ChildAwareRerunner& rerunner,
+                                         std::size_t limit, controller::Reporter& reporter) {
+  if (controller::wrong_result_count(report) == 0) {
+    return std::nullopt;
   }
-  const results::Verdict verdict = to_run_result(report, config).verdict;
-  if (verdict == results::Verdict::kFindings) {
-    return kExitWrongResult;
+  const controller::IsolationSummary isolated =
+      controller::isolate_findings(report, machine, isolator, rerunner, limit);
+  if (isolated.child_exit_code.has_value()) {
+    return isolated.child_exit_code;
   }
-  if (verdict == results::Verdict::kIncomplete) {
-    return controller::all_clean(report) ? kExitNotVerified : kExitUnclean;
-  }
-  return 0;  // Clean, or clean with corrected errors.
+  reporter.isolation_finished(report);
+  return std::nullopt;
 }
 
 int finish_run(controller::RunReport& report, const config::Config& config,
                const topology::Snapshot* machine, verification::Isolator& isolator,
                controller::ChildAwareRerunner& rerunner, std::size_t limit,
                controller::Reporter& reporter) {
-  if (controller::wrong_result_count(report) != 0) {
-    const controller::IsolationSummary isolated =
-        controller::isolate_findings(report, machine, isolator, rerunner, limit);
-    if (isolated.child_exit_code.has_value()) {
-      return *isolated.child_exit_code;
-    }
-    reporter.isolation_finished(report);
+  if (const std::optional<int> child =
+          isolate_wrong_results(report, machine, isolator, rerunner, limit, reporter);
+      child.has_value()) {
+    return *child;
   }
   return exit_code_for(report, config);
 }

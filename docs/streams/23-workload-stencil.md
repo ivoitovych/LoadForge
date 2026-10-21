@@ -1,6 +1,6 @@
 # Stream 23 — Workload: stencil
 
-**State:** not started  
+**State:** built on branch `feature/workload-stencil` (2026-10-20 18:00 UTC); awaiting the pull request  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 3  
 **Tier:** Tier A — a bounded component built against a written contract  

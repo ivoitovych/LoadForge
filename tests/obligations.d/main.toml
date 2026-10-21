@@ -2,15 +2,20 @@
 # Ledger fragment (ADR 0004): this file declares src/main and nothing else.
 
 [[module]]
-path    = "src/main"
-classes = ["P1", "P2", "P3", "P6"]
-tiers   = ["T1", "T2", "T7", "T8", "T11"]
-note    = """
+path             = "src/main"
+classes          = ["P1", "P2", "P3", "P6", "P7"]
+tiers            = ["T1", "T2", "T7", "T8", "T11"]
+fixture_builders = ["tests/integration/m3/machine.hpp"]
+consumes         = ["SamplerContract", "TimelineContract", "SourceContract", "SummarizerContract", "VerdictContract", "ResultWriterContract"]
+note             = """
 CLI dispatch, the selftest digest, and what a finished run is to the shell. \
 P1 and P3: the argument grammar of `stress --test` (every option refused by \
 name, each given once), the exit-code table (0 clean; 3 a worker did not \
-complete; 4 a wrong result outranks the rest; 5 a check was not made or a \
-verifying worker compared nothing), the report put into the results' types and \
+complete; 4 a result file could not be written; 5 a fault: a wrong result or \
+an error the hardware reported, which outranks the rest; 6 a check was not \
+made or a verifying worker compared nothing; when several apply the first of \
+5, 4, 3, 6 is the code, and a fault is not hidden by a result that could not be \
+written about it), the report put into the results' types and \
 the verdict they derive. P2: the affinity the kernel will not report (the \
 snapshot's CPUs stand and a withheld one is refused by name when a worker is \
 placed), a machine whose cache-line size is not known (refused: a \
@@ -28,4 +33,41 @@ isolation ladder through the command line against the faulty worker \
 (tests/supervision/ladder_test.cpp). T11: the first thermal result on hardware (M2b exit \
 criterion 5) is the occurrence log in tests/hardware, which records this machine \
 as unable to give one and the procedure for one that can. main() is covered, not \
-excluded."""
+excluded. \
+\
+Since M3 the command also puts the run together and writes it out (the second half of this note is what that added; the exit-code table above is the two milestones' composed, docs/journal/11-integration-m2.md).\
+\
+The command line, and since M3 the place where a run is put together: the \
+telemetry rig (every source in one order over one machine's roots, the \
+sampler, a bounded timeline), the result (the controller's report, the \
+fingerprint, the capability report and the statistics over the run's \
+window, sealed with its verdict) and the files it is written to \
+(--output json,csv). \
+\
+P1: the dispatch and the stress arguments, in any order, each once; \
+which formats; which phase a counter's advance belongs to (a boundary \
+reading is in both neighbouring windows, so every advance is in exactly \
+one phase); what the console says at the end. P2: every way a result \
+cannot be written is injected through the sink the command line is given \
+-- the directory that cannot take a file (refused before the run, not \
+after it), a file that cannot be stored, a writer that fails, a telemetry \
+probe the timeline refuses, a window the summarizer refuses -- and the \
+file sink's own failures are real and deterministic: a directory that does \
+not exist, a device that is full (/dev/full as the partial file), a \
+directory where the result belongs. P3: a timeline capacity that \
+saturates, an interval of zero, a run of negative length, an overhead \
+larger than the run. \
+\
+P7 is followed through the whole stack and not the source: tests/integration/m3 \
+serves the kernel's files as fixtures (machine.hpp builds them) and drives \
+every metric of every source through its six states -- present, absent, \
+denied, malformed, disappearing mid-run, a counter that wraps -- checking \
+what the sampler puts on the timeline, what the statistics make of it, and \
+that both writers keep the remedy of every absence. The same stack runs over \
+this machine's real /proc and /sys and through the shipped binary (T8), and \
+tests/integration/m3/disagreements_test.cpp records, as tests that are \
+expected to fail, each place two components read one contract differently. \
+\
+The six contracts consumed are run against this module's own mocks \
+(tests/unit/main/contract_mocks_test.cpp): the sampler, the timeline, the \
+source, the summarizer, the verdict and the result writer."""

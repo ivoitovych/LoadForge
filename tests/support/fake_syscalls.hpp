@@ -11,6 +11,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -405,8 +406,30 @@ class FakeSyscalls final : public platform::Syscalls {
   /// the fourth fork failing, the third returning 0 -- are positional.
   void script_forks(std::vector<ForkStep> steps) { forks_.assign(steps.begin(), steps.end()); }
 
+  /// Every successful fork takes this long: all clocks jump forward by it
+  /// before the fork returns, as they would in a supervisor whose fork and
+  /// exec are slow. The delay sits at the fork boundary, which is where a
+  /// loaded machine puts it, and costs a test no real time.
+  void delay_each_fork(std::int64_t nanoseconds) { fork_delay_ns_ = nanoseconds; }
+
+  /// Called as each successful fork returns to the parent, after its delay and
+  /// before the caller's next instruction; `index` counts forks from zero.
+  void on_fork_returned(std::function<void(int)> hook) { fork_hook_ = std::move(hook); }
+
   core::Result<pid_t, platform::SyscallError> fork_process() override {
+    const int index = fork_count_;
     ++fork_count_;
+    auto result = scripted_fork();
+    if (result.has_value() && result.value() != 0) {
+      clock_offset_ns_ += fork_delay_ns_;
+      if (fork_hook_) {
+        fork_hook_(index);
+      }
+    }
+    return result;
+  }
+
+  core::Result<pid_t, platform::SyscallError> scripted_fork() {
     if (!forks_.empty()) {
       const ForkStep step = forks_.front();
       forks_.pop_front();
@@ -470,6 +493,18 @@ class FakeSyscalls final : public platform::Syscalls {
   /// stragglers that do not exist.
   void group_left_running(pid_t group) { groups_left_running_.push_back(group); }
 
+  /// The child has terminated and nobody has reaped it: a zombie. From here
+  /// has_exited answers true, and a signal to it still SUCCEEDS, as the
+  /// kernel's does (journal §1.27); only the reap that delivers it turns a
+  /// signal into ESRCH. A fake that answered ESRCH for a zombie hid EXT-01:
+  /// the controller's "a dead worker is ESRCH" never met the success that the
+  /// kernel gives. A pid never mentioned is a running child.
+  void child_exits(pid_t pid) { zombies_.insert(pid); }
+  [[nodiscard]] bool is_zombie(pid_t pid) const { return zombies_.contains(pid); }
+  [[nodiscard]] bool is_reaped(pid_t pid) const { return reaped_.contains(pid); }
+  void fail_has_exited(int error) { has_exited_error_ = error; }
+  [[nodiscard]] const std::vector<pid_t>& exit_peeks() const { return exit_peeks_; }
+
   [[nodiscard]] int wait_count() const { return wait_count_; }
   [[nodiscard]] const std::vector<std::pair<pid_t, int>>& signals_sent() const {
     return signals_sent_;
@@ -491,6 +526,7 @@ class FakeSyscalls final : public platform::Syscalls {
     if (step.error != 0) {
       return platform::SyscallError{step.error, "waitpid", "any child"};
     }
+    mark_reaped(step.reaped.pid);
     return step.reaped;
   }
 
@@ -518,7 +554,20 @@ class FakeSyscalls final : public platform::Syscalls {
     if (step.error != 0) {
       return platform::SyscallError{step.error, "waitpid", "any child, without waiting"};
     }
+    mark_reaped(step.reaped.pid);
     return std::optional<platform::Reaped>{step.reaped};
+  }
+
+  core::Result<bool, platform::SyscallError> has_exited(pid_t pid) override {
+    exit_peeks_.push_back(pid);
+    if (has_exited_error_ != 0) {
+      return platform::SyscallError{has_exited_error_, "waitid", "exit status, without reaping"};
+    }
+    // A reaped child is no longer ours to ask about: ECHILD, as waitid says.
+    if (reaped_.contains(pid)) {
+      return platform::SyscallError{ECHILD, "waitid", "exit status, without reaping"};
+    }
+    return zombies_.contains(pid);
   }
 
   /// Set what a given clock id reports. Unset clocks return a fixed value, so a
@@ -582,7 +631,33 @@ class FakeSyscalls final : public platform::Syscalls {
         value.nanoseconds += 1'000'000'000;
       }
     }
+    return shifted(value);
+  }
+
+  [[nodiscard]] platform::TimeSpec shifted(platform::TimeSpec value) const {
+    if (clock_offset_ns_ == 0) {
+      return value;  // A reading set on purpose is given back exactly as set.
+    }
+    value.seconds += clock_offset_ns_ / 1'000'000'000;
+    value.nanoseconds += clock_offset_ns_ % 1'000'000'000;
+    if (value.nanoseconds >= 1'000'000'000) {
+      value.seconds += 1;
+      value.nanoseconds -= 1'000'000'000;
+    }
     return value;
+  }
+
+  /// What the next read of a clock will report, without reading it: for a
+  /// test that needs the time a call is about to be given.
+  [[nodiscard]] std::int64_t peek_clock_ns(int clock_id) const {
+    platform::TimeSpec value{0, 0};
+    if (const auto found = clocks_.find(clock_id); found != clocks_.end()) {
+      value = found->second;
+    }
+    const auto reads = reads_per_clock_.find(clock_id);
+    const int nth = (reads == reads_per_clock_.end() ? 0 : reads->second) + 1;
+    const std::int64_t advance = clock_step_ns_ * (nth - 1) + clock_offset_ns_;
+    return value.seconds * 1'000'000'000 + value.nanoseconds + advance;
   }
 
   // --- signals and identity --------------------------------------------------------
@@ -610,6 +685,11 @@ class FakeSyscalls final : public platform::Syscalls {
     }
     if (signal_error_ != 0) {
       return platform::SyscallError{signal_error_, "kill", "pid " + std::to_string(pid)};
+    }
+    // The kernel: a zombie takes the signal and discards it, and only a pid
+    // that has been reaped is ESRCH.
+    if (reaped_.contains(pid)) {
+      return platform::SyscallError{ESRCH, "kill", "pid " + std::to_string(pid)};
     }
     if (pid < 0 && std::find(groups_left_running_.begin(), groups_left_running_.end(), -pid) ==
                        groups_left_running_.end()) {
@@ -1229,6 +1309,9 @@ class FakeSyscalls final : public platform::Syscalls {
   int read_link_count_ = 0;
 
   std::deque<ForkStep> forks_;
+  std::int64_t fork_delay_ns_ = 0;
+  std::int64_t clock_offset_ns_ = 0;
+  std::function<void(int)> fork_hook_;
   pid_t fork_result_ = 0;
   int fork_error_ = 0;
   int fork_count_ = 0;
@@ -1254,6 +1337,16 @@ class FakeSyscalls final : public platform::Syscalls {
   std::deque<WaitStep> nonblocking_reaps_;
   int nonblocking_reap_error_ = 0;
   int nonblocking_reap_count_ = 0;
+
+  void mark_reaped(pid_t pid) {
+    zombies_.erase(pid);
+    reaped_.insert(pid);
+  }
+
+  std::set<pid_t> zombies_;
+  std::set<pid_t> reaped_;
+  int has_exited_error_ = 0;
+  std::vector<pid_t> exit_peeks_;
 
   int signal_error_ = 0;
   std::map<pid_t, int> signal_errors_;

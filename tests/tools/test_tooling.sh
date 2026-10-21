@@ -312,6 +312,27 @@ out="$(python3 "$SHARD" --root "$tree" targets alpha 2>&1)"
 expect "a shard no executable tests FAILS rather than sweeping nothing" 1 $? "run against nothing" "$out"
 rm -rf "$tree"
 
+# The test executables of a unit of the CI plan: a path, less what other units
+# sweep. A fragment below a module is named by its own path, and the module
+# around it leaves its tests to it.
+tree="$(mktemp -d)"
+mkdir -p "$tree/src/alpha/inner" "$tree/tests/unit/alpha/inner" "$tree/tests/property/alpha/inner"
+touch "$tree/src/alpha/a.cpp" "$tree/src/alpha/inner/b.cpp"
+printf 'loadforge_test_suite(loadforge_unit_alpha_inner_tests SOURCES b.cpp)\n' > "$tree/tests/unit/alpha/inner/CMakeLists.txt"
+printf 'loadforge_test_suite(loadforge_property_alpha_inner_tests SOURCES b.cpp)\n' > "$tree/tests/property/alpha/inner/CMakeLists.txt"
+printf 'add_executable(loadforge_unit_tests\n  unit/alpha/a_test.cpp\n)\n' > "$tree/tests/CMakeLists.txt"
+out="$(python3 "$SHARD" --root "$tree" unit-targets --scope src/alpha/inner 2>&1)"
+expect "a fragment's unit names every suite of its own tests"   0 $? "loadforge_property_alpha_inner_tests" "$out"
+leftover="$(grep -c '^loadforge_unit_tests$' <<< "$out")"
+expect "and not the shared binary its module's tests are in"    0 "$leftover" ""
+out="$(python3 "$SHARD" --root "$tree" unit-targets --scope src/alpha --exclude src/alpha/inner 2>&1)"
+expect "the module around it names the shared binary"           0 $? "^loadforge_unit_tests$" "$out"
+leftover="$(grep -c 'inner' <<< "$out")"
+expect "and leaves the fragment's suites to the fragment"       0 "$leftover" ""
+out="$(python3 "$SHARD" --root "$tree" unit-targets --scope src/alpha/inner --exclude src/alpha/inner 2>&1)"
+expect "a unit that leaves out all it has FAILS"                1 $? "run against nothing" "$out"
+rm -rf "$tree"
+
 # check-processes, against stand-in test programs that answer like GoogleTest:
 # the set every mutant runs must create no process, and a RealProcess* test must
 # create one. Bash builtins create none; running /bin/true creates one.

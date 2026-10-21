@@ -221,5 +221,53 @@ TEST(ToRunResult, OneWorkloadResultPerVerifyingWorkerAndOneWorkerResultPerWorker
   EXPECT_EQ(result.schema_version, results::kSchemaVersion);
 }
 
+// ---- the codes M2 and M3 each assigned, composed ---------------------------------------------
+
+TEST(ExitCodeComposed, TheCodesAreMainsAndTheOnesM2AddedFollowThem) {
+  EXPECT_EQ(kExitUnclean, 3);
+  EXPECT_EQ(kExitOutputFailed, 4);
+  EXPECT_EQ(kExitFault, 5);
+  EXPECT_EQ(kExitWrongResult, kExitFault) << "a wrong result is a fault, the verdict is findings";
+  EXPECT_EQ(kExitNotVerified, 6);
+}
+
+TEST(ExitCodeComposed, AFaultOutranksAWorkerThatDidNotCompleteAndAnIncompleteVerdict) {
+  for (const bool clean : {true, false}) {
+    for (const bool verified : {true, false}) {
+      EXPECT_EQ(exit_code_for(results::Verdict::kFindings, clean, verified), kExitFault);
+      EXPECT_EQ(exit_code_for(results::Verdict::kCorrectedErrors, clean, verified), kExitFault);
+    }
+  }
+}
+
+TEST(ExitCodeComposed, AWorkerThatDidNotCompleteOutranksACheckThatWasNotMade) {
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, false, true), kExitUnclean);
+  EXPECT_EQ(exit_code_for(results::Verdict::kClean, false, true), kExitUnclean);
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, true, true), kExitNotVerified);
+}
+
+TEST(ExitCodeComposed, WithNothingToVerifyAnIncompleteVerdictIsWhatSuchARunAlwaysHas) {
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, true), 0);
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, true, false), 0);
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, false), kExitUnclean);
+  EXPECT_EQ(exit_code_for(results::Verdict::kClean, true, true), 0);
+}
+
+TEST(ExitCodeComposed, AResultThatCannotBeWrittenIsFourUnlessAFaultIsTheNews) {
+  EXPECT_EQ(with_output_failure(0), kExitOutputFailed);
+  EXPECT_EQ(with_output_failure(kExitUnclean), kExitOutputFailed);
+  EXPECT_EQ(with_output_failure(kExitNotVerified), kExitOutputFailed);
+  EXPECT_EQ(with_output_failure(kExitFault), kExitFault);
+}
+
+TEST(ExitCodeComposed, ARunHasAVerifiedWorkerWhenAnyWorkerRanOne) {
+  controller::RunReport none;
+  none.workers = {null_worker()};
+  EXPECT_FALSE(has_verified_worker(none));
+  controller::RunReport some;
+  some.workers = {null_worker(), checked_worker()};
+  EXPECT_TRUE(has_verified_worker(some));
+}
+
 }  // namespace
 }  // namespace loadforge::cli

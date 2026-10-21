@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -27,6 +28,7 @@
 #include "topology/cpu_topology.hpp"
 #include "topology/snapshot.hpp"
 #include "unit/controller/machine_tree.hpp"
+#include "unit/main/cli_support.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -221,14 +223,30 @@ TEST(Cli, TheWorkerSwitchRunsARealWorkerInThisProcess) {
   EXPECT_TRUE(syscalls.close(control.value().write_fd).has_value());
 }
 
-TEST(Cli, StressTakesExactlyConfigAndAFile) {
-  for (const std::vector<std::string_view>& args :
-       {std::vector<std::string_view>{"stress"},
-        std::vector<std::string_view>{"stress", "--conf", "a.toml"},
-        std::vector<std::string_view>{"stress", "--config", "a.toml", "extra"}}) {
+TEST(Cli, StressTakesAConfigAndNothingItDoesNotKnow) {
+  for (const auto& [args, message] :
+       {std::pair{std::vector<std::string_view>{"stress"}, "stress needs --config FILE"},
+        std::pair{std::vector<std::string_view>{"stress", "--conf", "a.toml"},
+                  "stress does not take --conf"},
+        std::pair{std::vector<std::string_view>{"stress", "--config", "a.toml", "extra"},
+                  "stress does not take extra"},
+        std::pair{std::vector<std::string_view>{"stress", "--config"}, "--config takes a value"},
+        std::pair{std::vector<std::string_view>{"stress", "--config", "a", "--config", "b"},
+                  "--config is given twice"},
+        std::pair{std::vector<std::string_view>{"stress", "--config", "a", "--output", "xml"},
+                  "unknown output format \"xml\""},
+        std::pair{
+            std::vector<std::string_view>{"stress", "--config", "a", "--sample-interval", "soon"},
+            "--sample-interval: "},
+        std::pair{
+            std::vector<std::string_view>{"stress", "--config", "a", "--sample-interval", "0s"},
+            "--sample-interval must be above zero"},
+        std::pair{std::vector<std::string_view>{"stress", "--config", "a", "--sample-interval",
+                                                "9223372036854775807ms"},
+                  "--sample-interval is longer than any run can be"}}) {
     const Outcome r = invoke(args);
     EXPECT_EQ(r.code, 2);
-    EXPECT_NE(r.err.find("stress takes --config FILE or --test NAME"), std::string::npos) << r.err;
+    EXPECT_NE(r.err.find(message), std::string::npos) << r.err;
     EXPECT_TRUE(r.out.empty());
   }
 }
@@ -254,7 +272,8 @@ TEST(Cli, StressRefusesToRunWhenItCannotNameTheWorkerExecutable) {
   std::ostringstream out;
   std::ostringstream err;
   EXPECT_EQ(stress(LOADFORGE_SOURCE_DIR "/tests/fixtures/config/short-stress.toml",
-                   LOADFORGE_SOURCE_DIR "/no-such-link", topology::kDefaultSysfsRoot, out, err),
+                   LOADFORGE_SOURCE_DIR "/no-such-link", topology::kDefaultSysfsRoot,
+                   StressOptions{}, out, err),
             1);
   EXPECT_NE(err.str().find("cannot resolve this executable for the workers: readlink("),
             std::string::npos)
@@ -269,9 +288,10 @@ TEST(Cli, StressRefusesAMachineItCannotDescribeBeforeAnyWorkerStarts) {
   // executable link, so the snapshot is the only thing that can refuse.
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(stress(LOADFORGE_SOURCE_DIR "/tests/fixtures/config/short-stress.toml",
-                   "/proc/self/exe", LOADFORGE_SOURCE_DIR "/no-such-sysfs", out, err),
-            1);
+  EXPECT_EQ(
+      stress(LOADFORGE_SOURCE_DIR "/tests/fixtures/config/short-stress.toml", "/proc/self/exe",
+             LOADFORGE_SOURCE_DIR "/no-such-sysfs", StressOptions{}, out, err),
+      1);
   EXPECT_NE(err.str().find("loadforge: cannot describe this machine before starting workers: " +
                            std::string{LOADFORGE_SOURCE_DIR} +
                            "/no-such-sysfs/devices/system/cpu/online"),
@@ -280,46 +300,17 @@ TEST(Cli, StressRefusesAMachineItCannotDescribeBeforeAnyWorkerStarts) {
   EXPECT_TRUE(out.str().empty()) << "no banner, so no run: " << out.str();
 }
 
-/// One online CPU on its own core, no caches, no NUMA layout: the smallest
-/// /sys a snapshot accepts, built once on disk for the runs over the fake.
-const topology::Snapshot& one_cpu_machine() {
-  static const topology::Snapshot machine = [] {
-    const std::filesystem::path root = std::filesystem::temp_directory_path() /
-                                       ("loadforge-cli-sysfs-" + std::to_string(::getpid()));
-    const std::filesystem::path cpu = root / "devices" / "system" / "cpu";
-    std::filesystem::create_directories(cpu / "cpu0" / "topology");
-    for (const auto& [file, text] :
-         {std::pair{cpu / "online", "0"}, std::pair{cpu / "cpu0" / "topology" / "core_id", "0"},
-          std::pair{cpu / "cpu0" / "topology" / "physical_package_id", "0"},
-          std::pair{cpu / "cpu0" / "topology" / "thread_siblings_list", "0"}}) {
-      std::ofstream(file) << text << "\n";
-    }
-    platform::RealSyscalls syscalls;
-    platform::FileSystem filesystem(syscalls);
-    auto taken = topology::take_snapshot(filesystem, root.string());
-    std::error_code ignored;
-    std::filesystem::remove_all(root, ignored);
-    return std::move(taken).value();
+/// The supervisor alone: these tests script the seam's reads in the order the
+/// budget and the OOM record make them, and a source probed first would take
+/// them. The telemetry is tested where its files are served by path.
+const StressOptions& supervisor_only() {
+  static const StressOptions options = [] {
+    StressOptions only;
+    only.sample = false;
+    only.capabilities = false;
+    return only;
   }();
-  return machine;
-}
-
-/// What a run over the fake of the system calls is given: no telemetry probe,
-/// because the fake answers every path with one file (StressOptions).
-StressOptions over_a_fake() {
-  StressOptions options;
-  options.capabilities = false;
   return options;
-}
-
-/// Two null workloads for a short while, for driving run_stress over a fake.
-config::Config two_workloads() {
-  config::Config config;
-  config.run.mode = config::Mode::kStress;
-  config.run.duration = core::Duration{50};
-  config.workloads.push_back(config::Workload{"first", config::Threads::all(), true, {}});
-  config.workloads.push_back(config::Workload{"second", config::Threads::all(), true, {}});
-  return config;
 }
 
 TEST(Cli, RunStressReturnsAFailedWorkersExitCodeInTheChild) {
@@ -330,7 +321,7 @@ TEST(Cli, RunStressReturnsAFailedWorkersExitCodeInTheChild) {
   std::ostringstream out;
   std::ostringstream err;
   EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(),
-                       over_a_fake(), out, err),
+                       supervisor_only(), out, err),
             120);
   EXPECT_TRUE(err.str().empty()) << err.str();
   EXPECT_EQ(syscalls.exec_count(), 1);
@@ -342,8 +333,8 @@ TEST(Cli, RunStressReportsAControllerFailureAndTheUncleanRun) {
   failing.script_forks({{0, EAGAIN}});
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(failing, two_workloads(), "/opt/loadforge", one_cpu_machine(), over_a_fake(),
-                       out, err),
+  EXPECT_EQ(run_stress(failing, two_workloads(), "/opt/loadforge", one_cpu_machine(),
+                       supervisor_only(), out, err),
             1);
   EXPECT_NE(err.str().find("loadforge: spawn: fork(worker process): Resource temporarily"),
             std::string::npos)
@@ -358,8 +349,8 @@ TEST(Cli, RunStressReportsAControllerFailureAndTheUncleanRun) {
       {{platform::Reaped{1001, 0}, 0}, {platform::Reaped{1002, 0}, 0}});
   std::ostringstream report;
   std::ostringstream quiet;
-  EXPECT_EQ(run_stress(unclean, two_workloads(), "/opt/loadforge", one_cpu_machine(), over_a_fake(),
-                       report, quiet),
+  EXPECT_EQ(run_stress(unclean, two_workloads(), "/opt/loadforge", one_cpu_machine(),
+                       supervisor_only(), report, quiet),
             3);
   EXPECT_NE(report.str().find("0 of 2 worker(s) completed"), std::string::npos) << report.str();
   EXPECT_NE(report.str().find("\n  topology: 1 logical CPU(s) on 1 core(s) in 1 package(s); "
@@ -399,9 +390,9 @@ TEST(Cli, RunStressChecksMemoryAgainstTheBudgetItReads) {
   serve_machine(two_quick_exits(syscalls, 0), "MemAvailable:   1048576 kB\n");
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(
-      run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err),
-      3);
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), supervisor_only(),
+                       out, err),
+            3);
   EXPECT_NE(out.str().find("limit memory: enforced (checked at start against a ceiling of 1GiB)"),
             std::string::npos)
       << out.str();
@@ -411,8 +402,8 @@ TEST(Cli, RunStressChecksMemoryAgainstTheBudgetItReads) {
   serve_machine(two_quick_exits(refusing, 0), "MemAvailable:   1048576 kB\n");
   std::ostringstream quiet;
   std::ostringstream refusal;
-  EXPECT_EQ(run_stress(refusing, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), quiet,
-                       refusal),
+  EXPECT_EQ(run_stress(refusing, config, "/opt/loadforge", one_cpu_machine(), supervisor_only(),
+                       quiet, refusal),
             1);
   EXPECT_NE(refusal.str().find("loadforge: memory: workload.first: "), std::string::npos)
       << refusal.str();
@@ -426,9 +417,9 @@ TEST(Cli, RunStressSaysWhyMemoryIsNotEnforcedWhenTheBudgetCannotBeRead) {
   serve_machine(two_quick_exits(syscalls, 0), "MemTotal:       16479424 kB\n");
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(
-      run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err),
-      3);
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), supervisor_only(),
+                       out, err),
+            3);
   EXPECT_NE(out.str().find("limit memory: NOT ENFORCED (no memory budget could be read: "
                            "/proc/meminfo: not offered by this kernel (no MemAvailable line"),
             std::string::npos)
@@ -441,7 +432,7 @@ TEST(Cli, RunStressConsultsTheOomRecordForASigkillNobodySent) {
   std::ostringstream out;
   std::ostringstream err;
   EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(),
-                       over_a_fake(), out, err),
+                       supervisor_only(), out, err),
             3);
   EXPECT_NE(out.str().find("worker 0 (pid 1001): killed; killed by signal 9"), std::string::npos)
       << out.str();
@@ -509,12 +500,13 @@ TEST(CliStressTest, EveryOptionIsRefusedByNameWhenItIsMisused) {
 }
 
 TEST(CliStressTest, StressTakesAConfigOrATestAndNothingElse) {
-  for (const std::vector<std::string_view>& args :
-       {std::vector<std::string_view>{"stress", "--test"},
-        std::vector<std::string_view>{"stress", "--tests", "compression"}}) {
+  for (const auto& [args, message] :
+       {std::pair{std::vector<std::string_view>{"stress", "--test"}, "stress does not take --test"},
+        std::pair{std::vector<std::string_view>{"stress", "--tests", "compression"},
+                  "stress does not take --tests"}}) {
     const Outcome r = invoke(args);
     EXPECT_EQ(r.code, 2);
-    EXPECT_NE(r.err.find("stress takes --config FILE or --test NAME"), std::string::npos) << r.err;
+    EXPECT_NE(r.err.find(message), std::string::npos) << r.err;
   }
 }
 
@@ -547,7 +539,7 @@ TEST(CliStressTest, ATestThatCannotNameItsExecutableOrDescribeTheMachineIsRefuse
     std::ostringstream out;
     std::ostringstream err;
     const std::vector<std::string_view> args{"compression", "--duration", "1s"};
-    EXPECT_EQ(stress_test(args, LOADFORGE_SOURCE_DIR "/no-such-link", "/sys", out, err), 1);
+    EXPECT_EQ(stress_test(args, LOADFORGE_SOURCE_DIR "/no-such-link", "/sys", StressOptions{}, out, err), 1);
     EXPECT_NE(err.str().find("cannot resolve this executable for the workers"), std::string::npos)
         << err.str();
   }
@@ -556,7 +548,7 @@ TEST(CliStressTest, ATestThatCannotNameItsExecutableOrDescribeTheMachineIsRefuse
     std::ostringstream out;
     std::ostringstream err;
     const std::vector<std::string_view> args{"compression", "--duration", "1s"};
-    EXPECT_EQ(stress_test(args, link.path(), LOADFORGE_SOURCE_DIR "/no-such-sysfs", out, err), 1);
+    EXPECT_EQ(stress_test(args, link.path(), LOADFORGE_SOURCE_DIR "/no-such-sysfs", StressOptions{}, out, err), 1);
     EXPECT_NE(err.str().find("cannot describe this machine before starting workers"),
               std::string::npos)
         << err.str();
@@ -571,7 +563,7 @@ TEST(CliStressTest, ATestRunsRealWorkersForRealAndReportsWhatTheyChecked) {
   const std::vector<std::string_view> args{"compression", "--duration",  "1s",    "--workers",
                                            "2",           "--footprint", "6MiB",  "--seed",
                                            "7",           "--isa",       "scalar"};
-  EXPECT_EQ(stress_test(args, link.path(), "/sys", out, err), 0) << out.str() << err.str();
+  EXPECT_EQ(stress_test(args, link.path(), "/sys", StressOptions{}, out, err), 0) << out.str() << err.str();
   const std::string text = out.str();
   EXPECT_NE(text.find("stress for 1s with 2 worker(s)\n"), std::string::npos) << text;
   EXPECT_NE(text.find("  workload compression: 1 thread(s) on cpu "), std::string::npos) << text;
@@ -579,7 +571,11 @@ TEST(CliStressTest, ATestRunsRealWorkersForRealAndReportsWhatTheyChecked) {
   EXPECT_NE(text.find("  floating point (asserted at startup): rounding to nearest"),
             std::string::npos)
       << text;
-  EXPECT_NE(text.find("  capabilities:\ntelemetry capability: "), std::string::npos) << text;
+  const std::size_t capabilities = text.find("telemetry capability: ");
+  ASSERT_NE(capabilities, std::string::npos) << text;
+  EXPECT_LT(capabilities, text.find("stress for 1s")) << "stated once, before the run";
+  EXPECT_EQ(text.find("telemetry capability: ", capabilities + 1), std::string::npos)
+      << "and the sources are not probed a second time for the banner";
   EXPECT_NE(text.find("2 of 2 worker(s) completed"), std::string::npos) << text;
   EXPECT_NE(text.find("the oracle checked "), std::string::npos) << text;
   EXPECT_NE(text.find(" sampled block(s) and found 0 wrong"), std::string::npos) << text;
@@ -594,8 +590,68 @@ TEST(CliStressTest, WithoutWorkersOrAFootprintATestTakesOneWorkerPerCpuTheProces
   std::ostringstream err;
   const std::vector<std::string_view> args{"compression", "--duration", "1s", "--footprint",
                                            "4MiB"};
-  EXPECT_EQ(stress_test(args, link.path(), "/sys", out, err), 0) << out.str() << err.str();
+  EXPECT_EQ(stress_test(args, link.path(), "/sys", StressOptions{}, out, err), 0) << out.str() << err.str();
   EXPECT_NE(out.str().find("worker(s) completed"), std::string::npos) << out.str();
+}
+
+TEST(CliStressTest, EveryOutputOptionIsRefusedByNameWhenItIsMisused) {
+  struct Case {
+    std::vector<std::string_view> options;
+    std::string expected;
+  };
+  const std::vector<Case> cases = {
+      {{"--output", "xml"}, "unknown output format \"xml\""},
+      {{"--output", "json", "--output", "csv"},
+       "--output: not an option of stress --test, or given twice"},
+      {{"--output-dir", "a", "--output-dir", "b"},
+       "--output-dir: not an option of stress --test, or given twice"},
+      {{"--sample-interval", "soon"}, "--sample-interval: "},
+      {{"--sample-interval", "0s"}, "--sample-interval must be above zero"},
+      {{"--sample-interval", "9223372036854775807ms"},
+       "--sample-interval is longer than any run can be"},
+      {{"--sample-interval", "1s", "--sample-interval", "2s"},
+       "--sample-interval: not an option of stress --test, or given twice"},
+  };
+  for (const Case& each : cases) {
+    std::vector<std::string_view> args{"stress", "--test", "compression"};
+    args.insert(args.end(), each.options.begin(), each.options.end());
+    const Outcome r = invoke(args);
+    EXPECT_EQ(r.code, 2) << each.expected;
+    EXPECT_EQ(r.err.substr(0, 26 + each.expected.size()),
+              "loadforge: stress --test: " + each.expected)
+        << r.err;
+    EXPECT_TRUE(r.out.empty());
+  }
+}
+
+TEST(CliStressTest, AVerifiedRunSamplesTelemetryAndWritesTheResultWhenAskedTo) {
+  const LinkToTheBinary link;
+  const std::filesystem::path directory = std::filesystem::temp_directory_path() /
+                                          ("loadforge-cli-result-" + std::to_string(::getpid()));
+  std::filesystem::create_directories(directory);
+  std::ostringstream out;
+  std::ostringstream err;
+  const std::string where = directory.string();
+  const std::vector<std::string_view> args{"compression",   "--duration",  "1s",
+                                           "--workers",     "2",           "--footprint",
+                                           "6MiB",          "--output",    "json,csv",
+                                           "--output-dir",  where,         "--sample-interval",
+                                           "100ms"};
+  EXPECT_EQ(stress_test(args, link.path(), "/sys", StressOptions{}, out, err), 0)
+      << out.str() << err.str();
+  const std::string text = out.str();
+  EXPECT_NE(text.find("the oracle checked "), std::string::npos) << "the verified run: " << text;
+  EXPECT_NE(text.find("result written: " + where + "/run.json\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("result written: " + where + "/run.csv\n"), std::string::npos) << text;
+  std::ifstream json(directory / "run.json");
+  const std::string document((std::istreambuf_iterator<char>(json)),
+                             std::istreambuf_iterator<char>());
+  EXPECT_NE(document.find("\"compression\""), std::string::npos)
+      << "the workload that was verified is in the result";
+  EXPECT_NE(document.find("\"signature\""), std::string::npos)
+      << "and so is the telemetry sampled while it ran";
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
 }
 
 // --- the plan, over the fake -----------------------------------------------------------------
@@ -612,7 +668,7 @@ TEST(CliStressTest, EveryChoiceReachesTheWorkerThroughTheArgv) {
   config.workloads[1].name = "compression";
   config.workloads[0].threads = config::Threads::count(1);
   config.workloads[1].threads = config::Threads::count(1);
-  StressOptions options = over_a_fake();
+  StressOptions options = supervisor_only();
   options.seed = 4;
   options.isa = simd::IsaPath::kScalar;
   options.footprint_bytes = std::uint64_t{4} << 20U;
@@ -644,7 +700,7 @@ TEST(CliStressTest, AWorkerOfTheNullWorkloadIsStillCalledAHangAfterTwoSeconds) {
   std::ostringstream out;
   std::ostringstream err;
   EXPECT_EQ(run_stress(syscalls, two_workloads(), "/opt/loadforge", one_cpu_machine(),
-                       over_a_fake(), out, err),
+                       supervisor_only(), out, err),
             120);
   std::vector<std::string_view> tail;
   const std::vector<std::string>& argv = syscalls.last_exec_argv();
@@ -667,7 +723,7 @@ TEST(CliStressTest, ARegisteredWorkloadThatIsSwitchedOffDoesNotMakeTheRunAVerify
   std::ostringstream out;
   std::ostringstream err;
   EXPECT_EQ(
-      run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err),
+      run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), supervisor_only(), out, err),
       120);
   std::vector<std::string_view> tail;
   const std::vector<std::string>& argv = syscalls.last_exec_argv();
@@ -690,7 +746,7 @@ TEST(CliStressTest, AMachineWhoseCacheLineIsNotKnownDoesNotRunAWorkload) {
   config.workloads[0].name = "compression";
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, over_a_fake(), out, err), 1);
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, supervisor_only(), out, err), 1);
   EXPECT_NE(err.str().find("compression: the machine's cache-line size is not known"),
             std::string::npos)
       << err.str();
@@ -709,7 +765,7 @@ TEST(CliStressTest, TheCpusAWorkerMayUseAreWhatTheKernelPermitsOfWhatTheSnapshot
     config.workloads[0].threads = config::Threads::all();
     std::ostringstream out;
     std::ostringstream err;
-    EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, over_a_fake(), out, err),
+    EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, supervisor_only(), out, err),
               120);
     std::vector<std::string_view> tail;
     const std::vector<std::string>& argv = syscalls.last_exec_argv();

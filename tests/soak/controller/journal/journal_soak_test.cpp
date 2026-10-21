@@ -43,11 +43,16 @@ std::uint64_t env_number(const char* name, std::uint64_t fallback) {
 // AddressSanitizer parks freed blocks in a quarantine of up to 256 MiB, so
 // resident memory climbs under it whatever the code does; there the leak
 // check is LeakSanitizer's, at exit, and the resident-memory bound is not
-// asserted.
-#if defined(__SANITIZE_ADDRESS__)
+// asserted. ThreadSanitizer likewise: every heap page the run touches also
+// touches its shadow and metadata, which count in this process's resident set,
+// so the 256 KiB slack is exceeded or not depending on where the allocator
+// lands (failed once in CI, 2026-10-21, on #77; passed 5 of 5 locally). The
+// plain and coverage builds still assert the bound, and the ASan build's leak
+// check still covers what a growing resident set would mean.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 constexpr bool kQuarantine = true;
 #elif defined(__has_feature)
-#if __has_feature(address_sanitizer)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
 constexpr bool kQuarantine = true;
 #else
 constexpr bool kQuarantine = false;

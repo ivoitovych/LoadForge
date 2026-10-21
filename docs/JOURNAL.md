@@ -792,6 +792,26 @@ mutants of `src/` running against a slow suite; with no output to read, the two
 mechanisms above -- every target mutated, and a forked child holding Mull's pipes -- each
 suffice to explain them, and neither can be confirmed until a run reports.
 
+### 1.27 `kill(2)` succeeds on a zombie, so a successful signal proves nothing about the death
+
+*2026-10-20 19:30 UTC.* The first independent review (EXT-01) and a real-kernel test
+(`RealProcessSyscallsTest.KillSucceedsOnAnUnreapedZombieAndOnlyTheReapMakesItESRCH`):
+
+- A child that has terminated and has not been reaped is a zombie. `kill(zombie, SIGKILL)`
+  **returns success**, the signal is discarded, and `waitpid` then reports the original
+  status (exit 0 in the test). `ESRCH` comes only after the reap.
+- So a controller that records "signal sent" on success, and on `ESRCH`, records a signal
+  that may have arrived after the death. A worker killed by the OOM killer or an outside
+  `kill -9` in the same tick as an escalation was reported as the controller's stop or
+  timeout, and the OOM predicate refused to read the count for it.
+- `waitid(P_PID, pid, ..., WEXITED | WNOHANG | WNOWAIT)` says whether a child has
+  terminated without reaping it (`si_pid` is 0 while it runs); it answers `ECHILD` once the
+  child is reaped. It narrows the race but cannot close it: the worker can still die between
+  the look and the `kill`, and `pidfd` does not tell which of two racing SIGKILLs ended it.
+- The shared fake had modelled a dead child as `ESRCH`, the same class of fake-versus-kernel
+  divergence as the SIGPIPE bug (§1.23). It now models the three states: running, zombie
+  (`child_exits`: signals succeed, `has_exited` is true), reaped (a reap delivered: `ESRCH`
+  and `ECHILD`). Its own tests are `tests/unit/platform/fake_syscalls_test.cpp`.
 
 ### 1.28 clang-tidy 18's static analyzer crashes on `std::bit_cast<std::uintptr_t>(p) + offset`
 
@@ -2099,6 +2119,110 @@ would hold `kBitExact` over the pixels. The tile sums were added so that the dec
 is true and the decomposition (the tile edge, 8, 16 or 32) is real; if the manager prefers
 `kBitExact`, the tile sums and the decomposition come out of the header and nothing else
 changes.
+
+### 2.32 EXT-01: an attempted signal is not an established cause
+
+*2026-10-20 19:30 UTC.* Context: §1.27. Review: `reviews/review-response-2026-10-20-0352-UTC.md`
+EXT-01; plan: `reviews/reaction-plan-external-review-2026-10-20-1230-UTC.md` item 1.
+
+**Chosen.**
+1. *The seam gains `has_exited(pid)`* (`waitid` with `WNOWAIT`, bare in `RealSyscalls`, the
+   decision in `exit_peek_result` above the seam). `Run::send` looks before every signal. A
+   worker already exited is **not signalled and no signal is recorded**; its report gets the
+   note "signal N not sent: the worker had already exited". A refused look (any errno,
+   `ECHILD` included) is a controller error at stage `signal`. An `ESRCH` from `kill` after
+   a look that said running cannot happen to an unreaped child; if it does it is tolerated
+   and **not recorded**.
+2. *`Evidence::signal_sent` is renamed `signal_attempted`*: the last signal sent to a
+   worker the look showed running. It is an attempt and nothing more.
+3. *Every SIGKILL death is an OOM candidate*, the controller's attempted SIGKILL included,
+   so the count is always consulted when a record is offered. The all-or-none rule of
+   `judge_oom_kills` is unchanged and now counts those deaths too; the note no longer says
+   "the controller did not send". `OomFinding` gains `ruled_out` (read at both ends, did not
+   rise); `Evidence` gains `oom_inconclusive` (consulted, neither attributed nor ruled out).
+4. *The verdict for a death by SIGKILL that matches an attempted SIGKILL:*
+   - the count rose enough: `kOomKilled` (the rise outranks the attempt);
+   - the count could not speak (unreadable, went back, rose by fewer than the deaths):
+     **`kKilled`, the provenance ambiguous**, the report keeping "SIGKILL sent" as the stop
+     step and the count's note as the reason;
+   - the count was read and did not move, or no record was offered: the controller's stop
+     or timeout, as before.
+
+**Why a flag-free reading of existing fates and not a new outcome.** `kKilled` already
+means "killed, with nothing to say who sent it". A new fate would reach every reporter and
+the contract for a state that is exactly that. The companion requirement (the controller's
+own kill of a running worker stays its stop) rules out calling every attempted SIGKILL
+ambiguous; the count is the one witness the kernel offers, and it is used.
+
+**Rejected.** Treating `ESRCH` differently alone (the review: a zombie kill succeeds).
+Reaping before signalling (reaping inside `send` would break the one-reap-loop design and
+still leave the race). A new `kProvenanceAmbiguous` fate (above). Using a separate candidate
+class for the controller's kills so the pure candidates keep their precision: it would let a
+partial rise attribute some deaths and not others, which is the inference the all-or-none
+rule exists to refuse.
+
+**What stays open, and is said so.** A SIGKILL from outside that lands between the look and
+the controller's own kill, with the OOM count unmoved, is reported as the controller's stop.
+The window is the gap between two system calls; no interface closes it. A mixed run (one
+controller kill, one OOM kill, count +1) now attributes neither: the cost of the all-or-none
+rule with more candidates.
+
+**Tests, each red before the fix** (run against the unfixed logic, 13 failures including the
+real-kernel one): `MisbehaviourCatalogue.AWorkerKilledFromOutsideBeforeTheControllersSigkillIsNotBlamedOnIt`
+(outside SIGKILL held unreaped with `WNOWAIT`, then escalated; the old controller reported
+`kStoppedByController`), its companion `TheControllersOwnKillOfARunningWorkerIsStillItsStop`,
+the fake-driven `ControllerExitedTest`, `ControllerOomTest` and `AttemptedKillTest` rows.
+
+### 2.33 EXT-02: startup is its own supervised phase, and the duration starts at the last launch
+
+*2026-10-20 20:15 UTC.* Review: `reviews/review-response-2026-10-20-0352-UTC.md` EXT-02; plan:
+`reviews/reaction-plan-external-review-2026-10-20-1230-UTC.md` item 2.
+
+**Verified before changing anything.** All four claims held in the code: `started_` was
+taken in `prepare()`; `spawn()` forked every worker through one `WorkerPool::spawn` with no
+controller beat between forks; each worker's `progress_changed_ns` and `last_read_ns`, and the
+"never beat" allowance in `watch()`, were measured from `started_`; and the duration was
+compared against `started_`. The regression tests below were run against the unfixed
+controller and all four failed.
+
+**Chosen.**
+1. *The controller beats between forks.* `WorkerPool::spawn` takes an optional observer, called
+   in the supervisor after every fork that stays in it (never in a child). The controller's
+   observer reads the clock, beats slot 0, and records the worker's launch time. No thread is
+   added: the controller still forks before any thread exists (PLAN §4.6). A clock failure
+   there is the controller's failure at stage `clock`, and the pool unwinds every worker
+   already started, as it does for a failed fork.
+2. *Each worker's allowance is its own.* The first-heartbeat allowance, the progress clock and
+   the unreadable-slot clock all run from that worker's launch (`Tracked::launched_ns`), no
+   longer from before the first fork.
+3. *The configured `run.duration` starts when the last worker has been launched* (`started_`
+   is overwritten by each launch and so ends as the last one's). Starting the workers is not
+   part of the duration. Each worker also paces itself by the same duration from its own start
+   (unchanged), so every worker runs the full duration and the whole run lasts the time the
+   forks took plus the duration. Stated in the `loadforge --help` text, `config/quick.toml`,
+   `config::Run::duration` and the controller header.
+
+**Rejected.** A bigger global staleness allowance (trades false positives for slower detection
+of a real hang, as the review says). A beat thread (unsafe before the last fork; the header
+promises none). Counting the duration from `prepare()` (a short run on a slow machine would
+ask for its stop before late workers ran). Counting it from the first launch (the first worker
+would run longer than the last by the spawn time).
+
+**What stays open, and is said so.** One fork that by itself takes longer than the allowance
+still leaves earlier workers watching a beat that cannot be refreshed during that call; only
+a pause between forks is covered. That is a single system call blocking for seconds, which
+the controller cannot interleave without a thread.
+
+**Consequence for the tests.** The two extra clock reads (one per launch) move every tick of
+the fake clock, so the timing expectations in the existing controller tests were recomputed;
+a worker that never beats is now stale a launch-interval earlier than the one forked after it.
+
+**Tests, red before the fix:** `ControllerStartupTest` (a delay injected at the fork boundary
+through the shared fake, 60 ms per fork against a 100 ms allowance): a running worker never
+finds the controller's beat stale while it forks; a worker forked late is judged stale only
+once the allowance has passed from its own launch; the deadline falls the configured duration
+after the last launch; a clock failure between forks is the controller's failure and unwinds.
+The pool's observer has its own tests in `worker_pool_test.cpp`.
 
 ---
 

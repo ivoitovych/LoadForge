@@ -92,6 +92,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
+      units: ${{ steps.units.outputs.units }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: plan
@@ -99,6 +100,95 @@ jobs:
           set -euo pipefail
           shards="$(./tools/mutation-shard.py plan)"
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
+      - id: units
+        # A unit is a set of sources and the test program that kills mutants in
+        # them. A module whose tests are in the shared unit-test program is one
+        # unit; a module that owns a test program of its own (verification,
+        # telemetry, statistics, the reporters, the results and the journal of
+        # the controller, the workloads, ...) is a unit per program, because
+        # mull-runner mutates one program, and a mutant that program never runs
+        # is a NOT-COVERED mutant, which the gate refuses. Until this step,
+        # every shard ran the shared program, so every module with a program of
+        # its own was swept by tests that never touched it.
+        #
+        # Derived from the tree on every run, as the shards are: a fragment
+        # (a src/ directory with a CMakeLists.txt, ADR 0004) whose tests
+        # fragment names one loadforge_test_suite(loadforge_unit_*_tests) is
+        # swept by that program, and the shard of the module around it leaves
+        # it out. Header-only contracts (src/telemetry/sample.hpp, ...) have no
+        # sources of their own and are swept where they are compiled in.
+        run: |
+          set -euo pipefail
+          units="$(python3 - <<'PY'
+          import json, pathlib, re, subprocess, sys
+
+          root = pathlib.Path(".").resolve()
+          src = root / "src"
+          names_of_shards = json.loads(subprocess.check_output(["./tools/mutation-shard.py", "plan"],
+                                                                text=True, stderr=subprocess.DEVNULL))
+          shards = {n: subprocess.check_output(["./tools/mutation-shard.py", "scope", n], text=True,
+                                               stderr=subprocess.DEVNULL).split() for n in names_of_shards}
+
+          # A fragment is a directory under src/ with a CMakeLists.txt of its own (ADR 0004).
+          fragments = sorted(p.parent.relative_to(root).as_posix() for p in src.rglob("CMakeLists.txt")
+                             if p.parent != src)
+
+          SUITE = re.compile(r"loadforge_test_suite\(\s*(loadforge_unit_\w+_tests)\b")
+
+          def own_target(fragment):
+              cmake = root / "tests" / "unit" / pathlib.Path(fragment).relative_to("src") / "CMakeLists.txt"
+              if not cmake.exists():
+                  return None
+              found = SUITE.findall(cmake.read_text())
+              return found[0] if len(found) == 1 else None
+
+          targets = {f: own_target(f) for f in fragments}
+          with_tests = [f for f in fragments if targets[f]]
+
+          def below(path, others):
+              return [o for o in others if o != path and o.startswith(path + "/")]
+
+          def has_cpp(scope, excludes):
+              for cpp in (root / scope).rglob("*.cpp"):
+                  rel = cpp.relative_to(root).as_posix()
+                  if not any(rel.startswith(e + "/") for e in excludes):
+                      return True
+              return False
+
+          units = []
+          for f in with_tests:
+              excl = below(f, with_tests)
+              if has_cpp(f, excl):
+                  units.append({"name": f.removeprefix("src/").replace("/", "-"), "scopes": [f],
+                                "excludes": excl})
+          for name, scopes in shards.items():
+              excl = [e for s in scopes for e in below(s, with_tests) + ([s] if s in with_tests else [])]
+              if any(has_cpp(s, excl) for s in scopes):
+                  units.append({"name": name, "scopes": scopes, "excludes": excl})
+          names = [u["name"] for u in units]
+          assert len(names) == len(set(names)), names
+          # Every executable that holds tests of the unit's modules, its own
+          # program (a fragment with one) and the shared one among them, not
+          # one program per unit: a mutant is killed by whichever detects it,
+          # and the gate merges the runs by mutant. A unit no executable tests
+          # fails the plan, as it would fail its sweep.
+          for u in units:
+              args = [a for s in u["scopes"] for a in ("--scope", s)]
+              args += [a for e in u["excludes"] for a in ("--exclude", e)]
+              u["targets"] = subprocess.check_output(
+                  ["./tools/mutation-shard.py", "unit-targets", *args], text=True,
+                  stderr=subprocess.DEVNULL).split()
+          # Units that need the other architecture's SIMD are not built here.
+          import platform
+          arch = platform.machine()
+          units = [u for u in units
+                   if not (u["name"].endswith("-arm") and arch != "aarch64")
+                   and not (u["name"].endswith("-x86") and arch != "x86_64")]
+          print(json.dumps(units, separators=(",", ":")))
+          PY
+          )"
+          echo "$units" | python3 -m json.tool
+          echo "units=$units" >> "$GITHUB_OUTPUT"
 
   mull:
     # At 100% coverage the coverage number stops carrying information: it can no
@@ -126,7 +216,7 @@ jobs:
     #
     # STATUS: pinned (see env above) and scheduled weekly. A dispatch may name
     # another release, but only together with its own checksum.
-    name: zero unexplained surviving mutants (${{ matrix.shard }})
+    name: zero unexplained surviving mutants (${{ matrix.unit.name }})
     needs: plan
     if: '!inputs.discover_pin'
     runs-on: ubuntu-24.04
@@ -138,9 +228,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+        unit: ${{ fromJSON(needs.plan.outputs.units) }}
     env:
-      SHARD: ${{ matrix.shard }}
+      UNIT: ${{ matrix.unit.name }}
+      UNIT_TARGETS: ${{ toJSON(matrix.unit.targets) }}
+      UNIT_SCOPES: ${{ toJSON(matrix.unit.scopes) }}
+      UNIT_EXCLUDES: ${{ toJSON(matrix.unit.excludes) }}
     steps:
       - name: An overriding URL comes with its own checksum
         # The pin is used unless a dispatch supplies both. A URL alone would be
@@ -161,29 +254,52 @@ jobs:
           echo "${{ inputs.mull_deb_sha256 || env.MULL_DEB_SHA256 }}  /tmp/mull.deb" | sha256sum --check --strict
           sudo dpkg -i /tmp/mull.deb
           mull-runner-18 --version
-      - name: This shard's Mull configuration
+      - name: This unit's Mull configuration
         # Read twice, through MULL_CONFIG: by the compiler plugin, which then
-        # builds in only this shard's mutants, and by mull-runner, which then
+        # builds in only this unit's mutants, and by mull-runner, which then
         # runs only those. Outside the checkout, so no mull.yml Mull might find
-        # by searching upwards from a build directory can stand in for it.
+        # by searching upwards from a build directory can stand in for it. The
+        # paths are anchored at the checkout and escaped as
+        # tools/mutation-shard.py does; what a unit leaves out (the fragments
+        # swept by their own programs) is excluded.
         run: |
           set -euo pipefail
-          config="$RUNNER_TEMP/mull-$SHARD.yml"
-          ./tools/mutation-shard.py mull-config "$SHARD" > "$config"
+          config="$RUNNER_TEMP/mull-$UNIT.yml"
+          python3 - > "$config" <<'PY'
+          import json, os, pathlib
+          meta = set("\\.+*?()|[]{}^$#&-~")
+          def escape(text):
+              return "".join("\\" + c if c in meta else c for c in text)
+          base = escape(str(pathlib.Path.cwd()))
+          def paths(variable):
+              return [f"  - {json.dumps('^' + base + '/' + escape(p) + '/')}"
+                      for p in json.loads(os.environ[variable])]
+          print("# Generated for the", os.environ["UNIT"], "unit; not a file to edit or commit.")
+          print("mutators:")
+          print('  - "cxx_default"')
+          print("includePaths:")
+          print(*paths("UNIT_SCOPES"), sep="\n")
+          excludes = paths("UNIT_EXCLUDES")
+          if excludes:
+              print("excludePaths:")
+              print(*excludes, sep="\n")
+          PY
           cat "$config"
           echo "MULL_CONFIG=$config" >> "$GITHUB_ENV"
       - env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug -DCMAKE_CXX_FLAGS="-fpass-plugin=/usr/lib/mull-ir-frontend-18 -g -grecord-command-line"
-      - name: This shard's test executables
-        # Every executable that holds a test of the shard's modules, not the one
-        # binary M1 had (M2a exit criterion 6): a mutant is compiled into each
+      - name: This unit's test executables
+        # Every executable that holds a test of the unit's modules, not the one
+        # program M1 had (M2a exit criterion 6): a mutant is compiled into each
         # executable that links the code it sits in, and is killed when the
         # tests of any of them detect it (tools/mutation-gate.py merges the
-        # runs). Which executables those are follows from where the shard's
-        # tests live (tools/mutation-shard.py targets).
+        # runs by mutant). A unit with a test program of its own is swept by it
+        # (the units step of the plan, above), and by any other that holds tests
+        # of its modules; which those are follows from where the tests live
+        # (tools/mutation-shard.py unit-targets, run by the plan).
         run: |
           set -euo pipefail
-          targets="$(./tools/mutation-shard.py targets "$SHARD")"
+          targets="$(echo "$UNIT_TARGETS" | python3 -c 'import json,sys; print(*json.load(sys.stdin))')"
           echo "$targets"
           # Word splitting on purpose: one CMake target per word.
           cmake --build --preset debug --target $targets
@@ -191,9 +307,9 @@ jobs:
           for target in $targets; do
             path="$(find build/debug -type f -perm -u+x -name "$target" | head -n 1)"
             [ -n "$path" ] || { echo "no executable was built for $target" >&2; exit 1; }
-            binaries+=("$path")
+            binaries+=("./$path")
           done
-          printf '%s\n' "${binaries[@]}" > "$RUNNER_TEMP/binaries-$SHARD.txt"
+          printf '%s\n' "${binaries[@]}" > "$RUNNER_TEMP/binaries-$UNIT.txt"
       - name: The gate agrees with the real Mull
         # Compiles a known-surviving mutant, runs Mull, and checks that the gate
         # parses the exact mutator identifier and that a reviewed key for one
@@ -212,22 +328,24 @@ jobs:
           while read -r binary; do
             echo "== $binary"
             ./tools/mutation-shard.py check-processes "$binary"
-          done < "$RUNNER_TEMP/binaries-$SHARD.txt"
+          done < "$RUNNER_TEMP/binaries-$UNIT.txt"
       - name: Run mutants and enforce the gate
         run: |
           set -euo pipefail
           scope_args=()
-          scopes="$(./tools/mutation-shard.py scope "$SHARD")"
-          for path in $scopes; do scope_args+=(--scope "$path"); done
+          for path in $(echo "$UNIT_SCOPES" | python3 -c 'import json,sys; print(*json.load(sys.stdin))'); do
+            scope_args+=(--scope "$path")
+          done
           filter="$(./tools/mutation-shard.py gtest-filter)"
-          mapfile -t binaries < "$RUNNER_TEMP/binaries-$SHARD.txt"
+          mapfile -t binaries < "$RUNNER_TEMP/binaries-$UNIT.txt"
           ./tools/mutation-gate.py "${binaries[@]}" \
             "${scope_args[@]}" --test-arg="--gtest_filter=$filter" 2>&1 | tee "$RUNNER_TEMP/gate.log"
       - name: Report the verdict
         if: always()
         run: |
           {
-            echo "### Mutation shard \`$SHARD\`"
+            echo "### Mutation unit \`$UNIT\`"
+            sed 's/^/- /' "$RUNNER_TEMP/binaries-$UNIT.txt"
             echo '```'
             grep -E '^(mutation gate|  (UNEXPLAINED|STALE|NOT-COVERED|MUTANT OUTSIDE))' \
               "$RUNNER_TEMP/gate.log" || echo "the gate did not run"
@@ -236,7 +354,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: mutation-${{ matrix.shard }}
+          name: mutation-${{ matrix.unit.name }}
           path: build/mutation/
           if-no-files-found: ignore
 

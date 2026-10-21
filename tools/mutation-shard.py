@@ -43,6 +43,8 @@ Subcommands:
     plan                    the shards, as a JSON list for a CI matrix
     scope SHARD             the shard's repository-relative paths, one per line
     targets SHARD           the test executables that hold the shard's tests, one per line
+    unit-targets --scope P [--scope P ...] [--exclude E ...]
+                            the same for a unit of the CI plan: paths and what it leaves out
     mull-config SHARD       the shard's mull.yml, on standard output
     gtest-filter            the filter every mutant's test run is given
     check-processes BINARY  run the test binary and check the filter against it
@@ -201,20 +203,41 @@ SUITE_RE = re.compile(r"\bloadforge_test_suite\(\s*(?P<name>\w+)")
 
 
 def targets(root: pathlib.Path, name: str) -> list[str]:
-    """The test executables whose tests exercise a shard's code, by CMake target.
+    """The test executables whose tests exercise a shard's code, by CMake target."""
+    return targets_of(root, shard(root, name), [], repr(name) + " shard")
+
+
+def under(path: str, base: str) -> bool:
+    return path == base or path.startswith(base + "/")
+
+
+def targets_of(
+    root: pathlib.Path, paths: list[str], excludes: list[str], label: str
+) -> list[str]:
+    """The test executables whose tests exercise the code under `paths`, less
+    what is under `excludes`, by CMake target.
 
     A mutant is compiled into every executable that links the code it sits in,
     and killed by whichever executable's tests detect it, so the sweep of a
-    shard runs every executable that holds tests of the shard's modules, not
-    the one binary M1 had (M2a exit criterion 6). A test belongs to a module by
+    unit runs every executable that holds tests of the unit's modules, not the
+    one binary M1 had (M2a exit criterion 6). A test belongs to a module by
     where it lives: tests/<tier>/<module>/..., whose CMakeLists.txt defines a
     suite (loadforge_test_suite) or adds sources to the unit-test executable
     (target_sources), and tests/CMakeLists.txt's own list of unit/<module>/
-    sources for the modules that predate fragments. An executable that is not
-    returned has no test of this shard's, and would have no mutant to run.
+    sources for the modules that predate fragments. The module is a path under
+    src/ (a unit may be a fragment below a top-level module, as a unit that
+    owns a test program of its own is), and what a unit leaves out to other
+    units (`excludes`) is not its tests. An executable that is not returned has
+    no test of this unit's, and would have no mutant to run.
     """
-    paths = shard(root, name)
-    modules_of_shard = {path.removeprefix("src/") for path in paths}
+    scopes = [path.removeprefix("src/") for path in paths]
+    skipped = [path.removeprefix("src/") for path in excludes]
+
+    def mine(module: str) -> bool:
+        return any(under(module, scope) for scope in scopes) and not any(
+            under(module, other) for other in skipped
+        )
+
     found: list[str] = []
 
     def add(target: str) -> None:
@@ -224,7 +247,7 @@ def targets(root: pathlib.Path, name: str) -> list[str]:
     tests = root / "tests"
     for cmake in sorted(tests.rglob("CMakeLists.txt")):
         parts = cmake.relative_to(tests).parts[:-1]
-        if len(parts) < 2 or parts[0] in NOT_MODULE_TESTS or parts[1] not in modules_of_shard:
+        if len(parts) < 2 or parts[0] in NOT_MODULE_TESTS or not mine("/".join(parts[1:])):
             continue
         text = cmake.read_text(encoding="utf-8")
         for match in SUITE_RE.finditer(text):
@@ -234,12 +257,12 @@ def targets(root: pathlib.Path, name: str) -> list[str]:
     top = tests / "CMakeLists.txt"
     if top.exists():
         listed = top.read_text(encoding="utf-8")
-        for module in modules_of_shard:
-            if re.search(rf"^\s*unit/{re.escape(module)}/", listed, re.M):
+        for match in re.finditer(r"^\s*unit/(?P<dir>[\w/]+)/[\w.]+", listed, re.M):
+            if mine(match["dir"]):
                 add(UNIT_TESTS_TARGET)
     if not found:
         raise ShardFailure(
-            f"no test executable holds a test of the {name!r} shard ({', '.join(paths)}); "
+            f"no test executable holds a test of the {label} ({', '.join(paths)}); "
             "every mutant in it would be run against nothing and survive."
         )
     return found
@@ -381,6 +404,11 @@ def main() -> int:
     config_parser.add_argument("shard")
     targets_parser = sub.add_parser("targets", help="a shard's test executables, one target a line")
     targets_parser.add_argument("shard")
+    unit_targets_parser = sub.add_parser(
+        "unit-targets", help="a unit's test executables, one target a line"
+    )
+    unit_targets_parser.add_argument("--scope", action="append", required=True)
+    unit_targets_parser.add_argument("--exclude", action="append", default=[])
     sub.add_parser("gtest-filter", help="the filter every mutant's tests run with")
     check_parser = sub.add_parser("check-processes", help="check the filter against a binary")
     check_parser.add_argument("binary")
@@ -405,6 +433,8 @@ def main() -> int:
             sys.stdout.write(mull_config(root, args.shard))
         elif args.command == "targets":
             print("\n".join(targets(root, args.shard)))
+        elif args.command == "unit-targets":
+            print("\n".join(targets_of(root, args.scope, args.exclude, "unit")))
         elif args.command == "gtest-filter":
             print(GTEST_FILTER)
         else:

@@ -6,7 +6,7 @@ path    = "src/controller"
 classes = ["P1", "P2", "P3", "P4", "P6"]
 tiers   = ["T1", "T2", "T7", "T8"]
 consumes = ["SourceContract", "FpControlContract", "IsaProbeContract", "SelectPathContract",
-            "IsolatorContract"]
+            "IsolatorContract", "SamplerContract", "TimelineContract"]
 note    = """
 From M2a the controller also joins the verifying pieces, and the paragraphs \
 after the first are what that added. P4: it is the one place a worker's wrong \
@@ -69,10 +69,13 @@ test of that signal no hang-up can pass for. OOM is \
 below; the process-shared lock row has no lock to test (see the header). \
 \
 OOM is told from a fault and from a plain kill by the kernel's own record: \
-a SIGKILL the controller did not send is kOomKilled only when the workers' \
-cgroup's OOM-kill count, read before the first fork and after the last reap, \
-rose by at least as many as there are such deaths; otherwise every one stays \
-kKilled and its report says why. The table row, the candidate rule and the \
+a SIGKILL death, the controller's attempted SIGKILL included, is kOomKilled \
+only when the workers' cgroup's OOM-kill count, read before the first fork \
+and after the last reap, rose by at least as many as there are such deaths; \
+otherwise a SIGKILL nobody here attempted stays kKilled and its report says \
+why, and one the controller attempted stays its stop when the count is read \
+and did not move, and is kKilled (provenance ambiguous) when the count could \
+not speak. A worker found already exited is never signalled (EXT-01). The table row, the candidate rule and the \
 judgement (every outcome: enough, none, too few, a count that went back, \
 unreadable at either end) are pure and tested row by row; the loop is driven \
 against the controller's own fake of the record's contract \
@@ -88,4 +91,15 @@ companion runs wherever a count can be read: a SIGKILL from outside, the \
 same record consulted, stays kKilled and says the count did not move. The \
 kernel's side alone -- a child really OOM-killed moves its cgroup's count by \
 one, and a kill -9 moves it by none -- is the reader's T8, in \
-tests/unit/resources."""
+tests/unit/resources. \
+\
+Since M3 the loop also samples telemetry (RunOptions::sampler): a round \
+before the first fork, one every sample interval, one at the deadline on the \
+boundary of the phase it ends (the phase marks "run" and "stop"), and one \
+after the last reap; the cost of the rounds is measured and every reap is \
+timed on the timeline's clock. A round the timeline refuses ends sampling \
+and is reported, never the run (P2, injected through the controller's own \
+mocks of the sampler and the timeline, which the providers' suites are run \
+against: contract_mocks_test.cpp). P6: tests/supervision/telemetry_death_test.cpp \
+kills a real worker mid-run and finds the telemetry from before its death in \
+the result (M3 exit criterion 2)."""

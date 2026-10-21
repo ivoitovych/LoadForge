@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# CRC-32 (IEEE, src/core/crc32.hpp) of the stencil workload's input and of its
+# output on the scalar path, per (seed, unit, tile edge). The scalar path is
+# plain IEEE 754 arithmetic with no lanes, so these digests are the same on
+# x86-64 and ARM64 (docs/determinism.md §3); the test that reads this file
+# fails on whichever architecture disagrees.
+#
+# Produced 2026-10-20 17:05 UTC on x86_64 (g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0), build preset debug, by
+#   LOADFORGE_STENCIL_PRINT_GOLDEN=1 build/debug/tests/determinism/workloads/stencil/\
+#     loadforge_determinism_workloads_stencil_tests --gtest_filter='*ReproducesTheCommitted*'
+# columns: seed unit tile input_crc32 output_crc32 (the CRCs in hexadecimal)
+1 0 16 eebdcc6f f4f3e994
+24301 7 16 e557d2a3 7df867b4
+18446744073709551615 3 16 c98e2933 3b3ed3d3
+1 0 32 eebdcc6f f4f3e994
+24301 7 32 e557d2a3 7df867b4
+18446744073709551615 3 32 c98e2933 3b3ed3d3
+1 0 64 eebdcc6f f4f3e994
+24301 7 64 e557d2a3 7df867b4
+18446744073709551615 3 64 c98e2933 3b3ed3d3
+1 0 128 eebdcc6f f4f3e994
+24301 7 128 e557d2a3 7df867b4
+18446744073709551615 3 128 c98e2933 3b3ed3d3

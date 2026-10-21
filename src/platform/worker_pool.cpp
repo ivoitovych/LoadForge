@@ -17,7 +17,8 @@
 namespace loadforge::platform {
 
 core::Result<SpawnOutcome, SyscallError> WorkerPool::spawn(
-    const std::vector<std::vector<std::string>>& argv_per_worker) {
+    const std::vector<std::vector<std::string>>& argv_per_worker,
+    const LaunchObserver& after_launch) {
   pids_.assign(argv_per_worker.size(), 0);
   live_ = 0;
 
@@ -41,6 +42,15 @@ core::Result<SpawnOutcome, SyscallError> WorkerPool::spawn(
 
     pids_[slot] = forked.value().child_pid();
     ++live_;
+
+    if (after_launch) {
+      // The worker exists and is counted, so a refusal unwinds it with the rest.
+      auto observed = after_launch(slot, pids_[slot]);
+      if (!observed) {
+        unwind_partial_spawn();
+        return observed.error();
+      }
+    }
   }
 
   return SpawnOutcome::supervisor(pids_);
