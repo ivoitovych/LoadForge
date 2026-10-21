@@ -34,10 +34,6 @@ using testing::Bytes;
 
 namespace loadforge::contracts {
 
-// The workload contract's header registers the registry suite as well; this
-// module provides a workload, not the registry (the integration stream's).
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-
 namespace {
 
 template <std::uint32_t Tile, bool Widest>
