@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/checksum and nothing else.
+
+[[module]]
+path     = "src/verification/checksum"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T4", "T5", "T5b"]
+fixtures = ["xz/verification/checksum/crc64.txt"]
+note     = """
+Exact comparison of expected and actual bytes into record.hpp's Difference \
+(compare.hpp), and the CRC-64 seal that guards input which cannot be \
+regenerated (seal.hpp, verification.md §4a rule 2), each turned into the \
+record it calls for. \
+\
+P1: the four outcomes of a comparison and of a seal check, the eight-byte \
+loop of the CRC and its tail, the backward search for the last differing \
+byte at zero and many steps. \
+\
+P3: nothing compared, one byte, a difference in the first byte and in the \
+last, a window cut short by the end of the bytes and one of exactly 64, a \
+popcount counted beyond the window, lengths differing by one and one side \
+empty, the longest check a Subject may carry with the longest detail \
+appended, the empty seal, and the CRC at every length from 1 to 129 and on \
+to a megabyte, against xz. \
+\
+P4 is the module's subject. T5 (tests/fault_injection/verification/checksum) \
+injects each corruption shape into a line-aligned unit regenerated from \
+(seed, index) and asserts WHICH class it produced: a single bit at word and \
+line edges, two bits in one byte and at both ends of a word, a whole word, \
+adjacent bytes across a word boundary, a whole cache line, adjacent bytes \
+across a line boundary, the first and last byte of the unit, the same flips \
+read with 64- and 128-byte lines, a derived comparison labelled derived, a \
+truncated output with no classification. For the seal: every single-bit flip \
+of a 4096-byte input after generation is caught before use; every bit flip \
+of the stored CRC and of the stored length, over intact input, raises the \
+alarm (rule 2's false alarm, never silence), as do the values a sentinel \
+would have had; corrupt input under a corrupt seal is still an alarm. T5b: \
+nothing to compare, no input to check, and no seal taken each produce \
+VerificationNotPerformed, never a pass and never a wrong result. \
+\
+T4 (tests/property/verification/checksum): every field of a Difference \
+against the flipped bit positions it came from, classification against the \
+definition computed from those positions, symmetry, every record made valid; \
+and the CRC's claims checked rather than recalled -- every single-bit error, \
+every pair in a line, odd counts, bursts up to 64 bits, affinity, and any \
+split of a running checksum. \
+\
+The CRC is CRC-64/XZ; the fixture's values were read from xz itself, with \
+the command and the machine in the file (F21).\
+"""
