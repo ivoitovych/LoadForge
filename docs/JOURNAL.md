@@ -813,7 +813,6 @@ suffice to explain them, and neither can be confirmed until a run reports.
   (`child_exits`: signals succeed, `has_exited` is true), reaped (a reap delivered: `ESRCH`
   and `ECHILD`). Its own tests are `tests/unit/platform/fake_syscalls_test.cpp`.
 
-
 ### 1.28 clang-tidy 18's static analyzer crashes on `std::bit_cast<std::uintptr_t>(p) + offset`
 
 *Established 2026-10-20, wave 1 and wave 2 (#40, #63).* `clang-tidy-18` died with a
