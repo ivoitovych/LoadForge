@@ -39,9 +39,9 @@ work continues.
 | 8 | Fake-worker executable with the misbehaviour catalogue, including a worker that ignores its control pipe (the only real test that the parent-death signal ends a worker); gate: no test-hook symbol in the shipped binary; gate: lock obligations in the ledger | IMPLEMENTATION §10 | done, #29 |
 | 9 | Memory-budget reader (`MemAvailable`, cgroup v1 and v2) and OOM classified from the kernel's record | IMPLEMENTATION §10, journal §1.18 | done, #30 |
 | 10 | M1 exit: every criterion in IMPLEMENTATION §4 met and marked | IMPLEMENTATION §4 | done, #33, pending the mutation verdict: M1 is complete when the first sweep over `src/` reports zero unexplained survivors |
-| 10b | EXT-01: a successful `kill` is not proof the controller caused a SIGKILL death; split attempted from established, never signal a worker that has already exited, report ambiguous provenance, always consult the OOM count; the fake models `kill` on a zombie as the kernel does | external review, reaction plan 2026-10-20 12:30 UTC | |
-| 10c | EXT-02: startup as its own supervised phase: the controller beats between forks, each worker's allowance anchored at its own launch, the duration's start decided and documented | external review | |
-| 10d | EXT-03: a crash signal names a fault, not its cause; header, operator and verification documents, and abort and software-SIGBUS catalogue cases | external review | |
+| 10b | EXT-01: a successful `kill` is not proof the controller caused a SIGKILL death; split attempted from established, never signal a worker that has already exited, report ambiguous provenance, always consult the OOM count; the fake models `kill` on a zombie as the kernel does | external review, reaction plan 2026-10-20 12:30 UTC | done, this PR |
+| 10c | EXT-02: startup as its own supervised phase: the controller beats between forks, each worker's allowance anchored at its own launch, the duration's start decided and documented | external review | done, this PR |
+| 10d | EXT-03: a crash signal names a fault, not its cause; header, operator and verification documents, and abort and software-SIGBUS catalogue cases | external review | done, this PR |
 
 ## Next — prerequisite for M2a
 

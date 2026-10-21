@@ -128,6 +128,7 @@ struct Tracked {
   bool reaped = false;
   std::uint64_t progress = 0;
   std::int64_t progress_changed_ns = 0;
+  std::int64_t launched_ns = 0;   ///< The controller's clock when this worker was forked.
   std::int64_t last_read_ns = 0;  ///< When its slot last gave a consistent sample.
   std::vector<std::string> notes;
 };
@@ -162,8 +163,7 @@ class Run {
   void beat(const platform::TimePoint& now);
   [[nodiscard]] core::Result<core::Ok, ControllerError> request_stop(std::int64_t now_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> watch(Tracked& worker,
-                                                              const platform::TimePoint& now,
-                                                              std::int64_t elapsed_ns);
+                                                              const platform::TimePoint& now);
   [[nodiscard]] core::Result<core::Ok, ControllerError> send(Tracked& worker, int signal,
                                                              std::int64_t now_ns, bool stale);
   [[nodiscard]] core::Result<core::Ok, ControllerError> poll_and_drain(int timeout_ms);
@@ -298,8 +298,31 @@ core::Result<std::optional<int>, ControllerError> Run::spawn() {
     argvs.push_back(worker::argv_for(options_->executable, args));
   }
 
-  auto spawned = pool_.spawn(argvs);
+  // Between forks the controller beats, and notes when each worker began. A
+  // spawn can take longer than the staleness allowance on a loaded machine;
+  // the workers already running watch slot 0 meanwhile, and a frozen beat
+  // would have them leave as "controller lost" while it is alive and forking
+  // (journal §2.33). The last launch is also when the run begins: `started_`
+  // is overwritten by each, so it ends as the last worker's.
+  std::optional<ControllerError> clock_failure;
+  const auto launched = [this, &clock_failure](
+                            std::size_t slot,
+                            pid_t) -> core::Result<core::Ok, platform::SyscallError> {
+    auto now = clock_.now();
+    if (!now.has_value()) {
+      clock_failure = error_at("clock", describe(now.error()));
+      return now.error();
+    }
+    beat(now.value());
+    workers_[slot].launched_ns = now.value().running_ns;
+    started_ = now.value();
+    return core::Ok{};
+  };
+  auto spawned = pool_.spawn(argvs, launched);
   if (!spawned.has_value()) {
+    if (clock_failure.has_value()) {
+      return *clock_failure;
+    }
     return error_at("spawn", describe(spawned.error()));
   }
   if (spawned.value().is_worker()) {
@@ -314,8 +337,8 @@ core::Result<std::optional<int>, ControllerError> Run::spawn() {
   live_ = workers_.size();
   for (Tracked& worker : workers_) {
     worker.pid = spawned.value().pids()[worker.slot];
-    worker.progress_changed_ns = started_.running_ns;
-    worker.last_read_ns = started_.running_ns;
+    worker.progress_changed_ns = worker.launched_ns;
+    worker.last_read_ns = worker.launched_ns;
     // The worker's ends are the worker's now; the controller keeping a copy
     // would hide the end of file that is the one signal a dead worker cannot
     // fake.
@@ -379,7 +402,7 @@ core::Result<core::Ok, ControllerError> Run::tick() {
   take_round(now.value().running_ns, false);
   for (Tracked& worker : workers_) {
     if (!worker.reaped) {
-      if (auto watched = watch(worker, now.value(), elapsed_ns); !watched.has_value()) {
+      if (auto watched = watch(worker, now.value()); !watched.has_value()) {
         return watched;
       }
     }
@@ -410,8 +433,8 @@ core::Result<core::Ok, ControllerError> Run::request_stop(std::int64_t now_ns) {
   return core::Ok{};
 }
 
-core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker, const platform::TimePoint& now,
-                                                   std::int64_t elapsed_ns) {
+core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker,
+                                                   const platform::TimePoint& now) {
   // The worker's beat: stale by timestamp is the hang; fresh but with no
   // progress for the same allowance is the spin. Both are the same decision.
   //
@@ -439,7 +462,7 @@ core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker, const platfo
     if (liveness == ipc::Liveness::kStale) {
       stale = true;
     } else if (liveness == ipc::Liveness::kNeverBeat) {
-      stale = elapsed_ns > options_->stale_after_ns;
+      stale = now.running_ns - worker.launched_ns > options_->stale_after_ns;
     } else {
       stale = stalled;
     }
@@ -457,15 +480,34 @@ core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker, const platfo
 
 core::Result<core::Ok, ControllerError> Run::send(Tracked& worker, int signal, std::int64_t now_ns,
                                                   bool stale) {
-  // ESRCH is a worker that died since the last reap: not an error, and the
-  // reap that follows will say how.
+  // kill(2) succeeds on a zombie, so a success proves a signal was queued and
+  // nothing about what it did (journal §1.27). A worker that has already
+  // exited is therefore never signalled, and no signal is recorded for it:
+  // the reap that follows says how it died, and the record must not say the
+  // controller did it. The look is waitid with WNOWAIT, which reaps nothing.
+  auto exited = syscalls_->has_exited(worker.pid);
+  if (!exited.has_value()) {
+    return error_at("signal", describe(exited.error()));
+  }
+  if (exited.value()) {
+    worker.notes.push_back("signal " + std::to_string(signal) +
+                           " not sent: the worker had already exited");
+    return core::Ok{};
+  }
+  // What remains is a race the interface cannot close: the worker can die
+  // between that look and this kill. ESRCH cannot happen to a child that is
+  // unreaped, but if it does the worker is gone, which is not an error and
+  // not a signal sent.
   auto sent = syscalls_->send_signal(worker.pid, signal);
-  if (!sent.has_value() && sent.error().number != ESRCH) {
-    return error_at("signal", describe(sent.error()));
+  if (!sent.has_value()) {
+    if (sent.error().number != ESRCH) {
+      return error_at("signal", describe(sent.error()));
+    }
+    return core::Ok{};
   }
   worker.step = step_after(signal);
   worker.step_since_ns = now_ns;
-  worker.evidence.signal_sent = signal;
+  worker.evidence.signal_attempted = signal;
   worker.evidence.stale_when_signalled = stale;
   reporter_->event(now_ns - started_.running_ns, "worker " + std::to_string(worker.slot) +
                                                      ": sent signal " + std::to_string(signal) +
@@ -716,6 +758,7 @@ void Run::attribute_oom_kills() {
       judge_oom_kills(oom_before_, after, candidates.size(), options_->oom_record->scope());
   for (Tracked* worker : candidates) {
     worker->evidence.oom_kill_recorded = finding.attributed;
+    worker->evidence.oom_inconclusive = !finding.attributed && !finding.ruled_out;
     worker->notes.push_back(finding.note);
   }
 }

@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/stencil and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/stencil"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The independent oracle of the stencil workload, written from \
+src/workloads/stencil/spec.hpp alone: four 16 x 16 windows -- the two corners \
+and two that depend on the unit index -- swept eight times by plain scalar \
+code from the input it is given, each cell compared with the output against \
+2 gamma_32 times the largest input cell (Contract::kBounded). P1: each \
+decision of the sweep and the check -- a ring cell copied, an interior cell \
+updated, the window's margin clipped at each side of the grid or not, the \
+first failing cell in window-then-row-major order, a NaN or infinity in the \
+output. P3: the tolerance at the boundary, breached at (1 + 2^-20) times T' \
+and held at (1 - 2^-20) times it, in each of the four windows at three \
+positions (the first cell, an inner one, the last), with a tolerance that is \
+set by the largest cell of the WHOLE grid and not the window; windows at \
+every kind of origin -- each corner, each edge, the margin just fitting and \
+one cell short of it -- against a whole-grid sweep of the plainest reading, \
+to the bit; an input cell of magnitude exactly 1 and the next double above it, \
+an input of all zeros; windows that overlap. P4 is the module's subject. T5: \
+an exponent flip in each window names the cell and counts the cells before \
+it; of several failing cells the first in the order is named; the ring is \
+checked where a window covers it; an error below the bound goes unseen and \
+one above it does not; a cell outside every window is not examined (the \
+specification says so); a corrupted input is judged by the output it did not \
+produce. T3: scipy's filter, eight sweeps, on a generated unit (a fixture \
+from the real tool, tests/fixtures/verification/oracle/stencil/, with the \
+command and the machine that made it) is agreed with at every tile edge. \
+T5b: evidence of the wrong size on either side, an input cell that is NaN, \
+infinite or of magnitude above 1, an input of all zeros -- each is NotChecked \
+with nothing compared, never an agreement, while a NaN in the OUTPUT is a \
+mismatch. No P2: the oracle allocates nothing, so there is no allocation to \
+fail.\
+"""

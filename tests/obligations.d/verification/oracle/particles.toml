@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/particles and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/particles"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The independent oracle of the particles workload, written from \
+src/workloads/particles/spec.hpp alone: the force on sixteen sampled \
+particles (the first, the last, and fourteen that depend on the unit index) \
+summed directly over all the others in the specification's evaluation model, \
+each of the three components compared with the output against a tolerance \
+that grows with the particle's candidate count M_p and the sum of its terms' \
+absolute values (Contract::kBounded). P1: each decision of the sum -- the \
+particle itself skipped, a pair a candidate or not, a term active or zero -- \
+and of the check: the first failing entry in particle-then-component order, \
+a NaN or an infinity in the output. P3: the tolerance at the boundary, \
+breached at (1 + 2^-20) times T' and held at (1 - 2^-20) times it, for \
+a particle with ONE candidate and for one with THIRTY-THREE (thirty-two in \
+opposite pairs and one on top of the particle: a force that cancels, so the \
+offset is the residual to far better than epsilon), at the first, an inner \
+and the last sampled particle and for each of the three components; the \
+cutoff at q = 4 exactly (a candidate, no force), between 4 and the \
+candidate limit (a candidate, no force) and beyond the limit (neither); a \
+particle at the sampled one's own position (g(0) = 0, a candidate); a \
+particle with no candidate, whose tolerance is the floor so that any \
+nonzero force fails and one below the floor does not; a coordinate of 0, \
+-0 and the largest double below 16, and the first outside the box. P4 is \
+the module's subject. T5: an exponent flip in each component of the first, \
+an inner and the last sampled particle is named with its entry and the \
+ordinal of the check; a sign flip and a high mantissa flip are caught; of \
+several failing entries the first in the order is named; a particle the \
+sample does not examine is not examined (the specification says so); a NaN \
+or an infinity fails with a non-finite residual and a finite tolerance; the \
+lowest mantissa bit of a force is below the bound and raises no false \
+alarm; a moved coordinate is judged by the output it did not produce. T3: \
+scipy's neighbour search and numpy's sum (the real tool, \
+tests/fixtures/verification/oracle/particles/, with the commands and the \
+machine, itself checked against a brute-force sum in its generator) are \
+agreed with at every cell count; the fixture's forces sum to zero as \
+Newton's third law says. T1 also checks the direct sum against an \
+independent evaluation in long double. T5b: evidence of the wrong size on \
+either side, a coordinate that is NaN, infinite, negative, or at or beyond \
+16 -- each is NotChecked with nothing compared, never an agreement -- while \
+a NaN in the OUTPUT is a mismatch. No P2: the oracle allocates nothing, so \
+there is no allocation to fail.\
+"""

@@ -1,6 +1,6 @@
 # Stream 26 — Workload: particles
 
-**State:** not started  
+**State:** built — every exit criterion met on `feature/workload-particles` (2026-10-20 18:01 UTC); the manager opens the pull request  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 3  
 **Tier:** Tier A — a bounded component built against a written contract  

@@ -1,6 +1,6 @@
 # Stream 27 — Oracles: FFT, stencil, sparse, graph, particles
 
-**State:** not started  
+**State:** built on `feature/oracles-wave3`, gates run; the manager opens the pull request (2026-10-20 17:53 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 3  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

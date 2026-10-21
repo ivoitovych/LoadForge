@@ -519,6 +519,9 @@ class SteppedSyscalls final : public platform::Syscalls {
   core::Result<core::Ok, platform::SyscallError> send_signal(pid_t pid, int signal) override {
     return fake.send_signal(pid, signal);
   }
+  core::Result<bool, platform::SyscallError> has_exited(pid_t pid) override {
+    return fake.has_exited(pid);
+  }
   core::Result<platform::TimeSpec, platform::SyscallError> read_clock(int clock_id) override {
     return fake.read_clock(clock_id);
   }
