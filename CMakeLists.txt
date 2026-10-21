@@ -174,6 +174,8 @@ loadforge_enable_coverage(loadforge_ipc)
 
 add_library(loadforge_worker STATIC
   src/worker/scheduler.cpp
+  src/worker/control_channel.cpp
+  src/worker/duty.cpp
   src/worker/frames.cpp
   src/worker/verified_run.cpp
   src/worker/services.cpp
@@ -183,7 +185,7 @@ add_library(loadforge_worker STATIC
 # workloads and their oracles, the input-integrity runner, the executor, the
 # floating-point registers and the ISA probe, and the codec of the records it
 # sends. It links no workload by name; the registries do.
-target_link_libraries(loadforge_worker PUBLIC loadforge_ipc
+target_link_libraries(loadforge_worker PUBLIC loadforge_ipc loadforge_worker_control
   loadforge_workloads_registry loadforge_verification_oracle_registry
   loadforge_verification_integrity loadforge_worker_executor
   loadforge_platform_fpenv loadforge_platform_isa loadforge_primitives_simd

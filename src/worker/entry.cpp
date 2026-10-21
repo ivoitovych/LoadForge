@@ -655,7 +655,7 @@ int run(platform::Syscalls& syscalls, std::span<const std::string_view> args, st
     }
   }
 
-  const Session session{&region, worker.slot, worker.control_fd, worker.pacing};
+  const Session session{&region, worker.slot, worker.control_fd, worker.pacing, &*records};
   Outcome result;
   std::string detail;
   if (worker.workload.has_value()) {
