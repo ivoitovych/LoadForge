@@ -164,6 +164,16 @@ TEST(PlanWorker, ANameThatIsNotARegisteredWorkloadIsTheNullWorkloadOfM1) {
   EXPECT_FALSE(no_registry.value().args.has_value()) << "without a registry every name is a label";
 }
 
+// The workload has a kernel for a path only if the build compiled one: a
+// scalar-only build offers the scalar path even to a machine that has more.
+IsaPath widest_kernel_of_dense_linear() {
+  const workloads::BuiltinRegistry registry;
+  const auto made = registry.create(
+      "dense_linear", workloads::WorkloadConfig{1, std::uint64_t{8} << 20U, 0, IsaPath::kScalar});
+  return made.value()->descriptor().paths.contains(IsaPath::kAvx2) ? IsaPath::kAvx2
+                                                                   : IsaPath::kScalar;
+}
+
 TEST(PlanWorker, ARealWorkloadGetsEveryChoiceMadeOnceAndSaysWhatTheyAre) {
   const MachineTree tree(MachineShape{4, 64, true});
   const topology::Snapshot machine = tree.accepted();
@@ -180,7 +190,8 @@ TEST(PlanWorker, ARealWorkloadGetsEveryChoiceMadeOnceAndSaysWhatTheyAre) {
   EXPECT_EQ(args.seed, 10 + 2 * kSeedStride);
   EXPECT_EQ(args.footprint_bytes, std::uint64_t{8} << 20U);
   EXPECT_EQ(args.threads, 1U);
-  EXPECT_EQ(args.isa, IsaPath::kAvx2) << "the widest this machine and workload both have";
+  EXPECT_EQ(args.isa, widest_kernel_of_dense_linear())
+      << "the widest this machine and workload both have";
   EXPECT_EQ(args.duty, (verification::DutyCycle{2, 3}));
   EXPECT_EQ(args.line_bytes, 64U);
   EXPECT_EQ(plan.cpus, (std::vector<std::uint32_t>{2}));
@@ -188,7 +199,7 @@ TEST(PlanWorker, ARealWorkloadGetsEveryChoiceMadeOnceAndSaysWhatTheyAre) {
   EXPECT_EQ(args.numa_node, 0U);
   ASSERT_TRUE(plan.work.has_value());
   EXPECT_EQ(plan.work->descriptor.name, "dense_linear");
-  EXPECT_EQ(plan.work->isa, IsaPath::kAvx2);
+  EXPECT_EQ(plan.work->isa, widest_kernel_of_dense_linear());
   EXPECT_EQ(plan.work->threads, 1U);
   EXPECT_EQ(plan.work->cpu, 2U);
   EXPECT_EQ(plan.work->seed, args.seed);

@@ -94,6 +94,19 @@ complete and do not compose, or a contract silent where its neighbour needs an a
    with the full address, so isolation is not affected; the record's field is. **Needs:** the
    field to carry the package or the pair, or its meaning stated as "within the package".
 
+**One defect that is a component's own, found by the build and not by a contract.**
+`verification::provenance_of` (`src/verification/record.hpp`, verification core) ends in
+`return std::get_if<VerificationNotPerformed>(&record)->provenance;`, an unchecked
+`get_if`. Inlined into a consumer at `-O3` with GCC 13 and `-Wnull-dereference -Werror` (the
+`static` and `release` presets' flags), it is `error: null pointer dereference` at the
+consumer's call (here `controller/orchestration.cpp`, `take_error_record`); the debug and
+sanitizer builds compile it. It is not a wrong answer today (the variant has three
+alternatives and the first two are tested), so no runtime test can fail on it; the evidence is
+the command that fails, in `build/static` before this stream read the provenance through
+`std::visit` instead. `provenance_of` is left as it is (not this stream's file); the
+controller no longer calls it. `controller/results/document.cpp` and `controller/isolate.cpp`
+call it too and happen to compile. **Needs:** a visit, or `std::get<>`, in the provider.
+
 Smaller readings that differ and agree on every test either side has:
 
 * **`finish()`'s records and provenance.** The contract does not say whether the two records

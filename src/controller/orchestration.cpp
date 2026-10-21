@@ -14,6 +14,7 @@
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "config/config.hpp"
@@ -599,6 +600,9 @@ std::optional<std::string> Run::ingest(Tracked& worker, const ipc::Record& recor
 }
 
 std::optional<std::string> Run::take_error_record(Tracked& worker, const ipc::Record& record) {
+  if (!worker.plan.args.has_value()) {
+    return "an error record from a worker that runs no workload";
+  }
   auto decoded = verification::decode(record.payload);
   if (!decoded.has_value()) {
     return "an error record that does not decode (" +
@@ -609,12 +613,12 @@ std::optional<std::string> Run::take_error_record(Tracked& worker, const ipc::Re
   // A worker reports on the one workload it was told to run. A record about
   // any other is garbage that happened to be well formed, and a finding made
   // of it would be a verdict on hardware from nothing.
-  const verification::Provenance& where = verification::provenance_of(found);
-  if (!worker.plan.args.has_value()) {
-    return "an error record from a worker that runs no workload";
-  }
-  if (where.workload.has_value() && *where.workload != worker.plan.args->workload) {
-    return "an error record about workload '" + *where.workload + "' from a worker that runs '" +
+  // Read through a visit and not verification::provenance_of: that one ends in
+  // an unchecked get_if, which -Wnull-dereference refuses at -O3 (journal 11).
+  const std::optional<std::string> reported =
+      std::visit([](const auto& each) { return each.provenance.workload; }, found);
+  if (reported.has_value() && *reported != worker.plan.args->workload) {
+    return "an error record about workload '" + *reported + "' from a worker that runs '" +
            worker.plan.args->workload + "'";
   }
   if (verification::is_wrong_result(found)) {

@@ -58,6 +58,18 @@ TEST(Disagreements, TheUnrequestedPathSelectIsNotAlwaysOneAWorkloadHas) {
 // RunnerSetup has no memory policy, so a user who may not lock the footprint
 // cannot run at all, and the default footprint of the command is larger than
 // the 8 MiB an unprivileged process may lock by default.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+constexpr bool kSanitized = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+constexpr bool kSanitized = true;
+#else
+constexpr bool kSanitized = false;
+#endif
+#else
+constexpr bool kSanitized = false;
+#endif
+
 TEST(Disagreements, AnUnprivilegedProcessCannotLockTheWorkingSetTheRunnerAlwaysLocks) {
   if (::geteuid() != 0) {
     GTEST_SKIP() << "the test drops privileges itself and so needs to start with them";
@@ -90,6 +102,11 @@ TEST(Disagreements, AnUnprivilegedProcessCannotLockTheWorkingSetTheRunnerAlwaysL
     const bool refused = !runner.has_value() &&
                          runner.error().fault == verification::RunnerFault::kResources &&
                          runner.error().detail.find("locking failed") != std::string::npos;
+    // The sanitizers' runtimes answer mlock with success without calling it, so
+    // under one the allowance this test sets is never consulted.
+    if (kSanitized && runner.has_value()) {
+      ::_exit(92);
+    }
     ::_exit(refused ? 0 : 91);
   }
   int status = 0;
@@ -97,6 +114,9 @@ TEST(Disagreements, AnUnprivilegedProcessCannotLockTheWorkingSetTheRunnerAlwaysL
   ASSERT_TRUE(WIFEXITED(status));
   if (WEXITSTATUS(status) == 90) {
     GTEST_SKIP() << "this container will not let the test drop privileges";
+  }
+  if (WEXITSTATUS(status) == 92) {
+    GTEST_SKIP() << "a sanitizer's runtime answers mlock without calling it";
   }
   EXPECT_EQ(WEXITSTATUS(status), 0)
       << "an unprivileged process was expected to be refused with kResources, 'locking failed'";
