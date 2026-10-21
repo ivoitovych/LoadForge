@@ -38,7 +38,7 @@ namespace loadforge::controller {
 namespace {
 
 constexpr std::int64_t kMs = 1'000'000;
-constexpr std::uint64_t kFootprint = std::uint64_t{4} << 20U;
+constexpr std::uint64_t kFootprint = std::uint64_t{2} << 20U;
 
 class Quiet final : public Reporter {
  public:
@@ -53,7 +53,7 @@ mixed::Step step(std::int64_t at_ms, std::string phase, std::size_t slot,
   mixed::Step made;
   made.at_ns = at_ms * kMs;
   made.phase = std::move(phase);
-  made.workload = "sort";
+  made.workload = "raytrace";
   made.workers.push_back(mixed::WorkerCommands{slot, std::move(commands)});
   return made;
 }
@@ -61,9 +61,9 @@ mixed::Step step(std::int64_t at_ms, std::string phase, std::size_t slot,
 mixed::Schedule schedule_of(std::vector<mixed::Step> steps) {
   mixed::Schedule schedule;
   schedule.workers = 2;
-  schedule.start = {{"sort", kFootprint}, {"sort", kFootprint}};
+  schedule.start = {{"raytrace", kFootprint}, {"raytrace", kFootprint}};
   schedule.phase = "start";
-  schedule.workload = "sort";
+  schedule.workload = "raytrace";
   schedule.steps = std::move(steps);
   return schedule;
 }
@@ -299,17 +299,17 @@ TEST(ControlOverRealWorkers, ACorruptionIsFoundAboutWhicheverWorkloadAWorkerRanW
     return std::visit([](const auto& each) { return each.provenance.workload.value_or("none"); },
                       finding.record);
   };
-  std::size_t sort = 0;
+  std::size_t first = 0;
   std::size_t compression = 0;
   for (const FindingReport& finding : report->workers[0].findings) {
     const std::string name = workload_of(finding);
-    EXPECT_TRUE(name == "sort" || name == "compression") << name;
-    (name == "sort" ? sort : compression)++;
+    EXPECT_TRUE(name == "raytrace" || name == "compression") << name;
+    (name == "raytrace" ? first : compression)++;
   }
-  EXPECT_GT(sort, 0U) << "found before the switch, about sort";
+  EXPECT_GT(first, 0U) << "found before the switch, about raytrace";
   EXPECT_GT(compression, 0U) << "and after it, about compression";
   for (const FindingReport& finding : report->workers[1].findings) {
-    EXPECT_EQ(workload_of(finding), "sort") << "the neighbour was never switched";
+    EXPECT_EQ(workload_of(finding), "raytrace") << "the neighbour was never switched";
   }
   EXPECT_GT(report->workers[1].wrong_results, 0U);
 }

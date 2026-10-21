@@ -60,7 +60,7 @@ TEST(JournalHardKill, AControllerKilledMidRunLeavesAJournalThatReplaysAndItsWork
 
   const std::vector<std::string> args = {
       LOADFORGE_BINARY, "stress", "--test",     "mixed", "--duration", "120s", "--workers", "2",
-      "--footprint",    "4MiB",   "--rotation", "1s",    "--journal",  journal};
+      "--footprint",    "1MiB",   "--rotation", "1s",    "--journal",  journal};
   std::vector<char*> argv;
   for (const std::string& each : args) {
     argv.push_back(const_cast<char*>(each.c_str()));

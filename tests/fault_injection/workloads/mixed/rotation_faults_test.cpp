@@ -58,8 +58,12 @@ class Corrupting final : public Workload {
   void compute(std::uint64_t index, std::span<const std::byte> input, std::span<std::byte> output,
                std::span<std::byte> scratch, Executor& executor) const noexcept override {
     inner_->compute(index, input, output, scratch, executor);
-    if (index % 5 == 0 && output.size() > 40) {
-      output[40] ^= std::byte{0x10};
+    if (index % 5 == 0) {
+      // A high bit of every fourth byte: an oracle that judges a sample finds
+      // one, and one that tolerates a residual is not within its tolerance.
+      for (std::size_t at = 0; at < output.size(); at += 4) {
+        output[at] ^= std::byte{0x40};
+      }
     }
   }
 
@@ -152,7 +156,7 @@ class RotatingWorker {
     args_.pacing = Pacing{duration_ns, 20'000'000, 100'000'000'000};
     unit_.workload = std::string{workload};
     unit_.seed = 5;
-    unit_.footprint_bytes = std::uint64_t{8} << 20U;
+    unit_.footprint_bytes = std::uint64_t{2} << 20U;
     unit_.threads = 1;
     unit_.lock = verification::LockPolicy::kNone;
     thread_ = std::thread([this] {
@@ -238,7 +242,7 @@ TEST(RotationFaults,
   RotatingWorker worker(workloads, oracles);
   worker.start("compression", 2'500'000'000);
   sleep_ms(600);
-  worker.send({1, Switch{"sort", 9, std::uint64_t{16} << 20U, 0, {1, 1}}});
+  worker.send({1, Switch{"fft", 9, std::uint64_t{2} << 20U, 0, {1, 1}}});
   sleep_ms(900);
   worker.send({2, Stop{}});
   worker.finish();
@@ -260,13 +264,16 @@ TEST(RotationFaults,
       ++before;
       last_before = std::max(last_before, iteration_of(record));
     } else {
-      EXPECT_EQ(workload_of(record), "sort");
+      EXPECT_EQ(workload_of(record), "fft");
       ++after;
       first_after = std::min(first_after, iteration_of(record));
     }
   }
   EXPECT_GT(before, 0U) << "found before the switch";
-  EXPECT_GT(after, 0U) << "and found after it, about the workload the worker was switched to";
+  EXPECT_GT(after, 0U)
+      << "and found after it, about the workload the worker was switched to; units "
+      << seen.last_tally.units_computed << " findings " << seen.findings.size() << " answers "
+      << seen.answers.size();
   EXPECT_GT(first_after, last_before)
       << "the units run on across the switch: none is numbered twice, none is skipped back";
   EXPECT_GE(seen.last_tally.units_computed, before) << "the tally ran on across it";
@@ -279,29 +286,29 @@ TEST(RotationFaults, ACheckThatCannotBeMadeAfterASwitchIsNotPerformedNeverClean)
   RotatingWorker worker(workloads, oracles);
   worker.start("compression", 2'500'000'000);
   sleep_ms(600);
-  worker.send({1, Switch{"sort", 9, std::uint64_t{16} << 20U, 0, {1, 1}}});
+  worker.send({1, Switch{"fft", 9, std::uint64_t{2} << 20U, 0, {1, 1}}});
   sleep_ms(900);
   worker.send({2, Stop{}});
   worker.finish();
   ASSERT_TRUE(worker.result().has_value()) << describe(worker.result().error());
   const auto seen = worker.seen();
   std::size_t compression = 0;
-  std::size_t sort = 0;
+  std::size_t fft = 0;
   std::size_t about_the_whole_run = 0;
   for (const verification::ErrorRecord& record : seen.findings) {
     EXPECT_FALSE(verification::is_wrong_result(record));
     const auto& unrun = std::get<verification::VerificationNotPerformed>(record);
     if (unrun.what.starts_with("oracle over ")) {
       ++about_the_whole_run;
-      EXPECT_EQ(unrun.what, "oracle over sort units") << "stated once, by the run's last runner";
+      EXPECT_EQ(unrun.what, "oracle over fft units") << "stated once, by the run's last runner";
     } else if (workload_of(record) == "compression") {
       ++compression;
-    } else if (workload_of(record) == "sort") {
-      ++sort;
+    } else if (workload_of(record) == "fft") {
+      ++fft;
     }
   }
   EXPECT_GT(compression, 0U);
-  EXPECT_GT(sort, 0U);
+  EXPECT_GT(fft, 0U);
   EXPECT_EQ(about_the_whole_run, 1U);
   EXPECT_EQ(seen.last_tally.oracle_blocks, 0U);
   EXPECT_EQ(seen.last_tally.oracle_failed, 0U);

@@ -67,7 +67,7 @@ TEST(M5Binary, AMixedRunRotatesWhileEveryUnitIsVerifiedAndTheJournalSaysSo) {
   const std::string journal = (scratch.path() / "run.lfj").string();
   const Outcome ran = loadforge(scratch,
                                 "stress --test mixed --duration 7s --workers 2 "
-                                "--footprint 4MiB --rotation 1s --journal '" +
+                                "--footprint 1MiB --rotation 1s --journal '" +
                                     journal + "'");
   ASSERT_EQ(ran.code, 0) << ran.console;
   EXPECT_TRUE(contains(ran.console, "verdict: clean")) << ran.console;
@@ -87,10 +87,11 @@ TEST(M5Binary, AMixedRunRotatesWhileEveryUnitIsVerifiedAndTheJournalSaysSo) {
 TEST(M5Binary, ACyclingRunHoldsTheLoadAtEachLevelForItsDwell) {
   const Scratch scratch;
   const std::string journal = (scratch.path() / "cycle.lfj").string();
-  const Outcome ran = loadforge(scratch,
-                                "stress --test cycling --cycle load --duration 7s "
-                                "--workers 2 --footprint 4MiB --dwell 1s --journal '" +
-                                    journal + "'");
+  const Outcome ran =
+      loadforge(scratch,
+                "stress --test cycling --cycle load --duration 7s "
+                "--workers 2 --workload raytrace --footprint 2MiB --dwell 1s --journal '" +
+                    journal + "'");
   ASSERT_EQ(ran.code, 0) << ran.console;
   EXPECT_TRUE(contains(ran.console, "verdict: clean")) << ran.console;
   const Outcome replayed = loadforge(scratch, "journal '" + journal + "'");
@@ -103,7 +104,7 @@ TEST(M5Binary, ACyclingRunOfCoresVariesHowManyWorkersWork) {
   const Scratch scratch;
   const Outcome ran = loadforge(scratch,
                                 "stress --test cycling --cycle cores --duration 6s "
-                                "--workers 4 --footprint 4MiB --dwell 1s");
+                                "--workers 4 --workload raytrace --footprint 2MiB --dwell 1s");
   ASSERT_EQ(ran.code, 0) << ran.console;
   EXPECT_TRUE(contains(ran.console, "verdict: clean")) << ran.console;
   EXPECT_TRUE(contains(ran.console, "control: ")) << ran.console;
@@ -115,7 +116,7 @@ TEST(M5Binary, AJournalAnEarlierRunLeftAbnormallyIsKeptAndReportedNotOverwritten
   // A journal cut short, as a hard kill leaves it: the first run's file, with
   // its tail gone.
   ASSERT_EQ(loadforge(scratch,
-                      "stress --test mixed --duration 3s --workers 2 --footprint 4MiB "
+                      "stress --test mixed --duration 3s --workers 2 --footprint 1MiB "
                       "--rotation 1s --journal '" +
                           journal + "'")
                 .code,
@@ -128,7 +129,7 @@ TEST(M5Binary, AJournalAnEarlierRunLeftAbnormallyIsKeptAndReportedNotOverwritten
   }
   const Outcome again = loadforge(scratch,
                                   "stress --test mixed --duration 3s --workers 2 "
-                                  "--footprint 4MiB --rotation 1s --journal '" +
+                                  "--footprint 1MiB --rotation 1s --journal '" +
                                       journal + "'");
   ASSERT_EQ(again.code, 0) << again.console;
   EXPECT_TRUE(contains(again.console, "abnormally")) << again.console;
@@ -142,7 +143,7 @@ TEST(M5Binary, AnImpossibleScheduleIsRefusedBeforeAnyWorkerIsStarted) {
   const Scratch scratch;
   const Outcome ran = loadforge(scratch,
                                 "stress --test mixed --duration 30h --workers 2 "
-                                "--footprint 4MiB --rotation 1ms");
+                                "--footprint 1MiB --rotation 1ms");
   EXPECT_NE(ran.code, 0) << ran.console;
   EXPECT_TRUE(contains(ran.console, "more than 100000 steps")) << ran.console;
   EXPECT_FALSE(contains(ran.console, "spawned")) << ran.console;

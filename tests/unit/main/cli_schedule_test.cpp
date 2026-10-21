@@ -195,7 +195,7 @@ TEST(CliSchedule, ARunThatCannotBeScheduledIsRefusedBeforeAnyWorker) {
 TEST(CliSchedule, AMixedRunRotatesTheWorkersAndKeepsVerifyingAndSaysSo) {
   const LinkToTheBinary link;
   const Outcome r = run_test(link, {"mixed", "--duration", "5s", "--rotation", "1s", "--workers",
-                                    "2", "--footprint", "4MiB", "--seed", "11"});
+                                    "2", "--footprint", "1MiB", "--seed", "11"});
   EXPECT_EQ(r.code, 0) << r.out << r.err;
   EXPECT_NE(r.out.find("[1."), std::string::npos) << r.out;
   EXPECT_NE(r.out.find("phase r1 compute-heavy: "), std::string::npos) << r.out;
@@ -211,7 +211,7 @@ TEST(CliSchedule, ACyclingRunRaisesAndLowersTheLoadOfOneWorkload) {
   const LinkToTheBinary link;
   const Outcome r = run_test(link, {"cycling", "--workload", "compression", "--cycle", "load",
                                     "--duration", "5s", "--dwell", "1s", "--workers", "2",
-                                    "--footprint", "4MiB"});
+                                    "--footprint", "1MiB"});
   EXPECT_EQ(r.code, 0) << r.out << r.err;
   EXPECT_NE(r.out.find("phase c0 idle: cycling load"), std::string::npos) << r.out;
   EXPECT_NE(r.out.find("phase c1 heavy: "), std::string::npos) << r.out;
@@ -223,7 +223,7 @@ TEST(CliSchedule, TheCyclingOfCoresPausesSomeWorkersAndNotOthers) {
   const LinkToTheBinary link;
   const Outcome r = run_test(link, {"cycling", "--workload", "compression", "--cycle", "cores",
                                     "--duration", "3s", "--dwell", "1s", "--workers", "2",
-                                    "--footprint", "4MiB"});
+                                    "--footprint", "1MiB"});
   EXPECT_EQ(r.code, 0) << r.out << r.err;
   EXPECT_NE(r.out.find("phase c0 1 of 2: cycling cores"), std::string::npos) << r.out;
   EXPECT_NE(r.out.find("phase c1 1 of 2: "), std::string::npos) << r.out;
@@ -236,7 +236,7 @@ TEST(CliJournal, ARunWritesItAndTheNextOneSaysHowItEnded) {
   const Directory directory;
   const std::string path = directory.file("run.lfj");
   const Outcome first = run_test(link, {"compression", "--duration", "1s", "--workers", "1",
-                                        "--footprint", "4MiB", "--journal", path});
+                                        "--footprint", "1MiB", "--journal", path});
   EXPECT_EQ(first.code, 0) << first.out << first.err;
   EXPECT_EQ(first.out.find("previous journal"), std::string::npos) << "there was none";
   const Outcome shown = invoke({"journal", path});
@@ -247,7 +247,7 @@ TEST(CliJournal, ARunWritesItAndTheNextOneSaysHowItEnded) {
   EXPECT_NE(shown.out.find("phase \"done\""), std::string::npos) << shown.out;
 
   const Outcome second = run_test(link, {"compression", "--duration", "1s", "--workers", "1",
-                                         "--footprint", "4MiB", "--journal", path});
+                                         "--footprint", "1MiB", "--journal", path});
   EXPECT_EQ(second.code, 0) << second.out << second.err;
   EXPECT_NE(second.out.find("previous journal " + path + ": ended cleanly; "), std::string::npos)
       << second.out;
@@ -273,7 +273,7 @@ TEST(CliJournal, ARunThatWasKilledLeavesAJournalTheNextRunKeepsAndNames) {
     ASSERT_TRUE(writer.value()->sync().has_value());
   }
   const Outcome r = run_test(link, {"compression", "--duration", "1s", "--workers", "1",
-                                    "--footprint", "4MiB", "--journal", path});
+                                    "--footprint", "1MiB", "--journal", path});
   EXPECT_EQ(r.code, 0) << r.out << r.err;
   EXPECT_NE(r.out.find("previous journal " + path +
                        ": ended abnormally between records; 1 entry; the last: t=3.0s phase "
