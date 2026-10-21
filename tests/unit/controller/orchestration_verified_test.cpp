@@ -280,6 +280,34 @@ TEST(ControllerVerified, EachWorkerIsHandedItsUnitItsCpusAndItsOwnSeed) {
   EXPECT_EQ(unit.isa, simd::IsaPath::kScalar);
   EXPECT_EQ(unit.duty, (verification::DutyCycle{2, 4}));
   EXPECT_EQ(unit.line_bytes, 64U);
+  EXPECT_EQ(unit.lock, verification::LockPolicy::kTry)
+      << "the controller's default, told to the worker";
+}
+
+// M2 contract corrections, 2: what the runner said it did about locking is kept,
+// once, with the policy the controller chose.
+TEST(ControllerVerified, WhatAWorkersRunnerSaidAboutLockingIsKeptAndNamedInItsNotes) {
+  Rig rig;
+  const verification::MemoryLock fell{verification::LockPolicy::kTry,
+                                      verification::LockOutcome::kFellBack, "mlock refused"};
+  rig.both_exit_after([&rig, &fell] {
+    rig.deliver(0, worker::kMemoryFrameType, worker::encode_memory(fell));
+    rig.deliver_tally(0, a_tally(1));
+  });
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const WorkerReport& first = result.value().workers[0];
+  ASSERT_TRUE(first.memory.has_value());
+  EXPECT_EQ(*first.memory, fell);
+  ASSERT_TRUE(first.work.has_value());
+  EXPECT_EQ(first.work->lock, verification::LockPolicy::kTry);
+  bool said = false;
+  for (const std::string& note : first.records) {
+    said = said ||
+           note == "working set: not locked: the lock was refused (lock policy try): mlock refused";
+  }
+  EXPECT_TRUE(said);
+  EXPECT_FALSE(result.value().workers[1].memory.has_value()) << "a worker that said nothing";
 }
 
 TEST(ControllerVerified, AWorkersTallyAndErrorRecordsAreKeptAndCounted) {
@@ -363,6 +391,17 @@ TEST(ControllerVerified, WhatIsNotARecordTheContractAllowsIsACorruptChannelNever
       {"a record about another workload",
        [](Rig& rig) { rig.deliver_record(0, a_wrong_result("sort")); },
        "an error record about workload 'sort' from a worker that runs 'compression'"},
+      {"a memory frame that is not one",
+       [](Rig& rig) { rig.deliver(0, worker::kMemoryFrameType, std::vector<std::byte>(1)); },
+       "memory frame: 1 byte(s)"},
+      {"a second memory frame",
+       [](Rig& rig) {
+         rig.deliver(0, worker::kMemoryFrameType,
+                     worker::encode_memory(verification::MemoryLock{}));
+         rig.deliver(0, worker::kMemoryFrameType,
+                     worker::encode_memory(verification::MemoryLock{}));
+       },
+       "a second memory frame"},
       {"a tally of the wrong size",
        [](Rig& rig) { rig.deliver(0, worker::kTallyFrameType, std::vector<std::byte>(3)); },
        "tally frame: 3 byte(s)"},

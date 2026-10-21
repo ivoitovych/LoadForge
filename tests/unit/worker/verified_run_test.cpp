@@ -163,6 +163,7 @@ struct Script {
   int finishes = 0;
   std::vector<std::uint64_t> asked;
   std::optional<verification::RunnerSetup> setup;
+  verification::MemoryLock lock;  ///< What every scripted runner says it did about locking.
 };
 /// The script the factory's runners follow: a RunnerFactory is a plain function,
 /// so the state it reads cannot be a capture.
@@ -196,6 +197,9 @@ class ScriptedRunner final : public verification::SliceRunner {
     return current_script()->final_report.value_or(verification::SliceReport{});
   }
   [[nodiscard]] const verification::Tally& total() const noexcept override { return total_; }
+  [[nodiscard]] const verification::MemoryLock& memory_lock() const noexcept override {
+    return current_script()->lock;
+  }
 
  private:
   verification::Tally total_;
@@ -352,8 +356,10 @@ TEST(Prepare, BuildsEverythingInTheOrderItIsDestroyedInReverse) {
 
 TEST(Prepare, TheRunnerIsToldWhereTheUnitRunsAndWhichUnitComesFirst) {
   Rig rig;
+  rig.worker.workload->physical_package = 1;
   rig.worker.workload->physical_core = 2;
   rig.worker.workload->numa_node = 1;
+  rig.worker.workload->decomposition = 0;  // Asked for the default: the record says what it was.
   rig.worker.workload->duty = verification::DutyCycle{3, 5};
   rig.worker.workload->line_bytes = 128;
   auto prepared = prepare(rig.syscalls, *rig.worker.workload, {0}, 99, rig.services());
@@ -368,8 +374,15 @@ TEST(Prepare, TheRunnerIsToldWhereTheUnitRunsAndWhichUnitComesFirst) {
   EXPECT_EQ(setup.base.seed, 3U);
   EXPECT_EQ(setup.base.isa, simd::IsaPath::kScalar);
   EXPECT_EQ(setup.base.logical_cpu, 0U) << "one CPU named: the unit ran there";
+  EXPECT_EQ(setup.base.physical_package, 1U) << "a core is a package and a core";
   EXPECT_EQ(setup.base.physical_core, 2U);
   EXPECT_EQ(setup.base.numa_node, 1U);
+  // M2 contract corrections, 3: the decomposition the workload RESOLVED (never
+  // the 0 that asked for the default) and the footprint, for a re-run.
+  EXPECT_EQ(setup.base.decomposition, prepared.value().workload->plan().decomposition);
+  EXPECT_NE(setup.base.decomposition, 0U);
+  EXPECT_EQ(setup.base.footprint_bytes, rig.worker.workload->footprint_bytes);
+  EXPECT_EQ(setup.lock, rig.worker.workload->lock);
   EXPECT_EQ(setup.syscalls, &rig.syscalls);
 }
 
@@ -504,14 +517,37 @@ TEST(VerifiedRunLoop, EveryRecordASliceMadeIsSentBeforeItsTally) {
   rig.script.slices = {slice_of(1, {unrun("a"), unrun("b")})};
   ASSERT_TRUE(rig.run().has_value());
   const std::vector<ipc::Record> frames = rig.received();
-  ASSERT_GE(frames.size(), 3U);
-  EXPECT_EQ(frames[0].type, verification::kErrorRecordFrameType);
+  ASSERT_GE(frames.size(), 4U);
+  EXPECT_EQ(frames[0].type, kMemoryFrameType) << "told once, before the first slice";
   EXPECT_EQ(frames[1].type, verification::kErrorRecordFrameType);
-  EXPECT_EQ(frames[2].type, kTallyFrameType);
+  EXPECT_EQ(frames[2].type, verification::kErrorRecordFrameType);
+  EXPECT_EQ(frames[3].type, kTallyFrameType);
   const std::vector<verification::ErrorRecord> findings = rig.findings();
   ASSERT_GE(findings.size(), 2U);
   EXPECT_EQ(std::get<verification::VerificationNotPerformed>(findings[0]).what, "a");
   EXPECT_EQ(std::get<verification::VerificationNotPerformed>(findings[1]).what, "b");
+}
+
+// M2 contract corrections, 2: what the runner did about locking is told to the
+// controller, once, as it is; and what the worker was told to do about it is
+// handed to the runner.
+TEST(VerifiedRunLoop, TheLockPolicyGoesToTheRunnerAndWhatCameOfItToTheController) {
+  Rig rig;
+  rig.worker.workload->lock = verification::LockPolicy::kTry;
+  rig.script.lock = verification::MemoryLock{verification::LockPolicy::kTry,
+                                             verification::LockOutcome::kFellBack, "mlock refused"};
+  ASSERT_TRUE(rig.run().has_value());
+  ASSERT_TRUE(rig.script.setup.has_value());
+  EXPECT_EQ(rig.script.setup->lock, verification::LockPolicy::kTry);
+  const std::vector<ipc::Record> frames = rig.received();
+  ASSERT_FALSE(frames.empty());
+  ASSERT_EQ(frames[0].type, kMemoryFrameType);
+  const auto told = decode_memory(frames[0].payload);
+  ASSERT_TRUE(told.has_value()) << told.error();
+  EXPECT_EQ(told.value(), rig.script.lock);
+  EXPECT_EQ(std::count_if(frames.begin(), frames.end(),
+                          [](const ipc::Record& f) { return f.type == kMemoryFrameType; }),
+            1);
 }
 
 TEST(VerifiedRunLoop, WhatTheWholeRunDidNotCheckIsSentBeforeTheWorkerIsDone) {
@@ -648,17 +684,35 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
   {
     Rig rig;
     rig.script.slices = {slice_of(1, {unrun("a")})};
-    rig.syscalls.script_writes({{0, EIO}});
+    rig.syscalls.script_writes({{1, EIO}});
     auto outcome = rig.run();
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().stage, "record channel");
     EXPECT_NE(outcome.error().detail.find("Input/output error"), std::string::npos);
   }
   {
+    // The memory frame, the first of all, is the one refused.
+    Rig rig;
+    rig.syscalls.script_writes({{0, EIO}});
+    auto outcome = rig.run();
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().stage, "record channel");
+    EXPECT_EQ(rig.script.slices_run, 0);
+  }
+  {
+    // The reader is gone after the memory frame: the controller left.
+    Rig rig;
+    rig.script.slices = {slice_of(1, {unrun("a")})};
+    rig.syscalls.script_writes({{1, EPIPE}});
+    auto outcome = rig.run();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
+  }
+  {
     // The tally frame is the one refused.
     Rig rig;
     rig.script.slices = {slice_of(1)};
-    rig.syscalls.script_writes({{0, EIO}});
+    rig.syscalls.script_writes({{1, EIO}});
     auto outcome = rig.run();
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().stage, "record channel");
@@ -670,7 +724,7 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
     last.records.emplace_back(unrun("late"));
     rig.script.final_report = last;
     rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
-    rig.syscalls.script_writes({{0, EIO}});
+    rig.syscalls.script_writes({{1, EIO}});
     auto outcome = rig.run();
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().stage, "record channel");
@@ -681,7 +735,7 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
     last.records.emplace_back(unrun("late"));
     rig.script.final_report = last;
     rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
-    ASSERT_TRUE(rig.syscalls.close(rig.records.read_fd).has_value());
+    rig.syscalls.script_writes({{1, EPIPE}});
     auto outcome = rig.run();
     ASSERT_TRUE(outcome.has_value());
     EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);

@@ -5,8 +5,8 @@
 // A /sys the controller's tests describe machines with, built on disk and read
 // by the real snapshot code through the real seam (the topology module's tests
 // say why a fake would agree with whatever the reader believes): N online CPUs,
-// each on a core of its own in package 0, optionally one level-1 data cache per
-// CPU with a line size and optionally the one NUMA node holding them all.
+// each on a core of its own in package 0 (or split over several packages), optionally one level-1
+// data cache per CPU with a line size and optionally the one NUMA node holding them all.
 
 #include <unistd.h>
 
@@ -29,6 +29,9 @@ struct MachineShape {
   std::size_t cpus = 2;
   std::optional<std::uint32_t> line_bytes = 64;  ///< None: no cache directories at all.
   bool numa = true;
+  /// The CPUs are split evenly over this many packages, and each package numbers
+  /// its cores from 0, as a real machine does: core ids repeat across packages.
+  std::size_t packages = 1;
 };
 
 class MachineTree {
@@ -43,8 +46,9 @@ class MachineTree {
     for (std::size_t id = 0; id < shape.cpus; ++id) {
       const std::filesystem::path mine = cpu / ("cpu" + std::to_string(id));
       std::filesystem::create_directories(mine / "topology");
-      write(mine / "topology" / "physical_package_id", "0");
-      write(mine / "topology" / "core_id", std::to_string(id));
+      const std::size_t per_package = shape.cpus / shape.packages;
+      write(mine / "topology" / "physical_package_id", std::to_string(id / per_package));
+      write(mine / "topology" / "core_id", std::to_string(id % per_package));
       write(mine / "topology" / "thread_siblings_list", std::to_string(id));
       if (shape.line_bytes.has_value()) {
         const std::filesystem::path cache = mine / "cache" / "index0";

@@ -134,6 +134,9 @@ inline void put(Writer& out, const verification::Provenance& p) {
     out.u64(v.oracle_period);
     out.u64(v.integrity_period);
   });
+  out.optional(p.physical_package, u32);
+  out.optional(p.decomposition, u32);
+  out.optional(p.footprint_bytes, u64);
 }
 
 inline verification::Provenance get_provenance(Reader& in) {
@@ -158,6 +161,9 @@ inline verification::Provenance get_provenance(Reader& in) {
     duty.integrity_period = static_cast<std::uint32_t>(in.u64());
     return duty;
   });
+  p.physical_package = in.optional<std::uint32_t>(u32);
+  p.decomposition = in.optional<std::uint32_t>(u32);
+  p.footprint_bytes = in.optional<std::uint64_t>(u64);
   return p;
 }
 

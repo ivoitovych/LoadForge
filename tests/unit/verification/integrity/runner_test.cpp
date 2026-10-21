@@ -167,6 +167,100 @@ TEST(RunnerWorkingSetTest, TheWorkingSetIsPopulatedLockedAndBoundToTheWorkersNod
             syscalls.mapped()[0].bytes + 3 * verification::integrity::kCopyBytes);
 }
 
+// --- the lock policy (M2 contract corrections, 2) ----------------------------------
+
+TEST(RunnerLockPolicyTest, TheDefaultLocksEverythingAndSaysSo) {
+  const auto workload = make_rotor();
+  const RotorOracle oracle;
+  SerialExecutor executor;
+  SteppedSyscalls syscalls;
+  const auto runner = make_runner(setup_for(*workload, oracle, executor, syscalls));
+  ASSERT_NE(runner, nullptr);
+  EXPECT_EQ(runner->memory_lock(),
+            (verification::MemoryLock{
+                verification::LockPolicy::kRequire, verification::LockOutcome::kLocked, {}}));
+}
+
+TEST(RunnerLockPolicyTest, NoLockMapsAndRunsWithoutAskingTheKernelToLockAnything) {
+  const auto workload = make_rotor();
+  const RotorOracle oracle;
+  SerialExecutor executor;
+  SteppedSyscalls syscalls;
+  syscalls.fake.set_lock_limit(0);  // Any lock would be refused.
+  verification::RunnerSetup setup = setup_for(*workload, oracle, executor, syscalls);
+  setup.lock = verification::LockPolicy::kNone;
+  const auto runner = make_runner(setup);
+  ASSERT_NE(runner, nullptr);
+  EXPECT_EQ(runner->memory_lock(),
+            (verification::MemoryLock{
+                verification::LockPolicy::kNone, verification::LockOutcome::kNotLocked, {}}));
+  EXPECT_EQ(syscalls.fake.locked_bytes(), 0U);
+  EXPECT_EQ(syscalls.fake.live_mappings(), 4U);
+  EXPECT_EQ(slice(*runner, 8).tally.units_computed, 8U);
+}
+
+TEST(RunnerLockPolicyTest, TryWithNoAllowanceFallsBackSaysWhyAndStillRuns) {
+  const auto workload = make_rotor();
+  const RotorOracle oracle;
+  SerialExecutor executor;
+  SteppedSyscalls syscalls;
+  syscalls.fake.set_lock_limit(0);
+  verification::RunnerSetup setup = setup_for(*workload, oracle, executor, syscalls);
+  setup.lock = verification::LockPolicy::kTry;
+  const auto runner = make_runner(setup);
+  ASSERT_NE(runner, nullptr) << "kTry does not refuse for want of the lock";
+  const verification::MemoryLock& lock = runner->memory_lock();
+  EXPECT_EQ(lock.policy, verification::LockPolicy::kTry);
+  EXPECT_EQ(lock.outcome, verification::LockOutcome::kFellBack);
+  EXPECT_NE(lock.detail.find("locking failed"), std::string::npos) << lock.detail;
+  EXPECT_EQ(lock.detail.find("control state"), std::string::npos)
+      << "the working set's refusal comes first: " << lock.detail;
+  EXPECT_EQ(syscalls.fake.locked_bytes(), 0U);
+  EXPECT_EQ(slice(*runner, 8).tally.units_computed, 8U);
+}
+
+TEST(RunnerLockPolicyTest, TryThatLocksTheWorkingSetButNotACopyOfTheControlStateSaysSo) {
+  const auto workload = make_rotor();
+  const RotorOracle oracle;
+  SerialExecutor executor;
+  SteppedSyscalls syscalls;
+  syscalls.fail(Call::kLock, 3, ENOMEM);  // The second control copy's lock.
+  verification::RunnerSetup setup = setup_for(*workload, oracle, executor, syscalls);
+  setup.lock = verification::LockPolicy::kTry;
+  const auto runner = make_runner(setup);
+  ASSERT_NE(runner, nullptr);
+  const verification::MemoryLock& lock = runner->memory_lock();
+  EXPECT_EQ(lock.outcome, verification::LockOutcome::kFellBack);
+  EXPECT_EQ(lock.detail.rfind("control state: ", 0), 0U) << lock.detail;
+  EXPECT_NE(lock.detail.find("locking failed"), std::string::npos) << lock.detail;
+}
+
+TEST(RunnerLockPolicyTest, TryThatLocksEverythingIsLocked) {
+  const auto workload = make_rotor();
+  const RotorOracle oracle;
+  SerialExecutor executor;
+  SteppedSyscalls syscalls;
+  verification::RunnerSetup setup = setup_for(*workload, oracle, executor, syscalls);
+  setup.lock = verification::LockPolicy::kTry;
+  const auto runner = make_runner(setup);
+  ASSERT_NE(runner, nullptr);
+  EXPECT_EQ(runner->memory_lock().outcome, verification::LockOutcome::kLocked);
+  EXPECT_TRUE(runner->memory_lock().detail.empty());
+}
+
+TEST(RunnerLockPolicyTest, RequireStillRefusesWhatTryAndNoneSurvive) {
+  const auto workload = make_rotor();
+  const RotorOracle oracle;
+  SerialExecutor executor;
+  SteppedSyscalls syscalls;
+  syscalls.fake.set_lock_limit(0);
+  const auto made =
+      verification::make_slice_runner(setup_for(*workload, oracle, executor, syscalls));
+  ASSERT_FALSE(made.has_value());
+  EXPECT_EQ(made.error().fault, RunnerFault::kResources);
+  EXPECT_NE(made.error().detail.find("locking failed"), std::string::npos);
+}
+
 TEST(RunnerWorkingSetTest, WithoutANodeNothingIsBound) {
   const auto workload = make_rotor();
   const RotorOracle oracle;

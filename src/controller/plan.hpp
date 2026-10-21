@@ -56,6 +56,12 @@ struct VerificationOptions {
   verification::DutyCycle duty;
   std::uint32_t line_bytes = 0;
   std::vector<std::uint32_t> cpus;
+  /// What a worker's runner does about locking its working set (runner.hpp).
+  /// The default is to try: an unprivileged user's lock allowance (8 MiB) is
+  /// smaller than the default footprint, and a run that does not start is
+  /// worse than one that says its pages were not locked. The fact is in the
+  /// result either way.
+  verification::LockPolicy lock = verification::LockPolicy::kTry;
 
   [[nodiscard]] friend bool operator==(const VerificationOptions&,
                                        const VerificationOptions&) = default;
@@ -89,9 +95,10 @@ struct WorkerPlan {
 /// The path a workload runs on: `requested` if the build, the machine and the
 /// workload all have it, else the refusal; with no request, the first path in
 /// simd::kPreference that all three have, scalar at worst. The workload's own
-/// kernel set is a third set because select_path takes two: an unrequested
-/// call would otherwise choose AVX-512 for a workload that has no such kernel
-/// (journal fragment 06, question 2).
+/// kernel set (Registry::descriptor, without making a workload) is a third set
+/// because select_path takes two: an unrequested call would otherwise choose
+/// AVX-512 for a workload that has no such kernel (journal fragment 06,
+/// question 2; corrected in journal m2-contract-corrections, 1).
 [[nodiscard]] core::Result<simd::IsaPath, simd::DispatchError> choose_isa(
     std::optional<simd::IsaPath> requested, simd::IsaSet supported, simd::IsaSet compiled,
     simd::IsaSet workload_paths);

@@ -14,6 +14,10 @@
 
 namespace loadforge::workloads::sort {
 
+/// What every sort workload says about itself, without creating one: the
+/// descriptor of any workload create() returns (Registry::descriptor).
+[[nodiscard]] Descriptor workload_descriptor();
+
 /// The sort workload for `config`, or why the configuration is refused:
 /// kConfiguration for a decomposition that is neither 0 nor in kChunkCounts, or
 /// an ISA path other than scalar (the sort has no vector kernels);

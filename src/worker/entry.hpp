@@ -79,9 +79,13 @@ enum class RerunExit : std::uint8_t {
 ///   threads        the executor's thread count, at least 1.
 ///   duty           the duty cycle recorded in every record.
 ///   line_bytes     the topology's cache-line size (record.hpp, ExactBitCorruption).
-///   physical_core, numa_node   where --cpus puts the worker, from the
-///        topology the controller took; absent when the worker is not placed
-///        on one CPU.
+///   lock           what the runner does about locking the working set
+///        (verification::LockPolicy): the controller's choice, for every
+///        worker and every re-run of the run.
+///   physical_package, physical_core, numa_node   where --cpus puts the worker,
+///        from the topology the controller took; absent when the worker is not
+///        placed on one CPU (a unit spread over several has no one place,
+///        record.hpp). A core is the pair package and core.
 struct WorkloadArgs {
   std::string workload;
   std::uint64_t seed = 0;
@@ -89,8 +93,10 @@ struct WorkloadArgs {
   std::uint32_t threads = 1;
   std::uint32_t decomposition = 0;
   simd::IsaPath isa = simd::IsaPath::kScalar;
+  verification::LockPolicy lock = verification::LockPolicy::kRequire;
   verification::DutyCycle duty;
   std::uint32_t line_bytes = 64;
+  std::optional<std::uint32_t> physical_package;
   std::optional<std::uint32_t> physical_core;
   std::optional<std::uint32_t> numa_node;
 };

@@ -52,6 +52,14 @@ using Kernels = simd::KernelTable<PanelKernel>;
 /// build). No AVX-512 kernel exists, so that path is always refused.
 [[nodiscard]] const Kernels& built_kernels() noexcept;
 
+/// What every dense_linear workload of this build says about itself, without
+/// creating one (Registry::descriptor): the descriptor create() gives.
+[[nodiscard]] Descriptor workload_descriptor();
+
+/// The descriptor of a workload created with `kernels`: its paths are the
+/// table's.
+[[nodiscard]] Descriptor workload_descriptor(const Kernels& kernels);
+
 /// The workload for `config`, with the kernels this build holds.
 [[nodiscard]] core::Result<std::unique_ptr<Workload>, WorkloadError> create(
     const WorkloadConfig& config);

@@ -41,6 +41,7 @@ using verification::VerificationNotPerformed;
 inline Provenance full_provenance() {
   Provenance provenance;
   provenance.logical_cpu = 11;
+  provenance.physical_package = 1;
   provenance.physical_core = 5;
   provenance.numa_node = 1;
   provenance.buffer_address = 0x7f0012340000ULL;
@@ -52,6 +53,8 @@ inline Provenance full_provenance() {
   provenance.isa = simd::IsaPath::kAvx2;
   provenance.input_integrity = InputIntegrity::kCorruptDuringConsumption;
   provenance.duty = DutyCycle{4, 16};
+  provenance.decomposition = 64;
+  provenance.footprint_bytes = std::uint64_t{32} << 20U;
   return provenance;
 }
 

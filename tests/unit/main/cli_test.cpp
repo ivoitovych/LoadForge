@@ -486,6 +486,9 @@ TEST(CliStressTest, EveryOptionIsRefusedByNameWhenItIsMisused) {
        "--footprint: not an option of stress --test, or given twice"},
       {{"--isa", "scalar", "--isa", "neon"},
        "--isa: not an option of stress --test, or given twice"},
+      {{"--lock", "always"}, "--lock: 'always' is none of require, try, none"},
+      {{"--lock", "try", "--lock", "none"},
+       "--lock: not an option of stress --test, or given twice"},
   };
   for (const Case& each : cases) {
     std::vector<std::string_view> args{"stress", "--test", "compression"};

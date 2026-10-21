@@ -21,11 +21,15 @@
 // WHAT THE RECORD DOES NOT SAY
 // ----------------------------
 // A record's provenance names the workload, its version, the unit's index,
-// the seed and the ISA path, which is enough to regenerate the INPUT anywhere
-// (record.hpp). It does not name the footprint or the decomposition, and a
-// BitExactFixedDecomposition workload's OUTPUT depends on the decomposition.
-// Those are the run's, which the controller knows; use() tells the re-runner
-// which run's findings it is about to be asked to repeat.
+// the seed and the ISA path, which regenerate the INPUT anywhere, and (since
+// the M2 contract corrections) the resolved decomposition and the footprint,
+// which the OUTPUT of a BitExactFixedDecomposition workload and the unit's
+// place in the working set depend on (record.hpp). A finding whose provenance
+// lacks any of the seven is not re-run (kNotPerformed): a re-run of a guess is
+// not a re-run. What is NOT the unit's is the run's: the cache-line size, a
+// fact of the machine, and the lock policy; use() tells the re-runner which
+// run's findings it is about to be asked to repeat, and those two are all it
+// takes from it.
 
 #include <sys/types.h>
 
@@ -45,8 +49,8 @@ namespace loadforge::controller {
 /// a worker).
 class ChildAwareRerunner : public verification::Rerunner {
  public:
-  /// The run the next findings come from: footprint, decomposition and line
-  /// size are the run's, not the record's.
+  /// The run the next findings come from: the line size and the lock policy are
+  /// the run's, not the record's (the unit itself is the record's).
   virtual void use(const WorkerWork& work) = 0;
 
   /// Set once this process is a forked child whose exec failed; the caller

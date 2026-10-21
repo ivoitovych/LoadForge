@@ -30,6 +30,8 @@ class BuiltinRegistry final : public Registry {
   [[nodiscard]] std::vector<std::string> names() const override;
   [[nodiscard]] core::Result<std::unique_ptr<Workload>, WorkloadError> create(
       std::string_view name, const WorkloadConfig& config) const override;
+  [[nodiscard]] core::Result<Descriptor, WorkloadError> descriptor(
+      std::string_view name) const override;
 };
 
 }  // namespace loadforge::workloads

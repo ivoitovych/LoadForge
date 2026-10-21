@@ -96,6 +96,9 @@ void put_provenance(Writer& writer, const Provenance& provenance) {
     writer.u32(provenance.duty->oracle_period);
     writer.u32(provenance.duty->integrity_period);
   }
+  put_optional_u32(writer, provenance.physical_package);
+  put_optional_u32(writer, provenance.decomposition);
+  put_optional_u64(writer, provenance.footprint_bytes);
 }
 
 void put_kind(Writer& writer, const ExactBitCorruption& record) {
@@ -333,7 +336,10 @@ bool get_provenance(Reader& reader, Provenance& provenance) {
       reader.optional_u64("seed", provenance.seed) && reader.optional_u8("isa", isa) &&
       reader.optional_u8("input_integrity", integrity) && reader.presence("duty", duty_present) &&
       (!duty_present ||
-       (reader.u32("duty", oracle_period) && reader.u32("duty", integrity_period)));
+       (reader.u32("duty", oracle_period) && reader.u32("duty", integrity_period))) &&
+      reader.optional_u32("physical_package", provenance.physical_package) &&
+      reader.optional_u32("decomposition", provenance.decomposition) &&
+      reader.optional_u64("footprint_bytes", provenance.footprint_bytes);
   if (!read) {
     return false;
   }

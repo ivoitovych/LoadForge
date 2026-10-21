@@ -118,7 +118,9 @@ TEST(RecordEquality, EveryMemberIsCompared) {
        [](Provenance& p) { p.workload = "sort"; }, [](Provenance& p) { p.workload_version = 1; },
        [](Provenance& p) { p.seed = 1; }, [](Provenance& p) { p.isa = simd::IsaPath::kScalar; },
        [](Provenance& p) { p.input_integrity = InputIntegrity::kIntact; },
-       [](Provenance& p) { p.duty = DutyCycle{1, 1}; }});
+       [](Provenance& p) { p.duty = DutyCycle{1, 1}; },
+       [](Provenance& p) { p.physical_package = 0; }, [](Provenance& p) { p.decomposition = 1; },
+       [](Provenance& p) { p.footprint_bytes = 1; }});
   expect_memberwise_equality(
       contracts::record_samples::difference(),
       {[](Difference& d) { d.domain = Domain::kDerived; },

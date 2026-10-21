@@ -27,6 +27,10 @@
 
 namespace loadforge::workloads::monte_carlo {
 
+/// What every monte_carlo workload of this build says about itself, without
+/// creating one (Registry::descriptor): the descriptor create() gives.
+[[nodiscard]] Descriptor workload_descriptor();
+
 [[nodiscard]] core::Result<std::unique_ptr<Workload>, WorkloadError> create(
     const WorkloadConfig& config);
 

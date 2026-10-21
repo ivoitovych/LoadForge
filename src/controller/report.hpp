@@ -61,6 +61,7 @@ struct WorkerWork {
   std::uint64_t seed = 0;
   std::uint64_t footprint_bytes = 0;
   std::uint32_t line_bytes = 0;
+  verification::LockPolicy lock = verification::LockPolicy::kRequire;
 };
 
 [[nodiscard]] bool operator==(const WorkerWork& lhs, const WorkerWork& rhs);
@@ -92,6 +93,10 @@ struct WorkerReport {
   /// that says nothing about what it checked.
   verification::Tally tally{};
   bool tally_seen = false;
+  /// What its runner said it did about locking the working set (worker/frames.hpp,
+  /// frame 18), once it said it; absent when it never did (it did not get so far).
+  // NOLINTNEXTLINE(readability-redundant-member-init)
+  std::optional<verification::MemoryLock> memory{};
   /// What this worker ran, when it ran a real workload.
   // The braces are not redundant to the compiler that checks them: a member
   // with none is a missing initializer to every aggregate initialisation that

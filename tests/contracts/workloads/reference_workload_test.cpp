@@ -196,6 +196,16 @@ class ReferenceRegistryImpl final : public workloads::Registry {
     return WorkloadError{WorkloadFault::kUnknownWorkload,
                          "no workload '" + std::string(name) + "'"};
   }
+  [[nodiscard]] core::Result<Descriptor, WorkloadError> descriptor(
+      std::string_view name) const override {
+    // The reference reads it as the contract says: what a created workload
+    // says, and create()'s own words for a name it does not have.
+    auto made = create(name, WorkloadConfig{1, 1U << 16U, 0, {}});
+    if (!made.has_value()) {
+      return made.error();
+    }
+    return made.value()->descriptor();
+  }
 };
 
 struct ReferenceRegistry {

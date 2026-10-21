@@ -116,8 +116,15 @@ struct Descriptor {
 ///   seed             the run's seed: unit i's input is a function of (seed, i)
 ///                    and nothing else (primitives/rng/philox.hpp, stream i).
 ///   footprint_bytes  the most the resident units' inputs and outputs may
-///                    take together. Scratch is outside it: the runner sizes
-///                    the footprint to leave room for scratch.
+///                    take together. Scratch is outside it, and so is what the
+///                    runner adds: the working set it maps is the units that
+///                    fit, plus one more input (the bracket's regeneration),
+///                    plus plan().scratch_bytes for every thread of the
+///                    executor, plus a line of slack and the control state.
+///                    (Sort at one unit: 2.0 units on one thread, 3.2 on
+///                    three. Corrected in the M2 contract corrections: this
+///                    said the runner sizes the footprint to leave room for
+///                    scratch, which it does not.)
 ///   decomposition    the workload's decomposition parameter (tile, block or
 ///                    panel size, as its specification defines it); 0 asks
 ///                    for the workload's default. Part of the determinism
@@ -259,7 +266,19 @@ class Workload {
 /// workload's own error for a configuration it refuses, or kUnknownWorkload
 /// for a name not in names().
 ///
-/// Thread-safety: both calls may be made from any thread.
+/// descriptor(name) answers what the workload of that name says about itself
+/// WITHOUT creating one: for every name in names() it equals
+/// create(name, c).value()->descriptor() for every configuration c that
+/// create() accepts, and it is the same on every call; kUnknownWorkload, with
+/// the same words as create(), for a name not in names(). It exists because
+/// the path a workload is created for must be chosen from the paths it has
+/// (Descriptor::paths), and the workload cannot be created before its path is
+/// chosen (contract change of the M2 corrections, 2026-10-21: before it, a
+/// consumer made every workload twice, once on the scalar path to read this).
+/// It takes no configuration because a descriptor is constant for the
+/// workload's lifetime and does not depend on one.
+///
+/// Thread-safety: all three calls may be made from any thread.
 class Registry {
  public:
   Registry() = default;
@@ -272,6 +291,8 @@ class Registry {
   [[nodiscard]] virtual std::vector<std::string> names() const = 0;
   [[nodiscard]] virtual core::Result<std::unique_ptr<Workload>, WorkloadError> create(
       std::string_view name, const WorkloadConfig& config) const = 0;
+  [[nodiscard]] virtual core::Result<Descriptor, WorkloadError> descriptor(
+      std::string_view name) const = 0;
 };
 
 }  // namespace loadforge::workloads

@@ -71,16 +71,18 @@ verification::RerunOutcome RealRerunner::rerun(const verification::WrongResult& 
   // a fact it did not have, and a re-run of a guess is not a re-run.
   if (!where.workload.has_value() || !where.workload_version.has_value() ||
       !where.iteration.has_value() || !where.seed.has_value() || !where.isa.has_value() ||
+      !where.decomposition.has_value() || !where.footprint_bytes.has_value() ||
       *where.workload != work_->descriptor.name) {
     return RerunOutcome::kNotPerformed;
   }
   worker::RerunArgs args;
   args.unit.workload = *where.workload;
   args.unit.seed = *where.seed;
-  args.unit.footprint_bytes = work_->footprint_bytes;
+  args.unit.footprint_bytes = *where.footprint_bytes;
   args.unit.threads = request.threads;
-  args.unit.decomposition = work_->decomposition;
+  args.unit.decomposition = *where.decomposition;
   args.unit.isa = *where.isa;
+  args.unit.lock = work_->lock;
   args.unit.line_bytes = work_->line_bytes;
   args.workload_version = *where.workload_version;
   args.iteration = *where.iteration;

@@ -249,6 +249,45 @@ TEST(DocumentTest, AWorkloadCarriesItsDescriptorTallyAndDuty) {
   EXPECT_EQ(member(workload, "logical_bytes").as_unsigned(), 819200U);
 }
 
+// M2 contract corrections, 2: the lock's policy and what came of it.
+TEST(DocumentTest, AWorkloadSaysWhatWasChosenAboutLockingAndWhatCameOfIt) {
+  RunResult run = rich_run();
+  Node workload = member(to_document(run), "workloads").as_array().items[0];
+  EXPECT_EQ(member(workload, "lock_policy").as_text(), "try");
+  EXPECT_EQ(member(member(workload, "memory_lock"), "outcome").as_text(),
+            "not locked: the lock was refused");
+  EXPECT_EQ(member(member(workload, "memory_lock"), "detail").as_text(),
+            "mlock: Cannot allocate memory");
+
+  run.workloads[0].memory_lock->outcome = verification::LockOutcome::kLocked;
+  run.workloads[0].memory_lock->detail.clear();
+  workload = member(to_document(run), "workloads").as_array().items[0];
+  EXPECT_EQ(member(member(workload, "memory_lock"), "outcome").as_text(), "locked");
+  EXPECT_EQ(member(member(workload, "memory_lock"), "detail").kind(), NodeKind::kNull)
+      << "no refusal, no words";
+
+  run.workloads[0].memory_lock.reset();
+  workload = member(to_document(run), "workloads").as_array().items[0];
+  EXPECT_EQ(member(workload, "memory_lock").kind(), NodeKind::kNull)
+      << "the worker never said: not a claim that it locked";
+}
+
+// M2 contract corrections, 3 and 5: the provenance names the core's package and what a
+// re-run needs.
+TEST(DocumentTest, AProvenanceNamesThePackageTheDecompositionAndTheFootprint) {
+  const Node findings =
+      member(member(to_document(rich_run()), "workloads").as_array().items[0], "findings");
+  const Node& provenance = member(member(findings.as_array().items[0], "record"), "provenance");
+  EXPECT_EQ(member(provenance, "physical_package").as_unsigned(), 1U);
+  EXPECT_EQ(member(provenance, "physical_core").as_unsigned(), 1U);
+  EXPECT_EQ(member(provenance, "decomposition").as_unsigned(), 8U);
+  EXPECT_EQ(member(provenance, "footprint_bytes").as_unsigned(), 33554432U);
+  const Node& bare = member(member(findings.as_array().items[1], "record"), "provenance");
+  EXPECT_EQ(member(bare, "physical_package").kind(), NodeKind::kNull);
+  EXPECT_EQ(member(bare, "decomposition").kind(), NodeKind::kNull);
+  EXPECT_EQ(member(bare, "footprint_bytes").kind(), NodeKind::kNull);
+}
+
 TEST(DocumentTest, EveryIsaPathIsNamedWhenTheWorkloadHasIt) {
   RunResult run = rich_run();
   run.workloads[0].descriptor.paths = simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kAvx2,

@@ -153,6 +153,9 @@ void put_provenance(Writer& w, const Provenance& p) {
     w.u64(v.oracle_period);
     w.u64(v.integrity_period);
   });
+  w.optional(p.physical_package, u32);
+  w.optional(p.decomposition, u32);
+  w.optional(p.footprint_bytes, u64);
 }
 
 bool get_provenance(Reader& r, Provenance& p) {
@@ -177,9 +180,12 @@ bool get_provenance(Reader& r, Provenance& p) {
                       v = static_cast<verification::InputIntegrity>(raw);
                       return ok;
                     }) &&
-         r.optional(p.duty, [&r](verification::DutyCycle& v) {
-           return r.u32(v.oracle_period) && r.u32(v.integrity_period);
-         });
+         r.optional(p.duty,
+                    [&r](verification::DutyCycle& v) {
+                      return r.u32(v.oracle_period) && r.u32(v.integrity_period);
+                    }) &&
+         r.optional(p.physical_package, u32) && r.optional(p.decomposition, u32) &&
+         r.optional(p.footprint_bytes, u64);
 }
 
 std::vector<std::byte> reference_encode(const ErrorRecord& record) {

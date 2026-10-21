@@ -23,6 +23,7 @@
 #include "primitives/simd/dispatch.hpp"
 #include "statistics/signature.hpp"
 #include "topology/snapshot.hpp"
+#include "verification/runner.hpp"
 
 namespace loadforge::cli {
 
@@ -90,6 +91,8 @@ struct HostFacts {
 ///   seed             the run's seed; worker i runs seed + i * controller::kSeedStride.
 ///   footprint_bytes  a worker's footprint when its configuration names none.
 ///   isolation_limit  the most wrong results of one worker that fault isolation repeats.
+///   lock             what each worker's runner does about locking its working set
+///                    (verification::LockPolicy); `stress --test --lock` sets it.
 struct StressOptions {
   std::vector<std::string> formats;
   std::string output_dir = ".";
@@ -106,6 +109,7 @@ struct StressOptions {
   std::uint64_t seed = 1;
   std::uint64_t footprint_bytes = std::uint64_t{32} << 20U;
   std::size_t isolation_limit = 16;
+  verification::LockPolicy lock = verification::LockPolicy::kTry;
 };
 
 /// The stress command's arguments after "stress": `--config FILE`, and

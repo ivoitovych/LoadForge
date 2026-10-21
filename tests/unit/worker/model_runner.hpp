@@ -58,6 +58,10 @@ class ModelRunner final : public verification::SliceRunner {
 
   explicit ModelRunner(const verification::RunnerSetup& setup)
       : setup_(setup), next_(setup.first_index) {
+    lock_.policy = setup.lock;
+    lock_.outcome = setup.lock == verification::LockPolicy::kNone
+                        ? verification::LockOutcome::kNotLocked
+                        : verification::LockOutcome::kLocked;
     const workloads::Plan& plan = setup.workload->plan();
     const std::uint64_t line = setup.line_bytes;
     stride_ = (plan.input_bytes + plan.output_bytes + 3 * line - 1) / line * line;
@@ -99,6 +103,11 @@ class ModelRunner final : public verification::SliceRunner {
   }
 
   [[nodiscard]] const Tally& total() const noexcept override { return total_; }
+  /// The worker's reading of runner.hpp: the policy given, and the outcome it names
+  /// when nothing is refused (this model refuses nothing).
+  [[nodiscard]] const verification::MemoryLock& memory_lock() const noexcept override {
+    return lock_;
+  }
 
  private:
   static verification::VerificationNotPerformed not_performed(verification::Provenance where,
@@ -247,6 +256,7 @@ class ModelRunner final : public verification::SliceRunner {
   std::vector<std::byte> store_;
   std::vector<std::byte> scratch_;
   Tally total_;
+  verification::MemoryLock lock_;
   bool finished_ = false;
 };
 

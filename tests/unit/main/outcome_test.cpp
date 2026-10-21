@@ -216,9 +216,18 @@ TEST(ToRunResult, OneWorkloadResultPerVerifyingWorkerAndOneWorkerResultPerWorker
   EXPECT_EQ(workload.descriptor.name, "compression");
   EXPECT_EQ(workload.tally.units_computed, 5U);
   EXPECT_EQ(workload.logical_bytes, 5000U);
+  EXPECT_EQ(workload.lock_policy, found.work->lock);
+  EXPECT_FALSE(workload.memory_lock.has_value()) << "the worker said nothing";
   ASSERT_EQ(workload.findings.size(), 2U);
   EXPECT_EQ(result.verdict, results::Verdict::kFindings);
   EXPECT_EQ(result.schema_version, results::kSchemaVersion);
+
+  // What the worker's runner said about locking is carried into its workload's result.
+  report.workers[1].memory = verification::MemoryLock{
+      verification::LockPolicy::kTry, verification::LockOutcome::kFellBack, "refused"};
+  const results::RunResult told = to_run_result(report, a_config());
+  ASSERT_TRUE(told.workloads[0].memory_lock.has_value());
+  EXPECT_EQ(told.workloads[0].memory_lock->detail, "refused");
 }
 
 // ---- the codes M2 and M3 each assigned, composed ---------------------------------------------

@@ -47,12 +47,17 @@
 
 namespace loadforge::results {
 
-inline constexpr std::uint32_t kSchemaVersion = 2;
+inline constexpr std::uint32_t kSchemaVersion = 3;
 
 // Version 2 (contract change of the M3 corrections): a counter's summary carries
 // `resets` (statistics/signature.hpp); the unit "microjoules" exists, and the
 // power counter is in it; EDAC counters have a null `modulus` (a step down is a
 // reset); and the verdict reads the blindness of the error counters.
+
+// Version 3 (contract change of the M2 corrections): a record's provenance carries
+// `physical_package`, `decomposition` and `footprint_bytes`, and `physical_core` is
+// the core's id within its package; a workload carries `lock_policy` and
+// `memory_lock` (what the runner did about locking the working set).
 
 /// The run fingerprint (F12): the operating context two runs must share to be
 /// compared. Every field the machine might not tell us is optional.
@@ -103,6 +108,7 @@ struct Finding {
 ///   tally          the runner's totals over every worker that ran it.
 ///   logical_bytes  units computed times the plan's logical bytes (F12).
 ///   findings       every record, in the order the controller received them.
+///   lock_policy, memory_lock   the working set's lock: the choice and its outcome.
 struct WorkloadResult {
   workloads::Descriptor descriptor;
   simd::IsaPath isa = simd::IsaPath::kScalar;
@@ -111,6 +117,11 @@ struct WorkloadResult {
   verification::Tally tally;
   std::uint64_t logical_bytes = 0;
   std::vector<Finding> findings;
+  /// What the controller chose for the working set's lock, and what the
+  /// worker's runner said came of it; absent when the worker never said (it
+  /// did not get as far as a runner).
+  verification::LockPolicy lock_policy = verification::LockPolicy::kRequire;
+  std::optional<verification::MemoryLock> memory_lock;
 };
 
 /// One worker process, as supervision classified it.

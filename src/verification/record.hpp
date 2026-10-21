@@ -146,7 +146,33 @@ struct DutyCycle {
 /// The provenance a record carries from where it was made. Every field is
 /// nullable; see the header comment.
 ///
-///   logical_cpu, physical_core, numa_node  where the unit ran.
+///   logical_cpu, physical_package, physical_core, numa_node  where the unit ran.
+///                    A unit is computed by an executor of one or more threads,
+///                    and a record has room for ONE place, so these four are set
+///                    only when the whole unit ran in one: logical_cpu when
+///                    every thread of the worker ran on that one CPU, and the
+///                    other three from that CPU's place in the topology. A unit
+///                    spread over several CPUs has none of them, and says so by
+///                    leaving them unset (header comment, "absence"): it is not
+///                    isolated, because the ladder's rungs each name one CPU
+///                    (isolation.hpp, Placement). Contract change of the M2
+///                    corrections, 4.
+///   physical_core    the core's id WITHIN its package. Core ids repeat across
+///                    packages (core 0 of package 0 and of package 1 are two
+///                    cores), so a core is the pair (physical_package,
+///                    physical_core); either alone is not an address. Contract
+///                    change of the M2 corrections, 5.
+///   decomposition    the decomposition the unit was computed with, as the
+///                    workload RESOLVED it (Plan::decomposition, never 0): a
+///                    kBitExactFixedDecomposition workload's output is a
+///                    function of it, so a re-run needs it to compute the same
+///                    bits the finding is about.
+///   footprint_bytes  the footprint the run was configured with: it fixes how
+///                    many slots the working set has, and with them where in the
+///                    mapping (buffer_offset) the unit sat, which decides which
+///                    cache sets it used. A re-run that kept the footprint puts
+///                    the unit where it was. Contract change of the M2
+///                    corrections, 3.
 ///   buffer_address   the address of the first byte of the compared bytes --
 ///                    the unit's input for Side::kInput, its output for
 ///                    Side::kOutput. The runner places every unit's input and
@@ -164,6 +190,7 @@ struct DutyCycle {
 ///   duty             the duty cycle in force when the unit was checked.
 struct Provenance {
   std::optional<std::uint32_t> logical_cpu;
+  std::optional<std::uint32_t> physical_package;
   std::optional<std::uint32_t> physical_core;
   std::optional<std::uint32_t> numa_node;
   std::optional<std::uint64_t> buffer_address;
@@ -175,15 +202,19 @@ struct Provenance {
   std::optional<simd::IsaPath> isa;
   std::optional<InputIntegrity> input_integrity;
   std::optional<DutyCycle> duty;
+  std::optional<std::uint32_t> decomposition;
+  std::optional<std::uint64_t> footprint_bytes;
 };
 
 [[nodiscard]] inline bool operator==(const Provenance& lhs, const Provenance& rhs) noexcept {
-  return std::tie(lhs.logical_cpu, lhs.physical_core, lhs.numa_node, lhs.buffer_address,
-                  lhs.buffer_offset, lhs.iteration, lhs.workload, lhs.workload_version, lhs.seed,
-                  lhs.isa, lhs.input_integrity, lhs.duty) ==
-         std::tie(rhs.logical_cpu, rhs.physical_core, rhs.numa_node, rhs.buffer_address,
-                  rhs.buffer_offset, rhs.iteration, rhs.workload, rhs.workload_version, rhs.seed,
-                  rhs.isa, rhs.input_integrity, rhs.duty);
+  return std::tie(lhs.logical_cpu, lhs.physical_package, lhs.physical_core, lhs.numa_node,
+                  lhs.buffer_address, lhs.buffer_offset, lhs.iteration, lhs.workload,
+                  lhs.workload_version, lhs.seed, lhs.isa, lhs.input_integrity, lhs.duty,
+                  lhs.decomposition, lhs.footprint_bytes) ==
+         std::tie(rhs.logical_cpu, rhs.physical_package, rhs.physical_core, rhs.numa_node,
+                  rhs.buffer_address, rhs.buffer_offset, rhs.iteration, rhs.workload,
+                  rhs.workload_version, rhs.seed, rhs.isa, rhs.input_integrity, rhs.duty,
+                  rhs.decomposition, rhs.footprint_bytes);
 }
 
 /// How the differing bits of an exact mismatch are spread, which implicates
@@ -510,11 +541,13 @@ inline constexpr std::uint16_t kErrorRecordFrameType = 16;
 
 /// The first two bytes of every encoding: the format version, then the kind
 /// (1 ExactBitCorruption, 2 NumericalVerificationFailure, 3
-/// VerificationNotPerformed). The layout after them is the provider's, because
+/// VerificationNotPerformed). Version 2 (M2 contract corrections) added
+/// physical_package, decomposition and footprint_bytes to Provenance; a build
+/// reads no other version. The layout after them is the provider's, because
 /// both ends of the channel link the one provider -- as both link ipc's frames
 /// -- and a format the contract pinned byte by byte would be one nobody could
 /// fix without a contract change. Integers are little-endian.
-inline constexpr std::uint8_t kRecordFormatVersion = 1;
+inline constexpr std::uint8_t kRecordFormatVersion = 2;
 
 enum class DecodeFault : std::uint8_t {
   kEmpty,      ///< no bytes at all.

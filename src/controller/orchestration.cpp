@@ -79,7 +79,7 @@ bool operator==(const WorkerWork& lhs, const WorkerWork& rhs) {
     return std::tie(w.descriptor, w.isa, w.decomposition, w.duty, w.logical_bytes);
   };
   const auto where = [](const WorkerWork& w) {
-    return std::tie(w.threads, w.cpu, w.seed, w.footprint_bytes, w.line_bytes);
+    return std::tie(w.threads, w.cpu, w.seed, w.footprint_bytes, w.line_bytes, w.lock);
   };
   return what(lhs) == what(rhs) && where(lhs) == where(rhs);
 }
@@ -177,6 +177,7 @@ struct Tracked {
   WorkerPlan plan;  ///< What it was told to run (null workload: no args).
   verification::Tally tally;
   bool tally_seen = false;
+  std::optional<verification::MemoryLock> memory;
   std::vector<FindingReport> findings;
   std::uint64_t wrong_results = 0;
   std::uint64_t not_performed = 0;
@@ -227,6 +228,8 @@ class Run {
                                                                     const ipc::Record& record);
   [[nodiscard]] static std::optional<std::string> take_tally(Tracked& worker,
                                                              const ipc::Record& record);
+  [[nodiscard]] static std::optional<std::string> take_memory(Tracked& worker,
+                                                              const ipc::Record& record);
   [[nodiscard]] core::Result<core::Ok, ControllerError> reap(std::int64_t elapsed_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
   void attribute_oom_kills();
@@ -681,6 +684,9 @@ std::optional<std::string> Run::ingest(Tracked& worker, const ipc::Record& recor
   if (record.type == worker::kTallyFrameType) {
     return take_tally(worker, record);
   }
+  if (record.type == worker::kMemoryFrameType) {
+    return take_memory(worker, record);
+  }
   if (record.type == static_cast<std::uint16_t>(ipc::RecordType::kFinished)) {
     worker.evidence.finished_seen = true;
   }
@@ -722,6 +728,26 @@ std::optional<std::string> Run::take_error_record(Tracked& worker, const ipc::Re
   } else {
     ++worker.findings_dropped;
   }
+  return std::nullopt;
+}
+
+std::optional<std::string> Run::take_memory(Tracked& worker, const ipc::Record& record) {
+  auto decoded = worker::decode_memory(record.payload);
+  if (!decoded.has_value()) {
+    return decoded.error();
+  }
+  // Told once, before the first slice: a second is not a worker that works.
+  if (worker.memory.has_value()) {
+    return "a second memory frame";
+  }
+  const verification::MemoryLock& lock = decoded.value();
+  std::string line = "working set: " + std::string{verification::describe(lock.outcome)} +
+                     " (lock policy " + std::string{verification::describe(lock.policy)} + ")";
+  if (!lock.detail.empty()) {
+    line += ": " + lock.detail;
+  }
+  worker.notes.push_back(std::move(line));
+  worker.memory = std::move(decoded).value();
   return std::nullopt;
 }
 
@@ -958,6 +984,7 @@ core::Result<RunReport, ControllerError> Run::finish() {
     entry.records = std::move(worker.notes);
     entry.tally = worker.tally;
     entry.tally_seen = worker.tally_seen;
+    entry.memory = worker.memory;
     entry.work = worker.plan.work;
     entry.findings = std::move(worker.findings);
     entry.wrong_results = worker.wrong_results;

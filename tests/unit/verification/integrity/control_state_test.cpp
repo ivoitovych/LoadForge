@@ -37,7 +37,7 @@ platform::NodeMask only(std::uint32_t node) {
 
 TEST(ControlStateTest, ThreeCopiesEachInItsOwnPopulatedLockedMapping) {
   SteppedSyscalls syscalls;
-  const auto state = ControlState::create(syscalls, sample_words(), {});
+  const auto state = ControlState::create(syscalls, sample_words(), {}, LockPolicy::kRequire);
   ASSERT_TRUE(state.has_value());
   ASSERT_EQ(syscalls.mapped().size(), kCopies);
   std::set<std::byte*> addresses;
@@ -58,7 +58,7 @@ TEST(ControlStateTest, ThreeCopiesEachInItsOwnPopulatedLockedMapping) {
 
 TEST(ControlStateTest, EveryCopyHoldsTheSameBytesWrittenByItsOwnPass) {
   SteppedSyscalls syscalls;
-  auto state = ControlState::create(syscalls, sample_words(), {});
+  auto state = ControlState::create(syscalls, sample_words(), {}, LockPolicy::kRequire);
   ASSERT_TRUE(state.has_value());
   const std::span<std::byte> first = syscalls.mapping(0);
   for (std::size_t copy = 1; copy < kCopies; ++copy) {
@@ -76,7 +76,7 @@ TEST(ControlStateTest, EveryCopyHoldsTheSameBytesWrittenByItsOwnPass) {
 
 TEST(ControlStateTest, WhatIsWrittenIsWhatIsRead) {
   SteppedSyscalls syscalls;
-  auto state = ControlState::create(syscalls, sample_words(), {});
+  auto state = ControlState::create(syscalls, sample_words(), {}, LockPolicy::kRequire);
   ASSERT_TRUE(state.has_value());
   ControlState control = std::move(state).value();
   const auto initial = control.read();
@@ -96,7 +96,8 @@ TEST(ControlStateTest, TheCopiesAreSpreadRoundRobinOverTheNodesGiven) {
   SteppedSyscalls syscalls;
   syscalls.fake.permit_nodes(platform::NodeMask{only(0).nodes | only(1).nodes});
   const std::vector<std::uint32_t> two{0, 1};
-  ASSERT_TRUE(ControlState::create(syscalls, sample_words(), two).has_value());
+  ASSERT_TRUE(
+      ControlState::create(syscalls, sample_words(), two, LockPolicy::kRequire).has_value());
   ASSERT_EQ(syscalls.fake.binds().size(), 3U);
   EXPECT_EQ(syscalls.fake.binds()[0], only(0));
   EXPECT_EQ(syscalls.fake.binds()[1], only(1));
@@ -104,10 +105,46 @@ TEST(ControlStateTest, TheCopiesAreSpreadRoundRobinOverTheNodesGiven) {
 
   SteppedSyscalls single;
   const std::vector<std::uint32_t> one{0};
-  ASSERT_TRUE(ControlState::create(single, sample_words(), one).has_value());
+  ASSERT_TRUE(ControlState::create(single, sample_words(), one, LockPolicy::kRequire).has_value());
   ASSERT_EQ(single.fake.binds().size(), 3U);
   for (const platform::NodeMask& mask : single.fake.binds()) {
     EXPECT_EQ(mask, only(0)) << "one node: every copy on it";
+  }
+}
+
+TEST(ControlStateTest, TheLockPolicyDecidesWhetherTheCopiesAreLockedAndWhatCameOfIt) {
+  {
+    SteppedSyscalls syscalls;
+    const auto state = ControlState::create(syscalls, sample_words(), {}, LockPolicy::kRequire);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state.value().outcome(), LockOutcome::kLocked);
+    EXPECT_TRUE(state.value().detail().empty());
+  }
+  {
+    SteppedSyscalls syscalls;
+    syscalls.fake.set_lock_limit(0);
+    const auto state = ControlState::create(syscalls, sample_words(), {}, LockPolicy::kNone);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state.value().outcome(), LockOutcome::kNotLocked);
+    EXPECT_EQ(syscalls.fake.locked_bytes(), 0U);
+  }
+  {
+    // The second copy's lock is refused: it is mapped without, and the FIRST
+    // refusal's words are kept when a later copy is refused too.
+    SteppedSyscalls syscalls;
+    syscalls.fail(Call::kLock, 2, EPERM);
+    const auto state = ControlState::create(syscalls, sample_words(), {}, LockPolicy::kTry);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state.value().outcome(), LockOutcome::kFellBack);
+    EXPECT_NE(state.value().detail().find("locking failed"), std::string::npos);
+    EXPECT_EQ(syscalls.fake.locked_bytes(), 2 * kCopyBytes);
+  }
+  {
+    SteppedSyscalls syscalls;
+    syscalls.fake.set_lock_limit(0);
+    const auto state = ControlState::create(syscalls, sample_words(), {}, LockPolicy::kTry);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state.value().outcome(), LockOutcome::kFellBack) << "all three, one outcome";
   }
 }
 
@@ -133,7 +170,8 @@ TEST(ControlStateTest, ACopyThatCannotBeMappedIsNamedAndTheEarlierOnesAreUnmappe
                      std::to_string(error) + ", copy " + std::to_string(copy));
         SteppedSyscalls syscalls;
         syscalls.fail(call.call, static_cast<int>(copy) + 1, error);
-        const auto state = ControlState::create(syscalls, sample_words(), node);
+        const auto state =
+            ControlState::create(syscalls, sample_words(), node, LockPolicy::kRequire);
         ASSERT_FALSE(state.has_value());
         EXPECT_EQ(state.error().copy, copy);
         EXPECT_EQ(state.error().refused.stage, call.stage);

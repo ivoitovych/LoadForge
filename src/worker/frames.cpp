@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "worker/frames.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,54 @@ std::array<std::uint64_t, kCounters> counters_of(const verification::Tally& tall
 }
 
 }  // namespace
+
+std::vector<std::byte> encode_memory(const verification::MemoryLock& lock) {
+  std::vector<std::byte> bytes;
+  bytes.push_back(static_cast<std::byte>(kMemoryFormatVersion));
+  bytes.push_back(static_cast<std::byte>(lock.policy));
+  bytes.push_back(static_cast<std::byte>(lock.outcome));
+  const std::size_t kept = std::min(lock.detail.size(), kMaxMemoryDetailBytes);
+  for (std::size_t at = 0; at < kept; ++at) {
+    bytes.push_back(static_cast<std::byte>(lock.detail[at]));
+  }
+  return bytes;
+}
+
+core::Result<verification::MemoryLock, std::string> decode_memory(
+    std::span<const std::byte> bytes) {
+  constexpr std::size_t kHeader = 3;
+  if (bytes.size() < kHeader) {
+    return "memory frame: " + std::to_string(bytes.size()) + " byte(s), expected at least " +
+           std::to_string(kHeader);
+  }
+  if (bytes[0] != static_cast<std::byte>(kMemoryFormatVersion)) {
+    return "memory frame: unknown format version " +
+           std::to_string(std::to_integer<unsigned>(bytes[0]));
+  }
+  const auto policy = std::to_integer<unsigned>(bytes[1]);
+  if (policy > static_cast<unsigned>(verification::LockPolicy::kNone)) {
+    return "memory frame: unknown lock policy " + std::to_string(policy);
+  }
+  const auto outcome = std::to_integer<unsigned>(bytes[2]);
+  if (outcome > static_cast<unsigned>(verification::LockOutcome::kFellBack)) {
+    return "memory frame: unknown lock outcome " + std::to_string(outcome);
+  }
+  verification::MemoryLock lock;
+  lock.policy = static_cast<verification::LockPolicy>(policy);
+  lock.outcome = static_cast<verification::LockOutcome>(outcome);
+  const std::size_t detail = bytes.size() - kHeader;
+  if (detail > kMaxMemoryDetailBytes) {
+    return "memory frame: a detail of " + std::to_string(detail) + " bytes, at most " +
+           std::to_string(kMaxMemoryDetailBytes);
+  }
+  if (detail != 0 && lock.outcome != verification::LockOutcome::kFellBack) {
+    return std::string{"memory frame: a detail on an outcome that has none"};
+  }
+  for (std::size_t at = kHeader; at < bytes.size(); ++at) {
+    lock.detail.push_back(static_cast<char>(std::to_integer<unsigned char>(bytes[at])));
+  }
+  return lock;
+}
 
 std::vector<std::byte> encode_tally(const verification::Tally& tally) {
   std::vector<std::byte> bytes;

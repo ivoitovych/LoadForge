@@ -99,6 +99,16 @@ WorkloadError refuse(WorkloadFault fault, std::string detail) noexcept {
 
 }  // namespace
 
+Descriptor workload_descriptor() {
+  Descriptor descriptor;
+  descriptor.name = std::string(kName);
+  descriptor.version = kVersion;
+  descriptor.determinism = DeterminismClass::kBitExactFixedDecomposition;
+  descriptor.contract = verification::Contract::kBounded;
+  descriptor.paths = simd::kernel_paths(chunk_kernels());
+  return descriptor;
+}
+
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   const simd::KernelTable<ChunkKernel> kernels = chunk_kernels();
   const ChunkKernel kernel = simd::kernel_at(kernels, config.isa);
@@ -121,12 +131,6 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
                   "footprint " + std::to_string(config.footprint_bytes) +
                       " bytes holds no unit; one unit takes " + std::to_string(kUnitBytes));
   }
-  Descriptor descriptor;
-  descriptor.name = std::string(kName);
-  descriptor.version = kVersion;
-  descriptor.determinism = DeterminismClass::kBitExactFixedDecomposition;
-  descriptor.contract = verification::Contract::kBounded;
-  descriptor.paths = simd::kernel_paths(kernels);
   Plan plan;
   plan.input_bytes = kInputBytes;
   plan.output_bytes = kOutputBytes;
@@ -136,7 +140,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
   plan.logical_bytes = kUnitBytes;
   plan.operations = std::uint64_t{kBatches} * kSamplesPerBatch;
   return std::unique_ptr<Workload>(
-      std::make_unique<MonteCarlo>(config, std::move(descriptor), plan, kernel));
+      std::make_unique<MonteCarlo>(config, workload_descriptor(), plan, kernel));
 }
 
 }  // namespace loadforge::workloads::monte_carlo

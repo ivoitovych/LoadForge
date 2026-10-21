@@ -161,8 +161,7 @@ class SortWorkload final : public Workload {
  public:
   explicit SortWorkload(const Resolved& resolved) noexcept
       : seed_(resolved.seed),
-        descriptor_{std::string(kName), kVersion, DeterminismClass::kBitExact,
-                    verification::Contract::kExact, simd::IsaSet{simd::IsaPath::kScalar}},
+        descriptor_(sort::workload_descriptor()),
         plan_{kInputBytes,    kOutputBytes,    kSideBytes + counters_bytes(resolved.chunks),
               resolved.units, resolved.chunks, kLogicalBytes,
               kOperations} {}
@@ -216,6 +215,11 @@ class SortWorkload final : public Workload {
 };
 
 }  // namespace
+
+Descriptor workload_descriptor() {
+  return Descriptor{std::string(kName), kVersion, DeterminismClass::kBitExact,
+                    verification::Contract::kExact, simd::IsaSet{simd::IsaPath::kScalar}};
+}
 
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   const std::uint32_t chunks =

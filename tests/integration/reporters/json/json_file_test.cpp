@@ -62,7 +62,7 @@ TEST(JsonFileTest, ARealFileReadsBackAsTheSameDocumentTheStreamHeld) {
   const std::string text = read_back(file.path());
   EXPECT_EQ(text, memory.str()) << "a file and a string stream receive the same bytes";
   const Json doc = JsonReader::parse(text);
-  EXPECT_EQ(doc.at("schema_version").text, "2");
+  EXPECT_EQ(doc.at("schema_version").text, "3");
   EXPECT_EQ(doc.at("workloads").at(0).at("descriptor").at("name").text, "compression");
   EXPECT_EQ(doc.at("workloads").at(0).at("findings").items.size(), 6U);
   EXPECT_EQ(doc.at("fingerprint").at("kernel").text, "6.8.0");

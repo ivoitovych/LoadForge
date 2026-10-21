@@ -212,6 +212,15 @@ ErrorRecord random_record(std::mt19937_64& random) {
     provenance.numa_node = static_cast<std::uint32_t>(random());
   }
   if (coin()) {
+    provenance.physical_package = static_cast<std::uint32_t>(random());
+  }
+  if (coin()) {
+    provenance.decomposition = static_cast<std::uint32_t>(random());
+  }
+  if (coin()) {
+    provenance.footprint_bytes = random();
+  }
+  if (coin()) {
     provenance.buffer_address = random();
   }
   if (coin()) {

@@ -35,6 +35,8 @@ results::RunResult to_run_result(const controller::RunReport& report,
     workload.decomposition = worker.work->decomposition;
     workload.duty = worker.work->duty;
     workload.tally = worker.tally;
+    workload.lock_policy = worker.work->lock;
+    workload.memory_lock = worker.memory;
     workload.logical_bytes =
         results::logical_bytes(worker.tally.units_computed, worker.work->logical_bytes);
     for (const controller::FindingReport& finding : worker.findings) {

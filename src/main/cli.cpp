@@ -90,6 +90,7 @@ void print_usage(std::ostream& out) {
       << "                                  json, csv or json,csv, written to DIR/run.<format>\n"
       << "  loadforge stress --test NAME [--duration D] [--workers N] [--footprint SIZE]\n"
       << "                   [--isa scalar|avx2|avx512|neon] [--seed N]\n"
+      << "                   [--lock require|try|none]\n"
       << "                   [--output FORMATS] [--output-dir DIR] [--sample-interval DURATION]\n"
       << "                                  stress with one verified workload, sampled and\n"
       << "                                  written the same way; NAME is one of\n"
@@ -116,6 +117,7 @@ struct TestArgs {
   std::optional<core::ByteSize> footprint;
   std::optional<simd::IsaPath> isa;
   std::optional<std::uint64_t> seed;
+  std::optional<verification::LockPolicy> lock;
   std::vector<std::string> formats;  ///< --output: none given is none written.
   std::optional<std::string> output_dir;
   std::optional<std::int64_t> sample_interval_ns;
@@ -198,6 +200,18 @@ std::optional<std::string> take_isa(const Written& option, TestArgs& out) {
   return std::nullopt;
 }
 
+std::optional<std::string> take_lock(const Written& option, TestArgs& out) {
+  for (const verification::LockPolicy policy :
+       {verification::LockPolicy::kRequire, verification::LockPolicy::kTry,
+        verification::LockPolicy::kNone}) {
+    if (verification::describe(policy) == option.value) {
+      out.lock = policy;
+      return std::nullopt;
+    }
+  }
+  return refused(option.key, "'" + std::string{option.value} + "' is none of require, try, none");
+}
+
 std::optional<std::string> take_seed(const Written& option, TestArgs& out) {
   auto seed = whole_number(option.key, option.value);
   if (!seed.has_value()) {
@@ -237,12 +251,13 @@ struct Option {
   bool (*given)(const TestArgs&);
 };
 
-constexpr std::array<Option, 8> kOptions{{
+constexpr std::array<Option, 9> kOptions{{
     {"--duration", &take_duration, [](const TestArgs& a) { return a.duration.has_value(); }},
     {"--workers", &take_workers, [](const TestArgs& a) { return a.workers.has_value(); }},
     {"--footprint", &take_footprint, [](const TestArgs& a) { return a.footprint.has_value(); }},
     {"--isa", &take_isa, [](const TestArgs& a) { return a.isa.has_value(); }},
     {"--seed", &take_seed, [](const TestArgs& a) { return a.seed.has_value(); }},
+    {"--lock", &take_lock, [](const TestArgs& a) { return a.lock.has_value(); }},
     {"--output", &take_output, [](const TestArgs& a) { return !a.formats.empty(); }},
     {"--output-dir", &take_output_dir, [](const TestArgs& a) { return a.output_dir.has_value(); }},
     {"--sample-interval", &take_sample_interval,
@@ -487,6 +502,7 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
   StressOptions options = base;
   options.isa = test.isa;
   options.seed = test.seed.value_or(options.seed);
+  options.lock = test.lock.value_or(options.lock);
   if (test.output_dir.has_value()) {
     options.output_dir = *test.output_dir;
   }
@@ -604,6 +620,7 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   options.verification.seed = stress_options.seed;
   options.verification.footprint_bytes = stress_options.footprint_bytes;
   options.verification.requested_isa = stress_options.isa;
+  options.verification.lock = stress_options.lock;
   options.verification.isa_probe = probe.get();
   options.verification.line_bytes = line_bytes_of(snapshot);
   options.verification.cpus = allowed_cpus(syscalls, snapshot);

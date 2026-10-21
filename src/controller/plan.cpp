@@ -38,11 +38,12 @@ std::string cpu_list(const std::vector<std::uint32_t>& cpus) {
   return text;
 }
 
-/// The physical core the CPU belongs to in the snapshot, if the snapshot has it.
-std::optional<std::uint32_t> core_of(const topology::Snapshot& machine, std::uint32_t cpu) {
+/// The physical core the CPU belongs to in the snapshot, if the snapshot has it:
+/// the package and the core's id within it (core ids repeat across packages).
+std::optional<topology::CoreAddress> core_of(const topology::Snapshot& machine, std::uint32_t cpu) {
   for (const topology::LogicalCpu& each : machine.cpus.cpus()) {
     if (each.id == cpu) {
-      return each.core.core;
+      return each.core;
     }
   }
   return std::nullopt;
@@ -154,22 +155,23 @@ core::Result<WorkerPlan, std::string> plan_worker(const config::Workload& entry,
   args.decomposition = options.decomposition;
   args.duty = options.duty;
   args.line_bytes = options.line_bytes;
+  args.lock = options.lock;
 
-  // The workload's kernel set is only known from a workload, and a workload
-  // is only made for a path: made once for scalar, which every one has, to
-  // ask; made again for the path chosen, to have its refusal now and not in a
+  // The path is chosen from what the workload has kernels for, which the
+  // registry says without making one (Registry::descriptor); the workload is
+  // then made once, for that path, so that its refusal is had now and not in a
   // worker after the fork.
+  const auto described = options.registry->descriptor(entry.name);
+  if (!described.has_value()) {
+    return refused(entry.name, described.error());
+  }
   workloads::WorkloadConfig config{args.seed, footprint, args.decomposition,
                                    simd::IsaPath::kScalar};
-  auto asked = options.registry->create(entry.name, config);
-  if (!asked.has_value()) {
-    return refused(entry.name, asked.error());
-  }
   const simd::IsaSet supported = options.isa_probe != nullptr
                                      ? options.isa_probe->supported()
                                      : simd::IsaSet{simd::IsaPath::kScalar};
-  auto path = choose_isa(options.requested_isa, supported, simd::compiled_paths(),
-                         asked.value()->descriptor().paths);
+  auto path =
+      choose_isa(options.requested_isa, supported, simd::compiled_paths(), described.value().paths);
   if (!path.has_value()) {
     return entry.name + ": " + path.error().detail;
   }
@@ -181,7 +183,11 @@ core::Result<WorkerPlan, std::string> plan_worker(const config::Workload& entry,
   }
 
   if (plan.cpus.size() == 1 && machine != nullptr) {
-    args.physical_core = core_of(*machine, plan.cpus.front());
+    const std::optional<topology::CoreAddress> core = core_of(*machine, plan.cpus.front());
+    if (core.has_value()) {
+      args.physical_package = core->package;
+      args.physical_core = core->core;
+    }
     const topology::NumaNode* node = machine->numa.node_of(plan.cpus.front());
     if (node != nullptr) {
       args.numa_node = node->id;
@@ -200,6 +206,7 @@ core::Result<WorkerPlan, std::string> plan_worker(const config::Workload& entry,
   work.seed = args.seed;
   work.footprint_bytes = footprint;
   work.line_bytes = args.line_bytes;
+  work.lock = args.lock;
   plan.work = std::move(work);
   plan.description = entry.name + ": " + std::to_string(plan.threads) + " thread(s) on " +
                      cpu_list(plan.cpus) + ", footprint " +

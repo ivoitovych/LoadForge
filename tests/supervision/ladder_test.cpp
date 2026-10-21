@@ -139,6 +139,68 @@ TEST(IsolationLadder, ACorruptionThatRecursEverywhereIsNotCoreLocal) {
   }
 }
 
+/// The provenance of a worker's first record, of whatever kind.
+const verification::Provenance& first_provenance(const Scenario& scenario, std::size_t slot) {
+  return std::visit(
+      [](const auto& each) -> const verification::Provenance& { return each.provenance; },
+      scenario.report.workers[slot].findings.at(0).record);
+}
+
+// M2 contract corrections, 3 and 5: what a record names is enough to repeat the unit and
+// to say where it ran. Through the real worker, the real record channel and the real
+// topology: the resolved decomposition (compression has one, 1; not the 0 of "default"),
+// the footprint, and the core as the pair package and core.
+TEST(IsolationLadder, AFindingNamesTheDecompositionTheFootprintAndTheCoreAsAPackageAndACore) {
+  const auto scenario = run_scenario("all", 1, 2);
+  if (!scenario.has_value()) {
+    GTEST_SKIP() << "needs two CPUs this process may use";
+  }
+  platform::RealSyscalls syscalls;
+  platform::FileSystem filesystem(syscalls);
+  auto machine = topology::take_snapshot(filesystem);
+  ASSERT_TRUE(machine.has_value());
+  for (std::size_t slot = 0; slot < 2; ++slot) {
+    ASSERT_FALSE(scenario->report.workers[slot].findings.empty()) << "worker " << slot;
+    const verification::Provenance& where = first_provenance(*scenario, slot);
+    EXPECT_EQ(where.decomposition, 1U);
+    EXPECT_EQ(where.footprint_bytes, std::uint64_t{4} << 20U);
+    ASSERT_TRUE(where.logical_cpu.has_value());
+    const topology::LogicalCpu* cpu = nullptr;
+    for (const topology::LogicalCpu& each : machine.value().cpus.cpus()) {
+      if (each.id == *where.logical_cpu) {
+        cpu = &each;
+      }
+    }
+    ASSERT_NE(cpu, nullptr);
+    EXPECT_EQ(where.physical_package, cpu->core.package);
+    EXPECT_EQ(where.physical_core, cpu->core.core);
+  }
+}
+
+// M2 contract corrections, 4: a unit spread over the threads of an executor ran on all of
+// their CPUs, which a record has no room for, and the ladder's rungs each name one. It is
+// not isolated, the record names no place it did not run in, and the finding says why.
+TEST(IsolationLadder, AUnitSpreadOverSeveralCpusIsNotIsolatedAndNamesNoPlace) {
+  const auto scenario = run_scenario("all", 2, 2);
+  if (!scenario.has_value()) {
+    GTEST_SKIP() << "needs two CPUs this process may use";
+  }
+  EXPECT_EQ(scenario->summary.isolated, 0U);
+  for (std::size_t slot = 0; slot < 2; ++slot) {
+    const WorkerReport& worker = scenario->report.workers[slot];
+    ASSERT_GT(worker.wrong_results, 0U) << "worker " << slot;
+    const FindingReport& finding = worker.findings.at(0);
+    EXPECT_FALSE(finding.isolation.has_value());
+    EXPECT_EQ(finding.not_isolated,
+              "the worker ran on several CPUs, so the record names none to repeat it on");
+    const verification::Provenance& where = first_provenance(*scenario, slot);
+    EXPECT_FALSE(where.logical_cpu.has_value());
+    EXPECT_FALSE(where.physical_package.has_value());
+    EXPECT_FALSE(where.physical_core.has_value());
+    EXPECT_EQ(where.decomposition, 1U) << "what the unit is still says";
+  }
+}
+
 TEST(IsolationLadder, ACorruptionOnOneCoreIsCoreLocalAndOnlyThatWorkerFindsIt) {
   const auto scenario = run_scenario("core", 1, 2);
   if (!scenario.has_value()) {

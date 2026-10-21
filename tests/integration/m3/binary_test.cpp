@@ -111,7 +111,7 @@ TEST(RealBinaryTest, ARunWritesItsResultInBothFormatsAndTwoRunsShareTheirFingerp
 
   const std::string json = slurp(first / "run.json");
   ASSERT_FALSE(json.empty());
-  EXPECT_NE(json.find("\"schema_version\": 2"), std::string::npos);
+  EXPECT_NE(json.find("\"schema_version\": 3"), std::string::npos);
   EXPECT_NE(json.find("\"sample_interval_ns\": 100000000"), std::string::npos);
   EXPECT_NE(json.find("\"memory.available\""), std::string::npos);
   EXPECT_NE(json.find("\"fate\""), std::string::npos);

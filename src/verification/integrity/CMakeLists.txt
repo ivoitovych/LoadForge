@@ -8,6 +8,7 @@ loadforge_component(loadforge_verification_integrity
   SOURCES
     layout.cpp
     difference.cpp
+    locking.cpp
     control_state.cpp
     slice_runner.cpp
   LINK loadforge_platform)

@@ -12,6 +12,7 @@
 #include "contracts/simd/select_path_contract.hpp"
 #include "contracts/telemetry/source_contract.hpp"
 #include "contracts/verification/isolation_contract.hpp"
+#include "contracts/workloads/registry_contract.hpp"
 
 namespace loadforge::contracts {
 namespace {
@@ -21,6 +22,20 @@ using controller_testing::ModelIsolator;
 using controller_testing::ModelProbe;
 using controller_testing::ModelSelect;
 using controller_testing::ModelSource;
+using controller_testing::ScriptedRegistry;
+
+// The registry's suite against the controller's model of it (not failing, as
+// the contract's own subjects do not fail).
+struct ScriptedRegistrySubject {
+  static std::unique_ptr<workloads::Registry> make() {
+    return std::make_unique<ScriptedRegistry>();
+  }
+  static workloads::WorkloadConfig config(const std::string& /*name*/) {
+    return workloads::WorkloadConfig{7, std::uint64_t{16} << 20U, 0, simd::IsaPath::kScalar};
+  }
+};
+INSTANTIATE_TYPED_TEST_SUITE_P(ControllerModel, RegistryContract,
+                               ::testing::Types<ScriptedRegistrySubject>);
 
 struct SourceSubject {
   static std::unique_ptr<telemetry::Source> make() { return std::make_unique<ModelSource>(); }

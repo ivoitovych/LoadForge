@@ -90,7 +90,8 @@ std::string duty_words(const std::optional<DutyCycle>& duty) {
 void put_provenance(std::string& out, const Provenance& provenance) {
   out += "  provenance:\n";
   field(out, "logical CPU", widened(provenance.logical_cpu));
-  field(out, "physical core", widened(provenance.physical_core));
+  field(out, "physical package", widened(provenance.physical_package));
+  field(out, "physical core (within its package)", widened(provenance.physical_core));
   field(out, "NUMA node", widened(provenance.numa_node));
   field(out, "buffer address", hex_or_absent(provenance.buffer_address));
   field(out, "buffer offset", hex_or_absent(provenance.buffer_offset));
@@ -104,6 +105,8 @@ void put_provenance(std::string& out, const Provenance& provenance) {
         provenance.input_integrity.has_value() ? describe(*provenance.input_integrity)
                                                : kNotRecorded);
   field(out, "duty cycle", duty_words(provenance.duty));
+  field(out, "decomposition", widened(provenance.decomposition));
+  field(out, "footprint bytes", decimal_or_absent(provenance.footprint_bytes));
 }
 
 std::string bytes_line(std::span<const std::byte> bytes) {

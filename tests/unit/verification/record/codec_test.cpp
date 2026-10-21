@@ -62,8 +62,8 @@ DecodeError decode_error(const Bytes& bytes) {
 TEST(RecordCodecLayout, ARecordWithNoProvenanceIsTheDocumentedBytes) {
   const VerificationNotPerformed record = contracts::record_samples::not_performed();
   Layout expected;
-  expected.u8(1).u8(3);
-  for (int field = 0; field < 12; ++field) {
+  expected.u8(2).u8(3);
+  for (int field = 0; field < 15; ++field) {
     expected.u8(0);
   }
   expected.text("oracle over compression units").text("no unit was sampled").u64(0);
@@ -73,11 +73,13 @@ TEST(RecordCodecLayout, ARecordWithNoProvenanceIsTheDocumentedBytes) {
 TEST(RecordCodecLayout, EveryProvenanceFieldAndEveryExactFieldInItsPlace) {
   const ExactBitCorruption record = contracts::record_samples::exact();
   Layout expected;
-  expected.u8(1).u8(1);
+  expected.u8(2).u8(1);
   expected.u8(1).u32(11).u8(1).u32(5).u8(1).u32(1);
   expected.u8(1).u64(0x7f0012340000ULL).u8(1).u64(0x40000).u8(1).u64(123456789);
   expected.u8(1).text("compression").u8(1).u32(3).u8(1).u64(0xFEEDFACECAFEBEEFULL);
   expected.u8(1).u8(1).u8(1).u8(2).u8(1).u32(4).u32(16);
+  // Version 2: the package, the resolved decomposition, the footprint.
+  expected.u8(1).u32(1).u8(1).u32(64).u8(1).u64(std::uint64_t{32} << 20U);
   expected.u8(1).text("input against its regeneration").u32(128).u8(1);
   expected.u8(0).u64(0x1003).u64(0x1003).u64(1).u64(0x1000);
   expected.u64(8).u64(0).u64(8).u64(0x10ULL << 24U);
@@ -91,8 +93,8 @@ TEST(RecordCodecLayout, ANumericalRecordCarriesItsDoublesAsBitPatterns) {
   record.tolerance = 0.5;
   record.condition_number = std::numeric_limits<double>::infinity();
   Layout expected;
-  expected.u8(1).u8(2);
-  for (int field = 0; field < 12; ++field) {
+  expected.u8(2).u8(2);
+  for (int field = 0; field < 15; ++field) {
     expected.u8(0);
   }
   expected.text("momentum")
@@ -133,6 +135,9 @@ TEST(RecordCodecRoundTrip, EachOptionalFieldAloneSurvives) {
       [](Provenance& p, const Provenance& f) { p.isa = f.isa; },
       [](Provenance& p, const Provenance& f) { p.input_integrity = f.input_integrity; },
       [](Provenance& p, const Provenance& f) { p.duty = f.duty; },
+      [](Provenance& p, const Provenance& f) { p.physical_package = f.physical_package; },
+      [](Provenance& p, const Provenance& f) { p.decomposition = f.decomposition; },
+      [](Provenance& p, const Provenance& f) { p.footprint_bytes = f.footprint_bytes; },
   };
   for (std::size_t index = 0; index < setters.size(); ++index) {
     VerificationNotPerformed record = contracts::record_samples::not_performed();
@@ -150,23 +155,23 @@ TEST(RecordCodecDecode, NothingIsEmptyAndSaysSo) {
 }
 
 TEST(RecordCodecDecode, AnUnknownVersionIsTheAnswerEvenForOneByte) {
-  for (const std::uint8_t version : {0, 2, 255}) {
+  for (const std::uint8_t version : {0, 1, 3, 255}) {
     const DecodeError error = decode_error({static_cast<std::byte>(version)});
     EXPECT_EQ(error.fault, DecodeFault::kVersion) << int{version};
     EXPECT_EQ(error.detail, "byte 0 is format version " + std::to_string(version) +
-                                "; this build reads version 1");
+                                "; this build reads version 2");
   }
 }
 
 TEST(RecordCodecDecode, AVersionAloneIsTruncated) {
-  const DecodeError error = decode_error({std::byte{1}});
+  const DecodeError error = decode_error({std::byte{2}});
   EXPECT_EQ(error.fault, DecodeFault::kTruncated);
   EXPECT_EQ(error.detail, "the bytes end after the format version");
 }
 
 TEST(RecordCodecDecode, AnUnknownKindNamesItself) {
   for (const std::uint8_t kind : {0, 4, 200}) {
-    const DecodeError error = decode_error({std::byte{1}, static_cast<std::byte>(kind)});
+    const DecodeError error = decode_error({std::byte{2}, static_cast<std::byte>(kind)});
     EXPECT_EQ(error.fault, DecodeFault::kKind);
     EXPECT_EQ(error.detail,
               "byte 1 is kind " + std::to_string(kind) + "; the kinds are 1, 2 and 3");
@@ -184,10 +189,10 @@ TEST(RecordCodecDecode, TruncationNamesTheFieldItsOffsetAndWhatRemains) {
 }
 
 TEST(RecordCodecDecode, APresenceFlagThatIsNeitherZeroNorOneIsInvalidAtEveryField) {
-  static constexpr std::array<std::string_view, 12> kFields = {
-      "logical_cpu",   "physical_core", "numa_node",       "buffer_address",
-      "buffer_offset", "iteration",     "workload",        "workload_version",
-      "seed",          "isa",           "input_integrity", "duty"};
+  static constexpr std::array<std::string_view, 15> kFields = {
+      "logical_cpu",     "physical_core", "numa_node",        "buffer_address", "buffer_offset",
+      "iteration",       "workload",      "workload_version", "seed",           "isa",
+      "input_integrity", "duty",          "physical_package", "decomposition",  "footprint_bytes"};
   for (std::size_t field = 0; field < kFields.size(); ++field) {
     for (const std::uint8_t flag : {2, 0xFF}) {
       Bytes bytes = encode(contracts::record_samples::not_performed());
@@ -221,29 +226,29 @@ TEST(RecordCodecDecode, TheKindsOwnPresenceFlagsAreCheckedToo) {
 }
 
 TEST(RecordCodecDecode, ATextLengthPastTheLimitIsRefusedBeforeItIsTrusted) {
-  // Byte 14 is the length of `what` in a record without provenance.
+  // Byte 17 is the length of `what` in a record without provenance.
   const Bytes base = encode(contracts::record_samples::not_performed());
   Bytes bytes = base;
-  bytes[14] = std::byte{0x01};
-  bytes[15] = std::byte{0x04};  // 1025
+  bytes[17] = std::byte{0x01};
+  bytes[18] = std::byte{0x04};  // 1025
   DecodeError error = decode_error(bytes);
   EXPECT_EQ(error.fault, DecodeFault::kInvalid);
   EXPECT_EQ(error.detail,
-            "field 'what' at byte 14: a text of 1025 bytes, more than the 1024 a record carries");
+            "field 'what' at byte 17: a text of 1025 bytes, more than the 1024 a record carries");
 
   bytes = base;
-  for (std::size_t at = 14; at < 22; ++at) {
+  for (std::size_t at = 17; at < 25; ++at) {
     bytes[at] = std::byte{0xFF};
   }
   error = decode_error(bytes);
   EXPECT_EQ(error.fault, DecodeFault::kInvalid) << "no allocation of 2^64 - 1 bytes is attempted";
 
   bytes = base;
-  bytes[14] = std::byte{0x00};
-  bytes[15] = std::byte{0x04};  // 1024: allowed, and more than remain
+  bytes[17] = std::byte{0x00};
+  bytes[18] = std::byte{0x04};  // 1024: allowed, and more than remain
   error = decode_error(bytes);
   EXPECT_EQ(error.fault, DecodeFault::kTruncated);
-  EXPECT_EQ(error.detail.rfind("field 'what' at byte 22 needs 1024 byte(s), ", 0), 0U)
+  EXPECT_EQ(error.detail.rfind("field 'what' at byte 25 needs 1024 byte(s), ", 0), 0U)
       << error.detail;
 }
 

@@ -88,7 +88,12 @@ class ReferenceRunner final : public verification::SliceRunner {
         outputs_(aligned(out_stride_ * plan_.units, setup.line_bytes)),
         regenerated_(plan_.input_bytes),
         scratch_(plan_.scratch_bytes * setup.executor->threads()),
-        next_(setup.first_index) {}
+        next_(setup.first_index) {
+    lock_.policy = setup.lock;
+    lock_.outcome = setup.lock == verification::LockPolicy::kNone
+                        ? verification::LockOutcome::kNotLocked
+                        : verification::LockOutcome::kLocked;
+  }
 
   core::Result<SliceReport, RunnerError> run_slice(const SliceRequest& request) override {
     if (finished_) {
@@ -124,6 +129,11 @@ class ReferenceRunner final : public verification::SliceRunner {
   }
 
   [[nodiscard]] const Tally& total() const noexcept override { return total_; }
+  // The reference maps nothing, so nothing is refused: the policy as given and
+  // the outcome it names.
+  [[nodiscard]] const verification::MemoryLock& memory_lock() const noexcept override {
+    return lock_;
+  }
 
  private:
   [[nodiscard]] Provenance base() const {
@@ -227,6 +237,7 @@ class ReferenceRunner final : public verification::SliceRunner {
   std::vector<std::byte> scratch_;
   std::uint64_t next_;
   Tally total_;
+  verification::MemoryLock lock_;
   bool finished_ = false;
 };
 

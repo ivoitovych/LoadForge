@@ -111,7 +111,7 @@ add_test(NAME cli_worker_bad_args_message COMMAND loadforge --worker --slot 0)
 add_test(NAME cli_rerun_bad_args_code
          COMMAND sh -c "'$<TARGET_FILE:loadforge>' --rerun --cpu 0; test $? -eq 22")
 add_test(NAME cli_rerun_runs_a_unit_clean
-         COMMAND sh -c "'$<TARGET_FILE:loadforge>' --rerun --workload compression --seed 5 --footprint-bytes 1048576 --threads 1 --decomposition 0 --isa scalar --line-bytes 64 --version 1 --iteration 7 --cpu 0; test $? -eq 0")
+         COMMAND sh -c "'$<TARGET_FILE:loadforge>' --rerun --workload compression --seed 5 --footprint-bytes 1048576 --threads 1 --decomposition 0 --isa scalar --lock try --line-bytes 64 --version 1 --iteration 7 --cpu 0; test $? -eq 0")
 set_tests_properties(cli_worker_bad_args_message PROPERTIES
                      PASS_REGULAR_EXPRESSION "loadforge --worker: --workers: required")
 

@@ -41,6 +41,7 @@ WorkerWork a_work() {
   work.seed = 11;
   work.footprint_bytes = std::uint64_t{4} << 20U;
   work.line_bytes = 64;
+  work.lock = verification::LockPolicy::kTry;
   return work;
 }
 
@@ -52,6 +53,10 @@ verification::Provenance a_provenance() {
   where.iteration = 42;
   where.seed = 99;
   where.isa = simd::IsaPath::kScalar;
+  // Not the work's (a_work): the unit is the record's, and a test that gave both
+  // the same value could not tell which one the re-runner read.
+  where.decomposition = 7;
+  where.footprint_bytes = std::uint64_t{8} << 20U;
   return where;
 }
 
@@ -169,8 +174,9 @@ TEST(RealRerunner, TheProcessIsToldTheUnitTheRunsFactsAndTheRung) {
   const worker::RerunArgs& args = parsed.value();
   EXPECT_EQ(args.unit.workload, "compression");
   EXPECT_EQ(args.unit.seed, 99U) << "the record's, not the run's";
-  EXPECT_EQ(args.unit.footprint_bytes, std::uint64_t{4} << 20U) << "the run's, not the record's";
-  EXPECT_EQ(args.unit.decomposition, 1U);
+  EXPECT_EQ(args.unit.footprint_bytes, std::uint64_t{8} << 20U) << "the record's, not the run's";
+  EXPECT_EQ(args.unit.decomposition, 7U) << "the record's, not the run's: the output depends on it";
+  EXPECT_EQ(args.unit.lock, verification::LockPolicy::kTry) << "the run's, not the unit's";
   EXPECT_EQ(args.unit.threads, 2U) << "the rung's";
   EXPECT_EQ(args.unit.isa, simd::IsaPath::kScalar);
   EXPECT_EQ(args.unit.line_bytes, 64U);
@@ -178,6 +184,25 @@ TEST(RealRerunner, TheProcessIsToldTheUnitTheRunsFactsAndTheRung) {
   EXPECT_EQ(args.iteration, 42U);
   EXPECT_EQ(args.cpu, 5U) << "the rung's";
   EXPECT_EQ(args.unit.duty, (verification::DutyCycle{1, 1})) << "every check on";
+}
+
+// M2 contract corrections, 3: the unit is the record's, the decomposition and the
+// footprint included; a record that lacks either is not re-run from a guess.
+TEST(RealRerunner, AFindingWithoutTheDecompositionOrTheFootprintIsNotRerunFromAGuess) {
+  for (int missing = 0; missing < 2; ++missing) {
+    Rig rig;
+    rig.syscalls.fork_yields_child();
+    rig.syscalls.script_forks({{0, 0}});
+    verification::Provenance where = a_provenance();
+    if (missing == 0) {
+      where.decomposition.reset();
+    } else {
+      where.footprint_bytes.reset();
+    }
+    const int forks = rig.syscalls.fork_count();
+    EXPECT_EQ(rig.rerunner.rerun(a_finding(where), a_request()), RerunOutcome::kNotPerformed);
+    EXPECT_EQ(rig.syscalls.fork_count(), forks) << "nothing is started for " << missing;
+  }
 }
 
 TEST(RealRerunner, AChildWhoseExecFailedMustExitAndNothingIsStartedAfterIt) {

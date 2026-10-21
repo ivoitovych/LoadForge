@@ -132,13 +132,78 @@ struct SliceReport {
   std::uint64_t next_index = 0;
 };
 
+/// What the runner does about locking the working set in RAM (mlock). The
+/// controller chooses, per run, and the result records the choice and what came
+/// of it. Contract change of the M2 corrections, 2: until then the runner always
+/// locked, so a process that may not lock the footprint (an unprivileged user's
+/// allowance is 8 MiB by default) could not run the default 32 MiB, nor any
+/// sort configuration.
+///
+///   kRequire  lock the working set and the control state, or refuse the run
+///             (kResources). A page that is swapped out and back is a different
+///             physical page, so only a locked working set tests the memory the
+///             units were written to; this is the policy for a run that must
+///             say so. The outcome is kLocked.
+///   kTry      lock; if the kernel refuses the lock step (the allowance, or no
+///             permission), go on without it and say so: the outcome is
+///             kFellBack and the detail is the kernel's refusal in words. Every
+///             other refusal (the mapping, the node, the populate) is still
+///             kResources: only the lock is optional.
+///   kNone     do not lock. The outcome is kNotLocked.
+enum class LockPolicy : std::uint8_t { kRequire = 0, kTry = 1, kNone = 2 };
+
+[[nodiscard]] constexpr std::string_view describe(LockPolicy policy) noexcept {
+  switch (policy) {
+    case LockPolicy::kRequire:
+      return "require";
+    case LockPolicy::kTry:
+      return "try";
+    case LockPolicy::kNone:
+      return "none";
+  }
+  return "unrecognised lock policy";
+}
+
+/// What the runner did about locking: kLocked (the working set and every copy
+/// of the control state are locked), kNotLocked (the policy was kNone), or
+/// kFellBack (the policy was kTry and the kernel refused: not locked, and the
+/// detail says why). Encoded as these numbers wherever stored.
+enum class LockOutcome : std::uint8_t { kLocked = 0, kNotLocked = 1, kFellBack = 2 };
+
+[[nodiscard]] constexpr std::string_view describe(LockOutcome outcome) noexcept {
+  switch (outcome) {
+    case LockOutcome::kLocked:
+      return "locked";
+    case LockOutcome::kNotLocked:
+      return "not locked";
+    case LockOutcome::kFellBack:
+      return "not locked: the lock was refused";
+  }
+  return "unrecognised lock outcome";
+}
+
+/// The policy that was in force and what became of it; `detail` is empty
+/// unless the outcome is kFellBack, when it is the refusal in words
+/// (platform/memory.hpp's).
+struct MemoryLock {
+  LockPolicy policy = LockPolicy::kRequire;
+  LockOutcome outcome = LockOutcome::kLocked;
+  std::string detail;
+};
+
+[[nodiscard]] inline bool operator==(const MemoryLock& lhs, const MemoryLock& rhs) noexcept {
+  return std::tie(lhs.policy, lhs.outcome, lhs.detail) ==
+         std::tie(rhs.policy, rhs.outcome, rhs.detail);
+}
+
 /// Why a runner refused.
 ///
 ///   kConfiguration  the setup is wrong: a missing workload, oracle, executor
 ///                   or system-call seam; an oracle for another workload; a
 ///                   line size that is not a power of two of at least 8.
-///   kResources      the working set could not be allocated or placed. The
-///                   detail names the step (platform/memory.hpp's words).
+///   kResources      the working set could not be allocated or placed -- or,
+///                   under kRequire, locked. The detail names the step
+///                   (platform/memory.hpp's words).
 ///   kFinished       called after finish().
 enum class RunnerFault : std::uint8_t { kConfiguration, kResources, kFinished };
 
@@ -188,6 +253,9 @@ struct RunnerError {
 ///
 /// total() is the sum of every report returned so far.
 ///
+/// memory_lock() is the lock policy of the setup and its outcome, fixed when
+/// the runner was made.
+///
 /// Stopping: there is no stop call. The worker stops by not calling
 /// run_slice() again; a slice in progress completes, because its time is
 /// bounded by its size.
@@ -207,6 +275,7 @@ class SliceRunner {
       const SliceRequest& request) = 0;
   [[nodiscard]] virtual core::Result<SliceReport, RunnerError> finish() = 0;
   [[nodiscard]] virtual const Tally& total() const noexcept = 0;
+  [[nodiscard]] virtual const MemoryLock& memory_lock() const noexcept = 0;
 };
 
 /// Everything a runner is built from. The pointers are borrowed and must
@@ -219,11 +288,16 @@ class SliceRunner {
 ///                slot's input and output, and every ExactBitCorruption's
 ///                line_bytes.
 ///   base         the provenance every record starts from: where the worker
-///                runs (logical_cpu, physical_core, numa_node), the
-///                workload's name and version, the seed and the ISA path.
+///                runs (logical_cpu, physical_package, physical_core,
+///                numa_node: set only when the whole unit runs in one place,
+///                record.hpp), the workload's name and version, the seed, the
+///                ISA path, the resolved decomposition and the footprint.
 ///                iteration, buffer_address, buffer_offset, input_integrity
 ///                and duty are the runner's to set, per record.
 ///   first_index  the first unit's index.
+///   lock         whether the working set is locked in RAM (LockPolicy). The
+///                default, kRequire, is what the runner did before it had a
+///                choice.
 struct RunnerSetup {
   const workloads::Workload* workload = nullptr;
   const Oracle* oracle = nullptr;
@@ -233,6 +307,7 @@ struct RunnerSetup {
   std::uint32_t line_bytes = 64;
   Provenance base;
   std::uint64_t first_index = 0;
+  LockPolicy lock = LockPolicy::kRequire;
 };
 
 /// A runner for `setup`, or kConfiguration or kResources. Provided by the
