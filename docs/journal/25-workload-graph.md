@@ -130,7 +130,7 @@ this container did not have installed; it was installed with apt.
    output); `operations` is sixteen sweeps of `2E + (a + 1)V` floating-point operations
    plus one examination per edge. Both are estimates for rates, not measurements.
 
-## Intrinsics move to the primitives layer (2026-10-21)
+## Intrinsics move to the primitives layer (2026-10-21 06:10 UTC)
 
 The portability workflow refuses x86 intrinsics outside `src/primitives/simd/x86/` (and
 NEON outside `src/primitives/simd/arm/`); `src/workloads/graph/kernels.cpp` used both
