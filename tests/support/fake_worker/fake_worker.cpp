@@ -47,6 +47,10 @@
 //   exit0             Exit 0 with its finished record, at once.
 //   exit-error        An error record, then exit 1: the worker's own failure.
 //   segv, bus, abrt   Killed by SIGSEGV, SIGBUS or SIGABRT.
+//   abort-call        Killed by SIGABRT from a real call to abort().
+//   bus-mapping       Killed by SIGBUS from reading a mapped file past its
+//                     truncated end: a software cause for a hardware-looking
+//                     signal.
 //   hang              Alive, silent, descriptors held open: no beat, no read.
 //   spin              Beats with a fresh timestamp and never advances progress.
 //   close-records     Closes its record pipe, works on, exits 0.
@@ -132,6 +136,8 @@ enum class Behaviour : std::uint8_t {
   kSegv,
   kBus,
   kAbort,
+  kAbortCall,
+  kBusMapping,
   kHang,
   kSpin,
   kCloseRecords,
@@ -149,7 +155,7 @@ struct Named {
   Behaviour behaviour;
 };
 
-constexpr std::array<Named, 18> kCatalogue{{
+constexpr std::array<Named, 20> kCatalogue{{
     {"complete", Behaviour::kComplete},
     {"outlast", Behaviour::kOutlast},
     {"slow", Behaviour::kSlow},
@@ -158,6 +164,8 @@ constexpr std::array<Named, 18> kCatalogue{{
     {"segv", Behaviour::kSegv},
     {"bus", Behaviour::kBus},
     {"abrt", Behaviour::kAbort},
+    {"abort-call", Behaviour::kAbortCall},
+    {"bus-mapping", Behaviour::kBusMapping},
     {"hang", Behaviour::kHang},
     {"spin", Behaviour::kSpin},
     {"close-records", Behaviour::kCloseRecords},
@@ -371,7 +379,7 @@ void write_raw(int fd, std::span<const std::byte> bytes) {
 /// system call, below every interceptor, and the signal is sent to this thread
 /// the same way. No core is written: a test that faults on purpose has no use
 /// for one, and a core dump changes the status word the test reads.
-[[noreturn]] void die_by(int signal) {
+void arm_default_disposition(int signal) {
   const rlimit none{0, 0};
   ::setrlimit(RLIMIT_CORE, &none);
   ::prctl(PR_SET_DUMPABLE, 0);  // NOLINT(cppcoreguidelines-pro-type-vararg)
@@ -386,11 +394,45 @@ void write_raw(int fd, std::span<const std::byte> bytes) {
   ::sigemptyset(&unblock);
   ::sigaddset(&unblock, signal);
   ::pthread_sigmask(SIG_UNBLOCK, &unblock, nullptr);
+}
+
+[[noreturn]] void die_by(int signal) {
+  arm_default_disposition(signal);
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
   ::syscall(SYS_tgkill, ::getpid(), ::gettid(), signal);
   while (true) {
     ::pause();
   }
+}
+
+/// Dies by SIGABRT the way software does: by calling abort(), with the
+/// disposition armed as die_by arms it. The signal is the same as die_by's;
+/// what differs is that the process raised it through the library, which is
+/// what a failed assertion or an uncaught exception does.
+[[noreturn]] void die_by_abort() {
+  arm_default_disposition(SIGABRT);
+  std::abort();
+}
+
+/// Dies by SIGBUS for a software reason: a file mapped, truncated, and read
+/// past its new end. Nothing in the hardware is involved, and the kernel
+/// reports the same signal it would for a memory error. An anonymous file
+/// (memfd) keeps the test off the filesystem.
+[[noreturn]] void die_by_truncated_mapping() {
+  arm_default_disposition(SIGBUS);
+  const long page = ::sysconf(_SC_PAGESIZE);
+  const auto length = static_cast<std::size_t>(page);
+  const int fd = ::memfd_create("loadforge-fake-worker", 0);
+  if (fd < 0 || ::ftruncate(fd, page) != 0) {
+    ::_exit(kExitWorkerError);
+  }
+  void* const map = ::mmap(nullptr, length, PROT_READ, MAP_SHARED, fd, 0);
+  if (map == MAP_FAILED || ::ftruncate(fd, 0) != 0) {
+    ::_exit(kExitWorkerError);
+  }
+  // The page is now past the end of the file: touching it is a SIGBUS.
+  static_cast<void>(*static_cast<const volatile unsigned char*>(map));
+  ::_exit(kExitWorkerError);  // Not reached; a distinct exit if it ever is.
 }
 
 /// What one look at the control pipe found.
@@ -717,6 +759,10 @@ int Worker::run() {
       die_by(SIGBUS);
     case Behaviour::kAbort:
       die_by(SIGABRT);
+    case Behaviour::kAbortCall:
+      die_by_abort();
+    case Behaviour::kBusMapping:
+      die_by_truncated_mapping();
     case Behaviour::kHang:
       // Alive and silent, every descriptor still open: no end of file will
       // come, so only the heartbeat can tell.

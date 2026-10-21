@@ -13,7 +13,7 @@ namespace loadforge::platform {
 /// of them are terminations. Collapsing them -- the usual `if (status != 0)` --
 /// loses the distinction this project exists to report: a worker that computed a
 /// wrong answer and exited 1 is a verification failure, a worker killed by
-/// SIGBUS is a hardware event, and they must never be reported as the same
+/// SIGBUS is a process fault, and they must never be reported as the same
 /// thing (docs/PLAN.md §4.6).
 enum class Termination : std::uint8_t {
   kExited,        ///< Ran to completion and returned an exit code.

@@ -305,6 +305,28 @@ regenerable in isolation, without replaying the whole run.
 
 ---
 
+## 7a. A crash signal is a fault, not a cause
+
+SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE and SIGTRAP tell the controller that a worker
+process died. They do not tell it why. The controller reports such a death as a **process
+fault that may have software or hardware causes**, names the raw signal, and keeps the
+timeline up to it.
+
+Software produces every one of these signals: `abort()` raises SIGABRT, a read past the
+end of a truncated file mapping raises SIGBUS, a null pointer raises SIGSEGV, and
+`raise(SIGTRAP)` is a breakpoint. The kernel reports the same signal when a memory module
+fails. So no operator-facing text says "hardware" about a crash signal, and nothing
+downstream may read `kFault` as evidence of defective hardware.
+
+The verdict on hardware belongs to verification and isolation (§7): re-running the failed
+work on another core, single-threaded, with regenerated data, and correlating the result
+with telemetry. Until that has run, the hardware verdict for a crashed worker is
+**unattributed**. The supervision catalogue holds a worker that calls `abort()` and one
+that takes a software-induced SIGBUS, and asserts both are a fault with the raw signal and
+no hardware attribution in the report text.
+
+---
+
 ## 8. Error records carry full provenance
 
 An error report without provenance cannot be triaged. Every record carries the common

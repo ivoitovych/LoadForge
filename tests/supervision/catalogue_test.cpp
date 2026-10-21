@@ -43,6 +43,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -68,6 +69,7 @@
 #include "core/duration.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
+#include "reporters/console.hpp"
 #include "resources/cgroup.hpp"
 #include "resources/cgroup_oom_record.hpp"
 #include "topology/cpu_topology.hpp"
@@ -286,7 +288,7 @@ TEST(MisbehaviourCatalogue, ExitZeroWithItsRecordIsCompletionAndLeavesNoZombie) 
   EXPECT_TRUE(all_clean(report));
 }
 
-// --- Exit non-zero: a worker error, not a hardware fault --------------------
+// --- Exit non-zero: a worker error, not a fault signal --------------------
 
 TEST(MisbehaviourCatalogue, ExitNonZeroIsAWorkerErrorAndNotAFault) {
   const Selector selector{"*=outlast,1=exit-error"};
@@ -332,6 +334,51 @@ INSTANTIATE_TEST_SUITE_P(MisbehaviourCatalogue, FaultSignal,
                                          std::pair<std::string, int>{"abrt", SIGABRT}),
                          [](const testing::TestParamInfo<std::pair<std::string, int>>& info) {
                            return info.param.first;
+                         });
+
+// --- A crash signal names a fault, not its cause (review EXT-03) -----------
+//
+// abort() and a read past a truncated mapping are both the program's own
+// doing, and the kernel reports them with the same signals a failing memory
+// module would. The controller records the signal and calls it a fault; it has
+// no way to know more, and the words it prints must not claim to.
+
+class RealProcessSoftwareFault : public testing::TestWithParam<std::pair<std::string, int>> {};
+
+TEST_P(RealProcessSoftwareFault, IsAFaultWithTheRawSignalAndNoHardwareAttribution) {
+  const auto [name, signal] = GetParam();
+  const std::string selection = "*=outlast,1=" + name;
+  const Selector selector{selection.c_str()};
+  Recorder recorder;
+  const RunReport report = run_fake(workloads(2, kNeverMs), fake_options(2000), recorder);
+  ASSERT_EQ(report.workers.size(), 2U);
+  const WorkerReport& faulted = report.workers[1];
+  EXPECT_EQ(faulted.fate, WorkerFate::kFault) << describe(faulted.fate);
+  EXPECT_EQ(faulted.termination.rfind("killed by signal " + std::to_string(signal), 0), 0U)
+      << faulted.termination;
+  EXPECT_FALSE(has_record(faulted, "finished: "));
+
+  // Every word the operator is given about this worker: the controller's own
+  // line, the raw termination, and what the worker sent. None may attribute a
+  // cause the signal cannot establish.
+  std::ostringstream console;
+  reporters::ConsoleReporter(console).run_finished(report);
+  std::string text = console.str();
+  std::ranges::transform(text, text.begin(),
+                         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  EXPECT_NE(text.find("fault"), std::string::npos) << text;
+  EXPECT_EQ(text.find("hardware"), std::string::npos) << text;
+  EXPECT_EQ(text.find("defective"), std::string::npos) << text;
+  EXPECT_EQ(std::string(describe(faulted.fate)).find("hardware"), std::string::npos);
+}
+
+INSTANTIATE_TEST_SUITE_P(RealProcessCatalogue, RealProcessSoftwareFault,
+                         testing::Values(std::pair<std::string, int>{"abort-call", SIGABRT},
+                                         std::pair<std::string, int>{"bus-mapping", SIGBUS}),
+                         [](const testing::TestParamInfo<std::pair<std::string, int>>& info) {
+                           return info.param.first == "abort-call"
+                                      ? std::string("AbortCall")
+                                      : std::string("TruncatedMapping");
                          });
 
 // --- Silent hang: detected by heartbeat staleness, not by end of file -------
