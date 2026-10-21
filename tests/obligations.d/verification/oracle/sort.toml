@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/sort and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/sort"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The independent oracle for sort, from the specification alone: it checks, \
+never sorts. P1: each of the three steps and each of its outcomes -- an index \
+out of range, an index repeated, a key that differs from the input key its \
+index names, a pair out of order, and agreement -- and the creation refusals \
+(a configured decomposition, the plan's decomposition, the plan's sizes). P3: \
+every chunk count and the default, keys at both ends of the unsigned range and \
+either side of the sign bit, all keys equal, already sorted and reversed, the \
+window cut short by the end of the keys' region, an index of exactly kKeys. P4 \
+is the subject: the exact verdict of every corruption -- every bit of a key (a \
+single-bit difference at that byte), two bits in a word, bits within a line, \
+across lines, every bit of an index (a range or a repeat, never a difference), \
+a pair swapped, equal keys misordered, input corrupted before compute() \
+(agreement) and after it (a key mismatch). T3 holds the verdict against a \
+second, plain reading of the specification (std::sort builds the right output) \
+over random corruptions of tied and untied units. T5b: evidence of the wrong \
+size in each of six ways, and scratch that cannot be had, are NotChecked with \
+nothing compared, whatever the output holds. No P2: the one fallible call is \
+the scratch allocation, reached through the allocator seam by T5b."""

@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/integrity and nothing else.
+
+[[module]]
+path     = "src/verification/integrity"
+classes  = ["P1", "P2", "P3", "P4"]
+tiers    = ["T1", "T2", "T5", "T5b"]
+provides = ["SliceRunnerContract"]
+consumes = ["WorkloadContract", "OracleContract", "ExecutorContract"]
+note     = """
+The provider of verification/runner.hpp: a workload's units run one after \
+another in slots of one working set, each inside the input-integrity bracket \
+of verification.md §4a (write, open, compute, check, close), with the \
+values verification depends on -- seed, unit index, duty cycle, line size -- \
+kept three times under PLAN F18 rule 3. \
+\
+P4 is the subject, at T5 and T5b (tests/fault_injection/): the runner's own \
+memory is changed at each moment the bracket separates, and the record \
+asserted -- a slot's input changed before it is read (opening check, \
+kCorruptBeforeConsumption, the unit neither computed nor given to the \
+oracle), changed while it is read (the oracle agrees; only the closing check \
+sees it, kCorruptDuringConsumption), a wrong output (Side::kOutput, the \
+bracket intact), a bounded workload's wrong output (a \
+NumericalVerificationFailure, no bits) -- each input finding at every bit \
+classification, with the line size changing the answer. T5b: NotChecked, an \
+oracle that throws a std::exception or anything else, a verdict its \
+contract forbids, a duty cycle that samples or brackets nothing, a bracket \
+that stopped every sampled unit, a run that computed nothing: each a \
+VerificationNotPerformed and never a wrong result. The control state: a copy \
+that fails its checksum is excluded and repaired, a verified copy outvoted \
+is repaired, fewer than two verified copies or verified copies that \
+disagree stop the run with a VerificationNotPerformed; a corrupted stored \
+seed or index under a running runner changes no record. \
+\
+P2 (T2, tests/unit/): every step platform/memory takes for each of the four \
+mappings the runner makes -- the working set and the three copies -- \
+refused through the system-call seam with each errno mmap, mbind, \
+madvise(MADV_POPULATE_WRITE) and mlock document, through a decorator over \
+the shared fake that fails the n-th call of a kind; each a kResources error \
+naming the mapping and the step, and nothing left mapped or locked. \
+\
+P3 (T1): the layout at every line size from 8 to past a page, sizes already \
+whole lines and one byte, the largest working set that fits and every sum \
+that overflows a size_t; the comparison's window clipped at the end and at \
+kMaxWindowBytes, the popcount past it; text past kMaxTextBytes cut to fit; \
+the unit index wrapping at 2^64. \
+\
+P5 is not declared: the runner starts no thread and runs no two units at \
+once -- the executor is handed to each unit's compute(), which owns that \
+concurrency (executor.hpp). The tests run the runner over a threaded \
+executor too, under TSan in CI. \
+\
+Contracts: SliceRunnerContract runs against make_slice_runner() over the \
+real kernel; WorkloadContract, OracleContract and ExecutorContract run \
+against this module's own doubles (an exact and a bounded workload, their \
+oracles written from their specifications, a serial and a threaded \
+executor), so the doubles every runner test is built on read the contracts \
+as their providers must.\
+"""

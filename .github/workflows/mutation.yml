@@ -79,6 +79,27 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           sha256sum "$deb"
 
+  plan:
+    # One shard per module under src/ (tools/mutation-shard.py). The first run
+    # over the whole project as one job reached GitHub's six-hour job limit and
+    # was cancelled with no report at all (docs/JOURNAL.md §1.26, §2.28): one
+    # job per module bounds each, reports each, and lets one module's failure
+    # be read as that module's. Derived from the tree on every run, so a new
+    # module is swept from its first commit; the plan also fails if any
+    # allowlist entry lies in no shard, where nothing would ever review it.
+    name: shard plan
+    if: '!inputs.discover_pin'
+    runs-on: ubuntu-24.04
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - id: plan
+        run: |
+          set -euo pipefail
+          shards="$(./tools/mutation-shard.py plan)"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+
   mull:
     # At 100% coverage the coverage number stops carrying information: it can no
     # longer tell a thorough test from one that executes a line and asserts
@@ -88,7 +109,9 @@ jobs:
     # GATE: zero unexplained surviving mutants (docs/PLAN.md §7.3). Enforced by
     # tools/mutation-gate.py, which also fails if Mull cannot run: a gate that
     # degrades to a no-op when its tool is missing is a green tick with nothing
-    # behind it.
+    # behind it. Each shard judges itself (--scope): its mutants must all lie in
+    # its own module, and it applies, and finds stale, only its own allowlist
+    # entries. The verdict job below fails the run if any shard did not pass.
     #
     # The integration step below runs BEFORE the gate is pointed at the project's
     # own tests, and it is the more important of the two. The gate's fixture
@@ -96,13 +119,28 @@ jobs:
     # "Replaced" -- because the fixtures were written from the same wrong idea of
     # Mull's output as the parser was. Only the real binary can falsify that, so
     # the real binary runs first, against a program with a known-surviving
-    # mutant, and the gate is not trusted on this repository until it has.
+    # mutant, and the gate is not trusted on this repository until it has. It
+    # also proves, on the real Mull, the three things sharding depends on: the
+    # test program's arguments reach it, a hung mutant is killed and counted
+    # killed, and a report judged under a scope that does not hold it is refused.
     #
     # STATUS: pinned (see env above) and scheduled weekly. A dispatch may name
     # another release, but only together with its own checksum.
-    name: zero unexplained surviving mutants
+    name: zero unexplained surviving mutants (${{ matrix.shard }})
+    needs: plan
     if: '!inputs.discover_pin'
     runs-on: ubuntu-24.04
+    # Each shard is estimated at about ten minutes, most of it installing and
+    # building (docs/JOURNAL.md §1.26). An hour is ample, and a shard that
+    # needs more has stalled: it fails at an hour instead of holding a runner
+    # for six.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    env:
+      SHARD: ${{ matrix.shard }}
     steps:
       - name: An overriding URL comes with its own checksum
         # The pin is used unless a dispatch supplies both. A URL alone would be
@@ -118,18 +156,75 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ninja-build clang-18 llvm-18
+          sudo apt-get install -y -qq ninja-build clang-18 llvm-18 strace
           curl -fsSL --retry 3 "${{ inputs.mull_deb_url || env.MULL_DEB_URL }}" -o /tmp/mull.deb
           echo "${{ inputs.mull_deb_sha256 || env.MULL_DEB_SHA256 }}  /tmp/mull.deb" | sha256sum --check --strict
           sudo dpkg -i /tmp/mull.deb
           mull-runner-18 --version
+      - name: This shard's Mull configuration
+        # Read twice, through MULL_CONFIG: by the compiler plugin, which then
+        # builds in only this shard's mutants, and by mull-runner, which then
+        # runs only those. Outside the checkout, so no mull.yml Mull might find
+        # by searching upwards from a build directory can stand in for it.
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/mull-$SHARD.yml"
+          ./tools/mutation-shard.py mull-config "$SHARD" > "$config"
+          cat "$config"
+          echo "MULL_CONFIG=$config" >> "$GITHUB_ENV"
       - env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug -DCMAKE_CXX_FLAGS="-fpass-plugin=/usr/lib/mull-ir-frontend-18 -g -grecord-command-line"
-      - run: cmake --build --preset debug
+      - run: cmake --build --preset debug --target loadforge_unit_tests
       - name: The gate agrees with the real Mull
         # Compiles a known-surviving mutant, runs Mull, and checks that the gate
         # parses the exact mutator identifier and that a reviewed key for one
         # operator does not excuse a different operator at the same location.
+        # It sets its own MULL_CONFIG.
         run: ./tests/tools/mutation_integration.sh
+      - name: The tests every mutant runs create no process
+        # Every mutant runs the in-process tests only; the ones that create a
+        # process are named RealProcess* and left out, because a child a
+        # mutant leaves alive is the one thing Mull's timeout cannot reach
+        # (tools/mutation-shard.py). This checks the name against what each
+        # test really does, on this binary: the rest create no process, and
+        # each RealProcess* test creates one.
+        run: ./tools/mutation-shard.py check-processes ./build/debug/tests/loadforge_unit_tests
       - name: Run mutants and enforce the gate
-        run: ./tools/mutation-gate.py ./build/debug/tests/loadforge_unit_tests
+        run: |
+          set -euo pipefail
+          scope_args=()
+          scopes="$(./tools/mutation-shard.py scope "$SHARD")"
+          for path in $scopes; do scope_args+=(--scope "$path"); done
+          filter="$(./tools/mutation-shard.py gtest-filter)"
+          ./tools/mutation-gate.py ./build/debug/tests/loadforge_unit_tests \
+            "${scope_args[@]}" --test-arg="--gtest_filter=$filter" 2>&1 | tee "$RUNNER_TEMP/gate.log"
+      - name: Report the verdict
+        if: always()
+        run: |
+          {
+            echo "### Mutation shard \`$SHARD\`"
+            echo '```'
+            grep -E '^(mutation gate|  (UNEXPLAINED|STALE|NOT-COVERED|MUTANT OUTSIDE))' \
+              "$RUNNER_TEMP/gate.log" || echo "the gate did not run"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: mutation-${{ matrix.shard }}
+          path: build/mutation/
+          if-no-files-found: ignore
+
+  verdict:
+    # One result for the whole sweep. A matrix job's own result is already
+    # failure when any shard fails, but a run whose plan failed would skip every
+    # shard, and "skipped" is not "passed": this job fails on anything but
+    # every shard succeeding.
+    name: every shard passed
+    needs: [plan, mull]
+    if: always() && !inputs.discover_pin
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "plan: ${{ needs.plan.result }}, shards: ${{ needs.mull.result }}"
+          [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.mull.result }}" = success ]

@@ -1,0 +1,10 @@
+9:name=systemd:/
+8:pids:/
+7:blkio:/
+6:freezer:/
+5:devices:/
+4:memory:/process_api/01a15955-4d19-71df-841f-5b4e2244464e/claude-code-bash
+3:cpuset:/
+2:cpuacct:/
+1:cpu:/
+0::/

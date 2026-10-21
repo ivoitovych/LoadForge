@@ -2,12 +2,39 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/compression and nothing else.
 
 [[module]]
-path    = "src/workloads/compression"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the compression specification alone (spec.hpp, ADR 0004): the LZ4 \
-bound, the output header and its magic, each tested in \
-tests/contracts/workloads/. The compression stream takes this row over with \
-the workload and owes what IMPLEMENTATION §3 lists for it -- P4 and P5, and \
-T3, T4, T5, T5b, T6 -- with provides = ["WorkloadContract"]."""
+path     = "src/workloads/compression"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+fixtures = ["lz4-workload"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+The compression workload (F14): an LZ4-block compressor writing spec.hpp's \
+output, the input generator over Philox, and the factory; spec.hpp's own \
+definitions stay tested in tests/contracts/workloads/. \
+P1: the compressor's match/no-match and extension loop, each length field's \
+escape, the last sequence; the generator's walk; each refusal of the factory. \
+P3: empty, one-byte, four-byte, twelve- and thirteen-byte inputs (the \
+shortest block with a match); literal and match lengths either side of 15 and \
+of each 255 step; the last match exactly twelve bytes before the end and one \
+byte later; exactly five last literals; incompressible input at the full \
+64 KiB block; offset 65 535 and the first that cannot be coded; the bound on \
+the inputs closest to it; footprint exactly one unit and one byte less; \
+decomposition 0, 1, 2 and the largest; every ISA path. \
+P4: what the specification lets an output be judged -- agreement, each way a \
+block breaks the format, the wrong length, non-zero padding, the wrong \
+decoded size or bytes, and evidence of the wrong size not checked -- each \
+produced by corrupting a real unit's output and judged by the workload's own \
+test decoder, written from the format document and checked against blocks \
+the real lz4 1.9.4 tool wrote (T3, F21); T5 asserts which check fired and \
+where, T5b that wrong-size evidence is not checked. The module itself \
+classifies nothing: the classifying oracle is stream 03's. \
+P2 is absent: no system call, and the only allocation is create()'s, where \
+std::bad_alloc propagates as in every factory in the tree. P5 is absent: a \
+unit is one task, the workload holds no mutable state, and verification \
+concurrent with compute is the runner's (stream 02). \
+T6: BitExact at 1, 2, 3, 4 and 7 threads, across runs, scratch contents, \
+footprints and decomposition 0 or 1, and against committed bytes on every \
+architecture CI builds; no decomposition but 1 is accepted. \
+WorkloadContract runs against the workload, and ExecutorContract against the \
+workload's own three executors, in tests/unit/workloads/compression/."""
