@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/golden and nothing else.
+
+[[module]]
+path     = "src/verification/golden"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T6"]
+fixtures = ["golden/verification/golden/golden_mock-scalar.golden"]
+consumes = ["WorkloadContract"]
+note     = """
+Golden vectors (verification.md §4): the file format written down in \
+golden.hpp, recording a vector from a workload -- each unit's input and \
+output digest and a digest of all outputs, CRC-64 -- and comparing a recorded \
+vector with a fresh one into a regression report that names what changed. \
+A tripwire, not an oracle: the report is its own type with no conversion to \
+an ErrorRecord (asserted at compile time), so a golden mismatch can never \
+reach the record channel or fault isolation as a hardware fault. \
+\
+P1: every verdict -- unchanged, declared change (the version moved, with or \
+without bits), changed under the same version, not comparable (each key \
+field alone), nothing compared (an empty unit list and a zero count, each \
+alone) -- and every line of the file accepted and refused, each refusal with \
+its line number. \
+\
+P3: the largest version, footprint and decomposition, the smallest name and \
+resolved decomposition, seed 0, a decimal one past 2^32 - 1 and 2^64 - 1, \
+leading zeros, a sign, an empty value, digests one digit short and long, \
+upper case, and the characters either side of each digit range; a file \
+without a final newline, comments and empty lines anywhere, and anything \
+after the digest refused. Recording zero units is refused. \
+\
+No P4: a golden mismatch is a regression report, not a verification \
+outcome, and the module makes no error record. \
+\
+T6 (tests/determinism/verification/golden): a vector recorded at 1, 2, 3, 4 \
+and 7 threads, on repeat, and at five decompositions of a BitExact workload \
+is the same; the committed vector, recorded from this module's mock with \
+the command and the machine in its header, is reproduced at every thread \
+count -- on x86-64 and ARM64 in CI, which makes it a cross-architecture \
+check of Philox, the workload contract, CRC-64 and the format -- and a \
+declared change against it is reported as one, never as a fault. \
+\
+consumes WorkloadContract: the golden tests run on a mock workload of this \
+module's own (tests/unit/verification/golden/mock_workload.hpp), and the \
+provider's suite runs against it there.\
+"""

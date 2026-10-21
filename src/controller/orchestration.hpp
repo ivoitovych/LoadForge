@@ -80,7 +80,7 @@ struct ControllerError {
 ///
 /// It beats again after every fork, in the spawn loop, because workers that
 /// are already running watch slot 0 while the rest are still being created,
-/// and a spawn can take longer than the staleness allowance (journal §2.31).
+/// and a spawn can take longer than the staleness allowance (journal §2.33).
 /// Each worker's allowance for a first heartbeat, and the clock for its lack
 /// of progress, run from its own launch.
 ///

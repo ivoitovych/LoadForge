@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/telemetry/sources/power and nothing else.
+
+[[module]]
+path             = "src/telemetry/sources/power"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2"]
+fixtures         = ["sysfs/powercap/intel-two-packages", "sysfs/powercap/perf-psys-only", "sysfs/powercap/perf-two-packages", "sysfs/powercap/perf-one-package", "sysfs/powercap/absent", "sysfs/powercap/malformed-energy", "sysfs/powercap/malformed-scale"]
+fixture_builders = ["tests/unit/telemetry/sources/power/power_test.cpp"]
+provides         = ["SourceContract"]
+note             = """
+Package power by two providers with different failures and different fixes \
+(F3): powercap's energy_uj (root-only on patched kernels, wraps at \
+max_energy_range_uj, which is the metric's modulus) and the power PMU \
+through perf_event_open. P7 is the six states for each: present (committed \
+trees; the PMU description is a capture of the development VM, which has \
+only energy-psys, so that one is the real 'absent' of a missing package \
+event), absent, denied (a refused open), malformed, vanished, and wraps \
+(262143328000 then 500, a delta of 1350 across the range). The remedy is \
+the failing provider's: a denied energy_uj advises privilege or read access \
+and never CAP_PERFMON; a denied perf open advises CAP_PERFMON or a lower \
+paranoid level and never a file fix; when both fail they are reported \
+together, labelled, and a provider that merely lacks the interface \
+contributes no advice. P1 is the walk of zones (a zone that is not a \
+package is skipped), the choice of provider per package, and the ranking of \
+two failures. P2 is every errno of perf_event_open for the power PMU's \
+counter, a failing reset and enable, and a failing read. P3 is the 32-bit \
+PMU type, the scale (zero, negative, above the largest safe factor, the \
+largest accepted) and the energy at and one below the range."""

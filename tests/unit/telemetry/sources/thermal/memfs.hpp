@@ -174,9 +174,6 @@ class MemFs final : public platform::Syscalls {
   core::Result<platform::Reaped, platform::SyscallError> wait_any() override {
     return unsupported("wait", {});
   }
-  core::Result<bool, platform::SyscallError> has_exited(pid_t /*pid*/) override {
-    return unsupported("waitid", {});
-  }
   core::Result<core::Ok, platform::SyscallError> send_signal(pid_t /*pid*/,
                                                              int /*signal*/) override {
     return unsupported("kill", {});
@@ -238,6 +235,17 @@ class MemFs final : public platform::Syscalls {
     return unsupported("sigaction", {});
   }
   pid_t process_id() override { return 1; }
+  core::Result<int, platform::SyscallError> open_perf_event(
+      const platform::PerfEventSpec& /*spec*/) override {
+    return unsupported("perf_event_open", {});
+  }
+  core::Result<core::Ok, platform::SyscallError> control_perf_event(
+      int /*fd*/, platform::PerfAction /*action*/) override {
+    return unsupported("ioctl", {});
+  }
+  core::Result<platform::PerfCount, platform::SyscallError> read_perf_count(int /*fd*/) override {
+    return unsupported("read", {});
+  }
   core::Result<std::optional<platform::Reaped>, platform::SyscallError> reap_any_nonblocking()
       override {
     return unsupported("waitpid", {});

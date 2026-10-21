@@ -262,7 +262,7 @@ core::Result<std::optional<int>, ControllerError> Run::spawn() {
   // spawn can take longer than the staleness allowance on a loaded machine;
   // the workers already running watch slot 0 meanwhile, and a frozen beat
   // would have them leave as "controller lost" while it is alive and forking
-  // (journal §2.31). The last launch is also when the run begins: `started_`
+  // (journal §2.33). The last launch is also when the run begins: `started_`
   // is overwritten by each, so it ends as the last worker's.
   std::optional<ControllerError> clock_failure;
   const auto launched = [this, &clock_failure](
