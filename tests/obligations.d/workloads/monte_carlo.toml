@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/workloads/monte_carlo and nothing else.
+
+[[module]]
+path     = "src/workloads/monte_carlo"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6"]
+fixtures = ["workloads/monte_carlo"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+The Monte Carlo workload and its chunk kernels. P1: the kernels' lane loops \
+and the chunk loop (a chunk length of 16384 adds no chunk after the first; \
+the others add several), the three refusals of create() and their order. P3: \
+the key domain (0 and 2^64-1 and every pattern between are computed on), the \
+footprint at one byte under a unit, a unit, and the largest value, every \
+chunk length and its neighbours, and the sums at their extremes. There is no \
+P2: the module makes no system call and allocates nothing in compute(). \
+\
+P4 is not a verifier the module contains but what the module owes the \
+verifier: the oracle stream's check is the specification's, and T5 injects \
+corruption into a unit's output (every bit from the tolerance's floor up, \
+NaN, infinity, zero, the smallest-batch rule), into its input (caught only \
+against the regenerated input, as the input-integrity bracket does) and into \
+the work (a dropped task), then asserts the classification a test-side copy \
+of the specified check gives -- and pins the floor below which a flipped bit \
+is not seen. T5b makes that check impossible (evidence of the wrong size) \
+and asserts NotChecked with nothing compared. \
+\
+T3 is a scalar replay written in tests/oracle from the specification's own \
+sample functions, with an exact 128-bit sum; T4 holds the sums to the \
+integral's mean and spread and the batches to independence; T6 sweeps 1, 2, \
+3, 4 and 7 threads for fixed chunk length and path, bounds the difference \
+across chunk lengths and paths, and compares golden sums made by a Python \
+implementation (tests/fixtures/workloads/monte_carlo/make_golden.py) for the \
+orders of 1, 2 and 4 lanes. WorkloadContract runs against the implementation \
+for the scalar path and this machine's vector path; ExecutorContract runs \
+against the module's own serial and threaded executors."""

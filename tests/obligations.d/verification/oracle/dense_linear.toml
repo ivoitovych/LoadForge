@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/dense_linear and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/dense_linear"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The independent oracle for dense_linear, written from \
+workloads/dense_linear/spec.hpp alone: one entry of each of grid x grid \
+tiles of C, drawn from Philox by the unit index alone, each checked as a \
+naive scalar dot product against residual's derived tolerance. \
+\
+P1: the factory's four refusals one at a time, the size checks, the input \
+range check's three outcomes, a failure kept or not, the worst of several \
+(a NaN before a number, the later NaN never over the first, a greater \
+ratio, a tie keeping the first), a condition number present or absent. \
+P3: every grid from 1 to 256 and 0, 3 and 512 refused; every panel depth; \
+input entries at -1 (inside: entry_value(0) is -1), one step below -1, 1, \
+1.5, NaN and both infinities; outputs NaN, signalling NaN, both \
+infinities; ratios that overflow; a zero row, where the condition number \
+does not exist and the tolerance is the underflow term alone. \
+\
+P4 is the module's subject. OracleContract (provides) runs against the \
+oracle with good units whose exact product is known -- the spec's own \
+dyadic inputs with C computed in 128-bit integers and rounded once, plus an \
+integer-valued and a small-dyadic unit -- never kernel output, and with nine \
+wrong ones: single-bit flips (exponent, sign, top significand) and a NaN \
+and an infinity in sampled entries, a lost tile, C transposed, C = BA, and \
+every entry off by 2^-30. T3 adds every one of 43 evaluation orders a \
+correct kernel may use, agreed with, and the exact product agreed with at \
+every entry. T5 classifies 1,184 single-bit flips of sampled entries: sign \
+and exponent always a BoundedMismatch naming the entry, the comparison \
+sharp around the bound; the bound breached at (1 + eps) and held at \
+(1 - eps), ratio checked (M2b exit criterion 3); every entry caught at \
+grid = 256 where the default grid does not look; and the \
+NumericalVerificationFailure built from the verdicts has no bit fields, \
+asserted at compile time against the record kind that has them (M2b P4 \
+row). T5b: input entries the derivation cannot use, anywhere in A or B, \
+and evidence of the wrong size, are NotChecked with nothing compared, and \
+become VerificationNotPerformed with no provenance invented.\
+"""

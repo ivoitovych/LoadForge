@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/simd/arm and nothing else.
+
+[[module]]
+path    = "src/primitives/simd/arm"
+classes = ["P1", "P3"]
+tiers   = ["T1", "T6"]
+note    = """
+The NEON panel kernel of the dense-linear workload. Compiled, tested and \
+measured on AArch64 only: the coverage job runs on ARM64 for it, and the \
+completeness check expects this directory only there. The unit is guarded \
+by __aarch64__, so a tool reading every source on x86-64 sees it empty. P1 \
+and P3 as for src/primitives/simd/x86 (the same suites, instantiated against \
+this kernel): the loops at every depth including 1; first and last tile and \
+panel; odd addresses; subnormal, NaN, infinity, signed zeros; fused, not \
+rounded. T1 is PanelKernelSuite and T6 PanelKernelDeterminism, both against \
+the std::fma model of panel.hpp, which makes this kernel's bits the AVX2 \
+kernel's too."""

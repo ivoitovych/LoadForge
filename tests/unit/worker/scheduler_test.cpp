@@ -213,16 +213,24 @@ TEST(NullWorkloadTest, AControllerSlotUnreadableForLessThanTheAllowanceIsWaitedO
   // keeps working and completes. One torn read is no evidence of a death;
   // the first version left on it, and under TSan with every core busy a
   // healthy controller descheduled mid-publish made its workers exit 124.
-  Rig rig;
-  auto mapped = rig.syscalls.map_shared(rig.region->fd(), rig.region->bytes());
-  ASSERT_TRUE(mapped.has_value());
-  const std::uint64_t odd = 1;
-  std::memcpy(static_cast<std::byte*>(mapped.value()) + HeartbeatRegion::kHeaderBytes, &odd,
-              sizeof odd);
-  auto outcome = rig.run(Pacing{50 * kMs, 10 * kMs, 100 * kMs});
-  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
-  EXPECT_EQ(outcome.value(), (Outcome{StopReason::kDurationElapsed, 4, 50 * kMs}));
-  EXPECT_TRUE(rig.syscalls.unmap(mapped.value(), rig.region->bytes()).has_value());
+  // Once on a clock that starts at zero, and once on one that starts where a
+  // real machine's does, well past it: how long the slot has been unreadable
+  // is measured from the last reading, never from the clock's own zero.
+  for (const std::int64_t base_s : {std::int64_t{0}, std::int64_t{86'400}}) {
+    Rig rig;
+    for (const int clock_id : {CLOCK_MONOTONIC_RAW, CLOCK_MONOTONIC, CLOCK_BOOTTIME}) {
+      rig.syscalls.set_clock(clock_id, platform::TimeSpec{base_s, 0});
+    }
+    auto mapped = rig.syscalls.map_shared(rig.region->fd(), rig.region->bytes());
+    ASSERT_TRUE(mapped.has_value());
+    const std::uint64_t odd = 1;
+    std::memcpy(static_cast<std::byte*>(mapped.value()) + HeartbeatRegion::kHeaderBytes, &odd,
+                sizeof odd);
+    auto outcome = rig.run(Pacing{50 * kMs, 10 * kMs, 100 * kMs});
+    ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+    EXPECT_EQ(outcome.value(), (Outcome{StopReason::kDurationElapsed, 4, 50 * kMs})) << base_s;
+    EXPECT_TRUE(rig.syscalls.unmap(mapped.value(), rig.region->bytes()).has_value());
+  }
 }
 
 TEST(NullWorkloadTest, EveryFailureNamesItsStage) {

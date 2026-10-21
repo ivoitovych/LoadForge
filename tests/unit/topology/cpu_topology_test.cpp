@@ -265,6 +265,26 @@ TEST_F(CpuTopologyTest, AnIdPastAnythingTheKernelCanAssignIsRefused) {
   EXPECT_NE(describe(topology.error()).find("past any id"), std::string::npos);
 }
 
+TEST_F(CpuTopologyTest, TheLargestIdTheKernelCanAssignIsAccepted) {
+  // The bound is inclusive: 65535 is the last id, and one past it is refused
+  // by the next test.
+  set_online("0");
+  add_cpu(0, "0", "65535", "0");
+
+  auto topology = discover();
+  ASSERT_TRUE(topology.has_value()) << describe(topology.error());
+  EXPECT_EQ(topology.value().cpus().size(), 1U);
+}
+
+TEST_F(CpuTopologyTest, TheFirstIdPastTheLargestIsRefused) {
+  set_online("0");
+  add_cpu(0, "0", "65536", "0");
+
+  auto topology = discover();
+  ASSERT_FALSE(topology.has_value());
+  EXPECT_NE(describe(topology.error()).find("past any id"), std::string::npos);
+}
+
 TEST_F(CpuTopologyTest, ACpuMissingFromItsOwnSiblingSetIsRefused) {
   set_online("0-1");
   add_cpu(0, "0", "0", "1");  // cpu0 says its core holds only cpu1.

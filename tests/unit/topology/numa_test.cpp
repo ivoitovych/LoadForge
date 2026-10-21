@@ -279,6 +279,20 @@ TEST_F(NumaTest, ANodeClaimingAnOfflineCpuIsRefused) {
   EXPECT_NE(describe(numa.error()).find("not online"), std::string::npos);
 }
 
+TEST_F(NumaTest, AnOfflineCpuIsRefusedEvenWhenOtherCpusAreOnline) {
+  // The claim is checked against every online CPU, not against whether some
+  // other one happens to differ: cpu2 is claimed, cpu0 and cpu1 are online.
+  set_cpus_online("0-1");
+  set_nodes_online("0");
+  add_node(0, "0-2", "1000", "10");
+
+  auto numa = discover();
+  ASSERT_FALSE(numa.has_value());
+  EXPECT_EQ(numa.error().kind, DiscoveryFailure::Kind::kContradiction);
+  EXPECT_NE(describe(numa.error()).find("cpu2"), std::string::npos);
+  EXPECT_NE(describe(numa.error()).find("not online"), std::string::npos);
+}
+
 TEST_F(NumaTest, AnOnlineCpuBelongingToNoNodeIsRefused) {
   set_cpus_online("0-1");
   set_nodes_online("0");

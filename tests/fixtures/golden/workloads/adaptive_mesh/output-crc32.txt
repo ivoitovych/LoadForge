@@ -1,0 +1,30 @@
+# Golden digests of the adaptive mesh workload: a tripwire, not an oracle
+# (docs/verification.md §4). CRC-32 (core/crc32.hpp) of units 0 and 1 at seed 1:
+#
+#   input   the generated input (the hotspots, 2048 bytes).
+#   counts  the output's leaf counts (exact on every
+#           schedule and on every machine).
+#   serial  the whole output computed on one slot, where every coarse cell is
+#           added leaf by leaf in leaf order: the same bits on x86-64 and on
+#           AArch64, because every leaf value is a fixed sequence of plain
+#           binary64 operations (spec.hpp) and no fused multiply-add is
+#           contracted into it.
+#
+# Produced by tests/determinism/workloads/adaptive_mesh/determinism_test.cpp,
+# which prints every line it computes:
+#
+#   build/debug/tests/determinism/workloads/adaptive_mesh/loadforge_determinism_workloads_adaptive_mesh_tests \
+#     --gtest_filter='*Digest*'
+#
+# on 2026-10-20 17:40 UTC, on an x86-64 machine (GCC 13.3, debug preset). CI's
+# ARM64 runner checks the AArch64 half on real hardware on every run.
+#
+# A change to these lines is a change to the bits the workload produces, which
+# also changes the workload's version (kWorkloadVersion) and is reviewed as
+# such.
+counts 0 e7fdb831
+counts 1 1c02086c
+input 0 d12820fd
+input 1 935f90fb
+serial 0 ec0502e1
+serial 1 aaf7ca80

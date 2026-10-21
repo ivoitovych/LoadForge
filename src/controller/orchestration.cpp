@@ -638,7 +638,11 @@ core::Result<RunReport, ControllerError> Run::finish() {
 void Run::teardown() {
   // The silent release, for every way out. Live workers are killed and reaped
   // so a failed run leaves none behind; descriptors and the region follow.
-  if (spawned_ && live_ > 0) {
+  // Gated on the spawn alone: with none left live, every worker is reaped and
+  // its pid cleared from the pool, so the kills below find nobody to send to
+  // and the wait is never entered. The child of a fork never gets here with
+  // spawned_ set, and must not: its siblings are not its to kill.
+  if (spawned_) {
     // Each unreaped worker's group first, while its pid still pins the group's
     // number (see kill_group), then the workers themselves, for any that died
     // or failed before leading a group. A worker whose pid was never recorded
