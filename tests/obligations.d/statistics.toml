@@ -2,16 +2,29 @@
 # Ledger fragment (ADR 0004): this file declares src/statistics and nothing else.
 
 [[module]]
-path    = "src/statistics"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-The Load Signature contract: today the header alone (ADR 0004). P1 here is \
-the fault names and member-by-member equality of the summary types. The \
-statistics stream takes this row over with the Summarizer, adds T4 \
-(metamorphic relations: a window split in two, a constant series, a series \
-shifted in time) and runs SummarizerContract against its implementation; \
-the suite's exact expectations -- a window's open end, one reading, a \
-counter across a wrap and not across a gap, a metric with no reading that \
-stays unavailable -- already run against a reference in \
-tests/contracts/statistics/."""
+path     = "src/statistics"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T4"]
+provides = ["SummarizerContract"]
+fixtures = ["timeline/statistics/proc-sample.csv"]
+note     = """
+The Load Signature of a window: CompensatedSummarizer, a pure function of \
+the points in [start, end). P1 is each decision: a point before, at the \
+start of, inside, and at the end of the window; a gauge series, a counter \
+series, a reading of the wrong kind for its metric (ignored, not counted), \
+a series with no reading (Unavailable, kAbsent), only gaps (the last \
+reason), a counter gap that restarts the run of consecutive pairs, a window \
+refused. P3 is the arithmetic edges: one reading (no deviation, no slope), \
+two readings at one instant (no slope), a sum a plain loop gets wrong \
+(1e16 + 1 + 1 - 1e16, both arms of the compensation), a counter wrapping at \
+its modulus and at 2^64, a window before or after every point. \
+SummarizerContract runs against the implementation in \
+tests/unit/statistics. T4 (tests/property/statistics) holds the metamorphic \
+relations over fixed pseudo-random series: a window split in two and \
+recombined (counts and deltas add, with the step across the seam; extremes, \
+first, last and mean recombine), a constant series (no spread, no slope), a \
+series and its window shifted in time (the same signature bit for bit), a \
+counter offset by a constant (the same advance), a gauge offset by a \
+constant (only its level moves). The fixture is a real recording of this \
+kernel's /proc (command and machine in its header), checked against figures \
+computed in exact rational arithmetic."""

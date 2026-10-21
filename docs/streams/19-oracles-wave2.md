@@ -1,6 +1,6 @@
 # Stream 19 — Oracles: sort and Monte Carlo
 
-**State:** not started  
+**State:** built; branch feature/oracles-wave2, pull request not yet opened  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

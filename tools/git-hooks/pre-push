@@ -1,0 +1,37 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# LOADFORGE-REPO-HOOK
+#
+# Push gate: every commit this push introduces passes exactly the checks of
+# tools/check-commit-identity.sh (which CI runs on the whole history), sign-off
+# included, and the
+# branch name follows the convention in CONTRIBUTING.md. Skippable with
+# --no-verify; CI is not.
+set -uo pipefail
+
+top="$(git rev-parse --show-toplevel)" || exit 1
+gate="$top/tools/check-commit-identity.sh"
+ids="$top/.github/commit-identities"
+zero="0000000000000000000000000000000000000000"
+name_re='^(feature|fix|docs|chore|refactor)/[a-z0-9][a-z0-9._-]*$'
+bad=0
+
+while read -r _ local_sha remote_ref _; do
+  [ -n "${local_sha:-}" ] || continue
+  [ "$local_sha" = "${zero:0:${#local_sha}}" ] && continue   # deleting a ref
+  case "$remote_ref" in
+    refs/heads/*)
+      branch="${remote_ref#refs/heads/}"
+      if [ "$branch" != main ] && ! [[ "$branch" =~ $name_re ]]; then
+        echo "pre-push: branch '$branch' is not main or (feature|fix|docs|chore|refactor)/<slug>." >&2
+        bad=1
+      fi ;;
+  esac
+  if [ ! -x "$gate" ]; then
+    echo "pre-push: $gate is missing; nothing was checked, which is a refusal." >&2
+    bad=1
+  else
+    "$gate" "$local_sha" "$top" "$ids" "--remotes=origin" >&2 || bad=1
+  fi
+done
+exit "$bad"

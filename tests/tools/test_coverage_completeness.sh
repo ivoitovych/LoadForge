@@ -98,6 +98,64 @@ mkdir -p "$work/empty-src"
 run_gate "$complete_report" "$work/empty-src"
 expect 1 "a source tree with no .cpp files FAILS rather than passing vacuously" "vacuous"
 
+# --- each architecture's kernels, on that architecture only --------------------
+# The x86 kernels never compile on AArch64 and the ARM kernels never on x86-64,
+# so each report can name only its own architecture's. A kernel directory is
+# expected where it is built and nowhere else; everything else everywhere.
+mkdir -p "$work/arch/src/alpha" "$work/arch/src/primitives/simd/x86" \
+  "$work/arch/src/primitives/simd/arm"
+: >"$work/arch/src/alpha/one.cpp"
+: >"$work/arch/src/primitives/simd/x86/gemm.cpp"
+: >"$work/arch/src/primitives/simd/arm/gemm.cpp"
+
+report_of() { # file names, one report naming each
+  {
+    echo '<?xml version="1.0" ?><coverage><packages><package><classes>'
+    for name in "$@"; do echo "<class filename=\"$name\"/>"; done
+    echo '</classes></package></packages></coverage>'
+  } >"$work/arch/report.xml"
+}
+
+run_arch() { # architecture, then the gate's arguments
+  local arch="$1"
+  shift
+  OUT="$(LOADFORGE_COVERAGE_ARCH="$arch" "$GATE" "$@" 2>&1)"
+  RC=$?
+}
+
+report_of src/alpha/one.cpp src/primitives/simd/x86/gemm.cpp
+run_arch x86_64 "$work/arch/report.xml" "$work/arch/src"
+expect 0 "x86-64: the x86 kernels are expected and the ARM ones are not" "covers all 2 source file"
+expect 0 "and it says which directory it did not expect" "not expected on x86_64: 1 file(s) under src/primitives/simd/arm/"
+
+report_of src/alpha/one.cpp
+run_arch x86_64 "$work/arch/report.xml" "$work/arch/src"
+expect 1 "x86-64: a report without the x86 kernels FAILS" "src/primitives/simd/x86/gemm.cpp"
+expect 1 "and names only them" "1 source file(s) absent"
+
+report_of src/alpha/one.cpp src/primitives/simd/arm/gemm.cpp
+run_arch aarch64 "$work/arch/report.xml" "$work/arch/src"
+expect 0 "AArch64: the ARM kernels are expected and the x86 ones are not" "covers all 2 source file"
+expect 0 "and it says which directory it did not expect" "not expected on aarch64: 1 file(s) under src/primitives/simd/x86/"
+
+report_of src/alpha/one.cpp src/primitives/simd/x86/gemm.cpp
+run_arch aarch64 "$work/arch/report.xml" "$work/arch/src"
+expect 1 "AArch64: a report without the ARM kernels FAILS" "src/primitives/simd/arm/gemm.cpp"
+expect 1 "and names only them" "1 source file(s) absent"
+
+report_of src/primitives/simd/x86/gemm.cpp src/primitives/simd/arm/gemm.cpp
+run_arch aarch64 "$work/arch/report.xml" "$work/arch/src"
+expect 1 "a kernel directory is excused, nothing else is" "src/alpha/one.cpp"
+
+report_of src/alpha/one.cpp
+run_arch riscv64 "$work/arch/report.xml" "$work/arch/src"
+expect 0 "an architecture with neither kind of kernel expects neither" "covers all 1 source file"
+
+mkdir -p "$work/kernels-only/src/primitives/simd/arm"
+: >"$work/kernels-only/src/primitives/simd/arm/gemm.cpp"
+run_arch x86_64 "$work/arch/report.xml" "$work/kernels-only/src"
+expect 1 "a tree holding only the other architecture's kernels FAILS rather than passing vacuously" "vacuous"
+
 # --- the real thing ----------------------------------------------------------
 # Everything above uses a report shaped like gcovr's. This uses one gcovr wrote.
 if [ -f "$ROOT/build/coverage/coverage.xml" ]; then

@@ -1,0 +1,16 @@
+# Recorded 2026-10-20 12:45 UTC on a cloud container: x86_64, kernel 6.18.44-fc-v139.
+# Command: python3 loop of 12 x (time.clock_gettime_ns(CLOCK_MONOTONIC); read 'ctxt' from /proc/stat; read MemAvailable (kB) from /proc/meminfo; sleep 0.05)
+# Columns: timestamp_ns (relative to the first), ctxt (a counter), mem_available_kb (a gauge).
+timestamp_ns,ctxt,mem_available_kb
+0,69916,16008488
+51169481,69963,16008636
+101517874,69969,16008636
+152001838,69985,16008636
+202407202,70091,16008888
+252805028,70095,16008888
+303204799,70113,16009292
+353592563,70115,16009292
+403980725,70119,16009292
+454392574,70121,16009292
+504758124,70123,16009292
+555145826,70125,16009292

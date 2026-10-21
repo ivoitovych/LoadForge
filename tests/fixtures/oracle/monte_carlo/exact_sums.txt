@@ -1,0 +1,17 @@
+# The correctly rounded exact sum of the 16384 integrand values of one Monte
+# Carlo batch, for six batch keys (src/workloads/monte_carlo/spec.hpp: the
+# values are sample_value(sample_bits(key, k)), k = 0 .. 16383).
+#
+# Produced on 2026-10-20 at 08:00 UTC, Linux 6.18.44-fc-v139 x86_64, by
+# Python 3.13.16 math.fsum (an exact, correctly rounded sum) over the values
+# printed one per line as hex floats by a throwaway program compiled with
+#   g++ 13.3.0 -std=c++20 -O1 -ffp-contract=off -Isrc dump_terms.cpp
+# that calls the specification's sample_bits and sample_value for the key.
+# The program is not kept: it is a loop over those two calls. Each line is
+#   <batch key, 16 hex digits>  <math.fsum(values).hex()>
+0000000000000000 0x1.92c56bc5e32e9p+13
+ffffffffffffffff 0x1.92be588fdf4bdp+13
+0123456789abcdef 0x1.9151803b2677ap+13
+8000000000000000 0x1.925d55dddb7acp+13
+deadbeefcafef00d 0x1.91fc1a91b3fa4p+13
+00000000000000ff 0x1.92c98f00099f2p+13

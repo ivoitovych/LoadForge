@@ -1,6 +1,6 @@
 # Stream 14 — The timeline and the sampler
 
-**State:** not started  
+**State:** complete — timeline and sampler built, both contract suites pass, coverage 100% (2026-10-20 13:30 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier A — a bounded component built against a written contract  

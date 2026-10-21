@@ -1,6 +1,6 @@
 # Stream 10 — Fault isolation: the re-run ladder
 
-**State:** not started  
+**State:** built on `feature/isolation`, awaiting review (2026-10-20 11:10 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

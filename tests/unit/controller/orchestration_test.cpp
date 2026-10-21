@@ -264,6 +264,13 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
                   static_cast<std::byte*>(rig.region_bytes) + ipc::HeartbeatRegion::kHeaderBytes,
                   sizeof sequence);
       EXPECT_EQ(sequence, 12U);
+      // And six beats, counted up from one: the progress a worker reads.
+      std::uint64_t progress = 0;
+      std::memcpy(
+          &progress,
+          static_cast<std::byte*>(rig.region_bytes) + ipc::HeartbeatRegion::kHeaderBytes + 16,
+          sizeof progress);
+      EXPECT_EQ(progress, 6U);
       rig.deliver(0, ipc::RecordType::kFinished, "done");
       rig.deliver(1, ipc::RecordType::kFinished, "done too");
       rig.worker_exits(0, 0);
@@ -298,6 +305,12 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   // for each (when it starts, and after the drain that ends it), and the
   // finish reads it once more.
   EXPECT_EQ(report.elapsed_ns, 100 * kMs);
+  // Each of the five ticks waited one interval for records; the final drain's
+  // polls, after them, wait out the stop grace.
+  const std::vector<int>& timeouts = rig.syscalls.poll_timeouts();
+  ASSERT_GE(timeouts.size(), 5U);
+  EXPECT_EQ(std::vector<int>(timeouts.begin(), timeouts.begin() + 5),
+            (std::vector<int>{10, 10, 10, 10, 10}));
   EXPECT_EQ(
       rig.reporter.events,
       (std::vector<std::string>{
@@ -446,26 +459,38 @@ TEST(ControllerTest, AWorkerThatBeatsWithoutProgressIsASpinAndTimesOut) {
 }
 
 TEST(ControllerTest, AWorkerThatDiedInsideAPublishIsTreatedAsStale) {
-  Rig rig;
-  rig.config.run.duration = core::Duration{1000};
-  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
-  rig.reporter.on_event = [&rig](const std::string& line) {
-    if (starts_with(line, "spawned")) {
-      rig.beat(0, 1, 10 * kMs, 3);  // An odd sequence: a writer that never finished.
-      rig.beat(1, 1, 10'000 * kMs);
-    } else if (line == "worker 0: sent signal 15 (heartbeat stale)") {
-      rig.worker_exits(0, SIGSEGV);
-    } else if (line == "worker 0 (pid 1001): killed by signal 11") {
-      rig.worker_exits(1, 0);
+  // Once on a clock that starts at zero, and once on one that starts where a
+  // real machine's does, well past it: the allowance is measured from the
+  // start's reading, and an event's time is the time since it, so neither
+  // may depend on the reading itself.
+  for (const std::int64_t base_s : {std::int64_t{0}, std::int64_t{86'400}}) {
+    Rig rig;
+    for (const int clock_id : {CLOCK_MONOTONIC_RAW, CLOCK_MONOTONIC, CLOCK_BOOTTIME}) {
+      rig.syscalls.set_clock(clock_id, platform::TimeSpec{base_s, 0});
     }
-  };
-  auto result = rig.run();
-  ASSERT_TRUE(result.has_value()) << describe(result.error());
-  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kFault)
-      << "SIGTERM was sent, but what killed it was the fault";
-  // Unreadable from the start, and stale once that has lasted longer than the
-  // 100 ms allowance: the tick at 110 ms, not the first one.
-  EXPECT_EQ(rig.reporter.elapsed[1], 110 * kMs) << "unreadable past the allowance";
+    const std::int64_t base_ns = base_s * 1000 * kMs;
+    rig.config.run.duration = core::Duration{1000};
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    rig.reporter.on_event = [&rig, base_ns](const std::string& line) {
+      if (starts_with(line, "spawned")) {
+        rig.beat(0, 1, base_ns + 10 * kMs, 3);  // An odd sequence: a writer that never finished.
+        rig.beat(1, 1, base_ns + 10'000 * kMs);
+      } else if (line == "worker 0: sent signal 15 (heartbeat stale)") {
+        rig.worker_exits(0, SIGSEGV);
+      } else if (line == "worker 0 (pid 1001): killed by signal 11") {
+        rig.worker_exits(1, 0);
+      }
+    };
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << describe(result.error());
+    EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kFault)
+        << "SIGTERM was sent, but what killed it was the fault";
+    // Unreadable from the start, and stale once that has lasted longer than
+    // the 100 ms allowance: the tick at 110 ms, not the first one.
+    ASSERT_GE(rig.reporter.events.size(), 2U) << base_s;
+    EXPECT_EQ(rig.reporter.events[1], "worker 0: sent signal 15 (heartbeat stale)") << base_s;
+    EXPECT_EQ(rig.reporter.elapsed[1], 110 * kMs) << "unreadable past the allowance, " << base_s;
+  }
 }
 
 TEST(ControllerTest, ASlotUnreadableForLessThanTheAllowanceIsNotADeath) {
@@ -639,7 +664,34 @@ TEST(ControllerTest, ATeardownSweepsOnlyTheGroupsOfWorkersNotYetReaped) {
   EXPECT_EQ(rig.syscalls.signals_sent(),
             (std::vector<std::pair<pid_t, int>>{
                 {-kFirstPid, SIGKILL}, {-kSecondPid, SIGKILL}, {kSecondPid, SIGKILL}}));
+  EXPECT_EQ(rig.syscalls.wait_count(), 1)
+      << "one worker was left, so one wait: none fewer, and none more once it was reaped";
   EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+}
+
+TEST(ControllerTest, OnceTheLastWorkerIsReapedTheKernelIsAskedNothingMore) {
+  // With no children left, a non-blocking waitpid answers ECHILD, which in
+  // the loop is the controller's own failure. Both workers are reaped on the
+  // first tick, and the kernel's next answer is scripted as that ECHILD: the
+  // run completes only if nothing asks for it.
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.deliver(1, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+      rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{}, ECHILD});
+      rig.syscalls.script_nonblocking_reaps(rig.reaps);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(rig.syscalls.nonblocking_reap_count(), 2) << "one reap per worker, and no more";
+  EXPECT_EQ(rig.syscalls.wait_count(), 0) << "and the teardown had nobody to wait for";
+  EXPECT_TRUE(all_clean(result.value()));
 }
 
 // --- the OOM killer, from the kernel's record ---------------------------------------
@@ -1163,6 +1215,21 @@ TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehin
         << "both workers were running and were killed on the way out";
     EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
   }
+}
+
+TEST(ControllerTest, APipeEndNumberedZeroIsClosedLikeAnyOther) {
+  // A controller started with its standard input closed is given descriptor
+  // 0 for the first pipe end it creates. That is an open descriptor like any
+  // other, and the teardown of a run that failed before any worker existed
+  // closes it with the rest: -1 is the only number that means "not open".
+  Rig rig;
+  rig.syscalls.number_pipes_from(0);
+  rig.syscalls.script_forks({{0, EAGAIN}});
+  auto result = rig.run();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().stage, "spawn");
+  EXPECT_EQ(rig.syscalls.close_count(), 9) << "the region and both workers' two pipes";
+  EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
 }
 
 TEST(ControllerTest, EveryFailureInsideTheLoopNamesItsStageAndKillsTheWorkers) {

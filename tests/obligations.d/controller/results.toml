@@ -2,16 +2,24 @@
 # Ledger fragment (ADR 0004): this file declares src/controller/results and nothing else.
 
 [[module]]
-path    = "src/controller/results"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-The result schema and fingerprint contract (F12): today the header alone \
-(ADR 0004). P1 here is the verdict words and the schema version a default \
-result carries; a default result's verdict is incomplete, never clean. The \
-results stream takes this row over with aggregation, the fingerprint reader \
-and derive_verdict(), adds P2 and P7 for the fingerprint's reads of /proc \
-and /sys (T2, with fixtures), T8 for reproducing a fingerprint across two \
-runs on one machine (M3 exit criterion 5), and runs VerdictContract against \
-its implementation; the suite runs against a reference in \
-tests/contracts/results/."""
+path             = "src/controller/results"
+classes          = ["P1", "P2", "P3", "P7"]
+tiers            = ["T1", "T2", "T8"]
+fixtures         = ["fingerprint/vm-x86-64"]
+fixture_builders = ["tests/unit/controller/results/fingerprint_test.cpp"]
+provides         = ["VerdictContract"]
+note             = """
+Aggregation, the verdict and the run fingerprint (F12). P1: the verdict's \
+rules and their order, the finding counts, the fingerprint's candidate \
+order and which failure a field reports. P3: the logical-byte product that \
+saturates rather than wraps, a temperature in whole signed millidegrees, \
+counters that did not move. P2: every fingerprint field is read through the \
+platform seam, and an EACCES, an EIO and an ENOENT are injected at every \
+field (T2). P7: each file a fingerprint reads is a source with its states \
+-- present (a real virtual machine's files, committed), absent, denied, \
+malformed, a directory where a file should be; "vanishes mid-run" and \
+"counter wraps" do not apply to a one-shot read made before the run starts, \
+and the note says so rather than claiming them. T8: two fingerprints taken \
+on one machine through the real syscalls agree in everything but the moment \
+they were taken (M3 exit criterion 5). VerdictContract runs against \
+derive_verdict() in tests/unit/controller/results/verdict_test.cpp."""

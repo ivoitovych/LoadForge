@@ -2,13 +2,40 @@
 # Ledger fragment (ADR 0004): this file declares src/workloads/dense_linear and nothing else.
 
 [[module]]
-path    = "src/workloads/dense_linear"
-classes = ["P1", "P3"]
-tiers   = ["T1"]
-note    = """
-Today the dense-linear specification alone (spec.hpp, ADR 0004): the entry \
-generator at both ends of its range and its discarded low bits, the panel \
-depths, the sizes, and gamma_n, each tested in tests/contracts/workloads/. \
-The dense-linear stream takes this row over with the workload and owes what \
-IMPLEMENTATION §3 lists for it -- P4 and P5, and T3, T4, T5, T5b, T6 -- with \
-provides = ["WorkloadContract"]."""
+path     = "src/workloads/dense_linear"
+classes  = ["P1", "P3", "P5"]
+tiers    = ["T1", "T3", "T4", "T5", "T6"]
+fixtures = ["golden/workloads/dense_linear/output-crc32.txt"]
+provides = ["WorkloadContract"]
+consumes = ["ExecutorContract"]
+note     = """
+The dense-linear workload (M2b): C = A B at n = 256, blocked by k-panels, \
+parallel over row tiles, with the scalar kernel here and the vector kernels \
+in src/primitives/simd/{x86,arm}. P1: each refusal at creation (a table \
+without its scalar kernel, a panel depth spec.hpp does not list, a path with \
+no kernel, a footprint without one unit), the default depth, and the driver's \
+panel loop at one panel and at sixteen. P3: the footprint at either side of \
+one and two units and at its maximum; every listed depth and the values next \
+to them; a path outside the enumeration; the generated entries at both ends \
+of A and B; and in the kernels' suite, the first and last tile and panel, \
+depth 1 and all of k, buffers at odd addresses, subnormals, NaN, infinities \
+and signed zeros. P5: the reduction order is fixed by panel and tile and \
+nothing else; T6 runs one (depth, path) at 1, 2, 3, 4 and 7 threads under \
+shuffled and claiming schedules, and two runs whose recorded tile-to-slot \
+maps differ, and requires the same bits. T6 also holds the class from the \
+other side -- across depths and paths the bits differ, within the derived \
+bound -- and checks committed digests, so the scalar path is held to the \
+same bits on x86-64 and ARM64 and the AVX2 and NEON paths to each other's. \
+T3: sampled and full entries against naive dot products written in the \
+tests, with the bound derived there (tests/unit/workloads/dense_linear/\
+support.hpp). T4: identities, transposition, permutations, powers of two \
+and negation, exact on every path and depth. T5: corruption injected into \
+the input after generation and into the output after compute, and where the \
+bound does and does not see it. P4 and T5b, which IMPLEMENTATION §3 lists \
+for workloads, are removed: this module performs no verification, so it has \
+no outcome to classify and no check that can fail to run. Its verification \
+is the oracle stream's (src/verification/oracle/dense_linear, \
+src/verification/residual), which owes them; the fault-injection tier here \
+shows what that oracle will be given. Provides WorkloadContract on every \
+path the build has; consumes ExecutorContract, run against this module's \
+own executors (ADR 0003)."""
