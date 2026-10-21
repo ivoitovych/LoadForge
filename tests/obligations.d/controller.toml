@@ -5,7 +5,7 @@
 path    = "src/controller"
 classes = ["P1", "P2", "P3", "P4", "P6"]
 tiers   = ["T1", "T2", "T7", "T8"]
-consumes = ["SourceContract", "FpControlContract", "IsaProbeContract", "SelectPathContract",
+consumes = ["JournalContract", "SourceContract", "FpControlContract", "IsaProbeContract", "SelectPathContract",
             "IsolatorContract", "SamplerContract", "TimelineContract"]
 note    = """
 From M2a the controller also joins the verifying pieces, and the paragraphs \
@@ -102,4 +102,19 @@ and is reported, never the run (P2, injected through the controller's own \
 mocks of the sampler and the timeline, which the providers' suites are run \
 against: contract_mocks_test.cpp). P6: tests/supervision/telemetry_death_test.cpp \
 kills a real worker mid-run and finds the telemetry from before its death in \
-the result (M3 exit criterion 2)."""
+the result (M3 exit criterion 2). \
+\
+Since M5 the controller also tells its workers what to do while they run \
+(a mixed or cycling schedule, workloads/mixed) and keeps the crash journal. \
+P4: an acknowledgement must answer the oldest unanswered message, in order, \
+or the channel is corrupt; at most 64 messages may be unanswered (the rest of \
+a schedule's are dropped and counted; a Stop is always sent); an effect \
+(paused, a duty cycle's idle allowance) is taken only from a Done and a \
+refusal is a note naming the command and the reason. P6: a step is carried \
+out on the first tick at or after its time; the journal gets an entry at the \
+start, every interval, at each phase and at the deadline, appended then \
+synced, a storage fault ends journaling and never the run, and the writer is \
+never closed by the controller. The journal contract is run against the \
+controller's own model of a journal (journal_model_test.cpp). T7: the \
+controller killed with SIGKILL mid-run leaves a journal that replays and \
+workers that leave with it (tests/supervision/journal_kill_test.cpp)."""

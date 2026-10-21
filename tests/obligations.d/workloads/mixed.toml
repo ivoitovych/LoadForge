@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/workloads/mixed and nothing else.
+
+[[module]]
+path     = "src/workloads/mixed"
+classes  = ["P1", "P3", "P4", "P5", "P6"]
+tiers    = ["T1", "T3", "T4", "T5", "T5b", "T6", "T7", "T10"]
+fixtures = ["workloads/mixed/mixed-w4-s7-d70-r10-moving.txt",
+            "workloads/mixed/mixed-w3-s1-d300-r10-fixed.txt",
+            "workloads/mixed/mixed-w8-s42-d1800-r30-moving.txt",
+            "workloads/mixed/cycling-load-w3-d100-dwell5.txt",
+            "workloads/mixed/cycling-cores-w8-d60-dwell5.txt",
+            "workloads/mixed/cycling-cores-w1-d20-dwell5.txt"]
+consumes = ["RegistryContract"]
+note     = """
+The flagship mixed workload and thermal and power cycling: not a workload but \
+a schedule, data made before the run from its options alone (no process, no \
+clock), that says what each worker is told and when. Mixed rotates \
+workloads across the workers, changes the size of their datasets, at times \
+has every worker join one operation, and moves workers across CPUs, while \
+every unit goes on being verified; cycling raises and lowers the load as \
+phases of duty (idle, heavy, moderate, heavy) or the number of workers that \
+work. P1: the options each refused by name (no workers, a duration or \
+rotation that is not positive, no footprint, one set of CPUs, a roster with \
+nothing that fits). P3: the limits of the schedule at both sides (100000 steps, \
+4000000 commands), a label at 64 bytes and at 65, a roster of one, a single \
+worker. P4: a schedule that is not valid for the run it is given is refused \
+by `problem` before the first fork. P5: the schedule is shared by nothing -- \
+it is a value; the controller reads it from its one thread. P6: a worker \
+may die at any point of a rotation; the controller keeps counting what it \
+sent and what was answered (tests/supervision/control_test.cpp: a worker \
+killed between two rotations is reported killed and its neighbour finishes). \
+T3: the C++ schedules against a second implementation in Python \
+(fixtures/workloads/mixed/generate.py), listing for listing. T4: over \
+thousands of option sets drawn from a fixed generator, every schedule fits \
+the run, its times are the rotations', its phases never repeat, its commands \
+keep the rules of worker/control.hpp, sizes and seeds are as said, and the \
+commands applied to a model of each worker leave it at the level the step \
+names with no command that changes nothing. T5 and T5b: a corruption after \
+a switch is found about the workload switched to from the next unit on, \
+numbered without a gap or a repeat, and a check that cannot be made after a \
+switch is not performed, never clean, with the run's statement made once \
+(tests/fault_injection/workloads/mixed, the worker's loop running for real \
+in a thread). T6: the digest of each fixture schedule is pinned and equal on \
+x86-64 and ARM64, and a schedule is the same whatever else ran before it. \
+T7: every control message against real workers, N = 2 (tests/supervision). \
+T10: a worker rotated for LOADFORGE_SOAK_SECONDS grows no resident set, \
+descriptor or thread, loses no verification and has no tally run backwards, \
+and a five-hour schedule is made whole with every count in range \
+(tests/soak/workloads/mixed; nightly in .github/workflows/soak.yml)."""
