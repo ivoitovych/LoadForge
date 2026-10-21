@@ -177,9 +177,14 @@ class ModelIsolator final : public verification::Isolator {
         report.answers.other_core =
             ask(Rung::kOtherCore, placement.other_cores.front(), placement.threads);
       }
-      report.answers.single_thread = placement.threads == 1
-                                         ? report.answers.same_core
-                                         : ask(Rung::kSingleThread, placement.cpu, 1);
+      if (placement.threads != 1) {
+        report.answers.single_thread = ask(Rung::kSingleThread, placement.cpu, 1);
+      }
+    }
+    // A one-thread original: its same-core run was the single-thread run, and
+    // its answer is this rung's, whatever it was.
+    if (placement.threads == 1) {
+      report.answers.single_thread = report.answers.same_core;
     }
     report.finding = verification::derive_finding(report.answers);
     report.confidence = verification::confidence_of(report.finding);

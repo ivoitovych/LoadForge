@@ -328,6 +328,22 @@ the digest's whole cost.
 
 `LOADFORGE_MILESTONE` is `m2`; the version string is `0.0.0-m2`.
 
+### Merging main again (2026-10-21 05:59 UTC)
+
+Main moved by the one-suite contract headers (#84), the executor and workload specification
+changes, and sharded static analysis. The merge had no textual conflict. Two things followed.
+
+- The tests of this stream now include only the headers of the suites they instantiate
+  (`registry_contract.hpp`, `oracle_registry_contract.hpp`, `select_path_contract.hpp`,
+  `isa_probe_contract.hpp`, `fp_control_contract.hpp`, `source_contract.hpp`), and the allowances
+  for uninstantiated second suites are gone.
+- Main's isolation contract gained a case: an original that ran one thread and came out clean
+  at the first rung answers kNo at the single-thread rung too, not kUnknown. This stream's
+  model of the isolator in `tests/unit/controller/consumer_models.hpp` skipped that rung only
+  when the first rung reproduced, and so read it the other way. Main's text is the contract;
+  the model follows it. The controller itself uses the provider's isolator, so no source
+  changed.
+
 ## Contract questions
 
 1. **`Registry` has no way to ask a workload's paths without creating one** (disagreement 1).
