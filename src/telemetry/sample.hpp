@@ -40,6 +40,10 @@ enum class Unit : std::uint8_t {
   kRatio,  ///< 0 to 1: utilisation, a share.
   kCount,  ///< events: corrected errors, context switches.
   kVolts,
+  /// An energy counter's own unit: the raw value of RAPL's energy_uj and of the
+  /// power PMU once scaled. A counter is an integer, so joules would lose the
+  /// fraction; the metric names the unit its raw value is in.
+  kMicrojoules,
 };
 
 [[nodiscard]] constexpr std::string_view describe(Unit unit) noexcept {
@@ -62,13 +66,23 @@ enum class Unit : std::uint8_t {
       return "count";
     case Unit::kVolts:
       return "volts";
+    case Unit::kMicrojoules:
+      return "microjoules";
   }
   return "unrecognised unit";
 }
 
-/// A gauge is read as it is (a temperature). A counter only ever increases,
-/// modulo its wrap, and is read as a raw value whose differences mean
-/// something (energy in microjoules, corrected-error counts).
+/// A gauge is read as it is (a temperature). A counter is a raw value that only
+/// ever increases between resets, modulo its wrap if it has one, and whose
+/// differences mean something (energy in microjoules, corrected-error counts).
+///
+/// A counter's raw value is in its metric's unit, exactly: nothing downstream
+/// scales it, so a counter of energy is in kMicrojoules and never in kJoules.
+/// An ESTIMATE is not a counter, even when it is an integer: a count scaled up
+/// for the time an event was not on the PMU goes down when the next, exact,
+/// reading arrives, and a counter that goes down is read as a wrap or a reset.
+/// A source reports the exact raw count as the counter, and how much of the time
+/// the count covers as a separate gauge (the counters source's `pmu_share`).
 enum class Kind : std::uint8_t { kGauge, kCounter };
 
 /// What a metric is attributed to; the index says which one (package 0, CPU
@@ -115,9 +129,16 @@ enum class Scope : std::uint8_t {
 ///   unit, kind   as above.
 ///   scope, scope_index   what it is attributed to. (name, scope,
 ///                scope_index) identifies a series; nothing else does.
-///   modulus      for a counter that wraps, the value it wraps at: readings
-///                are in [0, modulus). Absent for a gauge, and for a counter
-///                that wraps at 2^64.
+///   modulus      for a counter that can wrap within a run, the value it wraps
+///                at: readings are in [0, modulus). Absent for a gauge, and for
+///                a counter that does not wrap within a run -- a 64-bit one
+///                (centuries at any rate), or a 32-bit one whose rate cannot
+///                reach 2^32 in a run (the memory controllers' error counts).
+///                A step down in a counter with no modulus is not a wrap: it is
+///                a RESET (the hardware's counters cleared, a driver reloaded,
+///                an event reopened), and the advance across it is unknown --
+///                counter_advance() says so, and the summarizer treats it as a
+///                gap and counts it, as it does an Unavailable reading.
 ///   provider     the mechanism behind it, for the remedy and the report:
 ///                "hwmon:coretemp", "powercap:intel-rapl", "perf:power".
 struct Metric {
@@ -236,6 +257,21 @@ using Reading = std::variant<Unavailable, Gauge, Counter>;
     return current - previous;
   }
   return *modulus - previous + current;
+}
+
+/// How far a counter advanced from `previous` to `current` by the rules of the
+/// metric's modulus, or nothing when that cannot be known.
+///
+/// With a modulus a step down is a wrap, and the advance is counter_delta().
+/// Without one the counter does not wrap within a run, so a step down is a reset
+/// and the advance across it is unknown: absent, never 2^64 - n. Statistics reads
+/// every pair of consecutive readings through this function.
+[[nodiscard]] constexpr std::optional<std::uint64_t> counter_advance(
+    std::uint64_t previous, std::uint64_t current, std::optional<std::uint64_t> modulus) noexcept {
+  if (!modulus.has_value() && current < previous) {
+    return std::nullopt;
+  }
+  return counter_delta(previous, current, modulus);
 }
 
 }  // namespace loadforge::telemetry

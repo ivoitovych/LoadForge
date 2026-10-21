@@ -182,11 +182,61 @@ TYPED_TEST_P(VerdictContract, CorrectedErrorsMakeACleanRunNotClean) {
       << "absent counters are not errors; the capability report says EDAC was not read";
 }
 
+TYPED_TEST_P(VerdictContract, AnErrorCounterThatWentBlindForPartOfTheRunIsNotAClaimOfCleanliness) {
+  const std::string corrected{results::kCorrectedErrorsMetric};
+  const std::string uncorrected{results::kUncorrectedErrorsMetric};
+  for (const std::string& name : {corrected, uncorrected}) {
+    results::RunResult run = results_suite::clean_run();
+    run.signature.metrics.push_back(results_suite::counted(name, 0));
+    ASSERT_EQ(TypeParam::derive(run), Verdict::kClean);
+    run.signature.metrics.back().unavailable_samples = 2;
+    EXPECT_EQ(TypeParam::derive(run), Verdict::kIncomplete)
+        << name << ": unreadable for two rounds, errors may have been counted in the gap";
+
+    run.signature.metrics.back().unavailable_samples = 0;
+    std::get<statistics::CounterSummary>(run.signature.metrics.back().value).resets = 1;
+    EXPECT_EQ(TypeParam::derive(run), Verdict::kIncomplete)
+        << name << ": reset, so the advance across the reset is unknown";
+
+    run.signature.metrics.back() = {
+        results_suite::counter(name),
+        telemetry::Unavailable{topology::Availability::kVanished, "/sys/devices/system/edac",
+                               "gone", "re-load the driver"},
+        5};
+    EXPECT_EQ(TypeParam::derive(run), Verdict::kIncomplete)
+        << name << ": present at probe and unreadable throughout is blind";
+  }
+}
+
+TYPED_TEST_P(VerdictContract, BlindnessOfAnythingElseOrAWrongResultDoesNotChangeTheVerdict) {
+  results::RunResult run = results_suite::clean_run();
+  const statistics::MetricSummary fan{results_suite::counter("fan.pulses"),
+                                      statistics::CounterSummary{2, 5, 1.0, 3}, 4};
+  run.signature.metrics.push_back(fan);
+  EXPECT_EQ(TypeParam::derive(run), Verdict::kClean)
+      << "only the hardware error counters stand for 'nothing was found wrong'";
+
+  results::RunResult found = results_suite::clean_run();
+  found.signature.metrics.push_back(
+      results_suite::counted(std::string(results::kUncorrectedErrorsMetric), 2));
+  found.signature.metrics.back().unavailable_samples = 1;
+  EXPECT_EQ(TypeParam::derive(found), Verdict::kFindings) << "a finding outranks incompleteness";
+
+  results::RunResult corrected = results_suite::clean_run();
+  corrected.signature.metrics.push_back(
+      results_suite::counted(std::string(results::kCorrectedErrorsMetric), 2));
+  corrected.signature.metrics.back().unavailable_samples = 1;
+  EXPECT_EQ(TypeParam::derive(corrected), Verdict::kIncomplete)
+      << "errors counted and part of the run not seen: incomplete outranks corrected";
+}
+
 REGISTER_TYPED_TEST_SUITE_P(VerdictContract, ARunThatCheckedEverythingAndFoundNothingIsClean,
                             AWrongResultIsAFindingWhateverElseHappened,
                             AnUncorrectedHardwareErrorIsAFinding,
                             AnythingNotCheckedOrNotFinishedIsIncomplete,
-                            CorrectedErrorsMakeACleanRunNotClean);
+                            CorrectedErrorsMakeACleanRunNotClean,
+                            AnErrorCounterThatWentBlindForPartOfTheRunIsNotAClaimOfCleanliness,
+                            BlindnessOfAnythingElseOrAWrongResultDoesNotChangeTheVerdict);
 
 }  // namespace loadforge::contracts
 

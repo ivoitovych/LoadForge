@@ -95,9 +95,9 @@ TEST(ResultTest, TheEveryAbsentMetricIsInTheCapabilitiesWithItsRemedyAndNowhereE
   stack.rounds(2);
   const results::RunResult result = stack.result();
   const auto counted = count(stack.capabilities());
-  EXPECT_EQ(counted.metrics - counted.present, 1U + 1U + 5U)
-      << "fan, thermal.package (the one metric an absent thermal source looks for) and five "
-         "counters";
+  EXPECT_EQ(counted.metrics - counted.present, 1U + 1U + 6U)
+      << "fan, thermal.package (the one metric an absent thermal source looks for), five "
+         "counters and the share of time they were on the PMU";
   // Capabilities carry every metric, present or not; the signature only
   // the ones that were read.
   EXPECT_EQ(result.signature.metrics.size(), counted.present);

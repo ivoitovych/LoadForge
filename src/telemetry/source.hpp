@@ -10,8 +10,9 @@
 //     src/telemetry/sources/<name>/ (thermal, fan, frequency, memory, power,
 //     counters, edac), each reading through the platform seam so that every
 //     state can be driven from fixtures.
-//   Consumers: the sampler (timeline.hpp), and the capability probe that
-//     reports the set at the start of every run.
+//   Consumers: the sampler (sampler.hpp), which is the only caller of probe():
+//     its probe() answers the capability report that is stated at the start of
+//     every run and rendered by telemetry/capability.
 //
 // THE SIX STATES, PER SOURCE
 // --------------------------
@@ -19,8 +20,9 @@
 // permission-denied, malformed, disappears mid-run, counter-wraps -- and each
 // arrives through this interface as something specific: a Reading, an
 // Unavailable of the matching kind at probe(), an Unavailable of kVanished at
-// sample(), or a counter whose raw value went down (counter_delta in
-// sample.hpp says what that means).
+// sample(), or a counter whose raw value went down (counter_advance in
+// sample.hpp says what that means: a wrap if the metric has a modulus, a reset
+// if it has none).
 
 #include <memory>
 #include <optional>
@@ -49,7 +51,9 @@ struct MetricStatus {
 /// reports ("thermal" for "thermal.package").
 ///
 /// probe() discovers what this machine offers and fixes the source's metric
-/// set; it is called once, before any sample(). It returns at least one
+/// set; it is called once, before any sample(), and by the sampler alone
+/// (Sampler::probe, which answers the same statuses to whoever asks again).
+/// Nothing else calls it: a source need not survive a second probe. It returns at least one
 /// status -- a source that finds nothing reports the metrics it looked for
 /// as unavailable, never an empty list, because a silently empty column is the
 /// worst outcome F3 names. Every metric's name is valid and starts with
@@ -94,7 +98,8 @@ struct SourceStatus {
 
 /// The capability set, reported at the start of every run (M2a exit
 /// criterion 5) and recorded in the result: every source, every metric, and
-/// for every metric that is not present, why and what to do.
+/// for every metric that is not present, why and what to do. It is the answer
+/// of Sampler::probe(), not of a probe of its own.
 struct CapabilityReport {
   std::vector<SourceStatus> sources;
 };

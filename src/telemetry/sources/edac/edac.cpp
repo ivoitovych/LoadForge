@@ -36,7 +36,7 @@ core::Result<std::uint64_t, topology::Unavailable> read_count(topology::Source& 
     return topology::Unavailable{topology::Availability::kMalformed, file.path(),
                                  std::move(detail)};
   }
-  if (parsed.value().value >= EdacSource::kModulus) {
+  if (parsed.value().value >= EdacSource::kRange) {
     std::string detail = "exceeds the 32-bit count the kernel keeps: ";
     detail += text.value();
     return topology::Unavailable{topology::Availability::kMalformed, file.path(),
@@ -62,7 +62,6 @@ Metric make_metric(std::string_view name, Scope scope, std::uint32_t index) {
   metric.kind = Kind::kCounter;
   metric.scope = scope;
   metric.scope_index = index;
-  metric.modulus = EdacSource::kModulus;
   metric.provider = std::string{kProvider};
   return metric;
 }

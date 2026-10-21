@@ -110,8 +110,14 @@ MetricSummary summarize_series(const telemetry::Metric& metric,
       const auto& raw = std::get<telemetry::Counter>(point.reading);
       ++counter.samples;
       if (previous.has_value()) {
-        counter.delta += telemetry::counter_delta(previous->raw, raw.raw, metric.modulus);
-        span_ns += point.timestamp_ns - previous->timestamp_ns;
+        const std::optional<std::uint64_t> advance =
+            telemetry::counter_advance(previous->raw, raw.raw, metric.modulus);
+        if (advance.has_value()) {
+          counter.delta += *advance;
+          span_ns += point.timestamp_ns - previous->timestamp_ns;
+        } else {
+          ++counter.resets;
+        }
       }
       previous = Seen{point.timestamp_ns, raw.raw};
     }

@@ -136,14 +136,32 @@ TEST(Summarizer, AMisfiledReadingAloneLeavesTheSeriesAbsent) {
   EXPECT_EQ(absent->detail, "no sample in the window");
 }
 
-TEST(Summarizer, ACounterWithoutAModulusWrapsAtTwoToTheSixtyFour) {
+TEST(Summarizer, ACounterWithoutAModulusDoesNotWrapAndAStepDownIsAReset) {
   telemetry::Metric metric = energy();
   metric.modulus = std::nullopt;
   Series view;
   view.add(metric, {Point{0, Counter{std::numeric_limits<std::uint64_t>::max() - 1}},
-                    Point{kSecond, Counter{3}}});
-  const auto signature = must_summarize(view, {0, 2 * kSecond});
-  EXPECT_EQ(counter_of(signature), (CounterSummary{2, 5, 5.0}));
+                    Point{kSecond, Counter{3}}, Point{2 * kSecond, Counter{10}}});
+  const auto signature = must_summarize(view, {0, 3 * kSecond});
+  EXPECT_EQ(counter_of(signature), (CounterSummary{3, 7, 7.0, 1}))
+      << "the step down advanced nothing known and spans no time; 7 after it, in the 1 s";
+}
+
+TEST(Summarizer, TwoResetsAreTwoAndEachReadingAfterOneIsTheNewBaseline) {
+  telemetry::Metric metric = energy();
+  metric.modulus = std::nullopt;
+  Series view;
+  view.add(metric,
+           {Point{0, Counter{9}}, Point{kSecond, Counter{0}}, Point{2 * kSecond, Counter{4}},
+            Point{3 * kSecond, Counter{1}}, Point{4 * kSecond, Counter{2}}});
+  const auto signature = must_summarize(view, {0, 5 * kSecond});
+  EXPECT_EQ(counter_of(signature), (CounterSummary{5, 5, 5.0 / 2.0, 2}));
+}
+
+TEST(Summarizer, AResetDoesNotBlendWithAGapOrWithAModulusWrap) {
+  Series view;  // energy() has a modulus: a step down is a wrap, never a reset
+  view.add(energy(), {Point{0, Counter{990}}, Point{kSecond, Counter{5}}});
+  EXPECT_EQ(counter_of(must_summarize(view, {0, 2 * kSecond})), (CounterSummary{2, 15, 15.0, 0}));
 }
 
 TEST(Summarizer, ACounterReadingJustAfterAGapStartsAFreshRun) {

@@ -205,7 +205,7 @@ TEST(PowerSourceTest, EachPackageIsACounterOfMicrojoulesThatWrapsAtItsRange) {
     const MetricStatus& status = statuses[package];
     EXPECT_FALSE(status.unavailable.has_value());
     EXPECT_EQ(status.metric.name, "power.package");
-    EXPECT_EQ(status.metric.unit, Unit::kJoules);
+    EXPECT_EQ(status.metric.unit, Unit::kMicrojoules);
     EXPECT_EQ(status.metric.kind, Kind::kCounter);
     EXPECT_EQ(status.metric.scope, Scope::kPackage);
     EXPECT_EQ(status.metric.scope_index, package);

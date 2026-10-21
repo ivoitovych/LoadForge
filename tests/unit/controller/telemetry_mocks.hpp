@@ -294,6 +294,7 @@ class MockSummarizer final : public statistics::Summarizer {
     std::vector<double> times;
     std::uint64_t samples = 0;
     std::uint64_t delta = 0;
+    std::uint64_t resets = 0;
     std::int64_t span = 0;
     bool pair = false;
     for (std::size_t at = 0; at < inside.size(); ++at) {
@@ -311,9 +312,14 @@ class MockSummarizer final : public statistics::Summarizer {
         const auto* now = std::get_if<telemetry::Counter>(&inside[at].reading);
         const auto* before = std::get_if<telemetry::Counter>(&inside[at - 1].reading);
         if (before != nullptr) {
-          delta += telemetry::counter_delta(before->raw, now->raw, metric.modulus);
-          span += inside[at].timestamp_ns - inside[at - 1].timestamp_ns;
-          pair = true;
+          const auto advance = telemetry::counter_advance(before->raw, now->raw, metric.modulus);
+          if (advance.has_value()) {
+            delta += *advance;
+            span += inside[at].timestamp_ns - inside[at - 1].timestamp_ns;
+            pair = true;
+          } else {
+            ++resets;
+          }
         }
       }
     }
@@ -325,6 +331,7 @@ class MockSummarizer final : public statistics::Summarizer {
       statistics::CounterSummary counter;
       counter.samples = samples;
       counter.delta = delta;
+      counter.resets = resets;
       if (pair) {
         counter.rate_per_second = static_cast<double>(delta) / (static_cast<double>(span) / 1e9);
       }

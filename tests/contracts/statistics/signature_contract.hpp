@@ -62,11 +62,22 @@ inline telemetry::Metric temperature() {
 
 inline telemetry::Metric energy() {
   return {"power.energy",
-          telemetry::Unit::kJoules,
+          telemetry::Unit::kMicrojoules,
           telemetry::Kind::kCounter,
           telemetry::Scope::kPackage,
           0,
           std::uint64_t{1000},
+          "test"};
+}
+
+/// A counter that does not wrap within a run: no modulus.
+inline telemetry::Metric errors() {
+  return {"edac.corrected",
+          telemetry::Unit::kCount,
+          telemetry::Kind::kCounter,
+          telemetry::Scope::kMemoryController,
+          0,
+          std::nullopt,
           "test"};
 }
 
@@ -180,6 +191,38 @@ TYPED_TEST_P(SummarizerContract, ACounterAdvancesAcrossWrapsButNotAcrossGaps) {
   EXPECT_EQ(signature.metrics[0].unavailable_samples, 1U);
 }
 
+TYPED_TEST_P(SummarizerContract, AStepDownInACounterWithNoModulusIsAResetAndNotAWrap) {
+  signature_suite::Series view;
+  view.add(signature_suite::errors(),
+           {Point{0, Counter{5}}, Point{kSecond, Counter{7}}, Point{2 * kSecond, Counter{0}},
+            Point{3 * kSecond, Counter{3}}});
+  const auto signature = this->summarize(view, {0, 4 * kSecond});
+  const auto* counter = std::get_if<CounterSummary>(&signature.metrics.at(0).value);
+  ASSERT_NE(counter, nullptr);
+  EXPECT_EQ(*counter, (CounterSummary{4, 5, 2.5, 1}))
+      << "2 before the reset, 3 after it from the new baseline, and the reset itself "
+         "advanced nothing known, nor spans time";
+  EXPECT_EQ(signature.metrics[0].unavailable_samples, 0U);
+}
+
+TYPED_TEST_P(SummarizerContract, TheWindowsOfARunAndItsPhasesSumToTheRun) {
+  signature_suite::Series view;
+  view.add(signature_suite::errors(),
+           {Point{0, Counter{0}}, Point{kSecond, Counter{1}}, Point{2 * kSecond, Counter{4}},
+            Point{3 * kSecond, Counter{5}}});
+  const std::vector<telemetry::PhaseMark> marks = {{0, "run"}, {2 * kSecond, "stop"}};
+  const auto delta_of = [&](const statistics::Window& window) {
+    const auto signature = this->summarize(view, window);
+    return std::get<CounterSummary>(signature.metrics.at(0).value).delta;
+  };
+  EXPECT_EQ(delta_of(statistics::run_window(0, 3 * kSecond)), 5U);
+  const std::uint64_t first = delta_of(statistics::phase_window(marks, 0, 3 * kSecond));
+  const std::uint64_t second = delta_of(statistics::phase_window(marks, 1, 3 * kSecond));
+  EXPECT_EQ(first, 4U) << "the advance that ended on the mark belongs to the phase it happened in";
+  EXPECT_EQ(second, 1U);
+  EXPECT_EQ(first + second, 5U);
+}
+
 TYPED_TEST_P(SummarizerContract, ACounterReadOnceHasNoRate) {
   signature_suite::Series view;
   view.add(signature_suite::energy(), {Point{kSecond, Counter{42}}});
@@ -194,7 +237,9 @@ REGISTER_TYPED_TEST_SUITE_P(SummarizerContract, AnEmptyOrInvertedWindowIsRefused
                             TheWindowIncludesItsStartAndExcludesItsEnd,
                             OneReadingHasNoDeviationAndNoSlope,
                             AMetricWithNoReadingIsUnavailableNeverZero,
-                            ACounterAdvancesAcrossWrapsButNotAcrossGaps, ACounterReadOnceHasNoRate);
+                            ACounterAdvancesAcrossWrapsButNotAcrossGaps,
+                            AStepDownInACounterWithNoModulusIsAResetAndNotAWrap,
+                            TheWindowsOfARunAndItsPhasesSumToTheRun, ACounterReadOnceHasNoRate);
 
 }  // namespace loadforge::contracts
 

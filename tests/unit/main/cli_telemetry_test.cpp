@@ -149,7 +149,7 @@ TEST_F(StressTelemetry, TheResultIsWrittenInEveryFormatAskedForAndSaysWhereItWen
   ASSERT_EQ(sink.prepared, std::vector<std::string>{"results"});
   ASSERT_EQ(sink.stored.size(), 2U);
   EXPECT_EQ(sink.stored[0].first, "results/run.json");
-  EXPECT_NE(sink.stored[0].second.find("\"schema_version\": 1"), std::string::npos);
+  EXPECT_NE(sink.stored[0].second.find("\"schema_version\": 2"), std::string::npos);
   EXPECT_NE(sink.stored[0].second.find("\"memory.available\""), std::string::npos)
       << "the signature is in the result";
   EXPECT_EQ(sink.stored[1].first, "results/run.csv");

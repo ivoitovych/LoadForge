@@ -99,6 +99,19 @@ struct MainMockVerdict {
     }
     return false;
   }
+  /// A hardware error counter that was unreadable for part of the run or was reset.
+  static bool blind(const results::RunResult& run) {
+    for (const statistics::MetricSummary& summary : run.signature.metrics) {
+      const auto* counter = std::get_if<statistics::CounterSummary>(&summary.value);
+      const bool error_counter = summary.metric.name == results::kCorrectedErrorsMetric ||
+                                 summary.metric.name == results::kUncorrectedErrorsMetric;
+      if (error_counter &&
+          (summary.unavailable_samples > 0 || (counter != nullptr && counter->resets > 0))) {
+        return true;
+      }
+    }
+    return false;
+  }
   static results::Verdict derive(const results::RunResult& run) {
     bool unrun = false;
     bool wrong = false;
@@ -114,7 +127,7 @@ struct MainMockVerdict {
     if (wrong || advanced(run, results::kUncorrectedErrorsMetric)) {
       return results::Verdict::kFindings;
     }
-    bool unfinished = run.workloads.empty() || unrun;
+    bool unfinished = run.workloads.empty() || unrun || blind(run);
     for (const results::WorkloadResult& workload : run.workloads) {
       unfinished =
           unfinished || workload.tally.oracle_blocks == 0 || workload.tally.integrity_checked == 0;

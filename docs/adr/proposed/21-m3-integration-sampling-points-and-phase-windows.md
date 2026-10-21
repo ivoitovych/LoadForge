@@ -3,6 +3,12 @@
 **Status:** proposed (stream 21; the manager numbers it when it lands)
 **Date:** 2026-10-20 21:40 UTC
 
+> **Outcome, 2026-10-21:** decision 3 (the window of a phase ends one nanosecond past the
+> next mark) is now stated in `statistics/signature.hpp` and built by
+> `statistics::phase_window()` and `run_window()`; `src/main`'s own `phase_windows()` is to
+> be replaced by them (recorded follow-up in
+> `docs/journal/m3-contract-corrections-*.md`). The rest of this ADR is unchanged.
+
 ## Context
 
 The sampler starts no thread and reads no clock (`telemetry/sampler.hpp`): the caller says

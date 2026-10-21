@@ -3,6 +3,13 @@
 **Status:** proposed (stream 21; the manager numbers it when it lands)
 **Date:** 2026-10-20 21:41 UTC
 
+> **Outcome, 2026-10-21 (branch `fix/m3-contract-disagreements`):** all seven disagreements
+> were corrected by a contract change (`docs/journal/m3-contract-corrections-*.md`), the
+> `WILL_FAIL` executable was removed, and its tests now pass in
+> `tests/integration/m3/corrections_test.cpp`. The mechanism worked as designed: each test
+> stayed red-by-design until its contract was fixed, and then moved. Nothing is registered
+> `WILL_FAIL` now.
+
 ## Context
 
 ADR 0003 has each component read a contract for itself and compares the readings by running

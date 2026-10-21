@@ -66,17 +66,6 @@ void write_missing(std::ostream& out, const Group& group) {
 
 }  // namespace
 
-CapabilityReport probe_capabilities(std::span<Source* const> sources) {
-  CapabilityReport report;
-  for (Source* const source : sources) {
-    SourceStatus status;
-    status.source = std::string{source->name()};
-    status.metrics = source->probe();
-    report.sources.push_back(std::move(status));
-  }
-  return report;
-}
-
 std::string render_capabilities(const CapabilityReport& report) {
   std::ostringstream out;
   out.imbue(std::locale::classic());

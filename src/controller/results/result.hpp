@@ -47,7 +47,12 @@
 
 namespace loadforge::results {
 
-inline constexpr std::uint32_t kSchemaVersion = 1;
+inline constexpr std::uint32_t kSchemaVersion = 2;
+
+// Version 2 (contract change of the M3 corrections): a counter's summary carries
+// `resets` (statistics/signature.hpp); the unit "microjoules" exists, and the
+// power counter is in it; EDAC counters have a null `modulus` (a step down is a
+// reset); and the verdict reads the blindness of the error counters.
 
 /// The run fingerprint (F12): the operating context two runs must share to be
 /// compared. Every field the machine might not tell us is optional.
@@ -129,7 +134,10 @@ struct Observers {
 ///   kCorrectedErrors  nothing was wrong, and the hardware corrected errors
 ///                     while it ran: not a clean run (F13).
 ///   kIncomplete       nothing was found wrong, and something was not checked
-///                     or did not finish: "no errors" cannot be said.
+///                     or did not finish: "no errors" cannot be said. That
+///                     includes a hardware error counter that was blind for part
+///                     of the run (below): the errors it was to count may have
+///                     happened there.
 ///   kFindings         something was computed wrong, or the hardware reported
 ///                     an uncorrected error.
 enum class Verdict : std::uint8_t { kClean, kCorrectedErrors, kIncomplete, kFindings };
@@ -175,8 +183,14 @@ struct RunResult {
 ///      delta is above zero.
 ///   2. kIncomplete when there is no workload; when any finding is a
 ///      VerificationNotPerformed; when any workload's tally has oracle_blocks
-///      or integrity_checked at zero; or when any worker's fate is not
-///      clean (controller::is_clean).
+///      or integrity_checked at zero; when any worker's fate is not
+///      clean (controller::is_clean); or when any signature metric named
+///      kCorrectedErrorsMetric or kUncorrectedErrorsMetric was blind: it has
+///      Unavailable readings in the run's window (`unavailable_samples` above
+///      zero) or was reset (`resets` above zero). A counter that was there and
+///      went blind is not a counter that did not move; a counter that was
+///      absent at probe is not in the signature, and the capability report
+///      says it was never read, which this rule does not call blind.
 ///   3. kCorrectedErrors when any signature metric named
 ///      kCorrectedErrorsMetric is a counter whose delta is above zero.
 ///   4. kClean.
