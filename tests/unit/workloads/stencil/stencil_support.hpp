@@ -196,6 +196,14 @@ inline double max_magnitude(std::span<const std::byte> grid) {
 // ---- the exact reference ---------------------------------------------------------
 
 __extension__ using Exact = __int128;
+__extension__ using UnsignedExact = unsigned __int128;
+
+/// value * factor in two's complement, multiplied unsigned: under UBSan a signed
+/// __int128 multiplication calls __muloti4, which the ARM64 runtime does not
+/// provide (journal §1.30). No product here comes near 2^127.
+inline Exact times(Exact value, UnsignedExact factor) {
+  return static_cast<Exact>(static_cast<UnsignedExact>(value) * factor);
+}
 
 /// Every cell of the grid after kSteps sweeps as an integer multiple of 2^-76.
 /// The input is a multiple of 2^-52, each sweep (4 u + N + S + E + W) / 8
@@ -207,15 +215,16 @@ inline std::vector<Exact> exact_after_sweeps(std::span<const std::byte> input,
   std::vector<Exact> grid(kEdge * kEdge);
   for (std::size_t cell = 0; cell < kEdge * kEdge; ++cell) {
     const double scaled = std::ldexp(cell_of(input, cell / kEdge, cell % kEdge), 52);
-    grid[cell] = static_cast<Exact>(static_cast<std::int64_t>(scaled)) * (Exact{1} << 24);
+    grid[cell] =
+        times(static_cast<Exact>(static_cast<std::int64_t>(scaled)), UnsignedExact{1} << 24);
   }
   std::vector<Exact> next(grid);
   for (std::size_t sweep = 0; sweep < sweeps; ++sweep) {
     for (std::size_t row = 1; row + 1 < kEdge; ++row) {
       for (std::size_t column = 1; column + 1 < kEdge; ++column) {
         const std::size_t cell = row * kEdge + column;
-        next[cell] = (4 * grid[cell] + grid[cell - kEdge] + grid[cell + kEdge] + grid[cell - 1] +
-                      grid[cell + 1]) /
+        next[cell] = (times(grid[cell], 4) + grid[cell - kEdge] + grid[cell + kEdge] +
+                      grid[cell - 1] + grid[cell + 1]) /
                      8;
       }
     }
