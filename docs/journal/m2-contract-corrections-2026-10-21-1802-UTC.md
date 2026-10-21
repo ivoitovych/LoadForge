@@ -177,9 +177,13 @@ schema is **3** (`docs/result-schema.md`). The worker protocol gained `--lock` a
 
 The five `prlimit` lifts (`ci.yml`, `sanitizers.yml`, `canary-2604.yml`, `portability.yml`,
 `coverage.yml`) were there because the sweep (and the default footprint) could not lock under an
-8 MiB allowance. The sweep now maps with `kTry`, and the controller's default is `kTry`, so the
-runs that were refused now run and say their pages were not locked. The decision about removing
-the lift is in the report of this change, with the measured result of the sweep unprivileged.
+8 MiB allowance. **They go.** The sweep now maps with `kTry`, and the controller's default is `kTry`,
+so the runs that were refused now run and say their pages were not locked. Measured here, as uid
+65534 with no capabilities under `prlimit --memlock=8388608` (the command of CI's own reproduction):
+the M2 integration binary passes (the sweep, 80 configurations, and the pipeline through the shipped
+binary), and the whole debug `ctest` passes (exit 0; the three tests that need root skip). What this
+does not show is ARM64 and Ubuntu 26.04, which are CI's: if one of them is red for want of the lock
+the lift is a one-line revert, and the red would be a test that maps without a policy.
 
 ## Follow-ups
 
