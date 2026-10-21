@@ -277,6 +277,23 @@ TEST(RunnerDefinition, FaultNamesAndErrorEquality) {
   EXPECT_EQ(verification::describe(RunnerFault::kResources), "runner resources");
   EXPECT_EQ(verification::describe(RunnerFault::kFinished), "runner already finished");
   EXPECT_EQ(verification::describe(static_cast<RunnerFault>(9)), "unrecognised runner fault");
+  EXPECT_EQ(verification::describe(verification::LockPolicy::kRequire), "require");
+  EXPECT_EQ(verification::describe(verification::LockPolicy::kTry), "try");
+  EXPECT_EQ(verification::describe(verification::LockPolicy::kNone), "none");
+  EXPECT_EQ(verification::describe(static_cast<verification::LockPolicy>(9)),
+            "unrecognised lock policy");
+  EXPECT_EQ(verification::describe(verification::LockOutcome::kLocked), "locked");
+  EXPECT_EQ(verification::describe(verification::LockOutcome::kNotLocked), "not locked");
+  EXPECT_EQ(verification::describe(verification::LockOutcome::kFellBack),
+            "not locked: the lock was refused");
+  EXPECT_EQ(verification::describe(static_cast<verification::LockOutcome>(9)),
+            "unrecognised lock outcome");
+  expect_memberwise_equality(
+      verification::MemoryLock{verification::LockPolicy::kTry, verification::LockOutcome::kLocked,
+                               "d"},
+      {[](verification::MemoryLock& l) { l.policy = verification::LockPolicy::kNone; },
+       [](verification::MemoryLock& l) { l.outcome = verification::LockOutcome::kFellBack; },
+       [](verification::MemoryLock& l) { l.detail = "e"; }});
   expect_memberwise_equality(RunnerError{RunnerFault::kResources, "d"},
                              {[](RunnerError& e) { e.fault = RunnerFault::kFinished; },
                               [](RunnerError& e) { e.detail = "e"; }});

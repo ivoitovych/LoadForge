@@ -520,9 +520,11 @@ Node workload_node(const WorkloadResult& workload) {
   if (workload.memory_lock.has_value()) {
     Node lock = Node::object();
     lock.add("outcome", text(verification::describe(workload.memory_lock->outcome)));
-    lock.add("detail", workload.memory_lock->detail.empty()
-                           ? Node::null()
-                           : Node::text(workload.memory_lock->detail));
+    Node detail = Node::null();
+    if (!workload.memory_lock->detail.empty()) {
+      detail = Node::text(workload.memory_lock->detail);
+    }
+    lock.add("detail", std::move(detail));
     node.add("memory_lock", std::move(lock));
   } else {
     node.add("memory_lock", Node::null());

@@ -671,6 +671,10 @@ TEST(VerifiedRunLoop, FailuresNameTheirStage) {
   }
 }
 
+// A write script that lets one frame through whole (the memory frame, the first the worker
+// sends) and then refuses the next with the errno given.
+constexpr std::size_t kEverything = std::size_t{1} << 20U;
+
 TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTheWorkers) {
   {
     Rig rig;
@@ -684,7 +688,7 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
   {
     Rig rig;
     rig.script.slices = {slice_of(1, {unrun("a")})};
-    rig.syscalls.script_writes({{1, EIO}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EIO}});
     auto outcome = rig.run();
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().stage, "record channel");
@@ -703,7 +707,7 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
     // The reader is gone after the memory frame: the controller left.
     Rig rig;
     rig.script.slices = {slice_of(1, {unrun("a")})};
-    rig.syscalls.script_writes({{1, EPIPE}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EPIPE}});
     auto outcome = rig.run();
     ASSERT_TRUE(outcome.has_value());
     EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
@@ -712,7 +716,7 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
     // The tally frame is the one refused.
     Rig rig;
     rig.script.slices = {slice_of(1)};
-    rig.syscalls.script_writes({{1, EIO}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EIO}});
     auto outcome = rig.run();
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().stage, "record channel");
@@ -724,7 +728,7 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
     last.records.emplace_back(unrun("late"));
     rig.script.final_report = last;
     rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
-    rig.syscalls.script_writes({{1, EIO}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EIO}});
     auto outcome = rig.run();
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().stage, "record channel");
@@ -735,7 +739,7 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
     last.records.emplace_back(unrun("late"));
     rig.script.final_report = last;
     rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
-    rig.syscalls.script_writes({{1, EPIPE}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EPIPE}});
     auto outcome = rig.run();
     ASSERT_TRUE(outcome.has_value());
     EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);

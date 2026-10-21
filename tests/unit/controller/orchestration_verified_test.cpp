@@ -536,6 +536,9 @@ TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
   b.tally_seen = true;
   EXPECT_NE(a, b);
   b = a;
+  b.memory = verification::MemoryLock{};
+  EXPECT_NE(a, b);
+  b = a;
   b.work = WorkerWork{};
   EXPECT_NE(a, b);
   b = a;
@@ -568,6 +571,7 @@ TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
   EXPECT_TRUE(differs([](WorkerWork& w) { w.seed = 1; }));
   EXPECT_TRUE(differs([](WorkerWork& w) { w.footprint_bytes = 1; }));
   EXPECT_TRUE(differs([](WorkerWork& w) { w.line_bytes = 1; }));
+  EXPECT_TRUE(differs([](WorkerWork& w) { w.lock = verification::LockPolicy::kNone; }));
 
   const FindingReport f;
   FindingReport g;
