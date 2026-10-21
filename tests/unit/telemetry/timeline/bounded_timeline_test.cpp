@@ -15,7 +15,7 @@
 #include <string>
 #include <variant>
 
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/telemetry/timeline_contract.hpp"
 
 namespace loadforge::telemetry {
 namespace {
@@ -38,7 +38,6 @@ INSTANTIATE_TYPED_TEST_SUITE_P(Bounded, TimelineContract,
                                ::testing::Types<telemetry::BoundedSubject>);
 // This file provides the timeline and consumes no source; the source suite
 // is instantiated by the sampler's tests, against its own mock.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(SourceContract);
 
 }  // namespace loadforge::contracts
 

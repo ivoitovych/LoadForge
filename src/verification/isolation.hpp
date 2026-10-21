@@ -27,8 +27,15 @@
 //                     Not performed: inconclusive; stop.
 //   2. kOtherCore     a CPU on another physical core, the original threads.
 //                     Skipped when the placement offers no other core.
+//                     This rung changes the core and holds node and cache
+//                     sharing constant where the topology allows: the order
+//                     of Placement::other_cores is the order of preference
+//                     for that.
 //   3. kSingleThread  the original CPU, one thread. Skipped when the original
-//                     ran one thread already: step 1 was this step.
+//                     ran one thread already: step 1 was this step, and its
+//                     answer is this rung's, whatever step 1 found -- clean
+//                     included, so a one-thread original that stopped at
+//                     step 1 answers kNo here too, not kUnknown.
 // Every finding is evidence CONSISTENT WITH something, reported with a
 // confidence, never a verdict on the hardware (§7).
 
@@ -131,7 +138,10 @@ class Rerunner {
 /// Where the original unit ran, and where else it may be run.
 ///
 ///   cpu          the logical CPU it ran on (its provenance's logical_cpu).
-///   threads      the thread count it ran with; at least 1.
+///   threads      the thread count it ran with; at least 1. A placement of 0
+///                is passed through as given: the requests carry 0, the
+///                Rerunner may refuse it (kNotPerformed), and the ladder
+///                turns the refusal into an answer like any other.
 ///   other_cores  logical CPUs on physical cores other than cpu's, in the
 ///                order to try them. The ladder uses the first.
 struct Placement {
@@ -278,10 +288,12 @@ struct Step {
 ///
 ///   steps          the re-runs made, in rung order.
 ///   answers        each rung's answer: kYes for
-///                  kReproduced, kNo for kClean, kUnknown for kNotPerformed or
-///                  a rung not run -- except that a single-thread rung skipped
-///                  because the original ran one thread takes the same-core
-///                  answer, which it is.
+///                  kReproduced, kNo for kClean, kUnknown for kNotPerformed, for
+///                  a rung not run, and for an outcome outside RerunOutcome --
+///                  never kNo, so no unrecognised value can produce the
+///                  transient finding -- except that a single-thread rung
+///                  skipped because the original ran one thread takes the
+///                  same-core answer, which it is (whatever that answer is).
 ///   finding        derive_finding(answers).
 ///   confidence     confidence_of(finding).
 struct IsolationReport {
