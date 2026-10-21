@@ -871,6 +871,234 @@ warm`) and passed 5 of 5 locally under the same preset. AddressSanitizer was alr
 exempted for its quarantine; ThreadSanitizer now is too, and the plain and coverage builds
 keep the bound.
 
+### 1.33 `lz4 -d` accepts blocks the format document says a decoder may refuse
+
+*Established 2026-10-20, wave 1 (stream 03, `docs/journal/03-oracle-compression.md`).* Hand-built
+blocks in a legacy frame were given to `lz4 -d` 1.9.4. It accepted offset 0 (writing zeros),
+a match starting 11 bytes before the end of the data, and a last token with a match length;
+it refused an offset reaching before the first byte, a match over the last five bytes, and a
+block ending after a match. The document leaves the end-of-block rules to the decoder
+("allowed to reject"), and the tool rejects some and not others. So agreement with the
+reference decoder is not the standard for a malformed block; the document is (§2.34). Every
+block the reference *compressor* wrote kept the stricter rules, which is what lets the
+strict oracle accept real output.
+
+### 1.34 A single-bit flip can turn one valid encoding into another, so "every flip is caught" is false
+
+*Established 2026-10-20, wave 1 (streams 03 and 05, fragments `03-oracle-compression.md`,
+`05-workload-compression.md`).* In `runs-l1` 517 of 4,728 single-bit flips decode to the
+original input by another route (an offset moved to an identical earlier copy); over one
+unit's 306,944 flips, 10 were agreements. The specification counts any block that decodes to
+the input as right, so no oracle can or should catch them. The tests say which of three each
+flip is (malformation, different bytes, another valid encoding), prove the third
+independently of the decoder, and pin the counts so a rule that stopped refusing shows as
+flips moving between columns. An exit criterion that says "every flip" has to say this.
+
+### 1.35 An unoptimised build leaves the upper ymm halves dirty, and every SSE instruction after it pays
+
+*Established 2026-10-20, wave 1 (stream 06, `docs/journal/06-workload-dense-linear.md`).* A
+whole-product test took 14 s in the debug build against 0.05 s for the same loop standalone;
+samples put the time in the test's own scalar code after the AVX2 kernel had run. GCC emits
+`vzeroupper` on leaving a 256-bit function only when it optimises: `objdump -d | grep -c
+vzeroupper` gave 0 for the debug object and 2 for `-O2`. An explicit `_mm256_zeroupper()` at
+the end of the kernel took the test to 0.6 s. Every test, coverage and sanitizer build is
+unoptimised, so the cost would have landed on every tier. Stream 25's sweep gained the same
+call when it moved into the kernel directory.
+
+### 1.36 What a 32-byte vector does to a build and to a call
+
+*Established 2026-10-20, waves 1 and 3 (streams 06, 25, 26, 30).* Four facts, each from a
+failed build or a crash:
+- `std::array<__m256d, N>` fails under `-Werror` (`-Wignored-attributes`: a template argument
+  drops the vector attributes); a struct of named `__m256d` members does not.
+- A 32-byte vector passed or returned by value in a unit built without AVX is
+  `-Werror=psabi`. Pass by `const&`; make constants `static constexpr`.
+- `std::bit_cast` on a vector inside a `target("avx2")` function crashed with `SIGSEGV` at
+  `-O0`: it is an ordinary function emitted for the baseline target, and a vector crosses
+  the call in registers the caller's target names. The rule: every function that touches a
+  vector is `always_inline` into the one function that chose the target, and the cast is
+  `__builtin_bit_cast`. `-Wno-psabi` only hides the note.
+- `-mavx2` on one source file puts AVX encodings in every inline function that file
+  emits: 93 `ymm` instructions in the one object, none in five others, and only because that
+  file included nothing from the standard library. A `target` attribute per function has no
+  such reach (§2.35).
+Also: Clang refuses `__attribute__((target(...))) [[nodiscard]]` and takes the other order.
+
+### 1.37 The scalar and the fused paths give the same bits on x86-64 and AArch64, measured under emulation
+
+*Established 2026-10-20, waves 1 and 3 (streams 06, 25, 30).* The dense-linear output
+digests, the graph ranks and nine ray-tracing digests were computed on x86-64 (scalar and
+AVX2) and from an `aarch64-linux-gnu-g++-13` build run under `qemu-aarch64` 8.2 (scalar and
+NEON): equal on every line. It follows from the kernels' order (lanes hold different entries,
+never partial sums of one; a fused multiply-add is one correctly rounded operation on both
+ISAs; `-ffp-contract=off` keeps the rest unfused), and `objdump -d` of the scalar kernels
+showed no `vfmadd`, `fmadd` or `fmla` on either architecture. The emulator is IEEE-exact for
+these operations but is not hardware; CI's ARM64 runner is the check on a real core. Under
+qemu the same tests ran about thirty times slower (3 min 25 s against 8 s). A NEON kernel
+measured to 100% on AArch64 before CI saw it by cross-compiling, running under qemu, and
+reading with `aarch64-linux-gnu-gcov-13`.
+
+### 1.38 A new thread inherits its creator's floating-point registers; `sched_setaffinity(0)` moves the calling thread only
+
+*Established 2026-10-20, wave 1 (streams 07 and 08, `07-numerics-platform.md`,
+`08-executor.md`).* With `fesetround(FE_UPWARD)` and MXCSR.FTZ and DAZ set before a pool of
+four threads started, every task on every thread read upward rounding, FTZ and DAZ on; a
+write in the child did not reach the parent. So "establish before any thread starts, assert
+on each thread's start" is correct. Pid 0 in `sched_setaffinity` is the calling *thread*:
+four threads pinned themselves, read their masks back as exactly their CPU, and
+`sched_getcpu()` agreed over 160 tasks, with the caller's mask unchanged. The kernel refuses
+a thread's placement (CPU 1023, an empty set) with `EINVAL` exactly as the shared fake
+models it.
+
+### 1.39 CPUID with a leaf above the highest returns the highest basic leaf's data, not zeros
+
+*Established 2026-10-20, wave 1 (stream 07).* A probe that reads leaf 7 on a CPU without it
+reads another leaf's bits as feature flags. The probe reads leaf 0 first and answers
+scalar-only below leaf 7; `XGETBV` without OSXSAVE faults on real hardware, so the fake
+records either read as a fault. The machine's `/proc/cpuinfo` flags and the probe agree
+(`avx2`, `fma`, `avx512f`): Linux removes a flag whose xfeature the OS has not enabled, so
+the flag list is the kernel's verdict on the OS-support half of the question.
+
+### 1.40 The runner's working set is bigger than its footprint, and an unprivileged run cannot lock it
+
+*Established 2026-10-20, wave 1 and the M2 integration (streams 02 and 11,
+`02-input-integrity.md`, `11-integration-m2.md`).* Under the default 8 MiB
+`RLIMIT_MEMLOCK`, as `nobody` (`setpriv --reuid=65534`): a 1 MiB footprint ran, 7,000,000
+bytes was refused with `mlock(8960384 bytes): Cannot allocate memory`. The set adds strides
+rounded to lines, the regeneration buffer, scratch and slack, and a page for each of three
+control copies. Sort's smallest unit is 2,621,440 bytes, so at 3 MiB its runner maps
+8,437,824, which is 49,216 over. This is what failed every CI job at the first sweep
+(2026-10-21 09:11 UTC): the jobs are unprivileged with 8 MiB, where §1.17's "root ignores the
+limit" had hidden it locally. The steps that run `ctest` now lift the allowance for their
+shell (`prlimit --memlock=unlimited`); the runner's always-lock policy stays an open
+contract question (§6).
+
+### 1.41 A perf event that excludes the kernel counts nothing the kernel does
+
+*Established 2026-10-21 (streams 13 and 21, and the M3 corrections,
+`m3-contract-corrections-2026-10-21-1145-UTC.md`).* `perf_event_open(PERF_TYPE_SOFTWARE,
+CONTEXT_SWITCHES, pid = getpid(), inherit = 1)` read after each of five 20 ms sleeps: with
+`exclude_kernel = 1`, 0 0 0 0 0 as root and as uid 65534; with it clear, 1 2 3 4 5 as root,
+`EACCES` as uid 65534 at `perf_event_paranoid` 2, and 1 2 3 4 5 at paranoid 1. A zero
+standing in for a value was present and valid, found only by a run against the real kernel;
+no fake could have shown it. Also from the VM: the four hardware events fail `ENOENT`; the
+power PMU (type 9) has only `energy-psys`, scale exactly 2^-32 J, and refuses `exclude_hv`
+and `inherit` with `EINVAL`; and `perf_event_paranoid` is 0 in one container and 2 in the
+next, so it is a property of the machine, which is why the source reads and names it.
+
+### 1.42 What the development VM does and does not offer
+
+*Established 2026-10-20, waves 1 and 2 (streams 09, 10, 13, 21).* A Firecracker VM, Linux
+6.18.44, 4 vCPUs, one node, no SMT: no `/sys/class/hwmon`, an empty `/sys/class/thermal`, no
+cpufreq, no powercap, no EDAC, no hardware performance counters; memory, `/proc/stat`, the
+CPU lists and caches are there. A "present" tree for any of the absent ones cannot be
+captured here, so tests build them in the layout the kernel documents and say so; none is a
+capture, and T11 (a thermal result on hardware) stays open. A real run of the M3 stack saw
+10 of 23 metrics, took 3 ms in 11 to 12 rounds of a 1 s run (0.28 % of one CPU at 10 Hz),
+and every absent metric printed with its remedy. `sizeof(Point)` is 120 bytes on x86-64, so
+a five-hour run over 96 series at 1 Hz is at most 414 MB resident, ten times that at 10 Hz.
+
+### 1.43 More shapes of §1.13, and one refinement
+
+*Established 2026-10-20, waves 1 to 4 (streams 00, 01, 02, 03, 04, 09, 12, 13, 19, 20, 24,
+28, 30).* Every stream found uncoverable branches on lines with no `if`. The refinement
+(stream 09): a cleanup branch comes from a *partly built* or *temporary aggregate*, not from
+a named local string; `std::string detail = ...; return Unavailable{kind, path_,
+std::move(detail)};` has none, `Unavailable{kind, a(), b()}` has one. What works is
+assigning into an object that is already complete (`emplace_back()` then fill the reference,
+default-construct then assign a field at a time). The shapes met beyond §1.13's: a ternary
+whose arms build strings (20 branches in one renderer); a temporary aggregate passed to
+`push_back`; `new (std::nothrow) T[n]` (a null check no test takes); a throwing constructor
+under a `new` (declare it `noexcept`, and let the `bad_alloc` end the process as the
+workload's own allocation would); a `switch` over every enumerator (the implicit no-match
+edge; make the last case `default:`); a template instantiated for several types (gcovr keeps
+instantiations apart; a reader written over a `std::variant` instead); a variant built on the
+first line of a function; and a `std::sqrt` that carries an errno arm (`-fno-math-errno` on
+that library, results unchanged). A defaulted `operator==` in a header, or a short-circuit `&&`
+chain defining one, still reads as uncovered (§1.22); a comparison written as a xor of the
+fields tested against zero has no branch. `noexcept` was not used to hide any of them where
+the function allocates: `bugprone-exception-escape` is on.
+
+### 1.44 A file that is only a table is absent from the coverage report
+
+*Established 2026-10-20, wave 3 (stream 27, `docs/journal/27-oracles-wave3.md`).* A generated
+`twiddle_table.cpp` holding one `const std::array` initializer has no executable line, so
+gcovr wrote no record for it and `tools/coverage.sh`, which requires every `src/**.cpp` in the
+report, failed at 100.0 % with "1 source file(s) absent". The table is a `.inc` included by
+the accessor's `.cpp`. A data-only `.cpp` in `src/` fails the gate however well it is tested.
+
+### 1.45 At -O3 GCC 13 cannot see that the last alternative of a variant is held
+
+*Established 2026-10-20, waves 1 and 2 (streams 01, 02, 11).* `return
+f(*std::get_if<Last>(&v));` after `get_if` tests for the other alternatives compiles in the
+debug, coverage and Clang builds and fails the `static` and `release` presets
+(`-Wnull-dereference -Werror`: "potential null pointer dereference", reported inside
+`basic_string::size()`). Calling the function out of line with `[[gnu::noinline]]` moved the
+warning into the wrapper. `std::get` for the last arm compiles but trips
+`bugprone-exception-escape`. What works: `std::visit` over per-alternative overloads.
+`oracle.hpp`'s helpers were corrected this way (#84, item 3, with a static-header
+preset so the contract headers compile under the release flags); `provenance_of` in
+`record.hpp` still has the shape, and the controller avoids it with a visit.
+
+### 1.46 A multiplication by 0.001 is not the nearest double; a division by 1000 is
+
+*Established 2026-10-20, wave 2 (stream 09, `docs/journal/09-telemetry-sources-a.md`).*
+`20016 * 0.001` is `20.016000000000002` and `20016 / 1000.0` is `20.016`; over the millidegree
+values 20000 to 99999 they differ for 10,654 of 80,000. A reading carries a multiplier and a
+divisor, and a temperature divides. A related misreading: the temperature range, absolute zero
+to one thousand degrees, does not catch a chip that reports a fixed `-128000` for "not
+connected", because that is above absolute zero. The first comment said it did and the test
+that tried it failed; catching it needs the chip named, which needs a chip to verify against.
+
+### 1.47 How far real computations sit inside the derived bounds
+
+*Established 2026-10-20, waves 1 to 3 (streams 04, 06, 22, 24, 26, 27).* Worst residual over
+tolerance: dense linear 0.0071 (against a naive loop; 0.0030 to 0.23 over 43 evaluation orders
+and short vectors); FFT under a twentieth of the bin tolerance, `numpy.fft` at 1e-5; stencil
+`scipy.ndimage` 1.6e-2, the nearest to its limit; particles 0.0061; sparse CG
+`||r||/||b||` 2.25e-16 at worst of 2,000 solves against the specification's 1.97e-11, which
+confirms the assumption its derivation flagged (a factor of 8.7e4, on the scalar path).
+The bounds are not hair-triggers on healthy output, and they are not vacuous: a flipped
+exponent or upper mantissa bit breaches them. What they let through is the low significand
+bits: 116 of 1,184 sampled single-bit flips of dense-linear outputs (every one a low
+mantissa bit); mantissa bits 0 to 14 of a Monte Carlo batch sum at tolerance 2^-38. Both
+are the specification's choice of a rounding bound, recorded so nobody expects the low bit
+to be seen.
+
+### 1.48 Parseval's residual cannot be placed within 2^-20 of its tolerance
+
+*Established 2026-10-20, wave 3 (streams 22 and 27).* The specification asks every bounded
+oracle's tolerance to be tested at (1 ± 2^-20) T'. The FFT's Parseval residual is a
+difference of two doubles near 64, so it moves in steps of one ulp (about 4.5e-13) while T'
+is about 6e-9: a step is about 2^-13 of T', and no output lands nearer the limit. Scaling
+the input does not help. The bin check, the stencil, the sparse rows and the particles
+reach epsilon by arranging the exact residual to be zero so that an offset *is* the
+residual; for Parseval the test finds by bisection the nearest representable residual on
+each side and requires both on the right side. The specification should say so (§6).
+
+### 1.49 A confidence interval from replicates is too narrow once the correction subtracts a noisy baseline
+
+*Established 2026-10-20, wave 3 (stream 28, `docs/journal/28-explore.md`).* A coverage
+property (600 seeded searches, 5 replicates, noise on candidate and reference) measured the
+nominal 95 % interval covering the true mean 81 % of the time: every corrected score
+subtracts a baseline built from the same few reference readings, so the error is shared and
+the sample spread cannot see it. Adding the propagated reference noise brought coverage to
+95 to 98 %. A successive-difference estimate of that noise was dominated by drift (a clear
+winner reported indistinguishable); the residual of each interior reading from the line
+through its neighbours is not.
+
+### 1.50 The executor's hand-off costs about 75 µs a run, almost all of it in the kernel
+
+*Established 2026-10-20, wave 1 (stream 08).* Two million runs of one to thirteen trivial
+tasks on four threads: 151.5 s wall, 21 s user, 162 s system (the futex calls of the condition
+variables, four threads woken per run); no index lost or repeated, five threads before and
+after, no allocation. It matters only to a workload whose unit is a few microseconds, and
+none specified is. Under ThreadSanitizer the process has one thread more than the pool made
+(the runtime's own, started once the process has made a thread), so the exact count is
+asserted outside the sanitizers and "unchanged across a million runs" everywhere. A hundred
+thousand runs took 7.7 s debug, 9 s TSan, 8 s ASan: the guess that sanitizers would be much
+slower, which had cut the soak to a tenth, was wrong (§4.21).
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
