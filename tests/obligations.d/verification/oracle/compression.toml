@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/compression and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/compression"
+classes  = ["P1", "P2", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+fixtures = ["lz4"]
+provides = ["OracleContract"]
+note     = """
+The compression workload's independent oracle: a strict LZ4 block decoder \
+written from the block-format document and workloads/compression/spec.hpp, \
+never from the compressor, and the Oracle that judges a unit's output with \
+it against the unit's input. \
+\
+P1: each rule of the format, refused and accepted, in decoder_test.cpp; the \
+order the oracle judges in (size, magic, length bound, padding, scratch, \
+block, comparison) in the T5 suite. \
+\
+P2: the one fallible call, the scratch the block decodes into. It comes \
+through a seam of this module's own (ScratchSource) and its failure is \
+injected in the T5b suite: every unit is NotChecked, and a malformed header \
+or padding is still reported as malformed without scratch. Added to the \
+brief's classes, which did not list it. \
+\
+P3: the empty literal run, literal and match lengths either side of 15 and \
+15 + 255k (k = 0, 1, 2), offsets 1 and 65535 and one past the first byte, a \
+match overlapping its own output (offsets 1 and 3), both end-of-block margins \
+exactly met and missed by one, data shorter than any match, empty data -- \
+written by hand from the document in tests/unit, and the same boundaries \
+from the reference tool in tests/oracle. \
+\
+P4: every verdict the contract allows an exact oracle. Each malformation is \
+an ExactMismatch with no difference, its check naming the rule and the byte \
+of the output; a block that decodes to wrong bytes is an ExactMismatch with \
+a Difference in Domain::kDerived; wrong-sized evidence and missing scratch \
+are NotChecked; OracleContract runs against the oracle in tests/unit with \
+good units from lz4 and a wrong unit for every rule. T5: every single-bit \
+flip of runs-l1's header and block, and a sample of the other six units', \
+each said to be malformed, a derived difference, or -- proved by the test's \
+own walk of the block -- another valid encoding of the same input, which the \
+specification counts as right. \
+\
+T3: tests/fixtures/lz4, made by lz4 1.9.4 (README.md there): every block \
+decodes under the strict rules to the input it was made from, and every \
+hand-built block to what lz4 -d decoded it to. \
+\
+Not P5: check() shares nothing between calls and holds no lock or atomic; \
+the contract's concurrency test runs it from a thread per unit."""

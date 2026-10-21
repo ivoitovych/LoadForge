@@ -9,3 +9,6 @@ coverage.xml
 
 # Ruff
 .ruff_cache/
+
+# Python bytecode, written whenever a script is imported.
+__pycache__/

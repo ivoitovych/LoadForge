@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/reporters/csv and nothing else.
+
+[[module]]
+path     = "src/reporters/csv"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T8"]
+provides = ["ResultWriterContract"]
+note     = """
+The result as one CSV table, one row per fact, RFC 4180. P1: every node \
+kind, an absent value (an empty cell, status "absent", the reason in its own \
+column), an unavailable reading (its kind in the status column, its path, \
+detail and remediation each in a column), an empty list, the stream checked \
+before and after the write. P3: a field with a comma, a quote, a CR, an LF, \
+or nothing at all, quoted and read back unchanged. There is no P2: the writer \
+makes no syscall of its own; the failing stream is the contract's failure, \
+driven at T1 with a refusing buffer and at T8 with /dev/full. T8: a real file \
+written and read back, byte-for-byte the same as the string stream's. \
+ResultWriterContract runs against the writer in \
+tests/unit/reporters/csv/csv_writer_test.cpp; the tests read the output with \
+a strict RFC 4180 reader written independently of the writer."""

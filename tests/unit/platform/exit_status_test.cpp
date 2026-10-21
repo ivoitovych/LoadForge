@@ -10,7 +10,7 @@
 //
 // But a constructed status word encodes THIS AUTHOR'S MODEL of the encoding, and
 // a model cannot falsify itself (F21) -- the same mistake in the test and in the
-// encoder agrees with itself perfectly. So RealWaitStatus below forks genuine
+// encoder agrees with itself perfectly. So RealProcessWaitStatus below forks genuine
 // children, kills them in genuine ways, and feeds the kernel's own status words
 // through the same classifier. That tier is what makes the constructed words
 // trustworthy; the encodings here were read off it rather than recalled.
@@ -26,7 +26,7 @@
 namespace loadforge::platform {
 namespace {
 
-// The Linux/glibc encoding, CONFIRMED against the kernel by the RealWaitStatus
+// The Linux/glibc encoding, CONFIRMED against the kernel by the RealProcessWaitStatus
 // tests below rather than taken from memory:
 //
 //   exited     code << 8                 exit(3)      -> 0x0300
@@ -75,7 +75,7 @@ TEST(ExitStatusTest, ExitCodeIsDecoded) {
 
 TEST(ExitStatusTest, ExitCodeIsTruncatedToEightBitsByTheKernelNotByUs) {
   // exit(256) is indistinguishable from exit(0) -- confirmed against the real
-  // kernel in RealWaitStatus.ExitCodeAboveOneByteWrapsToZero. This is the reason
+  // kernel in RealProcessWaitStatus.ExitCodeAboveOneByteWrapsToZero. This is the reason
   // the project never assigns meaning to an exit code above 255: doing so would
   // make a distinguished failure code report itself as success.
   EXPECT_EQ(ExitStatus{kExited(256)}.code(), 0);
@@ -215,7 +215,7 @@ int wait_for(pid_t child, int flags = 0) {
   return status;
 }
 
-TEST(RealWaitStatus, RealCleanExitIsSuccess) {
+TEST(RealProcessWaitStatus, RealCleanExitIsSuccess) {
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
@@ -227,7 +227,7 @@ TEST(RealWaitStatus, RealCleanExitIsSuccess) {
   EXPECT_TRUE(status.is_success());
 }
 
-TEST(RealWaitStatus, RealNonZeroExitCarriesItsCode) {
+TEST(RealProcessWaitStatus, RealNonZeroExitCarriesItsCode) {
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
@@ -240,7 +240,7 @@ TEST(RealWaitStatus, RealNonZeroExitCarriesItsCode) {
   EXPECT_EQ(status.describe(), "exited with code 3");
 }
 
-TEST(RealWaitStatus, ExitCodeAboveOneByteWrapsToZero) {
+TEST(RealProcessWaitStatus, ExitCodeAboveOneByteWrapsToZero) {
   // The claim ExitCodeIsTruncatedToEightBitsByTheKernelNotByUs makes, proved
   // against the kernel rather than against the encoding helper above.
   const pid_t child = ::fork();
@@ -254,7 +254,7 @@ TEST(RealWaitStatus, ExitCodeAboveOneByteWrapsToZero) {
                                       "which is why no code above 255 may carry meaning";
 }
 
-TEST(RealWaitStatus, RealSigkillIsClassifiedAsSignalledNotExited) {
+TEST(RealProcessWaitStatus, RealSigkillIsClassifiedAsSignalledNotExited) {
   const pid_t child = ::fork();
   ASSERT_GE(child, 0);
   if (child == 0) {
@@ -268,7 +268,7 @@ TEST(RealWaitStatus, RealSigkillIsClassifiedAsSignalledNotExited) {
   EXPECT_FALSE(status.is_success());
 }
 
-TEST(RealWaitStatus, ARealNonKillSignalIsSignalledAndIsNotConfusedWithSigkill) {
+TEST(RealProcessWaitStatus, ARealNonKillSignalIsSignalledAndIsNotConfusedWithSigkill) {
   // SIGTERM, NOT SIGSEGV, and the reason is worth knowing before someone
   // "improves" this back:
   //
@@ -296,7 +296,7 @@ TEST(RealWaitStatus, ARealNonKillSignalIsSignalledAndIsNotConfusedWithSigkill) {
   EXPECT_FALSE(status.is_success());
 }
 
-TEST(RealWaitStatus, RealStopAndContinueAreDistinguishedFromTermination) {
+TEST(RealProcessWaitStatus, RealStopAndContinueAreDistinguishedFromTermination) {
   // THE ORDERING THIS TEST DEPENDS ON, AND HOW IT IS ENFORCED
   // ---------------------------------------------------------
   // The parent must observe CONTINUED before the child exits. "Continued" is
