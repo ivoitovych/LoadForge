@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/atomic and nothing else.
+
+[[module]]
+path     = "src/primitives/atomic"
+classes  = ["P1", "P3", "P5"]
+tiers    = ["T1", "T4", "T6"]
+consumes = ["ExecutorContract"]
+note     = """
+Contention on one shared counter or on per-slot counters a line apart, and \
+a non-blocking release/acquire handoff. P5 is the two protocols and their \
+written arguments (atomic.hpp): the counters use relaxed because atomicity of a \
+read-modify-write needs no order and nothing else is published through them; \
+the handoff publishes a plain payload with release and reads it after an \
+acquire that saw the flag. Each runs at the argued order and at seq_cst. The \
+ordering tests are the exact totals and ticket sum at 1, 2, 3 and 7 threads \
+(a lost or duplicated increment fails them), the handoff over hundreds of \
+rounds with a plain payload (a weakening is a data race ThreadSanitizer \
+reports, and a stale read on AArch64 is a mismatch), and a serial run whose \
+observation count is exactly known. As PLAN §4.5 and IMPLEMENTATION §2.4 say, \
+TSan and the ARM64 job corroborate; they do not prove the absence of a rare \
+legal reordering. P1 is every refusal and loop; P3 is no units, no increments, \
+no cells, a line size of every invalid class and the extremes, storage one \
+counter short and exactly enough, a misaligned start, the ticket sum's wrap \
+modulo 2^64, and storage between counters left untouched. Line size comes from \
+the caller (the topology). No lock of any kind. Consumes the Executor, run \
+against the module's own mocks."""

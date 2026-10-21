@@ -1,6 +1,6 @@
 # Stream 20 — Primitives: the calibration engine
 
-**State:** not started  
+**State:** complete — branch `feature/primitives`, 2026-10-20 16:30 UTC; the six primitives, their T1/T4/T6 tests and ledger fragments are done  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  
