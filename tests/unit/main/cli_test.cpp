@@ -630,6 +630,23 @@ TEST(CliStressTest, EveryOutputOptionIsRefusedByNameWhenItIsMisused) {
   }
 }
 
+TEST(CliStressTest, ARunThatSamplesNothingStatesWhatTheMachineOffersInItsBannerAlone) {
+  const LinkToTheBinary link;
+  std::ostringstream out;
+  std::ostringstream err;
+  StressOptions base;
+  base.sample = false;
+  const std::vector<std::string_view> args{"compression", "--duration",  "1s",  "--workers",
+                                           "2",           "--footprint", "6MiB"};
+  EXPECT_EQ(stress_test(args, link.path(), "/sys", base, out, err), 0) << out.str() << err.str();
+  const std::string text = out.str();
+  const std::size_t banner = text.find("  capabilities:\ntelemetry capability: ");
+  ASSERT_NE(banner, std::string::npos) << text;
+  EXPECT_EQ(text.find("telemetry capability: ", banner + 20), std::string::npos)
+      << "stated once, by the controller, which is the only prober";
+  EXPECT_EQ(text.find("result written"), std::string::npos);
+}
+
 TEST(CliStressTest, AVerifiedRunSamplesTelemetryAndWritesTheResultWhenAskedTo) {
   const LinkToTheBinary link;
   const std::filesystem::path directory = std::filesystem::temp_directory_path() /

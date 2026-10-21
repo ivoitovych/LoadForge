@@ -338,6 +338,9 @@ std::optional<Launch> prepare_launch(platform::Syscalls& syscalls, const std::st
                                std::move(machine).value()};
 }
 
+/// What `stress --test` is given beside its own options.
+const StressOptions kDefaultOptions{};
+
 }  // namespace
 
 HostFacts read_host_facts() {
@@ -604,54 +607,55 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   const bool workers_clean = controller::all_clean(report);
 
   // The workers are gone: what is left to do is repeat the units that came
-  // out wrong, in processes of their own, and say what that shows.
+  // out wrong, in processes of their own and say what that shows (M2); then
+  // put the result together, say it, and write it (M3). A re-run that could
+  // not exec is this process, and ends it.
   verification::isolation::LadderIsolator isolator;
   controller::RealRerunner rerunner(syscalls, executable, controller::RerunOptions{});
-  if (const std::optional<int> rerun_child = isolate_wrong_results(
-          report, &snapshot, isolator, rerunner, stress_options.isolation_limit, reporter);
-      rerun_child.has_value()) {
-    return *rerun_child;  // This process is a re-run that could not exec.
-  }
-
-  const HostFacts host = stress_options.host.has_value() ? *stress_options.host : read_host_facts();
-  const statistics::CompensatedSummarizer real_summarizer;
-  const statistics::Summarizer& summarizer =
-      stress_options.summarizer != nullptr ? *stress_options.summarizer : real_summarizer;
-  results::FingerprintContext context;
-  context.build = results::this_build();
-  context.fp_environment = host.fp_environment;
-  context.isa_path = host.isa_path;
-  auto reading = results::read_fingerprint(machine, "", context);
-  ResultInputs inputs;
-  inputs.config = &config;
-  inputs.report = &report;
-  inputs.fingerprint = reading.fingerprint;
-  if (rig != nullptr) {
-    inputs.capabilities = rig->capabilities();
-  }
-  inputs.timeline = &timeline;
-  inputs.summarizer = &summarizer;
-  auto result = assemble_result(inputs);
-  if (!result.has_value()) {
-    err << "loadforge: cannot compute the result: " << result.error() << "\n";
-    return with_output_failure(exit_code_for(report, config));
-  }
-  out << summary_text(result.value(), report, timeline, summarizer, reading.gaps);
-  const int code =
-      exit_code_for(result.value().verdict, workers_clean, has_verified_worker(report));
-  if (stress_options.formats.empty()) {
+  const auto conclude = [&]() -> int {
+    const HostFacts host =
+        stress_options.host.has_value() ? *stress_options.host : read_host_facts();
+    const statistics::CompensatedSummarizer real_summarizer;
+    const statistics::Summarizer& summarizer =
+        stress_options.summarizer != nullptr ? *stress_options.summarizer : real_summarizer;
+    results::FingerprintContext context;
+    context.build = results::this_build();
+    context.fp_environment = host.fp_environment;
+    context.isa_path = host.isa_path;
+    auto reading = results::read_fingerprint(machine, "", context);
+    ResultInputs inputs;
+    inputs.config = &config;
+    inputs.report = &report;
+    inputs.fingerprint = reading.fingerprint;
+    if (rig != nullptr) {
+      inputs.capabilities = rig->capabilities();
+    }
+    inputs.timeline = &timeline;
+    inputs.summarizer = &summarizer;
+    auto result = assemble_result(inputs);
+    if (!result.has_value()) {
+      err << "loadforge: cannot compute the result: " << result.error() << "\n";
+      return with_output_failure(exit_code_for(report, config));
+    }
+    out << summary_text(result.value(), report, timeline, summarizer, reading.gaps);
+    const int code =
+        exit_code_for(result.value().verdict, workers_clean, has_verified_worker(report));
+    if (stress_options.formats.empty()) {
+      return code;
+    }
+    auto written =
+        write_results(result.value(), stress_options.formats, stress_options.output_dir, sink);
+    if (!written.has_value()) {
+      err << "loadforge: cannot write the result: " << written.error() << "\n";
+      return with_output_failure(code);
+    }
+    for (const std::string& file : written.value()) {
+      out << "result written: " << file << "\n";
+    }
     return code;
-  }
-  auto written =
-      write_results(result.value(), stress_options.formats, stress_options.output_dir, sink);
-  if (!written.has_value()) {
-    err << "loadforge: cannot write the result: " << written.error() << "\n";
-    return with_output_failure(code);
-  }
-  for (const std::string& file : written.value()) {
-    out << "result written: " << file << "\n";
-  }
-  return code;
+  };
+  return after_isolation(report, &snapshot, isolator, rerunner, stress_options.isolation_limit,
+                         reporter, conclude);
 }
 
 namespace {
@@ -725,7 +729,7 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
   if (command == "stress") {
     if (args.size() >= 3 && args[1] == "--test") {
       return stress_test(args.subspan(2), "/proc/self/exe", topology::kDefaultSysfsRoot,
-                         StressOptions{}, out, err);
+                         kDefaultOptions, out, err);
     }
     const auto parsed = parse_stress_args(args.subspan(1));
     if (!parsed.has_value()) {

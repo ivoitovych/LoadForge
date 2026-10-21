@@ -2,7 +2,7 @@
 #include "main/outcome.hpp"
 
 #include <algorithm>
-#include <optional>
+#include <functional>
 #include <utility>
 
 #include "config/config.hpp"
@@ -71,38 +71,34 @@ int with_output_failure(int code) noexcept {
 
 int exit_code_for(const controller::RunReport& report, const config::Config& config) {
   const bool verified = has_verified_worker(report);
-  const results::Verdict verdict =
-      verified ? to_run_result(report, config).verdict : results::Verdict::kClean;
+  results::Verdict verdict = results::Verdict::kClean;
+  if (verified) {
+    verdict = to_run_result(report, config).verdict;
+  }
   return exit_code_for(verdict, controller::all_clean(report), verified);
 }
 
-std::optional<int> isolate_wrong_results(controller::RunReport& report,
-                                         const topology::Snapshot* machine,
-                                         verification::Isolator& isolator,
-                                         controller::ChildAwareRerunner& rerunner,
-                                         std::size_t limit, controller::Reporter& reporter) {
-  if (controller::wrong_result_count(report) == 0) {
-    return std::nullopt;
+int after_isolation(controller::RunReport& report, const topology::Snapshot* machine,
+                    verification::Isolator& isolator, controller::ChildAwareRerunner& rerunner,
+                    std::size_t limit, controller::Reporter& reporter,
+                    const std::function<int()>& conclude) {
+  if (controller::wrong_result_count(report) != 0) {
+    const controller::IsolationSummary isolated =
+        controller::isolate_findings(report, machine, isolator, rerunner, limit);
+    if (isolated.child_exit_code.has_value()) {
+      return *isolated.child_exit_code;
+    }
+    reporter.isolation_finished(report);
   }
-  const controller::IsolationSummary isolated =
-      controller::isolate_findings(report, machine, isolator, rerunner, limit);
-  if (isolated.child_exit_code.has_value()) {
-    return isolated.child_exit_code;
-  }
-  reporter.isolation_finished(report);
-  return std::nullopt;
+  return conclude();
 }
 
 int finish_run(controller::RunReport& report, const config::Config& config,
                const topology::Snapshot* machine, verification::Isolator& isolator,
                controller::ChildAwareRerunner& rerunner, std::size_t limit,
                controller::Reporter& reporter) {
-  if (const std::optional<int> child =
-          isolate_wrong_results(report, machine, isolator, rerunner, limit, reporter);
-      child.has_value()) {
-    return *child;
-  }
-  return exit_code_for(report, config);
+  return after_isolation(report, machine, isolator, rerunner, limit, reporter,
+                         [&report, &config] { return exit_code_for(report, config); });
 }
 
 }  // namespace loadforge::cli

@@ -10,7 +10,7 @@
 // controller, not the other way), so this is where the two meet.
 
 #include <cstddef>
-#include <optional>
+#include <functional>
 
 #include "config/config.hpp"
 #include "controller/isolate.hpp"
@@ -66,17 +66,18 @@ inline constexpr int kExitNotVerified = 6;
 
 [[nodiscard]] int exit_code_for(const controller::RunReport& report, const config::Config& config);
 
-/// What follows a run whose workers are gone, without the exit code. When any
-/// wrong result was found, repeats up to `limit` of each worker's in processes
-/// of their own, writes what that shows into the report, and tells the
-/// reporter. A re-run whose exec failed in this process is a failed child: its
-/// exit code is returned at once, and nothing is reported.
-[[nodiscard]] std::optional<int> isolate_wrong_results(controller::RunReport& report,
-                                                       const topology::Snapshot* machine,
-                                                       verification::Isolator& isolator,
-                                                       controller::ChildAwareRerunner& rerunner,
-                                                       std::size_t limit,
-                                                       controller::Reporter& reporter);
+/// What follows a run whose workers are gone, and then `conclude`, whose value
+/// is the exit code. When any wrong result was found, repeats up to `limit` of
+/// each worker's in processes of their own, writes what that shows into the
+/// report, and tells the reporter. A re-run whose exec failed in this process
+/// is a failed child: its exit code is returned at once, `conclude` is not
+/// called and nothing is reported. The command line concludes by assembling
+/// and writing the result (M3), which needs the isolation in the report.
+[[nodiscard]] int after_isolation(controller::RunReport& report, const topology::Snapshot* machine,
+                                  verification::Isolator& isolator,
+                                  controller::ChildAwareRerunner& rerunner, std::size_t limit,
+                                  controller::Reporter& reporter,
+                                  const std::function<int()>& conclude);
 
 /// What follows a run whose workers are gone, and the process's exit code.
 /// When any wrong result was found, repeats up to `limit` of each worker's in
