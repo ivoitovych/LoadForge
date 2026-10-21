@@ -859,6 +859,18 @@ atomic and the counts exact. It is now set for every target in
 `loadforge_enable_coverage()` (`cmake/Coverage.cmake`), so a component no longer needs its
 own copy; the copies the wave-1 streams added are redundant and are being removed.
 
+
+### 1.32 ThreadSanitizer inflates the resident set, so a resident-memory bound does not hold under it
+
+*Established 2026-10-21 (#88).* The journal soak test bounds resident memory after thousands
+of appends to its warm value plus 256 KiB. Under ThreadSanitizer every heap page the run
+touches also touches the sanitizer's shadow and metadata pages, which count in
+`/proc/self/statm`'s resident figure. The bound then holds or not depending on where the
+allocator lands: it failed once in CI (`resident memory after 4320 appends against 432
+warm`) and passed 5 of 5 locally under the same preset. AddressSanitizer was already
+exempted for its quarantine; ThreadSanitizer now is too, and the plain and coverage builds
+keep the bound.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -2609,6 +2621,27 @@ the streams re-ran their failed steps. *The fix is a habit:* a stream deletes it
 directories when it reports, and the manager removes the worktree of every merged branch at
 each check-in.
 
+
+### 4.16 A green check run on a base that no longer exists
+
+On 2026-10-21 #87 showed every check green, but its run had merged it with `main` as it was
+before #84, which split the contract headers that two of its tests included. Merged then, it
+would have broken `main` with all checks green. A check run proves the merge of the head with
+the base *at the time of the run*. Before merging, either the head contains the latest change
+that could interact with it (a contract change above all), or the files it touches and the
+files `main` changed since the run are disjoint (`comm -12` of the two name lists). The EXT
+stack (#79 to #81) was merged on the second test; #87 was rebuilt on the first.
+
+### 4.17 A trap recorded in every brief recurred anyway
+
+Signed `__int128` multiplication under UBSan does not link on ARM64 (§1.30). It was in the
+stream rules every worker received, and the stencil stream's test helper still multiplied
+signed `__int128` (#70). The ARM64 ASan job caught it, which is what the gate is for; the
+lesson is that a sentence in a brief is not a check. The evidence that the fix was right was
+a cross-compile, since x86 provides `__muloti4`: `clang-18 --target=aarch64-linux-gnu
+-fsanitize=signed-integer-overflow -c` of the signed form references it once and the
+unsigned form not at all.
+
 ---
 
 ## 5. Process knowledge
@@ -2728,6 +2761,26 @@ GitHub retargets such a pull request to `main` automatically only when its base 
 deleted on merge, and the credential this work runs under cannot delete refs (§6). So after
 the parent merges, the child is retargeted to `main` explicitly and `main` is merged into it
 before its CI is believed. EXT-01, EXT-02 and EXT-03 (#79, #80, #81) are such a stack.
+
+
+### 5.10 A container restart loses whatever a worker had not committed
+
+At about 04:30 UTC on 2026-10-21 the container restarted. Three workers had merged `main` into
+their branches and made their fixes, uncommitted; integration stream 11 was in its final
+coverage run. The working trees survived, the processes did not, and every result that only
+lived in a worker's head was gone: the work had to be read back from `git status` and
+finished by new workers. Briefs written since then say to commit locally after each step that
+changes files, and the manager's own long checks write their exit codes to files before
+anything acts on them.
+
+### 5.11 The runner queue, not the work, set the pace
+
+Each pull request starts 24 jobs; with ten or more open, jobs waited over an hour for a
+runner. Three changes cut the queue: clang-tidy in four shards with a process per core
+(60 to 100 minutes down to 10 to 17, #85), a new push cancelling its branch's superseded run
+(#78), and documentation-only pull requests skipping the build and test workflows (#89). The
+credential this work runs under cannot cancel or re-run a job (403), so a push is the only
+way to restart one, and an unneeded push costs a full run.
 
 ---
 
