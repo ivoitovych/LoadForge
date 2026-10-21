@@ -207,7 +207,12 @@ TEST(PlanWorker, ARealWorkloadGetsEveryChoiceMadeOnceAndSaysWhatTheyAre) {
   EXPECT_NE(plan.description.find("dense_linear: 1 thread(s) on cpu 2, footprint 8MiB"),
             std::string::npos)
       << plan.description;
-  EXPECT_NE(plan.description.find("avx2 path"), std::string::npos) << plan.description;
+  // The path this machine and build give dense_linear: AVX2 on an x86 build with
+  // its kernels, scalar on ARM64 and in a scalar-only build.
+  EXPECT_NE(
+      plan.description.find(std::string{simd::describe(widest_kernel_of_dense_linear())} + " path"),
+      std::string::npos)
+      << plan.description;
 }
 
 TEST(PlanWorker, WhereAWorkerRunsOnSeveralCpusOrNoneNoSingleCoreIsClaimed) {
