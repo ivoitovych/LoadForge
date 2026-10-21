@@ -13,10 +13,6 @@
 namespace loadforge::contracts {
 namespace {
 
-// workload_contract.hpp registers RegistryContract as well; this stream
-// provides no registry.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-
 template <std::uint32_t kChunkRows>
 struct Sparse {
   static constexpr const char* kName = "sparse";
