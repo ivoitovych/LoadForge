@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "contracts/telemetry/sampler_contract.hpp"
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/telemetry/timeline_contract.hpp"
 #include "unit/controller/telemetry_mocks.hpp"
 
 namespace loadforge::contracts {
@@ -35,9 +35,6 @@ INSTANTIATE_TYPED_TEST_SUITE_P(ControllerMock, SamplerContract,
                                ::testing::Types<ControllerMockSampler>);
 INSTANTIATE_TYPED_TEST_SUITE_P(ControllerMock, TimelineContract,
                                ::testing::Types<ControllerMockTimeline>);
-// The controller does not consume a source; the header registers its suite
-// beside the timeline's, and a binary may not leave one uninstantiated.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(SourceContract);
 
 }  // namespace
 }  // namespace loadforge::contracts
