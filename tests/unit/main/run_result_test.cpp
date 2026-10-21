@@ -460,7 +460,7 @@ TEST(SummaryTextTest, EveryFingerprintFieldTheMachineWouldNotGiveIsNamedWithItsR
 namespace loadforge::cli {
 namespace {
 
-statistics::MetricSummary edac_summary(const std::string& name, statistics::Summary value,
+statistics::MetricSummary edac_summary(const std::string& name, const statistics::Summary& value,
                                        std::uint64_t unavailable) {
   statistics::MetricSummary summary;
   summary.metric = edac(name, telemetry::Scope::kMemoryController, 0);
@@ -506,7 +506,7 @@ TEST(SummaryTextTest, AnEdacCounterThatResetOrDroppedOutSaysTheVerdictIsIncomple
 }
 
 TEST(SummaryTextTest, AnEdacCounterReadThroughoutAndOtherMetricsAddNoIncompleteNote) {
-  statistics::MetricSummary other =
+  const statistics::MetricSummary other =
       edac_summary("thermal.package", statistics::CounterSummary{}, 9);
   const std::string text =
       edac_text({edac_summary("edac.corrected", statistics::CounterSummary{}, 0), other});

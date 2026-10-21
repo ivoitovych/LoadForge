@@ -98,6 +98,26 @@ std::size_t points_until(const telemetry::TimelineView& timeline, std::int64_t a
   return count;
 }
 
+/// One line for every EDAC counter the run did not read throughout: it reset or
+/// dropped out, so the verdict is incomplete there and the counts are a lower bound.
+std::string edac_blind_notes(const results::RunResult& result) {
+  std::ostringstream text;
+  for (const statistics::MetricSummary& summary : result.signature.metrics) {
+    if (summary.metric.name != results::kCorrectedErrorsMetric &&
+        summary.metric.name != results::kUncorrectedErrorsMetric) {
+      continue;
+    }
+    const auto* counter = std::get_if<statistics::CounterSummary>(&summary.value);
+    const std::uint64_t resets = counter != nullptr ? counter->resets : 0;
+    if (resets > 0 || summary.unavailable_samples > 0) {
+      text << "edac: " << series_name(summary.metric) << " was not read throughout (" << resets
+           << " reset(s), " << summary.unavailable_samples
+           << " unavailable sample(s)): the verdict is incomplete there\n";
+    }
+  }
+  return text.str();
+}
+
 }  // namespace
 
 std::string summary_text(const results::RunResult& result, const controller::RunReport& report,
@@ -149,21 +169,7 @@ std::string summary_text(const results::RunResult& result, const controller::Run
     if (deltas.empty()) {
       text << "edac: no error counted in any phase\n";
     }
-    // A counter that reset or dropped out was blind for part of the run: the
-    // verdict is incomplete there, and the counts above are a lower bound.
-    for (const statistics::MetricSummary& summary : result.signature.metrics) {
-      if (summary.metric.name != results::kCorrectedErrorsMetric &&
-          summary.metric.name != results::kUncorrectedErrorsMetric) {
-        continue;
-      }
-      const auto* counter = std::get_if<statistics::CounterSummary>(&summary.value);
-      const std::uint64_t resets = counter != nullptr ? counter->resets : 0;
-      if (resets > 0 || summary.unavailable_samples > 0) {
-        text << "edac: " << series_name(summary.metric) << " was not read throughout (" << resets
-             << " reset(s), " << summary.unavailable_samples
-             << " unavailable sample(s)): the verdict is incomplete there\n";
-      }
-    }
+    text << edac_blind_notes(result);
   }
   for (const results::FingerprintGap& gap : gaps) {
     text << "fingerprint: " << gap.field << " not recorded: " << topology::describe(gap.why)
