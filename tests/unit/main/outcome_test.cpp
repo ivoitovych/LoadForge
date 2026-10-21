@@ -7,10 +7,15 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <vector>
 
+#include "controller/isolate.hpp"
 #include "controller/report.hpp"
+#include "controller/rerun.hpp"
 #include "controller/supervision.hpp"
+#include "unit/controller/consumer_models.hpp"
+#include "unit/controller/machine_tree.hpp"
 
 namespace loadforge::cli {
 namespace {
@@ -109,6 +114,85 @@ TEST(ExitCode, AWorkerThatDidNotCompleteIsUncleanEvenWhenNothingElseIsWrong) {
   WorkerReport unchecked = checked_worker(WorkerFate::kKilled);
   unchecked.findings = {unrun_check()};
   EXPECT_EQ(code_of({unchecked}), kExitUnclean) << "unfinished outranks unchecked";
+}
+
+TEST(ExitCode, AnIncompleteRunWithAnUnfinishedWorkerIsUncleanWhateverElseIsMissing) {
+  WorkerReport blind = checked_worker(WorkerFate::kFault);
+  blind.tally.oracle_blocks = 0;
+  EXPECT_EQ(code_of({blind}), kExitUnclean);
+}
+
+class Counting final : public controller::Reporter {
+ public:
+  void run_starting(const controller::RunPlan& /*plan*/) override {}
+  void event(std::int64_t /*elapsed_ns*/, std::string_view /*line*/) override {}
+  void run_finished(const controller::RunReport& /*report*/) override {}
+  void isolation_finished(const controller::RunReport& /*report*/) override { ++isolations; }
+  int isolations = 0;
+};
+
+class Rerunner final : public controller::ChildAwareRerunner {
+ public:
+  void use(const controller::WorkerWork& /*work*/) override {}
+  [[nodiscard]] verification::RerunOutcome rerun(
+      const verification::WrongResult& /*finding*/,
+      const verification::RerunRequest& /*request*/) override {
+    ++asked;
+    return verification::RerunOutcome::kClean;
+  }
+  [[nodiscard]] std::optional<int> child_exit_code() const noexcept override { return child_exit; }
+  std::optional<int> child_exit;
+  int asked = 0;
+};
+
+TEST(FinishRun, NothingWrongMeansNothingIsRepeatedAndNobodyIsToldAndTheCodeIsTheRuns) {
+  const controller_testing::MachineTree tree(controller_testing::MachineShape{4, 64, false});
+  const topology::Snapshot machine = tree.accepted();
+  controller_testing::ModelIsolator isolator;
+  Rerunner rerunner;
+  Counting reporter;
+  controller::RunReport report;
+  report.workers = {checked_worker()};
+  EXPECT_EQ(finish_run(report, a_config(), &machine, isolator, rerunner, 5, reporter), 0);
+  EXPECT_EQ(rerunner.asked, 0);
+  EXPECT_EQ(reporter.isolations, 0);
+}
+
+controller::RunReport one_wrong_result() {
+  WorkerReport found = checked_worker();
+  FindingReport finding = wrong_result();
+  std::get<verification::ExactBitCorruption>(finding.record).provenance.logical_cpu = 1;
+  found.findings = {finding};
+  found.wrong_results = 1;
+  controller::RunReport report;
+  report.workers = {found};
+  return report;
+}
+
+TEST(FinishRun, AWrongResultIsRepeatedThenTheReporterIsToldAndTheCodeIsTheFindings) {
+  const controller_testing::MachineTree tree(controller_testing::MachineShape{4, 64, false});
+  const topology::Snapshot machine = tree.accepted();
+  controller_testing::ModelIsolator isolator;
+  Rerunner rerunner;
+  Counting reporter;
+  controller::RunReport report = one_wrong_result();
+  EXPECT_EQ(finish_run(report, a_config(), &machine, isolator, rerunner, 5, reporter),
+            kExitWrongResult);
+  EXPECT_GT(rerunner.asked, 0);
+  EXPECT_EQ(reporter.isolations, 1);
+  EXPECT_TRUE(report.workers[0].findings[0].isolation.has_value());
+}
+
+TEST(FinishRun, ARerunWhoseExecFailedHereMustExitWithItsCodeBeforeAnythingIsReported) {
+  const controller_testing::MachineTree tree(controller_testing::MachineShape{4, 64, false});
+  const topology::Snapshot machine = tree.accepted();
+  controller_testing::ModelIsolator isolator;
+  Rerunner rerunner;
+  rerunner.child_exit = 126;
+  Counting reporter;
+  controller::RunReport report = one_wrong_result();
+  EXPECT_EQ(finish_run(report, a_config(), &machine, isolator, rerunner, 5, reporter), 126);
+  EXPECT_EQ(reporter.isolations, 0) << "this process is a failed child, not the controller";
 }
 
 TEST(ToRunResult, OneWorkloadResultPerVerifyingWorkerAndOneWorkerResultPerWorker) {

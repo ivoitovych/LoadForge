@@ -325,16 +325,24 @@ TEST(PlanWorker, WithoutAnIsaProbeOnlyScalarIsOffered) {
 
 TEST(VerificationOptionsTest, EqualityLooksAtEveryField) {
   const VerificationOptions a;
-  VerificationOptions b;
-  EXPECT_EQ(a, b);
-  b.seed = 9;
-  EXPECT_NE(a, b);
-  b = a;
-  b.cpus = {1};
-  EXPECT_NE(a, b);
-  b = a;
-  b.requested_isa = IsaPath::kAvx2;
-  EXPECT_NE(a, b);
+  EXPECT_EQ(a, a);
+  const workloads::BuiltinRegistry registry;
+  const auto changed = [&a](auto change) {
+    VerificationOptions other = a;
+    change(other);
+    return a != other;
+  };
+  EXPECT_TRUE(changed([&registry](VerificationOptions& o) { o.registry = &registry; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.seed = 9; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.footprint_bytes = 1; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.decomposition = 1; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.requested_isa = IsaPath::kAvx2; }));
+  const controller_testing::ModelProbe probe{IsaSet{IsaPath::kScalar}};
+  EXPECT_TRUE(changed([&probe](VerificationOptions& o) { o.isa_probe = &probe; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.duty.oracle_period = 4; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.duty.integrity_period = 4; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.line_bytes = 64; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.cpus = {1}; }));
 }
 
 }  // namespace

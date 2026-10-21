@@ -657,6 +657,29 @@ TEST(CliStressTest, AWorkerOfTheNullWorkloadIsStillCalledAHangAfterTwoSeconds) {
   EXPECT_FALSE(parsed.value().workload.has_value());
 }
 
+TEST(CliStressTest, ARegisteredWorkloadThatIsSwitchedOffDoesNotMakeTheRunAVerifyingOne) {
+  testing::FakeSyscalls syscalls;
+  syscalls.advance_clocks_per_read(10'000'000);
+  syscalls.script_forks({{0, 0}});
+  syscalls.set_parent_pid(testing::FakeSyscalls::kFakePid);
+  config::Config config = two_workloads();
+  config.workloads[0] = config::Workload{"compression", config::Threads::count(1), false, {}};
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(
+      run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), over_a_fake(), out, err),
+      120);
+  std::vector<std::string_view> tail;
+  const std::vector<std::string>& argv = syscalls.last_exec_argv();
+  for (std::size_t at = 2; at < argv.size(); ++at) {
+    tail.emplace_back(argv[at]);
+  }
+  auto parsed = worker::parse_args(tail);
+  ASSERT_TRUE(parsed.has_value()) << parsed.error();
+  EXPECT_EQ(parsed.value().pacing.stale_after_ns, 2'000 * 1'000'000LL)
+      << "only an enabled registered workload is given the longer allowance";
+}
+
 TEST(CliStressTest, AMachineWhoseCacheLineIsNotKnownDoesNotRunAWorkload) {
   const controller_testing::MachineTree tree(
       controller_testing::MachineShape{2, std::nullopt, false});

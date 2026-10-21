@@ -218,6 +218,20 @@ TEST(RealRerunner, ARunThatNeverEndsIsKilledAndNotPerformed) {
   EXPECT_EQ(rig.syscalls.signals_sent()[0], (std::pair<pid_t, int>{kChild, SIGKILL}));
 }
 
+TEST(RealRerunner, EveryWayTheKernelSaysThePipeIsDoneIsTheRunEnding) {
+  const std::vector<platform::Readiness> endings = {
+      platform::Readiness{false, true, false, false},   // Hung up: the usual.
+      platform::Readiness{false, false, true, false},   // An error condition.
+      platform::Readiness{false, false, false, true}};  // A descriptor the kernel disowns.
+  for (const platform::Readiness& ending : endings) {
+    Rig rig;
+    rig.syscalls.script_readiness(kReadFd, ending);
+    rig.child_exits(static_cast<int>(worker::RerunExit::kReproduced));
+    EXPECT_EQ(rig.rerunner.rerun(a_finding(), a_request()), RerunOutcome::kReproduced);
+    EXPECT_TRUE(rig.syscalls.signals_sent().empty()) << "it ended, so nothing is killed";
+  }
+}
+
 TEST(RealRerunner, AFailedLookIsTheSameAsARunThatNeverEnds) {
   Rig rig;
   rig.syscalls.fail_poll(EBADF);

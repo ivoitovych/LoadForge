@@ -1336,6 +1336,26 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
     EXPECT_NE(result.error().detail.find("backwards"), std::string::npos) << result.error().detail;
   }
   {
+    // The look for more after a drain fails: the controller's own failure,
+    // reported as such.
+    Rig rig;
+    rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+    rig.reporter.on_event = [&rig](const std::string& line) {
+      if (starts_with(line, "spawned")) {
+        rig.deliver(0, ipc::RecordType::kFinished, "done");
+        rig.worker_exits(0, 0);
+        rig.syscalls.worker_releases_end(kControlRead1);
+        rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, 0}, 0});
+        rig.syscalls.script_nonblocking_reaps(rig.reaps);
+      }
+    };
+    rig.syscalls.fail_poll_on(2, EINVAL);  // The look for more, within the run's tick.
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "record channel");
+    EXPECT_NE(result.error().detail.find("poll("), std::string::npos) << result.error().detail;
+  }
+  {
     // After every worker is reaped, the final drain's poll on a channel still
     // held open fails: the controller's own failure, reported as such.
     Rig rig;
@@ -1349,7 +1369,7 @@ TEST(ControllerTest, FailuresAtTheEndAreReportedAfterTheWorkersAreGone) {
         rig.syscalls.script_nonblocking_reaps(rig.reaps);
       }
     };
-    rig.syscalls.fail_poll_on(2, EINVAL);  // The loop polled once; this is the final drain's.
+    rig.syscalls.fail_poll_on(3, EINVAL);  // The wait of the final drain, the third poll.
     auto result = rig.run();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().stage, "record channel");

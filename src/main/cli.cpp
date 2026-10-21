@@ -262,7 +262,8 @@ std::optional<Launch> prepare_launch(platform::Syscalls& syscalls, const std::st
         << topology::describe(machine.error()) << "\n";
     return std::nullopt;
   }
-  return Launch{executable.value(), machine.value()};
+  return std::optional<Launch>{std::in_place, std::move(executable).value(),
+                               std::move(machine).value()};
 }
 
 }  // namespace
@@ -322,8 +323,7 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
                                   ? static_cast<std::size_t>(*test.workers)
                                   : std::clamp<std::size_t>(cpus.size(), 1, kMostDefaultWorkers);
   for (std::size_t index = 0; index < workers; ++index) {
-    config.workloads.push_back(
-        config::Workload{test.workload, config::Threads::count(1), true, test.footprint});
+    config.workloads.emplace_back(test.workload, config::Threads::count(1), true, test.footprint);
   }
   StressOptions options;
   options.isa = test.isa;
@@ -397,19 +397,12 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   if (child_code.has_value()) {
     return *child_code;  // This process is a worker that could not exec.
   }
-  if (controller::wrong_result_count(report) != 0) {
-    // The workers are gone: what is left to do is repeat the units that came
-    // out wrong, in processes of their own, and say what that shows.
-    verification::isolation::LadderIsolator isolator;
-    controller::RealRerunner rerunner(syscalls, executable, controller::RerunOptions{});
-    const controller::IsolationSummary isolated = controller::isolate_findings(
-        report, &snapshot, isolator, rerunner, stress_options.isolation_limit);
-    if (isolated.child_exit_code.has_value()) {
-      return *isolated.child_exit_code;  // A re-run's exec failed in this process.
-    }
-    reporter.isolation_finished(report);
-  }
-  return exit_code_for(report, config);
+  // The workers are gone: what is left to do is repeat the units that came
+  // out wrong, in processes of their own, and say what that shows.
+  verification::isolation::LadderIsolator isolator;
+  controller::RealRerunner rerunner(syscalls, executable, controller::RerunOptions{});
+  return finish_run(report, config, &snapshot, isolator, rerunner, stress_options.isolation_limit,
+                    reporter);
 }
 
 namespace {

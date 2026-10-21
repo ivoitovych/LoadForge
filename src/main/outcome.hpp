@@ -9,9 +9,14 @@
 // The controller has no dependency on the results module (the results link the
 // controller, not the other way), so this is where the two meet.
 
+#include <cstddef>
+
 #include "config/config.hpp"
+#include "controller/isolate.hpp"
 #include "controller/report.hpp"
 #include "controller/results/result.hpp"
+#include "topology/snapshot.hpp"
+#include "verification/isolation.hpp"
 
 namespace loadforge::cli {
 
@@ -37,6 +42,16 @@ inline constexpr int kExitNotVerified = 5;
                                                const config::Config& config);
 
 [[nodiscard]] int exit_code_for(const controller::RunReport& report, const config::Config& config);
+
+/// What follows a run whose workers are gone, and the process's exit code.
+/// When any wrong result was found, repeats up to `limit` of each worker's in
+/// processes of their own, writes what that shows into the report, and tells
+/// the reporter. A re-run whose exec failed in this process is a failed child:
+/// its exit code is returned at once, and nothing is reported.
+[[nodiscard]] int finish_run(controller::RunReport& report, const config::Config& config,
+                             const topology::Snapshot* machine, verification::Isolator& isolator,
+                             controller::ChildAwareRerunner& rerunner, std::size_t limit,
+                             controller::Reporter& reporter);
 
 }  // namespace loadforge::cli
 

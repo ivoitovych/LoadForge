@@ -44,11 +44,11 @@ TEST(Pipeline, EveryWorkloadOfTheBuildRunsCleanAndIsCheckedByItsOracle) {
     RunOptions options;
     options.executable = LOADFORGE_BINARY;
     options.interval_ns = 20 * kMs;
-    options.stale_after_ns = 3000 * kMs;
-    options.grace = Grace{1000 * kMs, 1000 * kMs};
+    options.stale_after_ns = 10000 * kMs;
+    options.grace = Grace{6000 * kMs, 1000 * kMs};
     options.topology = &machine.value();
     options.verification.registry = &registry;
-    options.verification.footprint_bytes = std::uint64_t{6} << 20U;
+    options.verification.footprint_bytes = std::uint64_t{3} << 20U;
     options.verification.line_bytes = 64;
     config::Config config;
     config.run.mode = config::Mode::kStress;

@@ -97,7 +97,8 @@ verification::RerunOutcome RealRerunner::rerun(const verification::WrongResult& 
   platform::WorkerLauncher launcher(*syscalls_, executable_);
   platform::WorkerPool pool(*syscalls_, launcher);
   const pid_t self = syscalls_->process_id();
-  auto spawned = pool.spawn({argv});
+  const std::vector<std::vector<std::string>> commands(1, argv);
+  auto spawned = pool.spawn(commands);
   if (!spawned.has_value()) {
     (void)syscalls_->close(pipe.value().read_fd);
     (void)syscalls_->close(pipe.value().write_fd);

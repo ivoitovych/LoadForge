@@ -130,8 +130,9 @@ set_tests_properties(cli_stress_usage PROPERTIES WILL_FAIL TRUE)
 # machine can and cannot be read for before it starts.
 foreach(workload IN ITEMS compression dense_linear)
   add_test(NAME cli_stress_test_${workload}
-           COMMAND loadforge stress --test ${workload} --duration 2s --workers 2 --footprint 6MiB)
+           COMMAND loadforge stress --test ${workload} --duration 2s --workers 2 --footprint 2MiB)
   set_tests_properties(cli_stress_test_${workload} PROPERTIES
+                       RESOURCE_LOCK loadforge_pinned_workers
                        PASS_REGULAR_EXPRESSION
                        "2 of 2 worker\\(s\\) completed.*the oracle checked [1-9][0-9]* of them over [1-9][0-9]* sampled block\\(s\\) and found 0 wrong")
 endforeach()

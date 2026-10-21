@@ -362,6 +362,22 @@ TEST(ControllerVerified, WhatIsNotARecordTheContractAllowsIsACorruptChannelNever
          rig.deliver_tally(0, a_tally(2));
        },
        "a tally that went backwards"},
+      {"a tally whose oracle blocks go backwards alone",
+       [](Rig& rig) {
+         rig.deliver_tally(0, a_tally(9));
+         verification::Tally lower = a_tally(9);
+         lower.oracle_blocks = 1;
+         rig.deliver_tally(0, lower);
+       },
+       "a tally that went backwards"},
+      {"a tally whose input checks go backwards alone",
+       [](Rig& rig) {
+         rig.deliver_tally(0, a_tally(9));
+         verification::Tally lower = a_tally(9);
+         lower.integrity_checked = 1;
+         rig.deliver_tally(0, lower);
+       },
+       "a tally that went backwards"},
   };
   for (const Garbage& each : garbage) {
     Rig rig;
@@ -487,6 +503,7 @@ TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
   EXPECT_NE(a, b);
 
   const WorkerWork work;
+  EXPECT_TRUE(work == WorkerWork{}) << "a run described twice the same way is the same run";
   const auto differs = [&](auto change) {
     WorkerWork other = work;
     change(other);

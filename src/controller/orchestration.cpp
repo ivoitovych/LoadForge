@@ -72,13 +72,13 @@ std::uint64_t not_performed_count(const RunReport& report) noexcept {
 }
 
 bool operator==(const WorkerWork& lhs, const WorkerWork& rhs) {
-  // Member by member: std::tuple's comparison is not declared noexcept, and a
-  // noexcept function that calls one is a function an exception may escape.
-  return lhs.descriptor == rhs.descriptor && lhs.isa == rhs.isa &&
-         lhs.decomposition == rhs.decomposition && lhs.duty == rhs.duty &&
-         lhs.logical_bytes == rhs.logical_bytes && lhs.threads == rhs.threads &&
-         lhs.cpu == rhs.cpu && lhs.seed == rhs.seed && lhs.footprint_bytes == rhs.footprint_bytes &&
-         lhs.line_bytes == rhs.line_bytes;
+  const auto what = [](const WorkerWork& w) {
+    return std::tie(w.descriptor, w.isa, w.decomposition, w.duty, w.logical_bytes);
+  };
+  const auto where = [](const WorkerWork& w) {
+    return std::tie(w.threads, w.cpu, w.seed, w.footprint_bytes, w.line_bytes);
+  };
+  return what(lhs) == what(rhs) && where(lhs) == where(rhs);
 }
 
 bool operator==(const FindingReport& lhs, const FindingReport& rhs) {
@@ -260,7 +260,7 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
   }
   for (const config::Workload& workload : config_->workloads) {
     if (workload.enabled) {
-      workers_.push_back(Tracked{});
+      workers_.emplace_back();
       workers_.back().slot = workers_.size() - 1;
       auto planned = plan_worker(workload, workers_.back().slot, options_->budget,
                                  options_->verification, options_->topology);
@@ -528,7 +528,7 @@ core::Result<core::Ok, ControllerError> Run::poll_and_drain(int timeout_ms) {
 }
 
 core::Result<core::Ok, ControllerError> Run::drain_available(Tracked& worker) {
-  for (int reads = 0; reads < kMaxReadsPerTick && worker.channel_open; ++reads) {
+  for (int reads = 0; reads < kMaxReadsPerTick; ++reads) {
     if (auto drained = drain(worker); !drained.has_value()) {
       return drained;
     }

@@ -81,11 +81,13 @@ std::optional<Scenario> run_scenario(const std::string& fault, std::uint32_t thr
   RunOptions options;
   options.executable = LOADFORGE_FAULTY_WORKER;
   options.interval_ns = 20 * kMs;
-  options.stale_after_ns = 3000 * kMs;
-  options.grace = Grace{1000 * kMs, 1000 * kMs};
+  options.stale_after_ns = 10000 * kMs;
+  options.grace = Grace{6000 * kMs, 1000 * kMs};
   options.topology = &machine.value();
   options.verification.registry = &registry;
-  options.verification.footprint_bytes = std::uint64_t{4} << 20U;
+  // A dense_linear unit costs the cube of its side: small enough that an
+  // instrumented build still finishes a unit well inside the stop grace.
+  options.verification.footprint_bytes = std::uint64_t{workload == "dense_linear" ? 2U : 4U} << 20U;
   options.verification.line_bytes = 64;
   options.verification.cpus = allowed;
 

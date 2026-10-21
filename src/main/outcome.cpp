@@ -55,16 +55,29 @@ int exit_code_for(const controller::RunReport& report, const config::Config& con
   if (!verified) {
     return controller::all_clean(report) ? 0 : kExitUnclean;
   }
-  switch (to_run_result(report, config).verdict) {
-    case results::Verdict::kFindings:
-      return kExitWrongResult;
-    case results::Verdict::kIncomplete:
-      return controller::all_clean(report) ? kExitNotVerified : kExitUnclean;
-    case results::Verdict::kClean:
-    case results::Verdict::kCorrectedErrors:
-      return 0;
+  const results::Verdict verdict = to_run_result(report, config).verdict;
+  if (verdict == results::Verdict::kFindings) {
+    return kExitWrongResult;
   }
-  return kExitUnclean;
+  if (verdict == results::Verdict::kIncomplete) {
+    return controller::all_clean(report) ? kExitNotVerified : kExitUnclean;
+  }
+  return 0;  // Clean, or clean with corrected errors.
+}
+
+int finish_run(controller::RunReport& report, const config::Config& config,
+               const topology::Snapshot* machine, verification::Isolator& isolator,
+               controller::ChildAwareRerunner& rerunner, std::size_t limit,
+               controller::Reporter& reporter) {
+  if (controller::wrong_result_count(report) != 0) {
+    const controller::IsolationSummary isolated =
+        controller::isolate_findings(report, machine, isolator, rerunner, limit);
+    if (isolated.child_exit_code.has_value()) {
+      return *isolated.child_exit_code;
+    }
+    reporter.isolation_finished(report);
+  }
+  return exit_code_for(report, config);
 }
 
 }  // namespace loadforge::cli

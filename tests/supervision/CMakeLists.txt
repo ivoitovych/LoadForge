@@ -26,7 +26,11 @@ loadforge_enable_sanitizers(loadforge_supervision_tests)
 loadforge_enable_coverage(loadforge_supervision_tests)
 target_compile_options(loadforge_supervision_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-gtest_discover_tests(loadforge_supervision_tests)
+# Workers are pinned to the first CPUs: two of these tests at once would share
+# those CPUs and run each unit at half speed, which an instrumented build cannot
+# afford (a unit longer than the stop grace is a worker killed mid-unit).
+gtest_discover_tests(loadforge_supervision_tests
+  PROPERTIES RESOURCE_LOCK loadforge_pinned_workers)
 
 # The faulty worker (docs/IMPLEMENTATION.md §4, M2a exit criteria 2 and 4): the
 # shipped worker around a compression workload that corrupts its output on
