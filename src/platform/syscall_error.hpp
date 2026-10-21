@@ -71,6 +71,12 @@ struct SyscallError {
 /// arms tested directly. That is rung 2 of the exclusion ladder (make it
 /// reachable) rather than rung 4 (excuse it), and it is the same move the seam
 /// itself is: put the branch where a test can stand.
+///
+/// fork(2) has since gone one step further, to fork_result in syscalls.hpp:
+/// the comparison on the returned pid moved above the seam too, because the
+/// mutation sweep runs no test that forks and so could not see it below. The
+/// calls that still come here (waitpid, kill, clock_gettime and the rest) keep
+/// their comparison below the seam, where an in-process test reaches it.
 template <typename T>
 [[nodiscard]] core::Result<T, SyscallError> result_or_error(T value, bool failed, int number,
                                                             std::string_view call,

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/reporters/json and nothing else.
+
+[[module]]
+path     = "src/reporters/json"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T8"]
+provides = ["ResultWriterContract"]
+note     = """
+run.json: a result's document tree as RFC 8259 JSON. P1: every node kind, \
+an absence that is a member (null, and its reason beside it as \
+"<member>_unavailable") against one that is not, the stream checked before \
+and after the write. P3: the empty list and object, the 64-bit unsigned \
+and signed extremes, a real that is not a number (written as text, never as \
+zero or null), every control character, and every byte of text that is not \
+UTF-8 (replaced, one U+FFFD per offending byte, so the document stays valid). \
+There is no P2: the writer makes no syscall of its own, and a stream that \
+cannot take the output is the contract's failure, driven at T1 with a \
+refusing buffer and at T8 with /dev/full, a real ENOSPC. T8: a real file \
+written and read back, byte-for-byte the same as the string stream's. \
+ResultWriterContract runs against the writer in \
+tests/unit/reporters/json/json_writer_test.cpp; the tests read the output \
+with a strict reader written independently of the writer."""

@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/isolation and nothing else.
+
+[[module]]
+path     = "src/verification/isolation"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T5", "T5b"]
+provides = ["IsolatorContract"]
+consumes = []
+note     = """
+The provider of Isolator (verification/isolation.hpp): the re-run ladder of \
+verification.md §7 over a Rerunner, and the choice of the core its second \
+rung moves a unit to, made from the topology snapshot. \
+\
+P4 is the module's subject. Each outcome of each rung -- reproduced, clean, \
+not performed, and an outcome outside the enumeration -- for both kinds of \
+wrong result, a one- and a many-thread original, with and without another \
+core: every path, checked against the contract's rules for the requests, \
+the answers and the table (T5). Faults are injected into a modelled machine \
+-- one core of an SMT machine, an efficiency cluster's shared L2, one \
+node's memory, everywhere, only under concurrency, nowhere a re-run finds \
+it -- and the placement chosen from a real discovery of a built layout \
+decides where the ladder looks; each test asserts the finding that fault \
+must produce, which is what shows the sibling is never "another core" and \
+that the nearest other core is the one that tells a cluster fault from a \
+core-local one. T5b, the unrun checks: a re-run that cannot be made is \
+never a clean one -- no worker anywhere is inconclusive, never a transient; \
+an unreachable other core leaves the fault unlocated, never core-local. \
+IsolatorContract runs against LadderIsolator (T1). \
+\
+P1: the ladder's decisions and the order's four criteria, each separated \
+from the next by a layout built for it (node above cache, cache above \
+shape, shape above id; a shape counts threads and the core's own caches, \
+not its cluster's). P3: a machine of one core, with one thread and with \
+two; a CPU the snapshot does not hold; a snapshot with no caches and no \
+NUMA; a placement of zero threads, passed to the re-runner as given. \
+\
+The layouts are sysfs trees read by the real topology discovery, so each \
+is one discovery accepts; the symmetric one is this stream's machine as its \
+/sys describes it, and the real /sys is read too, every CPU's list checked \
+against the CPUs on other cores (F21). Not P2: no call here can fail; a \
+re-run that cannot be made is an answer, not an error. Not P6, T7: the \
+lifecycle of re-running a unit in a real worker is the Rerunner's, which \
+the integration stream provides and tests against real processes.\
+"""

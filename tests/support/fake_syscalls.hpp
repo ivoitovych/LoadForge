@@ -7,7 +7,11 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -15,6 +19,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -98,6 +103,9 @@ class FakeSyscalls final : public platform::Syscalls {
 
   core::Result<int, platform::SyscallError> open_read(const std::string& path) override {
     last_path_ = path;
+    if (use_tree_) {
+      return open_in_tree(path);
+    }
     if (open_error_ != 0) {
       return platform::SyscallError{open_error_, "open", path};
     }
@@ -110,6 +118,9 @@ class FakeSyscalls final : public platform::Syscalls {
                                                          std::size_t size) override {
     ++read_count_;
     ++reads_by_fd_[fd];
+    if (const auto file = tree_fds_.find(fd); file != tree_fds_.end()) {
+      return read_tree(fd, file->second, buffer, size);
+    }
     if (const auto pipe = pipe_readers_.find(fd); pipe != pipe_readers_.end()) {
       return read_pipe(fd, *pipe->second, buffer, size);
     }
@@ -144,7 +155,156 @@ class FakeSyscalls final : public platform::Syscalls {
     return count;
   }
 
+  // --- a tree of files ---------------------------------------------------------
+  //
+  // The single-content mode above serves one file. A source that reads a
+  // directory of them -- a powercap package and its constraints, one EDAC
+  // controller after another -- needs paths. The first call below switches the
+  // fake into tree mode, where a path nobody added is ENOENT, exactly as on a
+  // machine without it, and every added path has its own content, its own
+  // refusal and its own read failure.
+
+  void add_file(const std::string& path, std::string content) {
+    use_tree_ = true;
+    tree_files_[path] = std::move(content);
+  }
+  /// The file is gone from now on: the next open is ENOENT, as after a device
+  /// is unplugged. A descriptor already open keeps reading what it had.
+  void remove_file(const std::string& path) {
+    use_tree_ = true;
+    tree_files_.erase(path);
+    tree_open_errors_.erase(path);
+  }
+  /// open(2) of this path fails with `error` (EACCES: a root-only attribute).
+  void deny_file(const std::string& path, int error) {
+    use_tree_ = true;
+    tree_open_errors_[path] = error;
+  }
+  /// The file opens, and read(2) fails with `error`: a permission check made by
+  /// the driver, or a device that dies between the open and the read.
+  void fail_file_read(const std::string& path, int error) {
+    use_tree_ = true;
+    tree_read_errors_[path] = error;
+  }
+  /// Every regular file below a directory of the source tree, as if the
+  /// directory were `machine_prefix` ("/sys") on the machine: the committed
+  /// fixtures, made available to a test that must also refuse or remove some
+  /// of their files, which a clone cannot hold (a mode-000 file arrives
+  /// readable).
+  void add_tree(const std::filesystem::path& host_directory, const std::string& machine_prefix) {
+    use_tree_ = true;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(host_directory)) {
+      if (!entry.is_regular_file()) {
+        continue;
+      }
+      std::ifstream in(entry.path());
+      std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      tree_files_[machine_prefix + "/" +
+                  std::filesystem::relative(entry.path(), host_directory).generic_string()] =
+          std::move(content);
+    }
+  }
+  [[nodiscard]] int tree_opens_of(const std::string& path) const {
+    const auto found = tree_opens_.find(path);
+    return found == tree_opens_.end() ? 0 : found->second;
+  }
+
+  // --- performance counters ----------------------------------------------------
+  //
+  // An event is named by its (type, config), which is how a test says "the
+  // cycles counter" without knowing which descriptor it will be given. Every
+  // open that is not scripted to fail succeeds, so a test states only the
+  // refusal it is about.
+
+  struct PerfStep {
+    platform::PerfCount count;
+    int error = 0;  ///< Non-zero raises this errno instead of the count.
+  };
+
+  void fail_perf_open(std::uint32_t type, std::uint64_t config, int error) {
+    perf_open_errors_[{type, config}] = error;
+  }
+  void fail_every_perf_open(int error) { perf_open_error_all_ = error; }
+  /// The reads of this event, in order; the last one is repeated once the
+  /// script runs out, which is how a counter that has stopped moving reads.
+  void script_perf_reads(std::uint32_t type, std::uint64_t config, std::vector<PerfStep> steps) {
+    perf_scripts_[{type, config}].assign(steps.begin(), steps.end());
+  }
+  void fail_perf_control(platform::PerfAction action, int error) {
+    perf_control_errors_[static_cast<int>(action)] = error;
+  }
+  [[nodiscard]] const std::vector<platform::PerfEventSpec>& perf_opens() const {
+    return perf_opens_;
+  }
+  [[nodiscard]] const std::vector<std::pair<int, platform::PerfAction>>& perf_controls() const {
+    return perf_controls_;
+  }
+  /// The descriptor the fake gave the nth successful open of an event.
+  [[nodiscard]] int perf_fd_of(std::uint32_t type, std::uint64_t config) const {
+    for (const auto& [fd, key] : perf_fds_) {
+      if (key == std::pair{type, config}) {
+        return fd;
+      }
+    }
+    return -1;
+  }
+
+  core::Result<int, platform::SyscallError> open_perf_event(
+      const platform::PerfEventSpec& spec) override {
+    perf_opens_.push_back(spec);
+    const std::pair<std::uint32_t, std::uint64_t> key{spec.type, spec.config};
+    const std::string subject =
+        "perf event type " + std::to_string(spec.type) + " config " + std::to_string(spec.config);
+    if (perf_open_error_all_ != 0) {
+      return platform::SyscallError{perf_open_error_all_, "perf_event_open", subject};
+    }
+    if (const auto refused = perf_open_errors_.find(key); refused != perf_open_errors_.end()) {
+      return platform::SyscallError{refused->second, "perf_event_open", subject};
+    }
+    ++open_count_;
+    const int fd = next_perf_fd_++;
+    perf_fds_[fd] = key;
+    return fd;
+  }
+
+  core::Result<core::Ok, platform::SyscallError> control_perf_event(
+      int fd, platform::PerfAction action) override {
+    perf_controls_.emplace_back(fd, action);
+    if (!perf_fds_.contains(fd)) {
+      return platform::SyscallError{EBADF, "ioctl", describe(fd)};
+    }
+    if (const auto refused = perf_control_errors_.find(static_cast<int>(action));
+        refused != perf_control_errors_.end()) {
+      return platform::SyscallError{refused->second, "ioctl", describe(fd)};
+    }
+    return core::Ok{};
+  }
+
+  core::Result<platform::PerfCount, platform::SyscallError> read_perf_count(int fd) override {
+    ++read_count_;
+    const auto event = perf_fds_.find(fd);
+    if (event == perf_fds_.end()) {
+      return platform::SyscallError{EBADF, "read", describe(fd)};
+    }
+    auto& script = perf_scripts_[event->second];
+    if (script.empty()) {
+      return platform::PerfCount{1000, 1000, 1000};
+    }
+    const PerfStep step = script.front();
+    if (script.size() > 1) {
+      script.pop_front();
+    }
+    if (step.error != 0) {
+      return platform::SyscallError{step.error, "read", describe(fd)};
+    }
+    return step.count;
+  }
+
   core::Result<core::Ok, platform::SyscallError> close(int fd) override {
+    if (tree_fds_.erase(fd) != 0 || perf_fds_.erase(fd) != 0) {
+      ++close_count_;
+      return close_outcome(fd);
+    }
     if (const auto reader = pipe_readers_.find(fd); reader != pipe_readers_.end()) {
       --reader->second->readers;
       pipe_readers_.erase(reader);
@@ -781,6 +941,11 @@ class FakeSyscalls final : public platform::Syscalls {
       --held.pipe->writers;
     }
   }
+  /// Number the next pipes' ends from this descriptor on. The kernel hands
+  /// out the lowest number free, which is 0 in a process started with its
+  /// standard input closed; the default, well away from that, keeps a pipe's
+  /// ends apart from every other descriptor here.
+  void number_pipes_from(int fd) { next_pipe_fd_ = fd; }
   /// Deliver at most this many bytes per pipe read, so a frame arrives in
   /// pieces. Defaults to everything queued.
   void limit_pipe_reads(std::size_t bytes) { pipe_read_limit_ = bytes; }
@@ -912,7 +1077,8 @@ class FakeSyscalls final : public platform::Syscalls {
   /// Any descriptor of any kind this fake currently has open.
   [[nodiscard]] bool is_open(int fd) const {
     return (fd == kFakeDescriptor && descriptor_open_) || memory_files_.contains(fd) ||
-           pipe_readers_.contains(fd) || pipe_writers_.contains(fd);
+           pipe_readers_.contains(fd) || pipe_writers_.contains(fd) || tree_fds_.contains(fd) ||
+           perf_fds_.contains(fd);
   }
 
   /// A pipe: its queue and how many descriptors hold each end, here and in
@@ -990,6 +1156,62 @@ class FakeSyscalls final : public platform::Syscalls {
     }
     return readiness;
   }
+
+  struct TreeFile {
+    std::string path;
+    std::string content;  ///< What the file held when it was opened.
+    std::size_t offset = 0;
+  };
+
+  core::Result<int, platform::SyscallError> open_in_tree(const std::string& path) {
+    if (const auto refused = tree_open_errors_.find(path); refused != tree_open_errors_.end()) {
+      return platform::SyscallError{refused->second, "open", path};
+    }
+    const auto file = tree_files_.find(path);
+    if (file == tree_files_.end()) {
+      return platform::SyscallError{ENOENT, "open", path};
+    }
+    ++open_count_;
+    ++tree_opens_[path];
+    const int fd = next_tree_fd_++;
+    tree_fds_[fd] = TreeFile{path, file->second, 0};
+    return fd;
+  }
+
+  core::Result<std::size_t, platform::SyscallError> read_tree(int fd, TreeFile& file, char* buffer,
+                                                              std::size_t size) {
+    if (const auto failed = tree_read_errors_.find(file.path); failed != tree_read_errors_.end()) {
+      return platform::SyscallError{failed->second, "read", describe(fd)};
+    }
+    const std::size_t left = file.content.size() - file.offset;
+    const std::size_t count = left < size ? left : size;
+    for (std::size_t i = 0; i < count; ++i) {
+      buffer[i] = file.content[file.offset + i];
+    }
+    file.offset += count;
+    return count;
+  }
+
+  static constexpr int kFirstPerfFd = 400;
+  static constexpr int kFirstTreeFd = 600;
+
+  bool use_tree_ = false;
+  std::map<std::string, std::string> tree_files_;
+  std::map<std::string, int> tree_open_errors_;
+  std::map<std::string, int> tree_read_errors_;
+  std::map<std::string, int> tree_opens_;
+  std::map<int, TreeFile> tree_fds_;
+  int next_tree_fd_ = kFirstTreeFd;
+
+  using PerfKey = std::pair<std::uint32_t, std::uint64_t>;
+  std::map<PerfKey, int> perf_open_errors_;
+  int perf_open_error_all_ = 0;
+  std::map<PerfKey, std::deque<PerfStep>> perf_scripts_;
+  std::map<int, int> perf_control_errors_;
+  std::map<int, PerfKey> perf_fds_;
+  std::vector<platform::PerfEventSpec> perf_opens_;
+  std::vector<std::pair<int, platform::PerfAction>> perf_controls_;
+  int next_perf_fd_ = kFirstPerfFd;
 
   std::deque<ReadStep> reads_;
   int open_error_ = 0;

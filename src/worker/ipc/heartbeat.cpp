@@ -135,11 +135,10 @@ void* slots_base(void* base, std::size_t bytes) {
   return region.subspan(HeartbeatRegion::kHeaderBytes).data();
 }
 
-Slot* slot_at(void* slots, std::size_t slot) {
-  // A span over the slots, indexed by subspan so no raw pointer arithmetic
-  // is needed; the caller has already bounded `slot`.
-  const std::span<Slot> cells{static_cast<Slot*>(slots), slot + 1};
-  return cells.subspan(slot, 1).data();
+/// Every slot the region has, as a span, so that one is reached by subspan
+/// and no raw pointer arithmetic is needed; the caller bounds the index.
+std::span<Slot> slot_cells(void* slots, std::size_t count) {
+  return {static_cast<Slot*>(slots), count};
 }
 
 std::string count_detail(std::string_view what, std::uint64_t found, std::uint64_t expected) {
@@ -282,7 +281,7 @@ core::Result<core::Ok, RegionError> HeartbeatRegion::publish(std::size_t slot,
   if (slot >= slots()) {
     return layout_error(RegionFault::kSlotOutOfRange, count_detail("slot", slot, slots()));
   }
-  Slot* const cell = slot_at(slots_, slot);
+  Slot* const cell = slot_cells(slots_, slots()).subspan(slot, 1).data();
   const std::atomic_ref<std::uint64_t> sequence{cell->sequence};
   // Seqlock writer. The sequence goes odd before the fields change and even
   // after. The two transitions need different orderings, and a release store
@@ -301,15 +300,20 @@ core::Result<core::Ok, RegionError> HeartbeatRegion::publish(std::size_t slot,
   // sees a store made after this fence, the reader's acquire fence
   // synchronises with this one, and its second sequence load sees at least
   // the odd value, so the sample is retried.
-  const std::uint64_t start = sequence.load(std::memory_order_relaxed);
-  sequence.store(start + 1, std::memory_order_relaxed);
+  //
+  // Both stores derive from the odd value, so the even one a publish leaves
+  // is always the next after the odd one it wrote, and never the value it
+  // found: a reader that saw the slot at rest before the publish cannot see
+  // the same number after it.
+  const std::uint64_t writing = sequence.load(std::memory_order_relaxed) + 1;
+  sequence.store(writing, std::memory_order_relaxed);
   std::atomic_thread_fence(std::memory_order_release);
   std::atomic_ref<std::int64_t>{cell->timestamp_ns}.store(beat.timestamp_ns,
                                                           std::memory_order_relaxed);
   std::atomic_ref<std::uint64_t>{cell->progress}.store(beat.progress, std::memory_order_relaxed);
   std::atomic_ref<std::uint32_t>{cell->phase}.store(beat.phase, std::memory_order_relaxed);
   std::atomic_ref<std::uint32_t>{cell->pid}.store(beat.pid, std::memory_order_relaxed);
-  sequence.store(start + 2, std::memory_order_release);
+  sequence.store(writing + 1, std::memory_order_release);
   return core::Ok{};
 }
 
@@ -318,9 +322,10 @@ core::Result<std::optional<Heartbeat>, RegionError> HeartbeatRegion::observe(
   if (slot >= slots()) {
     return layout_error(RegionFault::kSlotOutOfRange, count_detail("slot", slot, slots()));
   }
-  Slot* const cell = slot_at(slots_, slot);
+  Slot* const cell = slot_cells(slots_, slots()).subspan(slot, 1).data();
   const std::atomic_ref<std::uint64_t> sequence{cell->sequence};
-  for (int attempt = 0; attempt < kMaxTornRetries; ++attempt) {
+  int attempts = 0;
+  for (; attempts < kMaxTornRetries; ++attempts) {
     // Seqlock reader. Acquire the sequence, read the fields, then re-read the
     // sequence; the fence keeps the field reads from being reordered after
     // the second sequence read. Odd means a write is in progress; a changed
@@ -344,9 +349,10 @@ core::Result<std::optional<Heartbeat>, RegionError> HeartbeatRegion::observe(
   }
   // Not count_detail: there is no expected count here, only attempts that all
   // found a write in progress, and "expected 0" read as if retries were a
-  // budget overrun rather than a slot never seen at rest.
+  // budget overrun rather than a slot never seen at rest. The number is the
+  // attempts actually made, counted, not the bound they were meant to meet.
   std::string detail = "no consistent sample in ";
-  detail += std::to_string(kMaxTornRetries);
+  detail += std::to_string(attempts);
   detail += " attempts";
   return layout_error(RegionFault::kTorn, std::move(detail));
 }

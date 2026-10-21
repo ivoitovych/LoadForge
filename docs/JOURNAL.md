@@ -1846,6 +1846,57 @@ test at the boundary, or allowlisted with a written reason if it is equivalent, 
 follow-up changes per module (ROADMAP item 11b). The sweep merges first: it is weekly and
 gates no pull request, so a red sweep holds nothing up and names exactly what is left.
 
+*Platform, 2026-10-20 15:44 UTC.* All 23 killed by hand, none allowlisted. The five in
+`fork_process` and `reap_any_nonblocking` went as planned above: the decision on the pid
+is now `fork_result` and `reap_result`, pure functions tested at -1, 0 and a positive pid,
+and the seam methods are the bare call and an errno read. In the rest of `syscalls.cpp`,
+a return of 0 from `open`, `memfd_create` and `write` is a real success (descriptor 0 with
+standard input closed; a zero-byte write) and is now tested; `readlink` and a blocking
+`waitpid` never return 0, so they test for -1, which removes the boundary. The five mask
+mutants survived because the affinity tests restored the process's mask *through the
+conversion under test*: a conversion that kept only CPU 0 pinned the process there, after
+which the glibc cross-check saw one CPU both ways. The conversions are now public and held
+to `CPU_SET`/`CPU_ISSET` on all 1024 bits (nodes too: a `cpu_set_t` is the kernel bitmap
+type `mbind` reads), and the restore goes through glibc. `exec`'s reserve is killed by an
+empty argument list; `describe`'s reserve is gone; the clock's two are message arithmetic,
+now asserted exactly; `WorkerPool`'s two slot loops are one `std::find_if`, and `pid_at` is
+killed at slot 0 of an empty pool, where the mutant reads storage never allocated. The new
+tests met §1.22's trap twice: `Reaped`'s and `CpuMask`'s defaulted comparisons are now
+defaulted out of line in `syscalls.cpp`.
+
+*The controller and worker shards' 18 survivors* (2026-10-20 12:59 UTC) are all gone, and
+none is allowlisted. Most fell to a test at the boundary: a memory total equal to
+`limits.memory`, an allowance equal to the interval, a region of `kMaxWorkers` attached, a
+frame of the largest payload read back. The fake's clocks start at zero, where `now - last`
+and `now + last` agree, so both torn-slot tests (controller and worker) also run with the
+clock a day past zero. The beat count, the poll timeout and the teardown's wait count are now
+asserted. A reap after the last worker meets a scripted `ECHILD`, as from the kernel. A pipe
+end numbered 0 (what the kernel hands out when standard input is closed) is closed by the
+teardown, through the fake's new `number_pipes_from`. The rest were equivalent and are gone
+from the code. The teardown's `live_ > 0` guard decided nothing that the wait loop did not.
+`put_u32` is unrolled, and `slot_at`'s span takes the region's length. The seqlock writer's
+two stores now both derive from the odd value, so a wrong sign leaves the sequence unchanged,
+and every reader sees that. The torn reader reports the attempts it made, so 65 no longer
+passes for 64. Each kill was proved by hand: mutate, build, and see the named test fail under
+`--gtest_filter=-RealProcess*`.
+
+**The `topology`, `resources` and `config` survivors (ROADMAP item 11b).** All 15 are
+killed or removed; none is allowlisted. Seven were boundary mutants killed by tests at the
+boundary: id 65535 accepted (`cpu_topology.cpp:46`, `cache.cpp:72`; tests
+`TheLargestIdTheKernelCanAssignIsAccepted`, `TheLargestIdACacheAttributeHoldsIsAccepted`),
+two L1 caches of one CPU that do not nest (`cache.cpp:236`, `TwoCachesAtOneLevelNeedNotNestInEachOther`),
+a claim of an offline CPU while other CPUs are online (`numa.cpp:120`, which a one-CPU
+fixture cannot tell from a correct claim), the octal escape `\377` (`cgroup.cpp:57`, `:62`),
+and a configuration lying past the first 4 KiB read (`config.cpp:511`: the old padding was
+a trailing comment, so a truncated read parsed the same; the padding now comes first). Eight
+were equivalent as written, because the comparison sat after an inequality test or one
+element past the end of a view that always has a space or NUL there, and were refactored
+away: `ordered_before` is one tuple comparison (`cache.cpp:298`, `:301`, `:303`), and the
+digit scans (`cache.cpp:332`, `numa.cpp:46`), the escape length check (`cgroup.cpp:51`)
+and the separator search (`cgroup.cpp:188`) use `find_first_not_of`, `substr` and
+`std::find`, which cannot read past the end. Each boundary kill was proved by hand: apply
+the mutation, rebuild, run the module's tests, see the named test fail, revert.
+
 ### 2.29 The sort and Monte Carlo specifications
 
 *2026-10-20 12:34 UTC.* The wave-2 prerequisite (ADR 0004: a workload's specification

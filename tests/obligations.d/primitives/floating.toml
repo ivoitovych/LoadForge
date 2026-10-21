@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/primitives/floating and nothing else.
+
+[[module]]
+path     = "src/primitives/floating"
+classes  = ["P1", "P3"]
+tiers    = ["T1", "T4", "T6"]
+consumes = ["ExecutorContract"]
+note     = """
+The dot product over eight FMA accumulators in a fixed reduction tree, \
+declared BitExactFixedDecomposition: the accumulator count, the tree and the \
+index order of the units are the decomposition. P1 is the element loop and the \
+run's sum at zero, one and many iterations. P3 is no elements (positive zero), \
+one element (the rounded product), lengths either side of every multiple of \
+the accumulator count, a unit index past 2^32, and the rounding itself: an \
+exact 128-bit integer sum of the 106-bit products bounds the error of every \
+result (tests/unit/primitives/floating). T4 draws configurations; T6 is the \
+BitExactFixedDecomposition sweep at 1, 2, 3, 4 and 7 threads, and shows a \
+different grouping of the same units differs only within rounding. Consumes \
+the Executor, run against the module's own mocks."""

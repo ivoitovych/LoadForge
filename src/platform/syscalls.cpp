@@ -3,8 +3,10 @@
 
 #include <fcntl.h>
 #include <linux/mempolicy.h>
+#include <linux/perf_event.h>
 #include <poll.h>
 #include <sched.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -21,6 +23,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -31,7 +34,24 @@ namespace {
 /// reading "read(fd 7): Bad file descriptor" cannot be mistaken for a path.
 std::string describe_fd(int fd) { return "fd " + std::to_string(fd); }
 
+/// A counter as an error message names it: "perf event type 4 config 1".
+std::string describe_event(const PerfEventSpec& spec) {
+  std::string text = "perf event type ";
+  text += std::to_string(spec.type);
+  text += " config ";
+  text += std::to_string(spec.config);
+  return text;
+}
+
 }  // namespace
+
+bool operator==(const Reaped&, const Reaped&) = default;
+bool operator==(const CpuMask&, const CpuMask&) = default;
+
+bool operator==(const PerfCount& lhs, const PerfCount& rhs) noexcept {
+  return std::tie(lhs.value, lhs.time_enabled, lhs.time_running) ==
+         std::tie(rhs.value, rhs.time_enabled, rhs.time_running);
+}
 
 // Every function below is a translation and nothing else. There is no decision
 // here to test, which is the point: docs/PLAN.md §4.3 keeps the layer that
@@ -44,6 +64,19 @@ std::string describe_fd(int fd) { return "fd " + std::to_string(fd); }
 // and by tests/unit/platform/real_syscalls_test.cpp, which drives them against
 // genuine paths in a temporary directory, including genuine failures: a missing
 // file for ENOENT, a directory for EISDIR, and a closed descriptor for EBADF.
+
+core::Result<int, SyscallError> Syscalls::open_perf_event(const PerfEventSpec& /*spec*/) {
+  return SyscallError{ENOSYS, "perf_event_open", ""};
+}
+
+core::Result<core::Ok, SyscallError> Syscalls::control_perf_event(int /*fd*/,
+                                                                  PerfAction /*action*/) {
+  return SyscallError{ENOSYS, "ioctl", ""};
+}
+
+core::Result<PerfCount, SyscallError> Syscalls::read_perf_count(int /*fd*/) {
+  return SyscallError{ENOSYS, "read", ""};
+}
 
 core::Result<int, SyscallError> RealSyscalls::open_read(const std::string& path) {
   // O_CLOEXEC matters here beyond hygiene: the controller forks workers, and a
@@ -77,18 +110,46 @@ core::Result<core::Ok, SyscallError> RealSyscalls::close(int fd) {
 core::Result<std::size_t, SyscallError> RealSyscalls::read_link(const std::string& path,
                                                                 char* buffer, std::size_t size) {
   const ssize_t count = ::readlink(path.c_str(), buffer, size);
-  if (count < 0) {
+  // -1 is readlink's one failure value, and it is tested for exactly: `< 0`
+  // would make 0 a boundary, and no input reaches it -- a symlink cannot have
+  // an empty target, and a zero-sized buffer is refused with EINVAL.
+  if (count == -1) {
     return SyscallError{errno, "readlink", path};
   }
   return static_cast<std::size_t>(count);
 }
 
+// The answer and its errno are two ints in a row: the check is right that they
+// could be swapped, and (what the call returned, what it set) is the order the
+// call produces them in. The tests give each a distinct value.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+core::Result<pid_t, SyscallError> fork_result(pid_t pid, int number) {
+  if (pid < 0) {
+    return SyscallError{number, "fork", "worker process"};
+  }
+  return pid;
+}
+
+// Three ints in a row, for the reason fork_result has two.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+core::Result<std::optional<Reaped>, SyscallError> reap_result(pid_t pid, int status, int number) {
+  if (pid < 0) {
+    return SyscallError{number, "waitpid", "any child, without waiting"};
+  }
+  if (pid == 0) {
+    return std::optional<Reaped>{};  // Children, but none has terminated.
+  }
+  return std::optional<Reaped>{Reaped{pid, status}};
+}
+
 core::Result<pid_t, SyscallError> RealSyscalls::fork_process() {
-  // Branch-free on purpose: fork's failures cannot be induced in a test process,
-  // so the decision lives in result_or_error, above the seam, where both arms
-  // are reachable. See the note there.
+  // The bare call. What its answer means is fork_result's to decide, above the
+  // seam, where a test reaches every arm without creating a process. In the
+  // child nothing here allocates: the errno read and the call below are all
+  // that runs before the caller has its 0.
   const pid_t pid = ::fork();
-  return result_or_error<pid_t>(pid, pid < 0, errno, "fork", "worker process");
+  const int number = errno;
+  return fork_result(pid, number);
 }
 
 SyscallError RealSyscalls::exec(const std::string& path, const std::vector<std::string>& argv) {
@@ -127,11 +188,13 @@ void RealSyscalls::start_session() { (void)::setsid(); }
 core::Result<Reaped, SyscallError> RealSyscalls::wait_any() {
   int status = 0;
   const pid_t pid = ::waitpid(-1, &status, 0);
-  // Branch-free for the same reason fork_process is: waitpid's failures are
-  // ECHILD (no children at all) and EINTR, and neither can be produced on
-  // demand in a test process without racing the test itself. The decision lives
-  // above the seam in result_or_error, where both arms are reachable.
-  return result_or_error<Reaped>(Reaped{pid, status}, pid < 0, errno, "waitpid", "any child");
+  // Branch-free on purpose: waitpid's failures are ECHILD (no children at all)
+  // and EINTR, and the second cannot be produced on demand in a test process
+  // without racing the test itself. The decision lives above the seam in
+  // result_or_error, where both arms are reachable. The test is for -1, the
+  // one failure value, rather than for `< 0`: a wait that blocks never answers
+  // 0, so that boundary would be one no input reaches.
+  return result_or_error<Reaped>(Reaped{pid, status}, pid == -1, errno, "waitpid", "any child");
 }
 
 core::Result<core::Ok, SyscallError> RealSyscalls::send_signal(pid_t pid, int signal) {
@@ -174,7 +237,8 @@ static_assert(kAffinityMaskBits == CPU_SETSIZE,
 static_assert(sizeof(cpu_set_t) * CHAR_BIT == CPU_SETSIZE,
               "cpu_set_t must be a plain bit array with no padding");
 
-namespace {
+static_assert(sizeof(CpuMaskBytes) == sizeof(cpu_set_t),
+              "CpuMaskBytes must be exactly the storage of a cpu_set_t");
 
 // The conversions read and write the set's bytes directly rather than through
 // CPU_ISSET and CPU_SET. Those macros carry a size guard -- `cpu / 8 < setsize`
@@ -182,14 +246,10 @@ namespace {
 // left a branch no test could take, and the coverage gate correctly refused
 // to call it covered. Rung 3 of the exclusion ladder: delete the unreachable
 // code rather than excuse it. The layout this assumes is the one glibc
-// documents and the static_assert above pins; the real-kernel test cross-checks
-// every one of the 1024 bits against CPU_ISSET itself, so the macro is still
-// the oracle -- in the test, where an oracle belongs.
-using RawBytes = std::array<unsigned char, sizeof(cpu_set_t)>;
-
-CpuMask from_raw(const cpu_set_t& raw) {
-  RawBytes bytes{};
-  std::memcpy(bytes.data(), &raw, sizeof raw);
+// documents and the static_asserts above pin; the tests cross-check every one
+// of the 1024 bits against CPU_SET and CPU_ISSET themselves, so the macros are
+// still the oracle -- in the test, where an oracle belongs.
+CpuMask cpu_mask_from_bytes(const CpuMaskBytes& bytes) {
   CpuMask mask;
   for (std::size_t cpu = 0; cpu < kAffinityMaskBits; ++cpu) {
     // .at(), and the widening cast, are for the checkers rather than for safety:
@@ -204,13 +264,26 @@ CpuMask from_raw(const cpu_set_t& raw) {
   return mask;
 }
 
-cpu_set_t to_raw(const CpuMask& mask) {
-  RawBytes bytes{};
+CpuMaskBytes cpu_mask_to_bytes(const CpuMask& mask) {
+  CpuMaskBytes bytes{};
   for (std::size_t cpu = 0; cpu < kAffinityMaskBits; ++cpu) {
     if (mask.cpus.test(cpu)) {
       bytes.at(cpu / CHAR_BIT) |= static_cast<unsigned char>(1U << (cpu % CHAR_BIT));
     }
   }
+  return bytes;
+}
+
+namespace {
+
+CpuMask from_raw(const cpu_set_t& raw) {
+  CpuMaskBytes bytes{};
+  std::memcpy(bytes.data(), &raw, sizeof raw);
+  return cpu_mask_from_bytes(bytes);
+}
+
+cpu_set_t to_raw(const CpuMask& mask) {
+  const CpuMaskBytes bytes = cpu_mask_to_bytes(mask);
   cpu_set_t raw;
   std::memcpy(&raw, bytes.data(), sizeof raw);
   return raw;
@@ -243,16 +316,17 @@ namespace {
 /// to a test; the length is what a reader can act on.
 std::string describe_length(std::size_t length) { return std::to_string(length) + " bytes"; }
 
+}  // namespace
+
 // The node mask crosses the seam as the array of unsigned long that mbind(2)
 // reads, built word by word -- bit n in word n / bits-per-long -- rather than
 // by copying bytes, so that the layout holds on either byte order.
-using NodeWords = std::array<unsigned long, kNodeMaskBits / (sizeof(unsigned long) * CHAR_BIT)>;
 static_assert(kNodeMaskBits % (sizeof(unsigned long) * CHAR_BIT) == 0,
               "the node mask must be a whole number of words");
 
-NodeWords to_words(const NodeMask& nodes) {
+NodeMaskWords node_mask_to_words(const NodeMask& nodes) {
   constexpr std::size_t kBitsPerWord = sizeof(unsigned long) * CHAR_BIT;
-  NodeWords words{};
+  NodeMaskWords words{};
   for (std::size_t node = 0; node < kNodeMaskBits; ++node) {
     if (nodes.nodes.test(node)) {
       words.at(node / kBitsPerWord) |= 1UL << (node % kBitsPerWord);
@@ -260,8 +334,6 @@ NodeWords to_words(const NodeMask& nodes) {
   }
   return words;
 }
-
-}  // namespace
 
 core::Result<void*, SyscallError> RealSyscalls::map_anonymous(std::size_t length, int extra_flags) {
   // PROT and the base flags are fixed here because every mapping this project
@@ -298,7 +370,7 @@ core::Result<core::Ok, SyscallError> RealSyscalls::advise_memory(void* address, 
 
 core::Result<core::Ok, SyscallError> RealSyscalls::bind_memory(void* address, std::size_t length,
                                                                const NodeMask& nodes) {
-  const NodeWords words = to_words(nodes);
+  const NodeMaskWords words = node_mask_to_words(nodes);
   // No libnuma: mbind(2) has no glibc wrapper, and linking a library for one
   // call would add a runtime dependency the static release cannot carry. The
   // maxnode argument is one more than the highest bit the kernel should read,
@@ -406,17 +478,68 @@ pid_t RealSyscalls::process_id() { return ::getpid(); }
 
 core::Result<std::optional<Reaped>, SyscallError> RealSyscalls::reap_any_nonblocking() {
   int status = 0;
+  // The bare call, as fork_process is; reap_result decides what the answer
+  // means. Real-kernel tests reach all three of its arms as well, but only one
+  // that forks can reach the last two, and the mutation sweep runs none.
   const pid_t pid = ::waitpid(-1, &status, WNOHANG);
-  if (pid < 0) {
-    // Unlike wait_any, the failing arm is reachable here: a process with no
-    // children asking without blocking is answered ECHILD at once, and the
-    // real-kernel test asks exactly that.
-    return SyscallError{errno, "waitpid", "any child, without waiting"};
+  const int number = errno;
+  return reap_result(pid, status, number);
+}
+
+core::Result<int, SyscallError> RealSyscalls::open_perf_event(const PerfEventSpec& spec) {
+  perf_event_attr attr{};
+  attr.size = sizeof(attr);
+  attr.type = spec.type;
+  attr.config = spec.config;
+  attr.disabled = 1;
+  attr.exclude_kernel = spec.user_only;
+  attr.exclude_hv = spec.user_only;
+  attr.inherit = spec.inherit;
+  attr.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING;
+  // The glibc syscall() wrapper is variadic and perf_event_open has no other
+  // spelling: glibc provides none.
+  // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
+  const long fd =
+      ::syscall(SYS_perf_event_open, &attr, spec.pid, spec.cpu, -1, PERF_FLAG_FD_CLOEXEC);
+  // NOLINTEND(cppcoreguidelines-pro-type-vararg)
+  // Not an `if`: whether the kernel grants a counter depends on the machine's
+  // PMU and perf_event_paranoid, so a test cannot choose the arm on every
+  // machine, and a branch here would be covered on one runner and not another.
+  return result_or_error(static_cast<int>(fd), fd < 0, errno, "perf_event_open",
+                         describe_event(spec));
+}
+
+core::Result<core::Ok, SyscallError> RealSyscalls::control_perf_event(int fd, PerfAction action) {
+  unsigned long request = 0;
+  switch (action) {
+    case PerfAction::kReset:
+      request = PERF_EVENT_IOC_RESET;
+      break;
+    case PerfAction::kEnable:
+      request = PERF_EVENT_IOC_ENABLE;
+      break;
+    case PerfAction::kDisable:
+      request = PERF_EVENT_IOC_DISABLE;
+      break;
   }
-  if (pid == 0) {
-    return std::optional<Reaped>{};  // Children, but none has terminated.
+  if (request == 0) {
+    return SyscallError{EINVAL, "ioctl", describe_fd(fd)};  // An action outside the enumeration.
   }
-  return std::optional<Reaped>{Reaped{pid, status}};
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+  const int result = ::ioctl(fd, request, 0);
+  return result_or_error(core::Ok{}, result != 0, errno, "ioctl", describe_fd(fd));
+}
+
+core::Result<PerfCount, SyscallError> RealSyscalls::read_perf_count(int fd) {
+  std::array<std::uint64_t, 3> raw{};
+  const ssize_t count = ::read(fd, raw.data(), sizeof(raw));
+  if (count < 0) {
+    return SyscallError{errno, "read", describe_fd(fd)};
+  }
+  if (static_cast<std::size_t>(count) != sizeof(raw)) {
+    return SyscallError{EIO, "read", describe_fd(fd)};  // Not a counter, or a torn read.
+  }
+  return PerfCount{raw[0], raw[1], raw[2]};
 }
 
 }  // namespace loadforge::platform

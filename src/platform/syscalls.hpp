@@ -4,7 +4,9 @@
 
 #include <sys/types.h>
 
+#include <array>
 #include <bitset>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -26,8 +28,39 @@ struct Reaped {
   pid_t pid = 0;
   int status = 0;  ///< Raw; decode with ExitStatus, which keeps the raw value.
 
-  [[nodiscard]] friend bool operator==(const Reaped&, const Reaped&) = default;
+  /// Defaulted out of line, in syscalls.cpp, so there is one definition and so
+  /// one coverage record: a comparison defaulted here is copied into every
+  /// unit that uses it, the linker keeps one copy, and the others are reported
+  /// at zero (journal §1.22). This one and CpuMask's showed it.
+  friend bool operator==(const Reaped&, const Reaped&);
 };
+
+/// The declaration the attribute can appertain to: a friend declaration that
+/// is not a definition cannot carry one.
+[[nodiscard]] bool operator==(const Reaped&, const Reaped&);
+
+/// What fork(2)'s return value means: a negative pid is the failure `number`
+/// names; anything else is the answer -- 0 in the child, the child's pid in the
+/// parent -- which WorkerLauncher::fork_worker tells apart (process.hpp).
+///
+/// RealSyscalls::fork_process is the bare call and hands its answer here. The
+/// decision is a function of its own so that a test reaches every arm without
+/// creating a process: fork's failures cannot be induced in a test process
+/// (result_or_error says why), and its successes cannot be seen without
+/// forking, which the mutation sweep's tests may not do (docs/JOURNAL.md §2.28).
+///
+/// It runs in the child too, between fork and exec. The success arm therefore
+/// allocates nothing; only the failure arm, which no child reaches, builds the
+/// error's subject.
+[[nodiscard]] core::Result<pid_t, SyscallError> fork_result(pid_t pid, int number);
+
+/// What waitpid(-1, &status, WNOHANG)'s return value means: a negative pid is
+/// the failure `number` names (ECHILD when there are no children at all), 0 is
+/// children of which none has terminated, and a positive pid is the child
+/// reaped, with its status word. Above the seam for the reason fork_result is:
+/// RealSyscalls::reap_any_nonblocking stays the bare call.
+[[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_result(pid_t pid, int status,
+                                                                            int number);
 
 /// One clock reading, exactly as clock_gettime(2) reports it.
 ///
@@ -57,8 +90,11 @@ inline constexpr std::size_t kAffinityMaskBits = 1024;
 struct CpuMask {
   std::bitset<kAffinityMaskBits> cpus;
 
-  [[nodiscard]] friend bool operator==(const CpuMask&, const CpuMask&) = default;
+  /// Defaulted out of line, for the reason Reaped's comparison is.
+  friend bool operator==(const CpuMask&, const CpuMask&);
 };
+
+[[nodiscard]] bool operator==(const CpuMask&, const CpuMask&);
 
 /// Width of a NUMA node mask. No Linux kernel numbers a node past 1023
 /// (CONFIG_NODES_SHIFT is at most 10), so a mask this wide names every node any
@@ -75,6 +111,27 @@ struct NodeMask {
 
   [[nodiscard]] friend bool operator==(const NodeMask&, const NodeMask&) = default;
 };
+
+/// A CpuMask as the bytes of a cpu_set_t: CPU n is bit n % CHAR_BIT of byte
+/// n / CHAR_BIT, the layout glibc documents and syscalls.cpp static_asserts.
+///
+/// The conversions are declared here, rather than kept private to the seam,
+/// so that a test can hold them to glibc's own CPU_SET and CPU_ISSET on every
+/// one of the 1024 bits without asking the kernel to move the test process.
+/// Through the kernel, a conversion that dropped every CPU but 0 passes on a
+/// machine whose only CPU is 0, and on any machine once a test has pinned
+/// itself there.
+using CpuMaskBytes = std::array<unsigned char, kAffinityMaskBits / CHAR_BIT>;
+[[nodiscard]] CpuMask cpu_mask_from_bytes(const CpuMaskBytes& bytes);
+[[nodiscard]] CpuMaskBytes cpu_mask_to_bytes(const CpuMask& mask);
+
+/// A NodeMask as the array of unsigned long that mbind(2) reads: node n is bit
+/// n % bits-per-long of word n / bits-per-long, built word by word rather than
+/// by copying bytes, so the layout holds on either byte order. Declared here
+/// for the reason the CPU conversions are: through the kernel, a machine with
+/// one node cannot tell most wrong layouts from the right one.
+using NodeMaskWords = std::array<unsigned long, kNodeMaskBits / (sizeof(unsigned long) * CHAR_BIT)>;
+[[nodiscard]] NodeMaskWords node_mask_to_words(const NodeMask& nodes);
 
 /// The two ends of a pipe, as pipe2(2) hands them out.
 struct PipeEnds {
@@ -98,6 +155,44 @@ struct Readiness {
 
   [[nodiscard]] friend bool operator==(const Readiness&, const Readiness&) = default;
 };
+
+/// A hardware or software counter to open with perf_event_open(2): which PMU
+/// (`type`), which event on it (`config`), and what to count.
+///
+/// `pid` and `cpu` are the syscall's own pair: pid 0 with cpu -1 counts the
+/// calling process on whichever CPU it runs, pid -1 with a cpu counts every
+/// process on that CPU (privileged). `user_only` sets exclude_kernel and
+/// exclude_hv, which is what lets an unprivileged process count itself at
+/// perf_event_paranoid 2; a PMU that counts the whole package (the power PMU)
+/// refuses them with EINVAL, which is why they are a choice and not a default.
+/// `inherit` makes children forked after the open count into the same
+/// descriptor. The event is opened disabled, close-on-exec, with total time
+/// enabled and running in its read format, so a multiplexed counter can be
+/// scaled (perf_event_open(2), PERF_FORMAT_TOTAL_TIME_*).
+struct PerfEventSpec {
+  std::uint32_t type = 0;
+  std::uint64_t config = 0;
+  pid_t pid = 0;
+  int cpu = -1;
+  bool user_only = false;
+  bool inherit = false;
+};
+
+/// What read(2) on a counter returns with the read format above: the count,
+/// and for how long the event existed and ran. They differ when the kernel
+/// time-shared the PMU between more events than it has counters.
+struct PerfCount {
+  std::uint64_t value = 0;
+  std::uint64_t time_enabled = 0;  ///< Nanoseconds since the event was enabled.
+  std::uint64_t time_running = 0;  ///< Nanoseconds it was on a counter.
+
+  /// Defined in syscalls.cpp, once: a defaulted comparison in a header reads as
+  /// uncovered the moment a second translation unit uses it (journal §1.22).
+  friend bool operator==(const PerfCount& lhs, const PerfCount& rhs) noexcept;
+};
+
+/// The three ioctl(2) requests a counter needs, as perf_event_open(2) names them.
+enum class PerfAction : std::uint8_t { kReset, kEnable, kDisable };
 
 /// The seam. Every system call the platform layer issues goes through here.
 ///
@@ -125,6 +220,11 @@ struct Readiness {
 ///
 /// The virtual dispatch costs a vtable lookup against a syscall that costs
 /// microseconds, which is not a trade worth thinking about.
+///
+/// A call added after M1 has an ENOSYS default so that adding it breaks no
+/// implementation; the real implementation and any fake that models it
+/// override it. Above the seam ENOSYS already means "the kernel does not offer
+/// this", which is what a fake that does not model the call should look like.
 class Syscalls {
  public:
   Syscalls() = default;
@@ -323,6 +423,23 @@ class Syscalls {
   /// is told otherwise has lost track of them.
   [[nodiscard]] virtual core::Result<std::optional<Reaped>, SyscallError>
   reap_any_nonblocking() = 0;
+
+  /// perf_event_open(2) with group -1 and PERF_FLAG_FD_CLOEXEC. The failures
+  /// the man page documents are E2BIG, EACCES, EBADF, EBUSY, EFAULT, EINVAL,
+  /// EINTR, EMFILE, ENODEV, ENOENT, ENOSPC, ENOSYS, EOPNOTSUPP, EOVERFLOW,
+  /// EPERM and ESRCH; what each means for a source is decided above the seam.
+  /// The default fails with ENOSYS (no perf events).
+  [[nodiscard]] virtual core::Result<int, SyscallError> open_perf_event(const PerfEventSpec& spec);
+
+  /// ioctl(2) PERF_EVENT_IOC_RESET, _ENABLE or _DISABLE on a counter. The
+  /// default fails with ENOSYS.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> control_perf_event(int fd,
+                                                                                PerfAction action);
+
+  /// read(2) of a counter: its count and its two times. A counter is read as a
+  /// whole or not at all, so a short read is an error here (EIO), unlike
+  /// read() above where it is normal. The default fails with ENOSYS.
+  [[nodiscard]] virtual core::Result<PerfCount, SyscallError> read_perf_count(int fd);
 };
 
 /// The real implementation. Contains no logic beyond translating errno into a
@@ -372,6 +489,10 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] core::Result<core::Ok, SyscallError> ignore_signal(int signal) override;
   [[nodiscard]] pid_t process_id() override;
   [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_any_nonblocking() override;
+  [[nodiscard]] core::Result<int, SyscallError> open_perf_event(const PerfEventSpec& spec) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> control_perf_event(int fd,
+                                                                        PerfAction action) override;
+  [[nodiscard]] core::Result<PerfCount, SyscallError> read_perf_count(int fd) override;
 };
 
 }  // namespace loadforge::platform
