@@ -32,7 +32,7 @@
 #include <variant>
 #include <vector>
 
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/telemetry/source_contract.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
 #include "support/fake_syscalls.hpp"
@@ -57,8 +57,6 @@ using telemetry::Source;
 using telemetry::Unavailable;
 using telemetry::Unit;
 using topology::Availability;
-
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TimelineContract);
 
 const std::filesystem::path kFixtures =
     std::filesystem::path{LOADFORGE_SOURCE_DIR} / "tests" / "fixtures" / "sysfs" / "powercap";

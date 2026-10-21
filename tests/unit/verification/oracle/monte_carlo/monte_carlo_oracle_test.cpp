@@ -76,7 +76,6 @@ struct MonteCarloSubject {
 namespace loadforge::contracts {
 INSTANTIATE_TYPED_TEST_SUITE_P(MonteCarlo, OracleContract,
                                ::testing::Types<tests::MonteCarloSubject>);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 }  // namespace loadforge::contracts
 
 namespace loadforge::tests {

@@ -45,7 +45,7 @@ Directories (each `tests/*/...` entry means the directory of that name under eve
 
 1. OracleContract passes, with good units from the reference tool and wrong units covering every rule of the format.
 2. Fixtures are produced by the `lz4` command line (its legacy frame, `lz4 -l`, holds raw blocks), each with the command and version that made it (F21).
-3. Every single-bit flip of the compressed bytes of a fixture is caught, as a malformation or a derived difference, and the test says which.
+3. Every single-bit flip of a fixture is caught, or is proved to be another valid encoding of the same input, and the test says which.
 4. 100% line, branch and function; ledger fragment current.
 
 ## How your work joins the build without touching a shared file (ADR 0004)

@@ -9,7 +9,8 @@
 #include <vector>
 
 #include "contracts/equality.hpp"
-#include "contracts/fpenv/fpenv_contract.hpp"
+#include "contracts/fpenv/fp_check_contract.hpp"
+#include "contracts/fpenv/fp_control_contract.hpp"
 #include "platform/fpenv/fpenv.hpp"
 
 namespace loadforge::contracts {
