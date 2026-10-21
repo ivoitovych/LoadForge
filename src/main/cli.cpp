@@ -510,7 +510,7 @@ struct Ending {
   platform::FileSystem* machine = nullptr;
   const StressOptions* options = nullptr;
   const Rig* rig = nullptr;  ///< Null when nothing was sampled.
-  const telemetry::BoundedTimeline* timeline = nullptr;
+  const telemetry::TimelineView* timeline = nullptr;
   ResultSink* sink = nullptr;
 };
 
