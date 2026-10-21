@@ -87,9 +87,14 @@ struct MixedOptions {
 /// more is a mistake, and the schedule is held in memory.
 inline constexpr std::size_t kMaxSteps = 100'000;
 
+/// The most commands (a step's worker commands, summed over the schedule) one
+/// may hold: a thousand workers over a hundred thousand steps would hold a
+/// hundred million, which no run needs and no machine should be asked for.
+inline constexpr std::size_t kMaxCommands = 4'000'000;
+
 /// The schedule, or why the options make none: no workers, a duration or
-/// rotation that is not positive, no footprint, too many steps, one set of
-/// CPUs or an invalid one, or no workload in the roster that fits the
+/// rotation that is not positive, no footprint, too many steps or commands, one
+/// set of CPUs or an invalid one, or no workload in the roster that fits the
 /// footprint.
 [[nodiscard]] core::Result<Schedule, std::string> make_mixed(const std::vector<RosterEntry>& roster,
                                                              const MixedOptions& options);

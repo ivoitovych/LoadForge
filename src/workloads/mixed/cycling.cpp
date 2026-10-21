@@ -74,6 +74,10 @@ core::Result<Schedule, std::string> make_cycling(const CyclingOptions& options) 
            std::to_string(options.duration_ns / 1'000'000) + " ms is more than " +
            std::to_string(kMaxSteps) + " steps";
   }
+  if (options.workers > kMaxCommands / levels) {
+    return std::to_string(options.workers) + " worker(s) over " + std::to_string(levels) +
+           " levels is more than " + std::to_string(kMaxCommands) + " commands";
+  }
   Schedule schedule;
   schedule.workers = options.workers;
   schedule.phase = "run";

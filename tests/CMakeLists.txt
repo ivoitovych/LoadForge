@@ -15,6 +15,9 @@ add_executable(loadforge_unit_tests
   unit/main/telemetry_rig_test.cpp
   unit/main/cli_telemetry_test.cpp
   unit/main/run_result_test.cpp
+  unit/main/journal_rig_test.cpp
+  unit/main/schedules_test.cpp
+  unit/main/cli_schedule_test.cpp
   unit/main/contract_mocks_test.cpp
   unit/controller/contract_mocks_test.cpp
   unit/controller/journal_model_test.cpp

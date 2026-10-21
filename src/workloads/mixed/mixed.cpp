@@ -165,6 +165,10 @@ core::Result<Schedule, std::string> make_mixed(const std::vector<RosterEntry>& r
            std::to_string(options.duration_ns / 1'000'000) + " ms is more than " +
            std::to_string(kMaxSteps) + " steps";
   }
+  if (options.workers > kMaxCommands / (rotations + 1)) {
+    return std::to_string(options.workers) + " worker(s) over " + std::to_string(rotations) +
+           " steps is more than " + std::to_string(kMaxCommands) + " commands";
+  }
   if (options.placements.size() == 1) {
     return std::string{"workers move across at least two sets of CPUs, not one"};
   }

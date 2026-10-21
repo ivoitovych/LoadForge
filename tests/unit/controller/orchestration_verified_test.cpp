@@ -23,12 +23,14 @@
 #include "telemetry/sampler.hpp"
 #include "telemetry/timeline/bounded_timeline.hpp"
 #include "unit/controller/consumer_models.hpp"
+#include "unit/controller/journal_model.hpp"
 #include "unit/controller/machine_tree.hpp"
 #include "verification/record.hpp"
 #include "worker/control.hpp"
 #include "worker/entry.hpp"
 #include "worker/frames.hpp"
 #include "worker/ipc/record.hpp"
+#include "workloads/mixed/schedule.hpp"
 #include "workloads/registry/registry.hpp"
 
 namespace loadforge::controller {
@@ -613,6 +615,111 @@ TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
   r = o;
   r.capabilities = "telemetry capability: 0 of 0 metric(s) present\n";
   EXPECT_NE(o, r);
+}
+
+// --- a worker told to switch workload, and a runner replaced (worker/control.hpp) ---------
+
+/// What the workers do, once the run has started and again at the deadline.
+void act_then_finish_at_deadline(Rig& rig, const std::function<void()>& at_start,
+                                 bool second_finishes = true) {
+  rig.reporter.on_event = [&rig, at_start, second_finishes](const std::string& line) {
+    if (line.substr(0, 7) == "spawned") {
+      at_start();
+    } else if (line.substr(0, 8) == "deadline") {
+      rig.deliver_finished(0);
+      if (second_finishes) {
+        rig.deliver_finished(1);
+      }
+      rig.worker_exits(0);
+      rig.worker_exits(1);
+    }
+  };
+}
+
+TEST(ControllerVerified, ARecordAboutAWorkloadTheWorkerWasToldToSwitchToIsItsOwn) {
+  mixed::Schedule schedule;
+  schedule.workers = 2;
+  schedule.phase = "start";
+  schedule.workload = "compression";
+  mixed::Step step;
+  step.at_ns = 0;
+  step.phase = "to sort";
+  step.workload = "sort";
+  step.workers.push_back(mixed::WorkerCommands{
+      0, {worker::Switch{"sort", 9, std::uint64_t{8} << 20U, 0, verification::DutyCycle{}}}});
+  schedule.steps.push_back(step);
+  {
+    Rig rig;
+    rig.options.schedule = &schedule;
+    act_then_finish_at_deadline(rig, [&rig] { rig.deliver_record(0, a_wrong_result("sort")); });
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << describe(result.error());
+    EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+    EXPECT_EQ(result.value().workers[0].wrong_results, 1U) << "told to run it, so about its run";
+    EXPECT_EQ(result.value().workers[0].commands.unacknowledged, 1U);
+  }
+  {
+    Rig rig;  // The same record from the worker that was not told.
+    rig.options.schedule = &schedule;
+    act_then_finish_at_deadline(
+        rig, [&rig] { rig.deliver_record(1, a_wrong_result("sort")); }, false);
+    auto result = rig.run();
+    ASSERT_TRUE(result.has_value()) << describe(result.error());
+    EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kChannelCorrupt);
+    EXPECT_EQ(result.value().workers[1].wrong_results, 0U);
+  }
+}
+
+TEST(ControllerVerified, TheLockOutcomeKeptIsTheWeakestARunnerOfTheWorkerHad) {
+  const auto told = [](Rig& rig, verification::LockOutcome outcome, const std::string& detail) {
+    rig.deliver(0, worker::kMemoryFrameType,
+                worker::encode_memory(verification::MemoryLock{verification::LockPolicy::kTry,
+                                                               outcome, detail}));
+  };
+  Rig rig;
+  rig.both_exit_after([&rig, &told] {
+    told(rig, verification::LockOutcome::kLocked, "");
+    told(rig, verification::LockOutcome::kLocked, "");  // Told again after a replacement: nothing new.
+    told(rig, verification::LockOutcome::kFellBack, "mlock: refused");
+    told(rig, verification::LockOutcome::kLocked, "");  // A later runner locked: not the weakest.
+    told(rig, verification::LockOutcome::kFellBack, "mlock: refused");  // The same again.
+  });
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const WorkerReport& first = result.value().workers[0];
+  EXPECT_EQ(first.fate, WorkerFate::kCompleted) << "a runner replaced is no corruption";
+  ASSERT_TRUE(first.memory.has_value());
+  EXPECT_EQ(first.memory->outcome, verification::LockOutcome::kFellBack);
+  EXPECT_EQ(first.memory->detail, "mlock: refused");
+  std::vector<std::string> said;
+  for (const std::string& note : first.records) {
+    if (note.substr(0, 12) == "working set:") {
+      said.push_back(note);
+    }
+  }
+  EXPECT_EQ(said, (std::vector<std::string>{
+                      "working set: locked (lock policy try)",
+                      "working set: not locked: the lock was refused (lock policy try): mlock: "
+                      "refused"}))
+      << "said when it changed, not each time";
+}
+
+TEST(ControllerVerified, TheJournalNamesTheUnitsOfTheMostAdvancedWorker) {
+  Rig rig;
+  controller_testing::RecordingWriter journal;
+  rig.options.journal = &journal;
+  rig.both_exit_after([&rig] {
+    rig.deliver_tally(0, a_tally(9));
+    rig.deliver_tally(1, a_tally(20));
+    rig.deliver_tally(1, a_tally(25));
+  });
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  ASSERT_FALSE(journal.entries.empty());
+  EXPECT_EQ(journal.entries.back().last_verified_unit, 25U);
+  EXPECT_EQ(journal.entries.back().phase, "done");
+  EXPECT_FALSE(journal.entries.front().last_verified_unit.has_value())
+      << "before any tally has arrived";
 }
 
 }  // namespace
