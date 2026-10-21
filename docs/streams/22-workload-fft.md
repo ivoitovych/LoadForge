@@ -1,6 +1,6 @@
 # Stream 22 — Workload: FFT
 
-**State:** not started  
+**State:** complete, pushed on `feature/workload-fft`; vector kernels open (journal fragment 22)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 3  
 **Tier:** Tier A — a bounded component built against a written contract  

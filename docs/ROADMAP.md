@@ -89,6 +89,13 @@ change (ADR 0004, "Changing a contract"):
   `docs/JOURNAL.md`, proposed ADRs numbered, `docs/IMPLEMENTATION.md` §3 and §10
   reconciled with what landed, and this file's state brought up to date.
 
+**State on 2026-10-21 09:50 UTC.** Waves 1, 2 and 3 are merged (wave 3: #69 to #74). Wave 4: ray tracing
+and adaptive mesh are merged (#75, #76); its oracles are in review (#77). The integration
+streams 21 (M3, #87) and 11 (M2, #90) are in review; 29, 33 and 34 have not started. The
+end-of-wave folding of the streams' journal fragments into `docs/JOURNAL.md`, and the
+contract changes for the twelve disagreements the integrations recorded, are the next
+manager items.
+
 #### Wave 1
 
 | # | Stream | Milestone | Tier | Depends on |

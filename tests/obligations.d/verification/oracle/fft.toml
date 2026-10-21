@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/fft and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/fft"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The independent oracle of the FFT workload, written from \
+src/workloads/fft/spec.hpp alone: a direct DFT at sixteen sampled bins and \
+Parseval over all 4096, each against the tolerance the specification derives, \
+for the radix of the plan (Contract::kBounded). P1: each decision of the \
+check -- the sampled bin that fails first, a failing bin before Parseval, a \
+real part or an imaginary part that fails, a NaN in either part, the larger \
+of two magnitudes -- and the loops at the sizes the evidence can take. P3: the \
+tolerance at the boundary, breached at (1 + 2^-20) times T' and held at (1 - \
+2^-20) times it, for both radices and for a bin and for Parseval (whose \
+residual moves in steps of about 2^-13 of the tolerance, so the nearest \
+representable residuals either side stand in for the two points); an input \
+component of exactly 1 in magnitude (generated, -1) and the next double above \
+it, an input of all zeros, an output holding a NaN, an infinity, or a value \
+whose square overflows; the twiddle table at its pinned entries \
+(W[0], W[n/4], W[n/8], W[n/2], W[3n/4]), at every exact image the \
+specification names, and against the C library's long double sine and \
+cosine. P4 is the module's subject. T5: an exponent flip and a high mantissa \
+flip in a sampled bin are named with the bin and the ordinal of the check; of \
+several failing bins the smallest k is named; an error in an unsampled bin is \
+caught by Parseval, and a failing bin takes precedence over it; the least \
+significant bit of a value is below what the bound claims and raises no \
+false alarm; a corrupted input is judged by the output it did not produce. \
+T3: numpy's transform of two generated units (fixtures from the real tool, \
+tests/fixtures/verification/oracle/fft/, with the commands and the machine \
+that made them) is agreed with at both radices. T5b: evidence of the wrong \
+size on either side, an input component that is NaN, infinite or of magnitude \
+above 1, an input of all zeros -- each is NotChecked with nothing compared, \
+never an agreement, while a NaN in the OUTPUT is a mismatch. No P2: the oracle \
+allocates nothing, so there is no allocation to fail.\
+"""
