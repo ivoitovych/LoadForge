@@ -174,9 +174,6 @@ namespace {
 
 namespace under_test = verification::oracle::graph;
 
-// This binary instantiates the oracle suite only.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
-
 // One decomposition runs the generic suite: every check of the graph oracle is
 // a recomputation of four megabytes, and the suite makes about thirty of them,
 // four at once, on the same counters. The other decompositions are run against

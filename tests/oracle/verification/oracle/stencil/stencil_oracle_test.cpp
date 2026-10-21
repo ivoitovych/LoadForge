@@ -208,9 +208,6 @@ namespace {
 
 namespace under_test = verification::oracle::stencil;
 
-// This binary instantiates the oracle suite only.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
-
 struct StencilSubject {
   static constexpr const char* kWorkload = "stencil";
   static constexpr verification::Contract kContract = verification::Contract::kBounded;

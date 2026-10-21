@@ -243,9 +243,6 @@ namespace {
 
 namespace under_test = verification::oracle::fft;
 
-// This binary instantiates the oracle suite only.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
-
 struct RadixFour {
   static constexpr const char* kWorkload = "fft";
   static constexpr verification::Contract kContract = verification::Contract::kBounded;

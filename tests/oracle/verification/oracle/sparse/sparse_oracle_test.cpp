@@ -211,9 +211,6 @@ namespace {
 
 namespace under_test = verification::oracle::sparse;
 
-// This binary instantiates the oracle suite only.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
-
 struct SparseSubject {
   static constexpr const char* kWorkload = "sparse";
   static constexpr verification::Contract kContract = verification::Contract::kBounded;
