@@ -1,6 +1,6 @@
 # Stream 25 — Workload: graph (BFS, PageRank)
 
-**State:** not started  
+**State:** built on `feature/workload-graph`, 2026-10-20 17:51 UTC: every tier passes, coverage 100%, awaiting the manager's merge  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 3  
 **Tier:** Tier A — a bounded component built against a written contract  
