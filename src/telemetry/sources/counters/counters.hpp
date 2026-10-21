@@ -41,26 +41,44 @@ namespace loadforge::telemetry {
 /// count itself in user space, so a refusal there comes from elsewhere -- a
 /// container's seccomp profile or a security module -- and lowering the
 /// sysctl would not help, which is why the advice differs.
+///
+/// `kernel_side` is true for an event that happens in the kernel (a context
+/// switch), which can be counted only with the kernel included: that needs
+/// CAP_PERFMON or a paranoid level of 1 or below, and level 2 -- which lets an
+/// unprivileged process count its own user space -- is not enough.
 [[nodiscard]] std::string perf_remediation(topology::Availability kind,
                                            std::optional<std::int64_t> paranoid,
-                                           std::string_view subject);
+                                           std::string_view subject, bool kernel_side = false);
 
 /// Hardware and software performance counters (PLAN F3, F17), through
 /// perf_event_open(2): `counters.cycles`, `counters.instructions`,
 /// `counters.cache_misses`, `counters.branch_misses` (hardware) and
-/// `counters.context_switches` (software), each a counter of events.
+/// `counters.context_switches` (software), each a counter of events, and the
+/// gauge `counters.pmu_share` (below).
 ///
 /// WHAT IT COUNTS. The calling process's main thread and every process it
-/// forks after probe() -- the workers -- in user space only. User space because
-/// that is what an unprivileged process may count at perf_event_paranoid 2, and
-/// because a worker's work is its own instructions. Inheritance is the
-/// kernel's: a counter opened with `inherit` follows fork(2).
+/// forks after probe() -- the workers. The hardware events count user space
+/// only: that is what an unprivileged process may count at perf_event_paranoid
+/// 2, and a worker's work is its own instructions. The software event does not
+/// exclude the kernel, because a context switch is counted in the kernel and
+/// with the kernel excluded it reads 0 for ever -- a zero standing in for a
+/// value. Counting it therefore needs CAP_PERFMON or perf_event_paranoid 1 or
+/// below, and without them `counters.context_switches` is absent, kDenied, with
+/// that remedy. Inheritance is the kernel's: a counter opened with `inherit`
+/// follows fork(2).
 ///
 /// WHEN THE PMU IS SHARED. More events than the PMU has counters are
 /// time-shared, and the kernel reports how long each was enabled and how long
-/// it ran. A reading is scaled by that ratio (an estimate, which is what perf
-/// itself prints); one that never ran is reported unreadable rather than as
-/// zero.
+/// it ran. Each counter is the raw count the kernel gives, which only increases;
+/// it is NOT scaled up to the time the event was enabled, because an estimate
+/// is not a counter (sample.hpp, Kind). The share of the time the events were
+/// on the PMU is `counters.pmu_share`, a gauge of ratio: the smallest, over the
+/// hardware events read in the round, of time running to time enabled since
+/// the probe. 1 means no event was ever time-shared; below 1 the hardware counts
+/// are lower bounds, and the true counts are at most the raw count divided by
+/// that share. The gauge is present when any hardware event is held and
+/// otherwise absent for the reason the first hardware event is. An event that
+/// never ran is reported unreadable rather than as zero.
 ///
 /// The descriptors are closed with the source. Thread-safety: none.
 class CountersSource final : public Source {
@@ -82,14 +100,19 @@ class CountersSource final : public Source {
  private:
   struct Channel {
     int fd = -1;
-    std::string subject;  ///< "perf event type 0 config 0": for a message.
+    std::string subject;       ///< "perf event type 0 config 0": for a message.
+    bool hardware = false;     ///< Counted by the PMU, so it can be time-shared.
+    bool kernel_side = false;  ///< Happens in the kernel: counted with it included.
   };
+
+  void report_share(std::vector<MetricStatus>& statuses, const Unavailable& first_hardware_failure);
 
   platform::Syscalls* syscalls_;
   platform::FileSystem* filesystem_;
   std::string paranoid_path_;
   std::optional<std::int64_t> paranoid_;
   std::vector<Channel> channels_;
+  bool share_reported_ = false;  ///< `counters.pmu_share` was present at probe().
 };
 
 }  // namespace loadforge::telemetry

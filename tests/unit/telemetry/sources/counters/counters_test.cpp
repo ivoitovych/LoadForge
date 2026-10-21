@@ -45,6 +45,7 @@ using loadforge::testing::FakeSyscalls;
 using telemetry::classify_perf_open;
 using telemetry::Counter;
 using telemetry::CountersSource;
+using telemetry::Gauge;
 using telemetry::Kind;
 using telemetry::MetricStatus;
 using telemetry::perf_remediation;
@@ -197,12 +198,12 @@ std::string subject_of(const Event& event) {
 
 // --- present ---------------------------------------------------------------------
 
-TEST(CountersSourceTest, EachEventIsOpenedForTheControllerAndItsChildrenInUserSpace) {
+TEST(CountersSourceTest, EachEventIsOpenedForTheControllerAndItsChildren) {
   Rig rig;
   EXPECT_EQ(rig.name(), "counters");
   const std::vector<MetricStatus> statuses = rig.probe();
-  ASSERT_EQ(statuses.size(), 5U);
-  for (std::size_t i = 0; i < statuses.size(); ++i) {
+  ASSERT_EQ(statuses.size(), 6U) << "five events and the share of time on the PMU";
+  for (std::size_t i = 0; i < 5; ++i) {
     EXPECT_EQ(statuses[i].metric.name, kAll[i].name);
     EXPECT_FALSE(statuses[i].unavailable.has_value());
     EXPECT_EQ(statuses[i].metric.unit, Unit::kCount);
@@ -218,9 +219,17 @@ TEST(CountersSourceTest, EachEventIsOpenedForTheControllerAndItsChildrenInUserSp
     EXPECT_EQ(opens[i].config, kAll[i].config);
     EXPECT_EQ(opens[i].pid, FakeSyscalls::kFakePid) << "the process, not an arbitrary thread";
     EXPECT_EQ(opens[i].cpu, -1);
-    EXPECT_TRUE(opens[i].user_only) << "all an unprivileged process may count at paranoid 2";
+    // User space for what the CPU counts (all an unprivileged process may count at
+    // paranoid 2); the kernel included for a context switch, which happens in it.
+    EXPECT_EQ(opens[i].user_only, kAll[i].type == 0) << kAll[i].name;
     EXPECT_TRUE(opens[i].inherit) << "the workers are forked after the open";
   }
+  EXPECT_EQ(statuses[5].metric.name, "counters.pmu_share");
+  EXPECT_FALSE(statuses[5].unavailable.has_value());
+  EXPECT_EQ(statuses[5].metric.unit, Unit::kRatio);
+  EXPECT_EQ(statuses[5].metric.kind, Kind::kGauge);
+  EXPECT_EQ(statuses[5].metric.scope, Scope::kMachine);
+  EXPECT_EQ(statuses[5].metric.provider, "perf:hardware");
   // Reset, then enable, for each: counts start from zero at their own enabling.
   const auto& controls = rig.syscalls.perf_controls();
   ASSERT_EQ(controls.size(), 10U);
@@ -238,9 +247,10 @@ TEST(CountersSourceTest, AReadingIsTheCountWhenTheEventRanTheWholeTime) {
   }};
   static_cast<void>(rig.probe());
   const auto readings = sample_once(rig);
-  ASSERT_EQ(readings.size(), 5U);
+  ASSERT_EQ(readings.size(), 6U);
   EXPECT_TRUE(same_reading(readings[0], Counter{777}));
   EXPECT_TRUE(same_reading(readings[4], Counter{12})) << "never enabled yet: the count as it is";
+  EXPECT_TRUE(same_reading(readings[5], Gauge{1.0})) << "every hardware event ran the whole time";
 }
 
 TEST(CountersSourceTest, NothingIsReadBeforeTheProbeAndAReprobeClosesWhatItReplaces) {
@@ -248,7 +258,7 @@ TEST(CountersSourceTest, NothingIsReadBeforeTheProbeAndAReprobeClosesWhatItRepla
   EXPECT_TRUE(sample_once(rig).empty());
   static_cast<void>(rig.probe());
   static_cast<void>(rig.probe());
-  EXPECT_EQ(sample_once(rig).size(), 5U);
+  EXPECT_EQ(sample_once(rig).size(), 6U);
   EXPECT_EQ(rig.syscalls.perf_opens().size(), 10U);
   EXPECT_EQ(rig.syscalls.open_count() - rig.syscalls.close_count(), 5)
       << "only the second probe's five descriptors are open: the first's were closed";
@@ -269,7 +279,7 @@ TEST(CountersSourceTest, EveryDescriptorIsClosedWithTheSourceEvenWhenACloseFails
 
 // --- multiplexing ----------------------------------------------------------------
 
-TEST(CountersSourceTest, AnEventThatSharedThePmuIsScaledToTheTimeItWasEnabled) {
+TEST(CountersSourceTest, AnEventThatSharedThePmuIsReportedAsItsRawCountNeverScaledUp) {
   Rig rig{[](FakeSyscalls& syscalls) {
     syscalls.script_perf_reads(0, 0, {{platform::PerfCount{500, 2000, 1000}, 0}});
     syscalls.script_perf_reads(0, 1, {{platform::PerfCount{3, 3000, 2000}, 0}});
@@ -278,10 +288,129 @@ TEST(CountersSourceTest, AnEventThatSharedThePmuIsScaledToTheTimeItWasEnabled) {
   }};
   static_cast<void>(rig.probe());
   const auto readings = sample_once(rig);
-  EXPECT_TRUE(same_reading(readings[0], Counter{1000}));
-  EXPECT_TRUE(same_reading(readings[1], Counter{4})) << "4.5 truncated: an estimate, as perf's";
-  EXPECT_TRUE(same_reading(readings[2], Counter{std::numeric_limits<std::uint64_t>::max()}))
-      << "the product is formed wide and clamped, never wrapped";
+  EXPECT_TRUE(same_reading(readings[0], Counter{500})) << "the kernel's count: it only increases";
+  EXPECT_TRUE(same_reading(readings[1], Counter{3}));
+  EXPECT_TRUE(same_reading(readings[2], Counter{std::numeric_limits<std::uint64_t>::max()}));
+  EXPECT_TRUE(same_reading(readings[5], Gauge{0.5}))
+      << "the smallest share of time on the PMU among the hardware events (500 of 1000)";
+}
+
+// Disagreement 2 of the M3 integration: a count scaled up for the time the event
+// was off the PMU is an estimate; scaled in one round and exact in the next it goes
+// down, and a counter that goes down is a reset or a wrap. The raw count never does.
+TEST(CountersSourceTest, TheCountDoesNotGoDownWhenTheEventStopsBeingTimeShared) {
+  Rig rig{[](FakeSyscalls& syscalls) {
+    syscalls.script_perf_reads(0, 0,
+                               {{platform::PerfCount{1000, 2000, 1000}, 0},    // shared PMU
+                                {platform::PerfCount{1500, 2000, 2000}, 0}});  // exclusive again
+  }};
+  static_cast<void>(rig.probe());
+  const auto first = sample_once(rig);
+  const auto second = sample_once(rig);
+  EXPECT_TRUE(same_reading(first[0], Counter{1000}));
+  EXPECT_TRUE(same_reading(second[0], Counter{1500}));
+  EXPECT_TRUE(same_reading(first[5], Gauge{0.5}));
+  EXPECT_TRUE(same_reading(second[5], Gauge{1.0}));
+}
+
+TEST(CountersSourceTest, TheShareIsAtMostOneAndIsOneBeforeAnythingIsEnabled) {
+  Rig rig{[](FakeSyscalls& syscalls) {
+    syscalls.script_perf_reads(0, 0, {{platform::PerfCount{5, 10, 12}, 0}});  // running > enabled
+    syscalls.script_perf_reads(0, 1, {{platform::PerfCount{0, 0, 0}, 0}});    // not yet enabled
+  }};
+  static_cast<void>(rig.probe());
+  EXPECT_TRUE(same_reading(sample_once(rig)[5], Gauge{1.0}));
+}
+
+TEST(CountersSourceTest, TheShareIsUnreadableWhenNoHardwareEventCanBeRead) {
+  Rig rig{[](FakeSyscalls& syscalls) {
+    for (const Event& event : {kCycles, kInstructions, kCacheMisses, kBranchMisses}) {
+      syscalls.script_perf_reads(event.type, event.config, {{platform::PerfCount{}, ENODEV}});
+    }
+  }};
+  static_cast<void>(rig.probe());
+  const auto readings = sample_once(rig);
+  ASSERT_EQ(readings.size(), 6U);
+  const Unavailable& why = as_unavailable(readings[5]);
+  EXPECT_EQ(why.kind, Availability::kUnreadable);
+  EXPECT_FALSE(why.detail.empty());
+  EXPECT_FALSE(why.remediation.empty());
+  EXPECT_TRUE(same_reading(readings[4], Counter{1000})) << "the software event is not affected";
+}
+
+TEST(CountersSourceTest, TheShareIsAbsentForTheReasonTheFirstHardwareEventIsWhenNoneIsHeld) {
+  Rig rig{[](FakeSyscalls& syscalls) { syscalls.fail_every_perf_open(EACCES); }, nullptr, "3\n"};
+  const auto statuses = rig.probe();
+  ASSERT_EQ(statuses.size(), 6U);
+  ASSERT_TRUE(statuses[5].unavailable.has_value());
+  EXPECT_EQ(*statuses[5].unavailable, *statuses[0].unavailable);
+  EXPECT_EQ(statuses[5].metric.name, "counters.pmu_share");
+  EXPECT_TRUE(sample_once(rig).empty()) << "nothing held, nothing read";
+
+  // Only the software event held: the share is absent, the software count present.
+  Rig software{[](FakeSyscalls& syscalls) {
+    for (const Event& event : {kCycles, kInstructions, kCacheMisses, kBranchMisses}) {
+      syscalls.fail_perf_open(event.type, event.config, ENOENT);
+    }
+  }};
+  const auto statuses_software = software.probe();
+  EXPECT_EQ(statuses_software[5].unavailable->kind, Availability::kAbsent);
+  EXPECT_EQ(sample_once(software).size(), 1U);
+}
+
+// Disagreement 4 of the M3 integration. With the kernel excluded a context switch
+// is never counted (the scheduler counts it in the kernel): on Linux 6.18 the count
+// stays 0 across five 20 ms sleeps, and without the exclusion it is 1, 2, 3, 4, 5.
+// perf_event_open(2) says an unprivileged process may leave the kernel in only
+// when perf_event_paranoid is 1 or below (EACCES otherwise; also seen on 6.18 as
+// uid 65534: exclude_kernel=0 at paranoid 2 is EACCES, at paranoid 1 it counts).
+TEST(CountersSourceTest, AnEventThatHappensInTheKernelIsNotOpenedWithTheKernelExcluded) {
+  Rig rig;
+  static_cast<void>(rig.probe());
+  bool software = false;
+  for (const platform::PerfEventSpec& spec : rig.syscalls.perf_opens()) {
+    if (spec.type == 1) {
+      software = true;
+      EXPECT_FALSE(spec.user_only) << "config " << spec.config;
+    } else {
+      EXPECT_TRUE(spec.user_only) << "the CPU's events stay user space only";
+    }
+  }
+  EXPECT_TRUE(software);
+}
+
+TEST(CountersSourceTest, TheContextSwitchCounterNeedsTheKernelAndSaysSoWhenDenied) {
+  // Unprivileged at paranoid 2: the hardware events are granted (user space) and the
+  // software event is refused (kernel included).
+  Rig rig{[](FakeSyscalls& syscalls) {
+    syscalls.fail_perf_open(kContextSwitches.type, kContextSwitches.config, EACCES);
+  }};
+  const auto statuses = rig.probe();
+  ASSERT_TRUE(statuses[4].unavailable.has_value());
+  EXPECT_EQ(statuses[4].unavailable->kind, Availability::kDenied);
+  const std::string& remedy = statuses[4].unavailable->remediation;
+  EXPECT_TRUE(mentions(remedy, "CAP_PERFMON"));
+  EXPECT_TRUE(mentions(remedy, "perf_event_paranoid to 1")) << remedy;
+  EXPECT_TRUE(mentions(remedy, "(it is 2)")) << remedy;
+  EXPECT_TRUE(mentions(remedy, "in the kernel"));
+  EXPECT_FALSE(statuses[0].unavailable.has_value());
+  EXPECT_EQ(sample_once(rig).size(), 5U) << "four counts, and the share; none for the denied one";
+
+  const std::string unknown = perf_remediation(Availability::kDenied, std::nullopt, "x", true);
+  EXPECT_TRUE(mentions(unknown, "perf_event_paranoid to 1"));
+  EXPECT_FALSE(mentions(unknown, "(it is"));
+  EXPECT_TRUE(mentions(perf_remediation(Availability::kAbsent, 2, "x", true), "nothing can be"));
+}
+
+TEST(CountersSourceTest, AReadOfTheKernelSideEventThatIsDeniedCarriesTheSameAdvice) {
+  Rig rig{[](FakeSyscalls& syscalls) {
+    syscalls.script_perf_reads(kContextSwitches.type, kContextSwitches.config,
+                               {{platform::PerfCount{}, EACCES}});
+  }};
+  static_cast<void>(rig.probe());
+  const auto readings = sample_once(rig);
+  EXPECT_EQ(as_unavailable(readings[4]).kind, Availability::kDenied);
+  EXPECT_TRUE(mentions(as_unavailable(readings[4]).remediation, "perf_event_paranoid to 1"));
 }
 
 TEST(CountersSourceTest, AnEventThatNeverRanIsUnreadableNotZero) {
@@ -322,8 +451,10 @@ TEST(CountersSourceTest, EveryErrnoOfPerfEventOpenIsClassifiedAndInjected) {
     EXPECT_EQ(classify_perf_open(tested.number), tested.kind) << tested.number;
     Rig rig{[&](FakeSyscalls& syscalls) { syscalls.fail_every_perf_open(tested.number); }};
     const auto statuses = rig.probe();
-    ASSERT_EQ(statuses.size(), 5U) << tested.number;
-    for (std::size_t i = 0; i < statuses.size(); ++i) {
+    ASSERT_EQ(statuses.size(), 6U) << tested.number;
+    ASSERT_EQ(*statuses[5].unavailable, *statuses[0].unavailable)
+        << "the share: the first's reason";
+    for (std::size_t i = 0; i < 5; ++i) {
       ASSERT_TRUE(statuses[i].unavailable.has_value()) << tested.number;
       const Unavailable& why = *statuses[i].unavailable;
       EXPECT_EQ(why.kind, tested.kind) << tested.number;
@@ -332,7 +463,7 @@ TEST(CountersSourceTest, EveryErrnoOfPerfEventOpenIsClassifiedAndInjected) {
       EXPECT_TRUE(mentions(
           why.detail, platform::describe(platform::SyscallError{tested.number, "x", ""}).substr(4)))
           << "the kernel's own words for errno " << tested.number << ": " << why.detail;
-      EXPECT_EQ(why.remediation, perf_remediation(tested.kind, 2, why.path));
+      EXPECT_EQ(why.remediation, perf_remediation(tested.kind, 2, why.path, kAll[i].type == 1));
     }
     EXPECT_TRUE(sample_once(rig).empty()) << "an event not opened is not read";
     EXPECT_TRUE(rig.syscalls.perf_controls().empty());
@@ -384,7 +515,7 @@ TEST(CountersSourceTest, AParanoiaFileThatCannotBeReadLeavesTheLevelUnknownNotTh
        {std::optional<std::string>{"high\n"}, std::optional<std::string>{}}) {
     Rig rig{[](FakeSyscalls& syscalls) { syscalls.fail_every_perf_open(EPERM); }, nullptr, content};
     const auto statuses = rig.probe();
-    ASSERT_EQ(statuses.size(), 5U);
+    ASSERT_EQ(statuses.size(), 6U);
     EXPECT_EQ(statuses[0].unavailable->kind, Availability::kDenied);
     EXPECT_FALSE(mentions(statuses[0].unavailable->detail, "paranoid"));
   }
@@ -430,11 +561,11 @@ TEST(CountersSourceTest, EveryStateHasItsOwnAdviceAndAStateThatIsNotOneGetsTheGe
 TEST(CountersSourceTest, OneRefusedEventDoesNotTakeTheOthersWithIt) {
   Rig rig{[](FakeSyscalls& syscalls) { syscalls.fail_perf_open(0, 3, ENOENT); }};
   const auto statuses = rig.probe();
-  ASSERT_EQ(statuses.size(), 5U);
+  ASSERT_EQ(statuses.size(), 6U);
   EXPECT_EQ(statuses[2].unavailable->kind, Availability::kAbsent);
   EXPECT_EQ(statuses[2].metric.name, "counters.cache_misses");
   const auto readings = sample_once(rig);
-  EXPECT_EQ(readings.size(), 4U) << "the refused one is not read";
+  EXPECT_EQ(readings.size(), 5U) << "the refused one is not read; the share is";
 }
 
 // --- ioctl failures --------------------------------------------------------------
@@ -445,6 +576,7 @@ TEST(CountersSourceTest, ACounterThatCannotBeResetIsNotEnabledAndIsClosed) {
   syscalls.fail_perf_control(platform::PerfAction::kReset, EPERM);
   CountersSource source{syscalls, filesystem};
   const auto statuses = source.probe();
+  ASSERT_EQ(statuses.size(), 6U);
   for (const MetricStatus& status : statuses) {
     ASSERT_TRUE(status.unavailable.has_value());
     EXPECT_EQ(status.unavailable->kind, Availability::kUnreadable);
@@ -464,6 +596,7 @@ TEST(CountersSourceTest, ACounterThatCannotBeEnabledIsClosedToo) {
   syscalls.fail_perf_control(platform::PerfAction::kEnable, EBADF);
   CountersSource source{syscalls, filesystem};
   const auto statuses = source.probe();
+  ASSERT_EQ(statuses.size(), 6U);
   for (const MetricStatus& status : statuses) {
     EXPECT_EQ(status.unavailable->kind, Availability::kUnreadable);
   }
@@ -490,21 +623,24 @@ TEST(CountersSourceTest, AReadThatFailsIsClassifiedByWhatTheKernelSaidAndRecover
   EXPECT_TRUE(mentions(as_unavailable(readings[1]).remediation, "CAP_PERFMON"));
   EXPECT_EQ(as_unavailable(readings[2]).kind, Availability::kUnreadable);
   EXPECT_TRUE(same_reading(readings[3], Counter{1000}));
+  EXPECT_TRUE(same_reading(readings[5], Gauge{1.0})) << "the share of the events that were read";
 
   readings = sample_once(rig);
   EXPECT_TRUE(same_reading(readings[0], Counter{4})) << "a counter that comes back is read again";
 }
 
-TEST(CountersSourceTest, ACounterThatWrapsAt64BitsHasADeltaAcrossTheWrap) {
+TEST(CountersSourceTest, A64BitCountHasNoModulusSoAStepDownIsAResetNotAWrap) {
   constexpr std::uint64_t kMax = std::numeric_limits<std::uint64_t>::max();
   Rig rig{[&](FakeSyscalls& syscalls) {
     syscalls.script_perf_reads(
         0, 0, {{platform::PerfCount{kMax - 4, 10, 10}, 0}, {platform::PerfCount{5, 20, 20}, 0}});
   }};
   const auto statuses = rig.probe();
+  EXPECT_FALSE(statuses[0].metric.modulus.has_value());
   const auto before = std::get<Counter>(sample_once(rig)[0]);
   const auto after = std::get<Counter>(sample_once(rig)[0]);
-  EXPECT_EQ(telemetry::counter_delta(before.raw, after.raw, statuses[0].metric.modulus), 10U);
+  EXPECT_FALSE(
+      telemetry::counter_advance(before.raw, after.raw, statuses[0].metric.modulus).has_value());
 }
 
 // --- against the real kernel -----------------------------------------------------
@@ -514,7 +650,7 @@ TEST(CountersSourceRealMachineTest, TheRealKernelsAnswersAreClassifiedConsistent
   platform::FileSystem filesystem{syscalls};
   CountersSource source{syscalls, filesystem};
   const auto statuses = source.probe();
-  ASSERT_EQ(statuses.size(), 5U);
+  ASSERT_EQ(statuses.size(), 6U);
   std::size_t present = 0;
   for (const MetricStatus& status : statuses) {
     if (!status.unavailable.has_value()) {
@@ -533,6 +669,7 @@ TEST(CountersSourceRealMachineTest, TheRealKernelsAnswersAreClassifiedConsistent
   EXPECT_EQ(readings.size(), present);
   for (const Reading& reading : readings) {
     EXPECT_TRUE(std::holds_alternative<Counter>(reading) ||
+                std::holds_alternative<Gauge>(reading) ||
                 std::holds_alternative<Unavailable>(reading));
   }
 }

@@ -28,6 +28,17 @@ bool counter_rose(const RunResult& run, std::string_view name) {
   return false;
 }
 
+bool counter_blind(const RunResult& run, std::string_view name) {
+  for (const statistics::MetricSummary& summary : run.signature.metrics) {
+    const auto* counter = std::get_if<statistics::CounterSummary>(&summary.value);
+    if (summary.metric.name == name &&
+        (summary.unavailable_samples > 0 || (counter != nullptr && counter->resets > 0))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 Verdict reference_verdict(const RunResult& run) {
   bool unchecked = run.workloads.empty();
   for (const results::WorkloadResult& workload : run.workloads) {
@@ -46,6 +57,8 @@ Verdict reference_verdict(const RunResult& run) {
   for (const results::WorkerResult& worker : run.workers) {
     unchecked = unchecked || !controller::is_clean(worker.fate);
   }
+  unchecked = unchecked || counter_blind(run, results::kCorrectedErrorsMetric) ||
+              counter_blind(run, results::kUncorrectedErrorsMetric);
   if (unchecked) {
     return Verdict::kIncomplete;
   }
@@ -65,7 +78,7 @@ TEST(ResultsDefinition, VerdictWordsAndTheSchemaVersion) {
   EXPECT_EQ(results::describe(Verdict::kIncomplete), "incomplete");
   EXPECT_EQ(results::describe(Verdict::kFindings), "findings");
   EXPECT_EQ(results::describe(static_cast<Verdict>(9)), "unrecognised verdict");
-  EXPECT_EQ(results::kSchemaVersion, 1U);
+  EXPECT_EQ(results::kSchemaVersion, 2U) << "2: resets, microjoules, the blind verdict";
   EXPECT_EQ(RunResult{}.schema_version, results::kSchemaVersion);
   EXPECT_EQ(RunResult{}.verdict, Verdict::kIncomplete) << "nothing is clean until shown to be";
 }

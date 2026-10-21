@@ -145,6 +145,17 @@ TYPED_TEST_P(SamplerContract, TheProbeReportsEverySourceAndRegistersWhatIsPresen
   EXPECT_EQ(this->timeline_.series.size(), 3U) << "and registered once";
 }
 
+TYPED_TEST_P(SamplerContract, TheSamplerIsTheOnlyProberAndProbesEverySourceOnceHoweverOftenAsked) {
+  this->build();
+  for (int ask = 0; ask < 3; ++ask) {
+    ASSERT_TRUE(this->sampler_->probe().has_value());
+  }
+  ASSERT_TRUE(this->sampler_->round(100).has_value());
+  ASSERT_TRUE(this->sampler_->probe().has_value());
+  EXPECT_EQ(this->thermal_->probes, 1);
+  EXPECT_EQ(this->power_->probes, 1) << "the capability report is this answer, not a second probe";
+}
+
 TYPED_TEST_P(SamplerContract, NothingIsReadBeforeTheProbe) {
   this->build();
   const auto appended = this->sampler_->round(100);
@@ -203,6 +214,7 @@ TYPED_TEST_P(SamplerContract, ASeriesTheTimelineRefusesFailsTheProbe) {
 
 REGISTER_TYPED_TEST_SUITE_P(SamplerContract, ASeriesTheTimelineRefusesFailsTheProbe,
                             TheProbeReportsEverySourceAndRegistersWhatIsPresent,
+                            TheSamplerIsTheOnlyProberAndProbesEverySourceOnceHoweverOftenAsked,
                             NothingIsReadBeforeTheProbe,
                             ARoundPutsEachReadingOnItsSeriesAtTheGivenTime,
                             ASourceThatBreaksItsContractNeverShiftsAnothersReadings,

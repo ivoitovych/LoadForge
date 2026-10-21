@@ -22,7 +22,9 @@ Verdict derive_verdict(const RunResult& result) {
     unchecked =
         unchecked || workload.tally.oracle_blocks == 0 || workload.tally.integrity_checked == 0;
   }
-  if (result.workloads.empty() || counts.not_performed > 0 || unchecked || unfinished) {
+  const bool blind = counter_blind(result.signature, kCorrectedErrorsMetric) ||
+                     counter_blind(result.signature, kUncorrectedErrorsMetric);
+  if (result.workloads.empty() || counts.not_performed > 0 || unchecked || unfinished || blind) {
     return Verdict::kIncomplete;
   }
   if (counter_advanced(result.signature, kCorrectedErrorsMetric)) {

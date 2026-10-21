@@ -38,7 +38,7 @@ std::string written(const results::RunResult& run) {
 
 TEST(JsonWriterTest, TheSchemaVersionIsTheFirstFieldOfTheDocument) {
   const std::string text = written(rich_run());
-  EXPECT_EQ(text.rfind("{\n  \"schema_version\": 1,\n", 0), 0U) << text.substr(0, 60);
+  EXPECT_EQ(text.rfind("{\n  \"schema_version\": 2,\n", 0), 0U) << text.substr(0, 60);
   results::RunResult run = rich_run();
   run.schema_version = 4242;
   EXPECT_EQ(written(run).rfind("{\n  \"schema_version\": 4242,\n", 0), 0U);

@@ -51,6 +51,19 @@ bool counter_advanced(const statistics::LoadSignature& signature, std::string_vi
   return false;
 }
 
+bool counter_blind(const statistics::LoadSignature& signature, std::string_view name) {
+  for (const statistics::MetricSummary& summary : signature.metrics) {
+    if (summary.metric.name != name) {
+      continue;
+    }
+    const auto* counter = std::get_if<statistics::CounterSummary>(&summary.value);
+    if (summary.unavailable_samples > 0 || (counter != nullptr && counter->resets > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void seal(RunResult& result) {
   result.schema_version = kSchemaVersion;
   result.verdict = derive_verdict(result);

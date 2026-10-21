@@ -24,8 +24,10 @@
 // taken in timestamp order with Neumaier compensation, so one timeline gives
 // one signature, bit for bit, on every machine.
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -46,6 +48,47 @@ struct Window {
 
 [[nodiscard]] inline bool operator==(const Window& lhs, const Window& rhs) noexcept {
   return std::tie(lhs.start_ns, lhs.end_ns) == std::tie(rhs.start_ns, rhs.end_ns);
+}
+
+// THE WINDOWS OF A RUN AND OF ITS PHASES
+// --------------------------------------
+// A counter's advance is the difference of two readings, and CounterSummary::delta
+// counts only the pairs of consecutive readings that are BOTH in the window. A
+// phase lasts "from start_ns until the next mark" (timeline.hpp), and the round
+// that is taken at the instant a phase ends is the one that closes it: the
+// reading ON a mark is the last reading of the phase before it and the first of
+// the phase after it. Windows of [mark, next mark) put it only in the later
+// phase, so the advance from the last earlier reading to it is in neither phase,
+// and the phases' deltas sum to less than the run's (an ECC error counted just
+// before a boundary would vanish from a per-phase report, F13).
+//
+// The rule is therefore that a window which ends at a mark closes ONE
+// NANOSECOND PAST it, so that it holds the reading on the mark. Adjacent phases
+// then share that reading, every consecutive pair of readings lies in exactly
+// one phase (the pair that ends on a mark belongs to the phase that was running
+// while it happened), and the phases' counter deltas sum to the run's. A gauge's
+// summary counts the shared reading in both phases: a statement about the
+// instant, not a double count of time. Windows are built only by the functions
+// below; a consumer does not build its own.
+
+/// The nanosecond a window that closes on a reading extends past it.
+inline constexpr std::int64_t kClosingMargin = 1;
+
+/// The window of a whole run: from its first round to, and including, its last.
+[[nodiscard]] constexpr Window run_window(std::int64_t first_round_ns,
+                                          std::int64_t last_round_ns) noexcept {
+  return Window{first_round_ns, last_round_ns + kClosingMargin};
+}
+
+/// The window of the phase `marks[index]`, which must be below marks.size(): from
+/// its mark to one nanosecond past the next mark, or, for the last phase, past
+/// `last_round_ns`, the run's last round.
+[[nodiscard]] constexpr Window phase_window(std::span<const telemetry::PhaseMark> marks,
+                                            std::size_t index,
+                                            std::int64_t last_round_ns) noexcept {
+  const bool last = index + 1 == marks.size();
+  return Window{marks[index].start_ns,
+                (last ? last_round_ns : marks[index + 1].start_ns) + kClosingMargin};
 }
 
 /// A gauge over the window: its present readings only.
@@ -80,23 +123,32 @@ struct GaugeSummary {
 /// A counter over the window.
 ///
 ///   samples    present readings in the window; at least 1.
-///   delta      the sum of counter_delta() over consecutive present readings
-///              with no Unavailable between them: across a gap the counter
-///              may have reset, and an advance that cannot be known is not
-///              guessed.
+///   delta      the sum of telemetry::counter_advance() over consecutive
+///              present readings with no Unavailable between them: across a
+///              gap the counter may have reset, and an advance that cannot be
+///              known is not guessed. A step down in a counter that has no
+///              modulus is a reset and is no advance either (below).
 ///   rate_per_second   delta / (span_ns / 1e9), span_ns the integer sum of
-///              the time those consecutive pairs span; absent when no such
+///              the time the pairs that were counted span; absent when no such
 ///              pair exists.
+///   resets     how many pairs of consecutive present readings were a step
+///              down in a counter with no modulus -- a reset, whose advance is
+///              unknown and is not in delta, nor its span in rate_per_second.
+///              The reading after a reset is the new baseline. A counter with
+///              resets was blind for part of the window just as one with
+///              unavailable readings was (MetricSummary::unavailable_samples),
+///              and a verdict treats the two alike (results/result.hpp).
 struct CounterSummary {
   std::uint64_t samples = 0;
   std::uint64_t delta = 0;
   std::optional<double> rate_per_second;
+  std::uint64_t resets = 0;
 };
 
 [[nodiscard]] inline bool operator==(const CounterSummary& lhs,
                                      const CounterSummary& rhs) noexcept {
-  return std::tie(lhs.samples, lhs.delta, lhs.rate_per_second) ==
-         std::tie(rhs.samples, rhs.delta, rhs.rate_per_second);
+  return std::tie(lhs.samples, lhs.delta, lhs.rate_per_second, lhs.resets) ==
+         std::tie(rhs.samples, rhs.delta, rhs.rate_per_second, rhs.resets);
 }
 
 using Summary = std::variant<telemetry::Unavailable, GaugeSummary, CounterSummary>;

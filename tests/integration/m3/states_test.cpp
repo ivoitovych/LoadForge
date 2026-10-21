@@ -35,11 +35,13 @@ struct Row {
   std::string path;
   std::string good;
   std::string malformed;
-  /// A counter that wraps: two readings, the second smaller, and the advance
-  /// between them in the counter's own unit.
+  /// A counter with a step down: two readings, the second smaller. When it has a
+  /// modulus (`wraps`) the advance between them in the counter's own unit; when it
+  /// has none the step is a reset and the advance is not known.
   std::string before_wrap;
   std::string after_wrap;
   std::uint64_t wrap_advance = 0;
+  bool wraps = false;
   std::function<void(Machine&)> deny;
   std::function<void(Machine&)> refuse_everything;
   std::function<void(Machine&)> vanish;
@@ -49,7 +51,7 @@ struct Row {
 Row make_row(std::string source, std::string metric, std::uint32_t scope_index, bool counter,
              std::string path, std::string good, std::string malformed,
              std::string before_wrap = {}, std::string after_wrap = {},
-             std::uint64_t wrap_advance = 0) {
+             std::uint64_t wrap_advance = 0, bool wraps = false) {
   Row row;
   row.source = std::move(source);
   row.metric = std::move(metric);
@@ -61,6 +63,7 @@ Row make_row(std::string source, std::string metric, std::uint32_t scope_index, 
   row.before_wrap = std::move(before_wrap);
   row.after_wrap = std::move(after_wrap);
   row.wrap_advance = wrap_advance;
+  row.wraps = wraps;
   return row;
 }
 
@@ -83,11 +86,11 @@ std::vector<Row> rows() {
   file_row(make_row("frequency", "frequency.cpu", 0, false,
                     "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "2400000", "turbo"));
   file_row(make_row("power", "power.package", 0, true, "/sys/class/powercap/intel-rapl:0/energy_uj",
-                    "1000000", "joules", std::to_string(kRaplRange - 100), "50", 150));
+                    "1000000", "joules", std::to_string(kRaplRange - 100), "50", 150, true));
   file_row(make_row("edac", "edac.corrected", 0, true, "/sys/devices/system/edac/mc/mc0/ce_count",
-                    "7", "many", "4294967294", "1", 3));
+                    "7", "many", "4294967294", "1", 0));
   file_row(make_row("frequency", "frequency.busy_ticks", 0, true, "/proc/stat", stat_with_busy(500),
-                    "cpu busy", stat_with_busy(~std::uint64_t{0} - 9), stat_with_busy(5), 15));
+                    "cpu busy", stat_with_busy(~std::uint64_t{0} - 9), stat_with_busy(5), 0));
   file_row(make_row("memory", "memory.available", 0, false, "/proc/meminfo",
                     "MemTotal: 8000 kB\nMemAvailable: 4000 kB\n", "MemAvailable: lots kB\n"));
   {
@@ -284,6 +287,7 @@ TEST_P(FileStates, MalformedIsMalformedAndNamesItsFile) {
 
 class CounterWraps : public SourceStates {};
 
+// A counter with a modulus wraps: the step down is the advance across the wrap.
 TEST_P(CounterWraps, AWrapBetweenTwoReadingsIsTheAdvanceAndNotAStepBack) {
   const Row& row = GetParam();
   Stack stack;
@@ -298,14 +302,25 @@ TEST_P(CounterWraps, AWrapBetweenTwoReadingsIsTheAdvanceAndNotAStepBack) {
   ASSERT_NE(summary, nullptr);
   const auto* counter = std::get_if<statistics::CounterSummary>(&summary->value);
   ASSERT_NE(counter, nullptr);
-  EXPECT_EQ(counter->delta, row.wrap_advance);
-  ASSERT_TRUE(counter->rate_per_second.has_value());
-  EXPECT_DOUBLE_EQ(*counter->rate_per_second, static_cast<double>(row.wrap_advance));
+  if (row.wraps) {
+    ASSERT_TRUE(summary->metric.modulus.has_value());
+    EXPECT_EQ(counter->delta, row.wrap_advance);
+    EXPECT_EQ(counter->resets, 0U);
+    ASSERT_TRUE(counter->rate_per_second.has_value());
+    EXPECT_DOUBLE_EQ(*counter->rate_per_second, static_cast<double>(row.wrap_advance));
+    return;
+  }
+  // No modulus: the counter does not wrap within a run, so the step down is a reset
+  // (sample.hpp), counted and not read as an advance of 2^32 - n or 2^64 - n.
+  EXPECT_FALSE(summary->metric.modulus.has_value());
+  EXPECT_EQ(counter->delta, 0U);
+  EXPECT_EQ(counter->resets, 1U);
+  EXPECT_FALSE(counter->rate_per_second.has_value()) << "no pair of readings was an advance";
 }
 
-// The performance counters are 64 bits wide and declare no modulus, so a wrap is the
-// unsigned difference. Not a file, so it is not a row.
-TEST(PerfCounterWraps, AWrapAtTwoToTheSixtyFourIsTheAdvanceAndNotAStepBack) {
+// The performance counters are 64 bits wide and declare no modulus, so a step down is a
+// reset. Not a file, so it is not a row.
+TEST(PerfCounterResets, AStepDownIsAResetAndNotAWrapAtTwoToTheSixtyFour) {
   Stack stack;
   stack.machine.install_everything();
   stack.machine.syscalls().script_perf_reads(
@@ -318,7 +333,8 @@ TEST(PerfCounterWraps, AWrapAtTwoToTheSixtyFourIsTheAdvanceAndNotAStepBack) {
   const auto* cycles =
       std::get_if<statistics::CounterSummary>(&Stack::find(signature, "counters.cycles")->value);
   ASSERT_NE(cycles, nullptr);
-  EXPECT_EQ(cycles->delta, 15U);
+  EXPECT_EQ(cycles->delta, 0U);
+  EXPECT_EQ(cycles->resets, 1U);
 }
 
 std::vector<Row> wrapping_rows() {

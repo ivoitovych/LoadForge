@@ -6,19 +6,17 @@ path             = "src/telemetry/capability"
 classes          = ["P1", "P7"]
 tiers            = ["T1", "T2"]
 fixture_builders = ["tests/unit/telemetry/capability/capability_test.cpp"]
-consumes         = ["SourceContract"]
 note             = """
-Probes a list of sources into a CapabilityReport, once each and in order, and \
-renders it for the start of a run (M2a exit criterion 5). \
+Renders a CapabilityReport for the start of a run (M2a exit criterion 5). The \
+report is the sampler's probe: this module probes nothing. \
 \
 P1: the rendering is checked in full for a mixed report; absences are \
 grouped only when name, state and remedy are all the same, so 256 CPUs \
 without cpufreq print one entry with a count and two different remedies stay \
 two entries; present metrics are listed once each with a count. \
 \
-P7: the probe has no capability state of its own. It carries what its sources \
-report, so the six states reach it as scripted statuses of this module's own \
-mock of the Source contract (run through SourceContract, consumes), and, in \
+P7: the report has no capability state of its own. It carries what the sources \
+report, so the six states reach it as scripted statuses and, in \
 the real-against-real tier, as the four real sources over the machine \
 captured in tests/fixtures and over the machine the tests run on, where every \
 absence must carry a remedy."""

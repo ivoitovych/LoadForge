@@ -320,6 +320,7 @@ Node summary_node(const statistics::Summary& summary) {
     node.add("samples", Node::unsigned_integer(counter->samples));
     node.add("delta", Node::unsigned_integer(counter->delta));
     node.add("rate_per_second", opt_real(counter->rate_per_second));
+    node.add("resets", Node::unsigned_integer(counter->resets));
     return node;
   }
   return absence_of(*std::get_if<Unavailable>(&summary));

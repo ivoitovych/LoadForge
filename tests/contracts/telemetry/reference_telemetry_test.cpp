@@ -178,6 +178,7 @@ TEST(TelemetryDefinition, UnitAndScopeNames) {
   EXPECT_EQ(describe(Unit::kRatio), "ratio");
   EXPECT_EQ(describe(Unit::kCount), "count");
   EXPECT_EQ(describe(Unit::kVolts), "volts");
+  EXPECT_EQ(describe(Unit::kMicrojoules), "microjoules");
   EXPECT_EQ(describe(static_cast<Unit>(99)), "unrecognised unit");
   EXPECT_EQ(describe(Scope::kMachine), "machine");
   EXPECT_EQ(describe(Scope::kPackage), "package");
@@ -231,6 +232,18 @@ TEST(TelemetryDefinition, ACounterAdvancesAcrossAtMostOneWrap) {
   EXPECT_EQ(counter_delta(990, 5, 1000U), 15U) << "wrapped at the modulus";
   EXPECT_EQ(counter_delta(990, 995, 1000U), 5U);
   EXPECT_EQ(counter_delta(~std::uint64_t{0}, 4, std::nullopt), 5U) << "wrapped at 2^64";
+}
+
+TEST(TelemetryDefinition, ACounterWithNoModulusDoesNotWrapAndAStepDownIsAReset) {
+  using telemetry::counter_advance;
+  EXPECT_EQ(counter_advance(10, 25, std::nullopt), std::optional<std::uint64_t>{15});
+  EXPECT_EQ(counter_advance(10, 10, std::nullopt), std::optional<std::uint64_t>{0});
+  EXPECT_EQ(counter_advance(5, 0, std::nullopt), std::nullopt) << "reset, not 2^64 - 5";
+  EXPECT_EQ(counter_advance(~std::uint64_t{0}, 4, std::nullopt), std::nullopt)
+      << "a 64-bit counter does not wrap within a run";
+  EXPECT_EQ(counter_advance(990, 5, 1000U), std::optional<std::uint64_t>{15}) << "wrapped";
+  EXPECT_EQ(counter_advance(990, 995, 1000U), std::optional<std::uint64_t>{5});
+  EXPECT_EQ(counter_advance(10, 10, 1000U), std::optional<std::uint64_t>{0});
 }
 
 TEST(TelemetryDefinition, TheReportCountsMetricsAndPresentOnes) {
