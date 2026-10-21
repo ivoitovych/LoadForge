@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "config/config.hpp"
-#include "contracts/simd/dispatch_contract.hpp"
+#include "contracts/simd/select_path_contract.hpp"
 #include "unit/controller/consumer_models.hpp"
 #include "unit/controller/machine_tree.hpp"
 #include "workloads/registry/registry.hpp"
@@ -39,9 +39,6 @@ INSTANTIATE_TYPED_TEST_SUITE_P(ControllerChoice, SelectPathContract,
                                ::testing::Types<ChooseIsaSubject>);
 
 }  // namespace
-
-// The probe suite is registered by the same header.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(IsaProbeContract);
 }  // namespace loadforge::contracts
 
 namespace loadforge::controller {

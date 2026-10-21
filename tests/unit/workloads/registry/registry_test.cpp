@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "contracts/workloads/workload_contract.hpp"
+#include "contracts/workloads/registry_contract.hpp"
 #include "workloads/workload.hpp"
 
 namespace loadforge::contracts {
@@ -86,8 +86,4 @@ TEST(BuiltinRegistryTable, AnUnknownNameIsNamedInTheRefusal) {
 }
 
 }  // namespace
-
-// The workload suite is registered by the same header; this module provides
-// the registry only (workload_contract.hpp, journal fragment 11).
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(WorkloadContract);
 }  // namespace loadforge::contracts

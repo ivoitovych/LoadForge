@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_registry_contract.hpp"
 #include "workloads/registry/registry.hpp"
 #include "workloads/workload.hpp"
 
@@ -82,8 +82,4 @@ TEST(BuiltinOracleRegistryTable, AnUnknownNameIsNamedInTheRefusal) {
 }
 
 }  // namespace
-
-// The per-oracle suite is registered by the same header; each oracle's own
-// stream provides it.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleContract);
 }  // namespace loadforge::contracts

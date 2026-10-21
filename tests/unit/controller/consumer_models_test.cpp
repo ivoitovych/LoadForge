@@ -7,9 +7,10 @@
 
 #include <gtest/gtest.h>
 
-#include "contracts/fpenv/fpenv_contract.hpp"
-#include "contracts/simd/dispatch_contract.hpp"
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/fpenv/fp_control_contract.hpp"
+#include "contracts/simd/isa_probe_contract.hpp"
+#include "contracts/simd/select_path_contract.hpp"
+#include "contracts/telemetry/source_contract.hpp"
 #include "contracts/verification/isolation_contract.hpp"
 
 namespace loadforge::contracts {
@@ -61,8 +62,4 @@ INSTANTIATE_TYPED_TEST_SUITE_P(ControllerModel, IsolatorContract,
                                ::testing::Types<IsolatorSubject>);
 
 }  // namespace
-
-// The headers register the suites of contracts this file does not consume.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TimelineContract);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(FpCheckContract);
 }  // namespace loadforge::contracts
