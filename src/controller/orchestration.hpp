@@ -55,9 +55,13 @@ struct RunOptions {
   /// (docs/determinism.md §3) and states in the banner; none: not asserted.
   /// Not owned; it must outlive the run.
   fpenv::FpControl* fp = nullptr;
-  /// The telemetry sources probed once before the first fork, whose
-  /// capability report the banner states (M2a exit criterion 5). Not owned.
-  std::vector<telemetry::Source*> sources;
+  /// The capability report the banner states (M2a exit criterion 5), already
+  /// rendered (telemetry::render_capabilities) from the answer of a sampler's
+  /// probe(): the controller never probes a source, because the sampler is the
+  /// only prober (telemetry/capability/capability.hpp). The caller probes once,
+  /// before the first fork, and hands the text over; empty: the banner states
+  /// no capabilities (the caller states them itself, as for a sampled run).
+  std::string capabilities;
   /// The telemetry sampler (telemetry/sampler.hpp), already probed by the
   /// caller, which states the capability report before the run and keeps it
   /// for the result. The controller calls round() on its own tick, so sampling

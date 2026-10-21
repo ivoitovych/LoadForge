@@ -40,10 +40,6 @@
 #include "resources/memory_budget.hpp"
 #include "statistics/summarizer.hpp"
 #include "telemetry/capability/capability.hpp"
-#include "telemetry/sources/fan/fan.hpp"
-#include "telemetry/sources/frequency/frequency.hpp"
-#include "telemetry/sources/memory/memory.hpp"
-#include "telemetry/sources/thermal/thermal.hpp"
 #include "topology/cache.hpp"
 #include "topology/cpu_topology.hpp"
 #include "topology/snapshot.hpp"
@@ -620,11 +616,8 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   // "called once, before any sample()"), so the controller is not also handed
   // sources to probe for its banner: that is for a run that samples nothing.
   options.sample_interval_ns = stress_options.sample_interval_ns;
-  telemetry::ThermalSource thermal(machine);
-  telemetry::FanSource fan(machine);
-  telemetry::FrequencySource frequency(machine);
-  telemetry::MemorySource memory(machine);
   std::unique_ptr<Rig> rig;
+  std::unique_ptr<Rig> probe_only;
   if (stress_options.sample) {
     const std::int64_t run_ms = std::min(config.run.duration.count(), kLongestMilliseconds);
     const std::int64_t run_ns = (run_ms * kNanosecondsPerMillisecond) + options.grace.stop_ns +
@@ -643,7 +636,21 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     options.timeline = &rig->timeline();
     out << telemetry::render_capabilities(rig->capabilities());
   } else if (stress_options.capabilities) {
-    options.sources = {&thermal, &fan, &frequency, &memory};
+    // A run that samples nothing still states what the machine offers, from a
+    // sampler's probe like every other path: a rig that is probed, rendered
+    // into the banner and never sampled. It lives to the end of the run, so the
+    // sources hold their descriptors before any worker is born.
+    auto made = make_rig(syscalls, machine, stress_options.roots,
+                         timeline_capacity({0, options.sample_interval_ns,
+                                            series_bound(snapshot.cpus.logical_cpu_count())}),
+                         stress_options.sources);
+    if (!made.has_value()) {
+      err << "loadforge: cannot set up telemetry: " << telemetry::describe(made.error().fault)
+          << ": " << made.error().detail << "\n";
+      return kConfigRefused;
+    }
+    probe_only = std::move(made).value();
+    options.capabilities = telemetry::render_capabilities(probe_only->capabilities());
   }
   const telemetry::BoundedTimeline no_timeline(0);
   const telemetry::BoundedTimeline& timeline = rig != nullptr ? rig->timeline() : no_timeline;

@@ -10,6 +10,7 @@
 #include <csignal>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +19,9 @@
 #include "platform/fpenv/environment.hpp"
 #include "primitives/rng/philox.hpp"
 #include "support/fake_syscalls.hpp"
+#include "telemetry/capability/capability.hpp"
+#include "telemetry/sampler.hpp"
+#include "telemetry/timeline/bounded_timeline.hpp"
 #include "unit/controller/consumer_models.hpp"
 #include "unit/controller/machine_tree.hpp"
 #include "verification/record.hpp"
@@ -176,9 +180,15 @@ struct Rig {
 TEST(ControllerVerified, TheBannerStatesEveryWorkersPlanTheRegistersAndTheCapabilities) {
   Rig rig;
   controller_testing::ModelFp<true, false> fp;
-  controller_testing::ModelSource source;
+  // The caller probes, once, with a sampler (the only prober); the controller
+  // states the report it is given and probes nothing.
+  telemetry::BoundedTimeline timeline(64);
+  std::vector<std::unique_ptr<telemetry::Source>> sources;
+  sources.push_back(std::make_unique<controller_testing::ModelSource>());
+  const auto probed = telemetry::make_sampler(std::move(sources), timeline)->probe();
+  ASSERT_TRUE(probed.has_value());
   rig.options.fp = &fp;
-  rig.options.sources = {&source};
+  rig.options.capabilities = telemetry::render_capabilities(probed.value());
   rig.both_exit_after([] {});
   auto result = rig.run();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
@@ -195,7 +205,7 @@ TEST(ControllerVerified, TheBannerStatesEveryWorkersPlanTheRegistersAndTheCapabi
   EXPECT_NE(plan.capabilities.find("model.temperature"), std::string::npos) << plan.capabilities;
   EXPECT_NE(plan.capabilities.find("run as a user that may read it"), std::string::npos)
       << "an absence carries its remedy";
-  EXPECT_TRUE(source.probed()) << "probed before the first fork";
+  EXPECT_EQ(plan.capabilities, rig.options.capabilities) << "the report as given, unchanged";
 }
 
 TEST(ControllerVerified, WithoutRegistersOrSourcesTheBannerSaysNothingOfThem) {
@@ -553,8 +563,7 @@ TEST(ControllerVerified, TheNewReportFieldsAreComparedByEveryMember) {
   r.fp = &fp;
   EXPECT_NE(o, r);
   r = o;
-  controller_testing::ModelSource source;
-  r.sources = {&source};
+  r.capabilities = "telemetry capability: 0 of 0 metric(s) present\n";
   EXPECT_NE(o, r);
 }
 

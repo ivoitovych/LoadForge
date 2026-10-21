@@ -1035,12 +1035,9 @@ core::Result<RunReport, ControllerError> Run::execute() {
     plan.workloads.push_back(worker.plan.description);
   }
   plan.environment = environment_;
-  if (!options_->sources.empty()) {
-    // Once, before the first fork, and nowhere else: the sources are probed
-    // here so the set the banner states is the set that was found.
-    plan.capabilities =
-        telemetry::render_capabilities(telemetry::probe_capabilities(options_->sources));
-  }
+  // Probed once, before the first fork, by the caller's sampler: the banner
+  // states the set that was found, and this run probes nothing.
+  plan.capabilities = options_->capabilities;
   reporter_->run_starting(plan);
 
   auto spawned = spawn();

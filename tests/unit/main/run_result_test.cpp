@@ -68,14 +68,6 @@ struct Sampled {
   }
 };
 
-TEST(RunWindowTest, ItRunsFromTheFirstRoundToOneNanosecondPastTheLast) {
-  controller::SamplingReport sampling;
-  sampling.first_round_ns = 10;
-  sampling.last_round_ns = 50;
-  EXPECT_EQ(run_window(sampling), (statistics::Window{10, 51}))
-      << "a window excludes its end, and the last round is the closing reading";
-}
-
 TEST(PhaseWindowsTest, EachPhaseEndsOneNanosecondPastTheNextMarkAndTheLastPastTheEnd) {
   const Sampled run;
   const auto windows = phase_windows(run.timeline, 5 * kSecond);
@@ -460,6 +452,65 @@ TEST(SummaryTextTest, EveryFingerprintFieldTheMachineWouldNotGiveIsNamedWithItsR
   const std::string text = summary_text(result, report, timeline, summarizer, {gap});
   EXPECT_NE(text.find("fingerprint: microcode not recorded: "), std::string::npos) << text;
   EXPECT_NE(text.find("/proc/cpuinfo"), std::string::npos) << text;
+}
+
+}  // namespace
+}  // namespace loadforge::cli
+
+namespace loadforge::cli {
+namespace {
+
+statistics::MetricSummary edac_summary(const std::string& name, statistics::Summary value,
+                                       std::uint64_t unavailable) {
+  statistics::MetricSummary summary;
+  summary.metric = edac(name, telemetry::Scope::kMemoryController, 0);
+  summary.value = value;
+  summary.unavailable_samples = unavailable;
+  return summary;
+}
+
+std::string edac_text(const std::vector<statistics::MetricSummary>& metrics) {
+  mocks::MockTimeline timeline;
+  const mocks::MockSummarizer summarizer;
+  const auto series =
+      timeline.add_series(edac("edac.corrected", telemetry::Scope::kMemoryController, 0)).value();
+  count(timeline, series, 1 * kSecond, 0);
+  count(timeline, series, 2 * kSecond, 0);
+  EXPECT_TRUE(timeline.mark_phase({1 * kSecond, "run"}).has_value());
+  controller::RunReport report;
+  report.sampling.enabled = true;
+  report.sampling.last_round_ns = 2 * kSecond;
+  results::RunResult result;
+  result.signature.metrics = metrics;
+  return summary_text(result, report, timeline, summarizer, {});
+}
+
+TEST(SummaryTextTest, AnEdacCounterThatResetOrDroppedOutSaysTheVerdictIsIncompleteThere) {
+  statistics::CounterSummary reset;
+  reset.samples = 3;
+  reset.resets = 2;
+  const std::string by_reset = edac_text({edac_summary("edac.corrected", reset, 0)});
+  EXPECT_NE(by_reset.find("edac: edac.corrected memory controller 0 was not read throughout (2 "
+                          "reset(s), 0 unavailable sample(s)): the verdict is incomplete there\n"),
+            std::string::npos)
+      << by_reset;
+  const std::string by_gap =
+      edac_text({edac_summary("edac.uncorrected", statistics::CounterSummary{}, 4)});
+  EXPECT_NE(by_gap.find("edac: edac.uncorrected memory controller 0 was not read throughout (0 "
+                        "reset(s), 4 unavailable sample(s))"),
+            std::string::npos)
+      << by_gap;
+  const telemetry::Unavailable none{};
+  const std::string by_state = edac_text({edac_summary("edac.corrected", none, 0)});
+  EXPECT_EQ(by_state.find("not read throughout"), std::string::npos) << by_state;
+}
+
+TEST(SummaryTextTest, AnEdacCounterReadThroughoutAndOtherMetricsAddNoIncompleteNote) {
+  statistics::MetricSummary other =
+      edac_summary("thermal.package", statistics::CounterSummary{}, 9);
+  const std::string text =
+      edac_text({edac_summary("edac.corrected", statistics::CounterSummary{}, 0), other});
+  EXPECT_EQ(text.find("not read throughout"), std::string::npos) << text;
 }
 
 }  // namespace

@@ -41,7 +41,9 @@ class RealStack {
     return rig_->capabilities();
   }
   [[nodiscard]] statistics::LoadSignature signature() const {
-    const auto taken = summarizer_.summarize(rig_->timeline(), cli::run_window(sampling()));
+    const auto taken = summarizer_.summarize(
+        rig_->timeline(),
+        statistics::run_window(sampling().first_round_ns, sampling().last_round_ns));
     EXPECT_TRUE(taken.has_value());
     return taken.value();
   }

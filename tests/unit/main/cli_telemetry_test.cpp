@@ -195,6 +195,16 @@ TEST_F(StressTelemetry, TelemetryThatCannotBeSetUpRefusesTheRunBeforeAnyWorkerSt
   EXPECT_EQ(syscalls.fork_count(), 0);
 }
 
+TEST_F(StressTelemetry, ARunThatSamplesNothingStillTakesItsCapabilitiesFromASamplerProbe) {
+  options.sources = twins;
+  options.sample = false;
+  EXPECT_EQ(run(), 1) << "the probe is the sampler's, so a refusal of the timeline is the same one";
+  EXPECT_NE(err.str().find("loadforge: cannot set up telemetry: duplicate series"),
+            std::string::npos)
+      << err.str();
+  EXPECT_EQ(syscalls.fork_count(), 0);
+}
+
 TEST_F(StressTelemetry, AResultThatCannotBeComputedIsReportedAndNothingIsWritten) {
   const RefusingSummarizer refusing;
   options.summarizer = &refusing;

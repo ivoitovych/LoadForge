@@ -17,8 +17,6 @@ namespace loadforge::cli {
 
 namespace {
 
-constexpr std::int64_t kWindowEndMargin = 1;
-
 std::string series_name(const telemetry::Metric& metric) {
   std::string text = metric.name;
   if (metric.scope != telemetry::Scope::kMachine) {
@@ -43,19 +41,13 @@ results::WorkloadResult idle_workload(const config::Workload& workload) {
 
 }  // namespace
 
-statistics::Window run_window(const controller::SamplingReport& sampling) noexcept {
-  return statistics::Window{sampling.first_round_ns, sampling.last_round_ns + kWindowEndMargin};
-}
-
 std::vector<PhaseWindow> phase_windows(const telemetry::TimelineView& timeline,
                                        std::int64_t end_ns) {
   const std::span<const telemetry::PhaseMark> marks = timeline.phases();
   std::vector<PhaseWindow> windows(marks.size());
   for (std::size_t at = 0; at < marks.size(); ++at) {
-    const bool last = at + 1 == marks.size();
-    const std::int64_t end = last ? end_ns : marks[at + 1].start_ns;
     windows[at].label = marks[at].label;
-    windows[at].window = {marks[at].start_ns, end + kWindowEndMargin};
+    windows[at].window = statistics::phase_window(marks, at, end_ns);
   }
   return windows;
 }
@@ -157,6 +149,21 @@ std::string summary_text(const results::RunResult& result, const controller::Run
     if (deltas.empty()) {
       text << "edac: no error counted in any phase\n";
     }
+    // A counter that reset or dropped out was blind for part of the run: the
+    // verdict is incomplete there, and the counts above are a lower bound.
+    for (const statistics::MetricSummary& summary : result.signature.metrics) {
+      if (summary.metric.name != results::kCorrectedErrorsMetric &&
+          summary.metric.name != results::kUncorrectedErrorsMetric) {
+        continue;
+      }
+      const auto* counter = std::get_if<statistics::CounterSummary>(&summary.value);
+      const std::uint64_t resets = counter != nullptr ? counter->resets : 0;
+      if (resets > 0 || summary.unavailable_samples > 0) {
+        text << "edac: " << series_name(summary.metric) << " was not read throughout (" << resets
+             << " reset(s), " << summary.unavailable_samples
+             << " unavailable sample(s)): the verdict is incomplete there\n";
+      }
+    }
   }
   for (const results::FingerprintGap& gap : gaps) {
     text << "fingerprint: " << gap.field << " not recorded: " << topology::describe(gap.why)
@@ -173,7 +180,9 @@ core::Result<results::RunResult, std::string> assemble_result(const ResultInputs
   result.fingerprint = inputs.fingerprint;
   result.capabilities = inputs.capabilities;
   if (report.sampling.rounds > 0) {
-    auto signature = inputs.summarizer->summarize(*inputs.timeline, run_window(report.sampling));
+    auto signature = inputs.summarizer->summarize(
+        *inputs.timeline,
+        statistics::run_window(report.sampling.first_round_ns, report.sampling.last_round_ns));
     if (!signature.has_value()) {
       return std::string{statistics::describe(signature.error().fault)} + ": " +
              signature.error().detail;
