@@ -3509,6 +3509,50 @@ Kept short and current; move an item to the relevant document once it is settled
   is `reviews/review-request-2026-10-20-1841-UTC.md` (#68). Everything since supervision
   still has had no independent reviewer.
 
+- **Contract questions from the stream fragments, folded 2026-10-21 18:20 UTC.** The fragments in
+  `docs/journal/` keep the questions as the streams asked them; this is where each stands.
+  *Resolved by a contract change:*
+  - Wave 1's questions (one suite per header, the `for_each_index` NOLINT, the `oracle.hpp`
+    visits, the dense-linear and compression specification wording, isolation's four readings)
+    were decided in #84, and the shared coverage flag in #67:
+    `docs/journal/wave-1-integration-2026-10-20-1840-UTC.md`.
+  - The M3 integration's seven disagreements, with stream 13's question about the energy unit,
+    were decided in #92: `docs/journal/m3-contract-corrections-2026-10-21-1145-UTC.md` (§2.42 to §2.44).
+  - The M2 integration's five disagreements (stream 11: `select_path` against a workload's paths,
+    the runner's lock policy, the decomposition missing from `Provenance`, one CPU for a
+    multi-thread unit, `physical_core` as one number) are in progress. There is no decision
+    file yet; the same change takes the stream-02 runner items the owner deferred.
+  *Open:*
+  - **Scratch.** One piece per unit against one per slot, and whether the caller's writes before
+    `run()` are visible to the tasks (§2.38; streams 17, 20, 22 to 26, 31).
+  - **Vector kernels.** Whether a workload stream may own files under `src/primitives/simd/`
+    (§2.36; streams 22, 23, 24).
+  - **Parseval.** The specification's (1 ± 2^-20) test cannot be met for that check (§1.48;
+    streams 22, 27).
+  - **Declared classes and versions.** Ray tracing (§2.31, stream 30) and the stencil (stream 23)
+    give more than their class names; `Descriptor::version` against the specification's
+    `kVersion` (streams 05, 25).
+  - **Deferred by the owner, still open:** a `kMalformed` decode fault and a rule for over-long
+    text (stream 01); `runs_here()` on a subject (streams 06, 18, 26); the floating-point
+    re-assert policy (stream 07).
+  - **`RunResult` gaps** (streams 12, 21): per-phase counter results are on the console and in no
+    file; a worker's death leaves no telemetry field; `Observers` cannot say sampling stopped;
+    the fingerprint carries no reason for an absent field and `topology::Unavailable` has no
+    remediation; `scope` is printed as prose; nothing turns the two tick counters into a
+    utilisation.
+  - **Specification figures to correct:** adaptive mesh's "about 50 leaves in a cell" (88
+    measured) and "6913 leaves in all" (4096 holds); the particles specification test named
+    "...DefaultIsOne" that asserts 2; verification.md §3's preconditioner for sparse; the raytrace
+    specification names neither which pixel of a tile is sampled nor whether the tile-sum slots
+    past `tile_count` are checked (stream 32). Sparse's derivation 2 is no longer an assumption
+    (§1.47).
+  - **Captures wanted (F21):** hwmon, thermal, fan and cpufreq trees, EDAC, powercap and a laptop's
+    fingerprint files; hybrid and big.LITTLE topologies; a NEON golden row for the particles.
+    The VM offers none (§1.42), so T11 stays open.
+  - **GCC's ThreadSanitizer preset** fails to build `src/worker/ipc/heartbeat.cpp`
+    (`atomic_thread_fence`, streams 16 and 20); Clang's runtime does install and run
+    (stream 21).
+
 ---
 
 ## 7. Stream journals
@@ -3524,3 +3568,10 @@ stream learned what, and resolves the contract questions in a contract change.
 
 The first fragment is `docs/journal/00-contracts-and-streams.md`, from the change that
 wrote the contracts.
+
+**Folded 2026-10-21 18:20 UTC.** The fragments of waves 1 to 4 (00 to 10, 12 to 20, 22 to 28 and
+30 to 32), the two integrations (11 and 21) and the two decision files beside them were folded
+into the sections above: §1.33 to §1.50, §2.34 to §2.48, §4.18 to §4.22, and the state of every
+contract question in §6. Streams 29, 33 and 34 have no fragment yet. Each file is kept unchanged
+as the record of which stream learned what. The next fold is at the end of the next wave; the
+numbering continues from §1.50, §2.48 and §4.22.
