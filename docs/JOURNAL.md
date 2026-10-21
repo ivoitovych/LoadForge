@@ -871,6 +871,234 @@ warm`) and passed 5 of 5 locally under the same preset. AddressSanitizer was alr
 exempted for its quarantine; ThreadSanitizer now is too, and the plain and coverage builds
 keep the bound.
 
+### 1.33 `lz4 -d` accepts blocks the format document says a decoder may refuse
+
+*Established 2026-10-20, wave 1 (stream 03, `docs/journal/03-oracle-compression.md`).* Hand-built
+blocks in a legacy frame were given to `lz4 -d` 1.9.4. It accepted offset 0 (writing zeros),
+a match starting 11 bytes before the end of the data, and a last token with a match length;
+it refused an offset reaching before the first byte, a match over the last five bytes, and a
+block ending after a match. The document leaves the end-of-block rules to the decoder
+("allowed to reject"), and the tool rejects some and not others. So agreement with the
+reference decoder is not the standard for a malformed block; the document is (§2.34). Every
+block the reference *compressor* wrote kept the stricter rules, which is what lets the
+strict oracle accept real output.
+
+### 1.34 A single-bit flip can turn one valid encoding into another, so "every flip is caught" is false
+
+*Established 2026-10-20, wave 1 (streams 03 and 05, fragments `03-oracle-compression.md`,
+`05-workload-compression.md`).* In `runs-l1` 517 of 4,728 single-bit flips decode to the
+original input by another route (an offset moved to an identical earlier copy); over one
+unit's 306,944 flips, 10 were agreements. The specification counts any block that decodes to
+the input as right, so no oracle can or should catch them. The tests say which of three each
+flip is (malformation, different bytes, another valid encoding), prove the third
+independently of the decoder, and pin the counts so a rule that stopped refusing shows as
+flips moving between columns. An exit criterion that says "every flip" has to say this.
+
+### 1.35 An unoptimised build leaves the upper ymm halves dirty, and every SSE instruction after it pays
+
+*Established 2026-10-20, wave 1 (stream 06, `docs/journal/06-workload-dense-linear.md`).* A
+whole-product test took 14 s in the debug build against 0.05 s for the same loop standalone;
+samples put the time in the test's own scalar code after the AVX2 kernel had run. GCC emits
+`vzeroupper` on leaving a 256-bit function only when it optimises: `objdump -d | grep -c
+vzeroupper` gave 0 for the debug object and 2 for `-O2`. An explicit `_mm256_zeroupper()` at
+the end of the kernel took the test to 0.6 s. Every test, coverage and sanitizer build is
+unoptimised, so the cost would have landed on every tier. Stream 25's sweep gained the same
+call when it moved into the kernel directory.
+
+### 1.36 What a 32-byte vector does to a build and to a call
+
+*Established 2026-10-20, waves 1 and 3 (streams 06, 25, 26, 30).* Four facts, each from a
+failed build or a crash:
+- `std::array<__m256d, N>` fails under `-Werror` (`-Wignored-attributes`: a template argument
+  drops the vector attributes); a struct of named `__m256d` members does not.
+- A 32-byte vector passed or returned by value in a unit built without AVX is
+  `-Werror=psabi`. Pass by `const&`; make constants `static constexpr`.
+- `std::bit_cast` on a vector inside a `target("avx2")` function crashed with `SIGSEGV` at
+  `-O0`: it is an ordinary function emitted for the baseline target, and a vector crosses
+  the call in registers the caller's target names. The rule: every function that touches a
+  vector is `always_inline` into the one function that chose the target, and the cast is
+  `__builtin_bit_cast`. `-Wno-psabi` only hides the note.
+- `-mavx2` on one source file puts AVX encodings in every inline function that file
+  emits: 93 `ymm` instructions in the one object, none in five others, and only because that
+  file included nothing from the standard library. A `target` attribute per function has no
+  such reach (§2.35).
+Also: Clang refuses `__attribute__((target(...))) [[nodiscard]]` and takes the other order.
+
+### 1.37 The scalar and the fused paths give the same bits on x86-64 and AArch64, measured under emulation
+
+*Established 2026-10-20, waves 1 and 3 (streams 06, 25, 30).* The dense-linear output
+digests, the graph ranks and nine ray-tracing digests were computed on x86-64 (scalar and
+AVX2) and from an `aarch64-linux-gnu-g++-13` build run under `qemu-aarch64` 8.2 (scalar and
+NEON): equal on every line. It follows from the kernels' order (lanes hold different entries,
+never partial sums of one; a fused multiply-add is one correctly rounded operation on both
+ISAs; `-ffp-contract=off` keeps the rest unfused), and `objdump -d` of the scalar kernels
+showed no `vfmadd`, `fmadd` or `fmla` on either architecture. The emulator is IEEE-exact for
+these operations but is not hardware; CI's ARM64 runner is the check on a real core. Under
+qemu the same tests ran about thirty times slower (3 min 25 s against 8 s). A NEON kernel
+measured to 100% on AArch64 before CI saw it by cross-compiling, running under qemu, and
+reading with `aarch64-linux-gnu-gcov-13`.
+
+### 1.38 A new thread inherits its creator's floating-point registers; `sched_setaffinity(0)` moves the calling thread only
+
+*Established 2026-10-20, wave 1 (streams 07 and 08, `07-numerics-platform.md`,
+`08-executor.md`).* With `fesetround(FE_UPWARD)` and MXCSR.FTZ and DAZ set before a pool of
+four threads started, every task on every thread read upward rounding, FTZ and DAZ on; a
+write in the child did not reach the parent. So "establish before any thread starts, assert
+on each thread's start" is correct. Pid 0 in `sched_setaffinity` is the calling *thread*:
+four threads pinned themselves, read their masks back as exactly their CPU, and
+`sched_getcpu()` agreed over 160 tasks, with the caller's mask unchanged. The kernel refuses
+a thread's placement (CPU 1023, an empty set) with `EINVAL` exactly as the shared fake
+models it.
+
+### 1.39 CPUID with a leaf above the highest returns the highest basic leaf's data, not zeros
+
+*Established 2026-10-20, wave 1 (stream 07).* A probe that reads leaf 7 on a CPU without it
+reads another leaf's bits as feature flags. The probe reads leaf 0 first and answers
+scalar-only below leaf 7; `XGETBV` without OSXSAVE faults on real hardware, so the fake
+records either read as a fault. The machine's `/proc/cpuinfo` flags and the probe agree
+(`avx2`, `fma`, `avx512f`): Linux removes a flag whose xfeature the OS has not enabled, so
+the flag list is the kernel's verdict on the OS-support half of the question.
+
+### 1.40 The runner's working set is bigger than its footprint, and an unprivileged run cannot lock it
+
+*Established 2026-10-20, wave 1 and the M2 integration (streams 02 and 11,
+`02-input-integrity.md`, `11-integration-m2.md`).* Under the default 8 MiB
+`RLIMIT_MEMLOCK`, as `nobody` (`setpriv --reuid=65534`): a 1 MiB footprint ran, 7,000,000
+bytes was refused with `mlock(8960384 bytes): Cannot allocate memory`. The set adds strides
+rounded to lines, the regeneration buffer, scratch and slack, and a page for each of three
+control copies. Sort's smallest unit is 2,621,440 bytes, so at 3 MiB its runner maps
+8,437,824, which is 49,216 over. This is what failed every CI job at the first sweep
+(2026-10-21 09:11 UTC): the jobs are unprivileged with 8 MiB, where §1.17's "root ignores the
+limit" had hidden it locally. The steps that run `ctest` now lift the allowance for their
+shell (`prlimit --memlock=unlimited`); the runner's always-lock policy stays an open
+contract question (§6).
+
+### 1.41 A perf event that excludes the kernel counts nothing the kernel does
+
+*Established 2026-10-21 (streams 13 and 21, and the M3 corrections,
+`m3-contract-corrections-2026-10-21-1145-UTC.md`).* `perf_event_open(PERF_TYPE_SOFTWARE,
+CONTEXT_SWITCHES, pid = getpid(), inherit = 1)` read after each of five 20 ms sleeps: with
+`exclude_kernel = 1`, 0 0 0 0 0 as root and as uid 65534; with it clear, 1 2 3 4 5 as root,
+`EACCES` as uid 65534 at `perf_event_paranoid` 2, and 1 2 3 4 5 at paranoid 1. A zero
+standing in for a value was present and valid, found only by a run against the real kernel;
+no fake could have shown it. Also from the VM: the four hardware events fail `ENOENT`; the
+power PMU (type 9) has only `energy-psys`, scale exactly 2^-32 J, and refuses `exclude_hv`
+and `inherit` with `EINVAL`; and `perf_event_paranoid` is 0 in one container and 2 in the
+next, so it is a property of the machine, which is why the source reads and names it.
+
+### 1.42 What the development VM does and does not offer
+
+*Established 2026-10-20, waves 1 and 2 (streams 09, 10, 13, 21).* A Firecracker VM, Linux
+6.18.44, 4 vCPUs, one node, no SMT: no `/sys/class/hwmon`, an empty `/sys/class/thermal`, no
+cpufreq, no powercap, no EDAC, no hardware performance counters; memory, `/proc/stat`, the
+CPU lists and caches are there. A "present" tree for any of the absent ones cannot be
+captured here, so tests build them in the layout the kernel documents and say so; none is a
+capture, and T11 (a thermal result on hardware) stays open. A real run of the M3 stack saw
+10 of 23 metrics, took 3 ms in 11 to 12 rounds of a 1 s run (0.28 % of one CPU at 10 Hz),
+and every absent metric printed with its remedy. `sizeof(Point)` is 120 bytes on x86-64, so
+a five-hour run over 96 series at 1 Hz is at most 414 MB resident, ten times that at 10 Hz.
+
+### 1.43 More shapes of §1.13, and one refinement
+
+*Established 2026-10-20, waves 1 to 4 (streams 00, 01, 02, 03, 04, 09, 12, 13, 19, 20, 24,
+28, 30).* Every stream found uncoverable branches on lines with no `if`. The refinement
+(stream 09): a cleanup branch comes from a *partly built* or *temporary aggregate*, not from
+a named local string; `std::string detail = ...; return Unavailable{kind, path_,
+std::move(detail)};` has none, `Unavailable{kind, a(), b()}` has one. What works is
+assigning into an object that is already complete (`emplace_back()` then fill the reference,
+default-construct then assign a field at a time). The shapes met beyond §1.13's: a ternary
+whose arms build strings (20 branches in one renderer); a temporary aggregate passed to
+`push_back`; `new (std::nothrow) T[n]` (a null check no test takes); a throwing constructor
+under a `new` (declare it `noexcept`, and let the `bad_alloc` end the process as the
+workload's own allocation would); a `switch` over every enumerator (the implicit no-match
+edge; make the last case `default:`); a template instantiated for several types (gcovr keeps
+instantiations apart; a reader written over a `std::variant` instead); a variant built on the
+first line of a function; and a `std::sqrt` that carries an errno arm (`-fno-math-errno` on
+that library, results unchanged). A defaulted `operator==` in a header, or a short-circuit `&&`
+chain defining one, still reads as uncovered (§1.22); a comparison written as a xor of the
+fields tested against zero has no branch. `noexcept` was not used to hide any of them where
+the function allocates: `bugprone-exception-escape` is on.
+
+### 1.44 A file that is only a table is absent from the coverage report
+
+*Established 2026-10-20, wave 3 (stream 27, `docs/journal/27-oracles-wave3.md`).* A generated
+`twiddle_table.cpp` holding one `const std::array` initializer has no executable line, so
+gcovr wrote no record for it and `tools/coverage.sh`, which requires every `src/**.cpp` in the
+report, failed at 100.0 % with "1 source file(s) absent". The table is a `.inc` included by
+the accessor's `.cpp`. A data-only `.cpp` in `src/` fails the gate however well it is tested.
+
+### 1.45 At -O3 GCC 13 cannot see that the last alternative of a variant is held
+
+*Established 2026-10-20, waves 1 and 2 (streams 01, 02, 11).* `return
+f(*std::get_if<Last>(&v));` after `get_if` tests for the other alternatives compiles in the
+debug, coverage and Clang builds and fails the `static` and `release` presets
+(`-Wnull-dereference -Werror`: "potential null pointer dereference", reported inside
+`basic_string::size()`). Calling the function out of line with `[[gnu::noinline]]` moved the
+warning into the wrapper. `std::get` for the last arm compiles but trips
+`bugprone-exception-escape`. What works: `std::visit` over per-alternative overloads.
+`oracle.hpp`'s helpers were corrected this way (#84, item 3, with a static-header
+preset so the contract headers compile under the release flags); `provenance_of` in
+`record.hpp` still has the shape, and the controller avoids it with a visit.
+
+### 1.46 A multiplication by 0.001 is not the nearest double; a division by 1000 is
+
+*Established 2026-10-20, wave 2 (stream 09, `docs/journal/09-telemetry-sources-a.md`).*
+`20016 * 0.001` is `20.016000000000002` and `20016 / 1000.0` is `20.016`; over the millidegree
+values 20000 to 99999 they differ for 10,654 of 80,000. A reading carries a multiplier and a
+divisor, and a temperature divides. A related misreading: the temperature range, absolute zero
+to one thousand degrees, does not catch a chip that reports a fixed `-128000` for "not
+connected", because that is above absolute zero. The first comment said it did and the test
+that tried it failed; catching it needs the chip named, which needs a chip to verify against.
+
+### 1.47 How far real computations sit inside the derived bounds
+
+*Established 2026-10-20, waves 1 to 3 (streams 04, 06, 22, 24, 26, 27).* Worst residual over
+tolerance: dense linear 0.0071 (against a naive loop; 0.0030 to 0.23 over 43 evaluation orders
+and short vectors); FFT under a twentieth of the bin tolerance, `numpy.fft` at 1e-5; stencil
+`scipy.ndimage` 1.6e-2, the nearest to its limit; particles 0.0061; sparse CG
+`||r||/||b||` 2.25e-16 at worst of 2,000 solves against the specification's 1.97e-11, which
+confirms the assumption its derivation flagged (a factor of 8.7e4, on the scalar path).
+The bounds are not hair-triggers on healthy output, and they are not vacuous: a flipped
+exponent or upper mantissa bit breaches them. What they let through is the low significand
+bits: 116 of 1,184 sampled single-bit flips of dense-linear outputs (every one a low
+mantissa bit); mantissa bits 0 to 14 of a Monte Carlo batch sum at tolerance 2^-38. Both
+are the specification's choice of a rounding bound, recorded so nobody expects the low bit
+to be seen.
+
+### 1.48 Parseval's residual cannot be placed within 2^-20 of its tolerance
+
+*Established 2026-10-20, wave 3 (streams 22 and 27).* The specification asks every bounded
+oracle's tolerance to be tested at (1 ± 2^-20) T'. The FFT's Parseval residual is a
+difference of two doubles near 64, so it moves in steps of one ulp (about 4.5e-13) while T'
+is about 6e-9: a step is about 2^-13 of T', and no output lands nearer the limit. Scaling
+the input does not help. The bin check, the stencil, the sparse rows and the particles
+reach epsilon by arranging the exact residual to be zero so that an offset *is* the
+residual; for Parseval the test finds by bisection the nearest representable residual on
+each side and requires both on the right side. The specification should say so (§6).
+
+### 1.49 A confidence interval from replicates is too narrow once the correction subtracts a noisy baseline
+
+*Established 2026-10-20, wave 3 (stream 28, `docs/journal/28-explore.md`).* A coverage
+property (600 seeded searches, 5 replicates, noise on candidate and reference) measured the
+nominal 95 % interval covering the true mean 81 % of the time: every corrected score
+subtracts a baseline built from the same few reference readings, so the error is shared and
+the sample spread cannot see it. Adding the propagated reference noise brought coverage to
+95 to 98 %. A successive-difference estimate of that noise was dominated by drift (a clear
+winner reported indistinguishable); the residual of each interior reading from the line
+through its neighbours is not.
+
+### 1.50 The executor's hand-off costs about 75 µs a run, almost all of it in the kernel
+
+*Established 2026-10-20, wave 1 (stream 08).* Two million runs of one to thirteen trivial
+tasks on four threads: 151.5 s wall, 21 s user, 162 s system (the futex calls of the condition
+variables, four threads woken per run); no index lost or repeated, five threads before and
+after, no allocation. It matters only to a workload whose unit is a few microseconds, and
+none specified is. Under ThreadSanitizer the process has one thread more than the pool made
+(the runtime's own, started once the process has made a thread), so the exact count is
+asserted outside the sanitizers and "unchanged across a million runs" everywhere. A hundred
+thousand runs took 7.7 s debug, 9 s TSan, 8 s ASan: the guess that sanitizers would be much
+slower, which had cut the soak to a tenth, was wrong (§4.21).
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -2236,6 +2464,310 @@ once the allowance has passed from its own launch; the deadline falls the config
 after the last launch; a clock failure between forks is the controller's failure and unwinds.
 The pool's observer has its own tests in `worker_pool_test.cpp`.
 
+### 2.34 An oracle is strict where the specification allows strictness
+
+*Wave 1 (stream 03, `docs/journal/03-oracle-compression.md`).* The LZ4 oracle refuses every
+end-of-block breach, offset 0, and a last token with a match length, though `lz4 -d` accepts
+each (§1.33). A lenient oracle would agree with a compressor that writes what the document
+says cannot be there, and agreement is the one answer an oracle must not give falsely.
+*Rejected:* matching the reference decoder's behaviour, which is an implementation's choice.
+"End of block" in the 12-byte rule is the end of the *decoded* data (the document counts
+decoded bytes; the reference compressor's limits are on its input), and both margins are
+applied to every match, which is the same rule checked where it breaks. The last token's
+match field must be 0, which also makes a flip of that nibble a caught corruption. These
+readings became the specification's words in #84. The oracle's scratch is a seam of its own,
+its failure P2, rejecting a 64 KiB stack buffer (an executor thread's stack is not the
+module's to assume) and thread-local scratch (64 KiB of static TLS in every thread).
+
+### 2.35 AVX2 by a target attribute, never by `-mavx2`; no AVX-512 kernel
+
+*Waves 1 to 4 (streams 06, 18, 26, 30).* A unit compiled with `-mavx2` compiles every inline
+function it instantiates under AVX2, and the linker may keep that copy for a scalar-path
+caller: an illegal instruction on a machine without AVX2, in a function that has nothing to do
+with it (§1.36). Each kernel instead carries `__attribute__((target("avx2,fma")))` (`"avx2"`
+alone where no FMA is used), the shared body is `always_inline` into it, and a type local to
+the unit keeps its copy from being merged with another's. NEON needs nothing: it is baseline
+on AArch64. No workload has an AVX-512 kernel: its lines could be covered only on a runner
+that has the feature, GitHub's x86 runners are a mix (AMD EPYC Zen 3 has none), and the rule is
+100 % with no exclusions, so the gate would pass or fail with the runner it was given.
+`create()` refuses `kAvx512` as `kConfiguration`, never replaces it; a kernel waits for a
+coverage runner that guarantees the feature. Tests of a path the machine cannot run fail,
+they do not skip: a skipped path is a path no test ran. The scalar kernel does not fuse
+(`std::fma` without `-mfma` is a library call per multiply-add, the one thing a stress kernel
+must not be). Proposed ADR: `docs/adr/proposed/06-workload-dense-linear-vector-kernels.md`.
+
+### 2.36 Where a workload's vector kernels live
+
+*Waves 1 to 4 (streams 06, 18, 22, 23, 24, 25, 26, 30); settled workload by workload, not as a
+rule.* Three sources read differently: `spec.hpp` and the briefs put AVX2 and NEON kernels in
+the workload's directory; `dispatch.hpp` and `portability.yml` allow intrinsics only under
+`src/primitives/simd/x86/` and `arm/`, which stream 06 owns. Options each stream weighed:
+(a) intrinsics in the workload's directory, refused by the portability gate; (b) intrinsics in
+the primitives directories, which a workload stream may not edit and whose CMake fragment
+collides; (c) portable code in the workload with a function `target`; (d) scalar only, the
+table's other slots left null for a later stream. Taken: dense linear (b, its own stream);
+stencil, particles and ray tracing (c, the compilers' `vector_size` types); Monte Carlo (c, lane
+loops); FFT and sparse (d). Graph first used intrinsics in its own directory and moved the
+sweeps into the primitives layer on 2026-10-21 (b), unchanged in behaviour; rejected there were
+an exemption (the rule is the point) and vector extensions (they hide the instruction choice a
+bit-exact contract depends on). (c) costs that the compiler picks the instructions, no FMA is
+used, and the AVX2 path does not stress the FMA units. A descriptor's `paths` is the kernel
+table's in every case, so a descriptor and a factory cannot disagree. Whether a workload stream
+may own files under `primitives/simd/` for its kernels is open (§6).
+
+### 2.37 The executor: one thread per placement, the caller runs nothing, one counter
+
+*Wave 1 (stream 08, `docs/journal/08-executor.md`).* Threads start through a seam of the pool's
+own over `pthread_create`/`pthread_join`, one at a time, each placing itself and checking its
+registers against its creator's. A pool of *n* placements has *n* threads and slot *s* is
+thread *s* for its life; the calling thread waits. Indices are claimed one at a time with
+`fetch_add` on one `seq_cst` counter; every thread wakes for every run; everything a run
+publishes is under one mutex. *Rejected:* `std::thread` (a failed start throws below the seam,
+and no test on a root runner can make one fail); starting all threads and collecting reports
+(every seam becomes concurrent); a caller that joins in (it would run tasks on whatever CPU it
+happens to be on, and a placement means something only if the thread placed is the one that
+works); a static partition (a descheduled thread holds up the run); a claim under the mutex (a
+lock per index); waking only as many threads as indices, or spinning before sleeping (both cut
+the 75 µs of §1.50, both make which arm a test takes depend on the scheduler). Every wait's
+first test is fixed by the protocol, never the scheduler (§4.11). Orderings in the primitives
+(stream 20) are relaxed counters and release/acquire hand-offs, each also run at `seq_cst`;
+ordering tests corroborate and cannot prove (PLAN §4.5), and the mutation table in the
+fragment shows which weakenings they do catch.
+
+### 2.38 A unit's scratch is one piece, not one per slot
+
+*Waves 2 to 4 (streams 17, 22, 23, 24, 25, 26, 31); decided by none of them.*
+`Plan::scratch_bytes` is "per executor slot", and the contract says slot *s* owns the *s*-th
+piece. A sort, an FFT, a stencil, a sparse solve, a graph and a particle structure each need
+*one* shared buffer, and every one of those streams met the same wall. The reading taken by
+all: the unit uses the **first** piece, sized to hold it, and the other `threads() - 1` pieces
+are unused; the calling thread owns the whole span between `run()` calls and builds shared
+structure before the tasks, which only read it, and slots own their pieces while tasks run.
+Cost: memory the runner reserves and nothing uses (3.5 MiB for 0.5 MiB at seven threads, in
+the stencil). *Rejected:* slot-private scratch with a shared arena built by one task (the
+unit's memory would depend on the executor); a lock or an atomic per cell (stream 31 keeps a
+partial sum per slot and combines in slot order, so no word is written by two threads, and the
+executor's claiming is the "shared queue" the specification names). Ray tracing sidesteps it
+with `scratch_bytes` 0 and a hierarchy on the stack. A contract that named a per-unit figure
+would remove the waste; it is open (§6), together with the converse, that `run()` makes the
+caller's earlier writes visible to the tasks, which the sort and the primitives both rely on
+(streams 17 and 20).
+
+### 2.39 The runner: serial units, one locked working set, a vote of three
+
+*Wave 1 (stream 02, `docs/journal/02-input-integrity.md`).* Units run one after another, the
+executor going to each unit's `compute()`, which keeps §4a's temporal invariant by construction
+(nothing but the unit touches its slot between its write and its closing check) and gives
+`compute()` an executor of its own. *Rejected:* units over the executor with a serial one for
+`compute()`, which would change what a parallel workload is measured doing. One mapping holds
+every slot's input and output, the regeneration buffer and the scratch, populated and locked,
+always: a page swapped out and back is a different physical page, and a finding on it would be
+attributed to memory it never stayed in. Not huge pages (a recorded choice of the run, PLAN F7,
+and the runner has no field for it). The control state (seed, next index, duty cycle, line size)
+is three copies voted once per unit: two verified copies that agree decide; one verified beside
+two that fail is `kTooFewVerified`, a winner picked and not a majority found, which F18
+forbids. A vote before each step was rejected: five reads for no protection the per-unit vote
+lacks, since the steps' working values live in registers. The vote guards state *at rest*, from
+the end of one unit to the start of the next, because the copies are rewritten after every unit
+from the values voted at its start. A run that cannot decide stops and says why (never an
+`ExactBitCorruption`, never isolated). The slot geometry is not protected: a corrupted stride
+crashes loudly, which the supervisor sees.
+
+### 2.40 The isolation ladder: the nearest other core, and only a clean re-run is clean
+
+*Wave 1 and the M2 integration (streams 10 and 11, `10-isolation.md`, `11-integration-m2.md`).*
+The ladder's second rung re-runs a unit on **the nearest other physical core**, which departs
+from the brief ("a different cache domain and NUMA node where the topology offers one"),
+because verification.md §7 reads the two answers only if the other core shares memory and
+uncore with the original: a reproduction across a cluster is barely consistent with the
+original's cache, and a clean one there reports a core-local fault for a fault in a shared L2
+or an L3 (`InjectedFault.ASharedClusterCacheIsFoundNotCoreLocal`). Distance adds nothing to the
+finding for a reproduction, which is already "not core-local, high confidence". The order is:
+same node, lowest shared cache level, same *shape* (thread count and private caches, the
+snapshot's stand-in for core kind on hybrid and big.LITTLE parts), then CPU id; never an SMT
+sibling. Heterogeneous layouts are modelled, not captured. In the integration (stream 11) a
+re-run is a process of the same binary with `--rerun`, pinned to the rung's CPU, answering by
+exit code (0 clean, 20 reproduced, 21 not performed, 22 bad arguments), and **any other exit,
+any signal, a timeout is "not performed", never "clean"** (§2.32): the ladder's most alarming
+finding is reached through a clean re-run. `stress --test` runs one single-threaded worker per
+CPU, each pinned and each with its own seed (`seed + slot × 0x9E3779B97F4A7C15`), because that
+is the shape in which a finding names a CPU; a multi-threaded unit leaves `logical_cpu` unset
+and is verified and not isolated, and says so on the finding. An unprivileged run that cannot
+lock its working set is refused cleanly, not degraded (§1.40).
+
+### 2.41 What the controller believes of a worker, and what it keeps
+
+*M2 integration (stream 11).* Error records come in frames of type 16, tallies in type 17 (a
+version byte and seven counters), **cumulative** and sent after every slice, so a frame never
+read costs a stale figure and not a wrong one; the 64-byte heartbeat slot was not widened (it
+would change the M1 protocol for no reader that needs a lock-free tally). A record is kept only
+if the frame's checksum verified, the payload decodes to a record the contract allows, and it is
+about the workload the worker was told to run; a tally smaller than the last is not a running
+total. Each refusal closes the channel and makes the worker `kChannelCorrupt` with no finding:
+tested over seven kinds of garbage, a bit flipped at each of 400 positions of a frame, and 300
+well-framed random payloads. The controller keeps the first 256 error records of a worker and
+counts the rest, and isolates at most 16 wrong results per worker, after the workers are gone,
+one at a time. A persistent fault fills the 64 KiB record pipe faster than one read a tick
+empties it and blocks the worker in `write(2)`, which looks like a hang, so a woken channel is
+drained until `poll` says empty, capped at 64 reads a tick. A hang is ten seconds for a
+verifying worker and two for a null one, a constant and not a key, since a key is a thing to
+tune until a failure goes away. The cache-line size is the topology's or the run is refused: an
+assumed 64 would classify every multi-bit error by a boundary nobody measured.
+
+### 2.42 Counters: wrap, reset, estimate, and the unit the number is in
+
+*M3 integration and its corrections (streams 13 and 21; `m3-contract-corrections-2026-10-21-1145-UTC.md`,
+#92; ADR 0004 on wrap).* Four findings from running the real stack, each a test registered
+`WILL_FAIL` until the contract moved; the options are written out in that file.
+- **Unit.** +20 J rendered as "delta 20000000 joules". Taken: name the unit the raw value is
+  in (`Unit::kMicrojoules`) and state that a counter's raw value is in its metric's unit,
+  exactly. *Rejected:* a scale on `Metric` (every consumer must apply it, and one that forgets
+  is wrong by 10^6, silently); converting in the source (an integer counter can only go to a
+  finer unit, which it already is in).
+- **An estimate is not a counter.** A perf count scaled for multiplexing went from 2000 to 1500
+  and `counter_delta` read the step down as a wrap: 18,446,744,073,709,551,116. Taken: report
+  the raw count, which only increases, and one gauge, `counters.pmu_share`, the least
+  `time_running / time_enabled` of the hardware events in the round. *Rejected:* a gauge for the
+  count (no delta, and the run's instructions are what a counter is for); the raw count plus
+  enabled and running times as ten more counters (complete and noisy); the raw count alone
+  (honest about the number, silent about its quality).
+- **A step down in a counter that cannot wrap is a reset.** `modulus` now means "wraps within a
+  run" (absent: does not). The advance across a reset is unknown, not guessed, exactly as across
+  an `Unavailable` reading, and the reading after is the new baseline; `counter_advance` returns
+  it or nothing, and `CounterSummary::resets` counts them (result schema 1 to 2). EDAC declares
+  no modulus: at a thousand errors a second a 32-bit counter wraps in 50 days, longer than a
+  run, and what makes it go down is `reset_counters` or a driver reload. *Rejected:* a `wraps`
+  flag (a second way to say what an absent modulus says, and the two can disagree); reading a
+  step down as a wrap only when the previous reading was near the modulus (a heuristic in a
+  contract, right by luck). Wrap detection stays above the source (ADR 0004), and the Load
+  Signature never adds an advance across a gap.
+- **Software events are opened with the kernel included** (§1.41), the only way to count a
+  context switch. At paranoid 2 without `CAP_PERFMON` the metric is *denied, with a remedy that
+  says so*, not present and 0; hardware events stay user-space only and need nothing at
+  paranoid 2. *Rejected:* keeping `user_only` and never having the metric; dropping it.
+
+### 2.43 Sampling points, phase windows, and who probes
+
+*M3 integration and its corrections (stream 21, `docs/journal/21-integration-m3.md`; the M3
+corrections file; stream 11's merge of both).* Sampling is in the controller's loop, as rounds at
+four fixed points: before the first fork (a counter's baseline before any worker can move it),
+every interval, at the deadline on the instant the next phase is marked, and after the last
+reap. *Rejected:* a sampler thread (the controller's only thread, a P5 argument, for no gain at
+1 to 10 Hz, and fork before threads is the rule); rounds in the workers (the observer inside the
+observed). A round not later than the last is skipped, not refused, because two ticks can read
+the same clock tick; a round the timeline refuses ends sampling and is reported, never the run.
+**A phase's window closes one nanosecond past its mark** (`statistics::kClosingMargin`,
+`run_window`, `phase_window`), so the reading on a mark is in both neighbours and every pair of
+consecutive readings is in exactly one phase: phases sum to the run. *Rejected:* a window that
+owns the pair whose *earlier* reading is inside it, or whose *later* is (both change `delta` for
+every window that ends between readings, and the second assigns the advance to the wrong
+phase). The obvious `[mark, next mark)` gave phase deltas of 2 where the run's was 5. The
+sampler's `probe()` is the only prober and asking again is free (`probe_capabilities()` is
+removed): it must call `probe()` to register the series anyway, and a source that cannot take a
+second probe would otherwise leak or double-register. The capability report reaches the
+controller as rendered text from the caller's sampler, so the controller cannot probe twice
+(*rejected:* a `CapabilityReport` in `RunOptions`; always sampling).
+
+### 2.44 A counter blind for part of a run is not a claim of cleanliness; the exit codes
+
+*M3 integration, its corrections and the M2 merge (streams 11 and 21).* `derive_verdict` now
+reads the error counters: one that was in the signature and has `unavailable_samples` or
+`resets` above zero makes the run `incomplete`, which outranks corrected errors for a counter
+that counted some and was blind for the rest. *Rejected:* any metric with unavailable samples
+(a fan that dropped a reading would void a run that verified everything); also requiring the
+capability report to list the counters as present. An *absent* counter still does not stop a
+run being clean: the capability report says it was never read. Exit codes, one table after the
+two integrations gave 4 and 5 different meanings: 0 clean; 3 a worker did not complete; 4 a
+result file could not be written; **5 a fault** (a wrong result, or an error the hardware
+reported, which `derive_verdict` calls `findings` and `corrected errors`); **6 a check was not
+made**. Precedence 5, 4, 3, 6, 0: a fault is the finding and survives a failure to write about
+it. Main already had 4 and 5 in its usage text and tests, and M2's numbers were unreleased, so
+M2's meanings moved. A run that checked nothing is not a pass. The output directory is checked
+before the run (a five-hour run that finds it missing at the end has lost its result), and files
+are written whole or not at all.
+
+### 2.45 One document tree rendered by each reporter; absence is `null` and its reason
+
+*Wave 2 (stream 12, `docs/journal/12-results-and-reporters.md`).* `to_document()` builds one
+tree and both writers serialise it, so JSON and CSV hold the same facts by construction and
+"nothing summarised away" is checked once. Absence in JSON is `null` with `<member>_unavailable`
+beside it (*rejected:* an object in place of the value, whose reader discriminates on a key; a
+sentinel string); in CSV an empty `value` with `status`, `reason`, `source_path`, `detail` and
+`remediation` in their own columns. A NaN or infinite real is the text `nan`/`inf`, because null
+would say "not recorded" about a value that was. CSV is long form, one row per leaf with the
+dotted path in `field` and the schema version first in every row. JSON text is validated UTF-8
+with each bad byte one U+FFFD, nothing dropped. Availability carries a stable code (`absent`,
+`vanished`, `denied`, `malformed`, `unreadable`) beside its phrase, because a reader should not
+parse prose; `scope` still prints as prose (§6). Two fingerprints on one machine are equal in
+every field but `temperature_at_start_c`, and a test over 30 runs asserts that every differing
+field is such a moment field. The fixtures for a laptop (battery, cpufreq, thermal zone) are
+built from the documented formats, not captured.
+
+### 2.46 Telemetry sources: discovered by number, named only by the driver, absent told from unavailable
+
+*Wave 2 (streams 09 and 13, `09-telemetry-sources-a.md`, `13-telemetry-sources-b.md`).*
+`platform::FileSystem` cannot list a directory, and `std::filesystem` would bypass the seam and
+leave discovery's P2 paths untestable, so hwmon chips, `tempN`, `fanN` and thermal zones are
+found by number up to a bound (64, 255, 64), and EDAC controllers from `mc0` to the first without
+a `ce_count`. A sensor is `thermal.package` or `thermal.core` only for `coretemp`'s exact
+`Package id N` and `Core N` and `k10temp`'s `Tdie`; anything else is `thermal.sensor` with the
+chip as provider. `Tctl` is not the package (an offset on some parts), and a rule for `acpitz`,
+`nvme` or `iwlwifi` would be an unverified confident statement (F3). Zones stay beside hwmon and
+are not merged (deduplicating compares live values, which is a guess). A fan at 0 rpm is a
+reading. Frequency reports tick counters and not a gauge, which would need the previous reading
+in a stateless source. Memory is seven fields from one read, so one round is one instant. The
+`perf_event_open` errno table: `EACCES` and `EPERM` denied; `ENOENT`, `ENODEV`, `EOPNOTSUPP`,
+`ENOSYS` and `EINVAL` absent; the rest unreadable, a failure of the attempt and not a fact about
+the machine (`EINVAL` as absent is a judgement, since it is what the power PMU returned for bits
+it refuses). The paranoid level chooses the remedy: above 2 lower it; at 2 or below the sysctl is
+not what refuses, and advice to change it would be worse than none. Power tries powercap, then
+the PMU's `energy-pkg`, with one remedy per actionable provider. The set of metrics is fixed at
+the probe, and a metric denied at the probe is not re-tried at `sample()`. Capability absences are
+grouped by name, state and remedy together ("x256" for 256 CPUs).
+
+### 2.47 Tolerances are derived, and a sampled check says what it guarantees
+
+*Waves 1 to 3 (streams 04, 19, 27; `04-bounded-verification.md`).* The dense-linear tolerance
+bounds |kernel - oracle| when *both* are evaluations of the same sum: the oracle's value is not
+exact, so Higham's γ_n S alone false-alarms at up to twice that, and a chosen multiple is a
+constant verification.md §5 forbids. Eight `nextafter` round-up steps are a proof margin and a
+test cannot tell 8 from 2 (the proof needs seven), so a surviving mutant there is expected and
+the derivation is what discharges it. The underflow term is kept though correct inputs never
+underflow, because the range check admits a subnormal. Sampling is one entry per tile, drawn per
+unit from the index, every sampled entry compared and the worst named; the first version's claim
+that a fault confined to a tile "meets a check" was wrong (external review W1-02): a fault
+altering *k* of a tile's 1,024 entries is caught in one unit with probability k/1024, a
+persistent fault is caught across units, and grid 256 checks every entry. `blocks_compared` (64
+or 65,536) is what tells sampled from complete. Monte Carlo is summed by Neumaier compensation,
+*not* a `long double` accumulator (it differs by architecture) or a pairwise tree (error grows
+with log n); the oracle's sum equals Python's `math.fsum` bit for bit on six keys. A sampling
+oracle's sample is arithmetic on a mixed index with a stride coprime to the modulus (no rejection
+loop, no branch a particular index must reach); a sample shared between two units is a birthday
+collision, not a defect. A plan is held to the specification even where the oracle does not use
+it: a wrong decomposition is a wiring mistake the registry should see at once. Oracles allocate
+nothing where they can avoid it, and take one scratch through a factory seam where they cannot
+(`docs/adr/proposed/27-oracles-wave3-scratch-and-sampling.md`).
+
+### 2.48 The crash journal and the timeline: what is stored, and what is not retried
+
+*Wave 2 (streams 14 and 16, `14-telemetry-pipeline.md`, `16-journal.md`).* A journal record is
+`u32 length | u32 CRC-32 over length and payload | payload`; a length of 0 or above 512 is
+corrupt at once, so a flipped high bit is corruption and not a plausible torn tail. *Rejected:*
+the reference's 8-byte length and CRC (wasteful); varints (a reader that cannot be checked by
+counting). The directory is fsynced at open, since a created file's name is not durable until its
+entry is. **fsync failure is never retried** (only `EINTR` is): a second fsync after `EIO` can
+succeed for pages already dropped. A failed append does not poison the writer (replay says
+`kCorrupt` with the entries before it, and the controller, which already gets `kStorage`,
+decides); a short write continues and zero progress is an error. The timeline is one vector of
+points per series, *not* a ring (`TimelineView::points()` is a `std::span`, so a series is
+contiguous) and not one preallocated block (a five-hour run's worth, over a gigabyte, paid by a
+one-minute run); resident is at most 2 × capacity × `sizeof(Point)` and transient growth at most
+one more capacity, stated as `memory_bound_bytes()`. A probe the timeline refuses is remembered,
+and its first outcome is final. A source's readings are used all or none: a count that differs
+from its present metrics makes each of its series `kMalformed`, naming the source as the defect.
+The order of refusal is unknown series, out of order, kind mismatch, capacity, last, because every
+other refusal is the caller's mistake and should be reported even on a full timeline.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
@@ -2642,6 +3174,77 @@ a cross-compile, since x86 provides `__muloti4`: `clang-18 --target=aarch64-linu
 -fsanitize=signed-integer-overflow -c` of the signed form references it once and the
 unsigned form not at all.
 
+### 4.18 The same contract trap found independently by every stream in a wave
+
+*Waves 1 to 4, from the fragments' "Contract questions".* Streams may not read each other's
+work (ADR 0003), so a trap in a frozen header is met once per stream, each paying a build or a
+CI run. Counted from the fragments: a header registering two typed suites, so that a binary
+instantiating one fails GoogleTest's uninstantiated-suite check (streams 01, 02, 03, 04, 05,
+07, 08, 09, 12, 13, 14 and 27); `for_each_index` tripping `bugprone-easily-swappable-parameters`
+in the frozen executor header (05, 06, 20, 23, 31, among others); gcov counters going negative under threads
+(04, 05, 06, 08, 20, 27); `INSTANTIATE_TYPED_TEST_SUITE_P` refusing a qualified name or a
+comma (00, 04, 07, 14, 18, 26, 27). Wave 1 found each, the wave-1 contract corrections fixed
+them (#84, #67), and wave 3's streams still met some of them
+(stream 27 notes "as wave 2 found"). §4.17 is the same lesson from the manager's side: a
+sentence in a brief is not a check. The structural fix is that a contract question which
+costs every consumer a build is fixed by the manager before the next wave starts, not
+folded at the wave's end, and that a stream's fragment is read by the manager while the wave
+runs (§5.6). The things that cost nothing to say in a brief (where `INSTANTIATE` goes, a named
+function for `Executor::run`) were not the problem; the ones nobody knew to say were.
+
+### 4.19 A number stated in a header, a comment or a test name is a claim, and was wrong when measured
+
+*Waves 1 to 4 (streams 04, 09, 22, 24, 26, 27, 31, 32).* Each was found by running something, not by
+reading: the frozen dense-linear header said entries have "magnitude below 1" when
+`entry_value(0)` is exactly -1.0; the adaptive-mesh header said a cell has "at most about 50"
+leaves and 88 occurred in 200 units, and its "6913 leaves in all" is looser than the 4096 that
+holds; the particles spec's own test is named "...DefaultIsOne" and asserts 2; a comment said a
+temperature range caught a chip's `-128000` and a test showed it did not (§1.46); a claim that a
+fault confined to a tile "meets a check" was true of 1 entry in 1,024 (§2.47); the FFT's
+(1 ± 2^-20) boundary test cannot be met for Parseval (§1.48); a verification.md table says sparse
+has a preconditioner that the specification rules out. A figure in a document is a
+hypothesis until something has produced it. The rule: when a header states a measured-looking
+number ("about", "at most"), record the measurement beside it with its command, or say it is
+an estimate.
+
+### 4.20 When a test disagreed with the code, the independent reference was wrong first
+
+*Waves 3 and 4 (streams 22, 27, 31).* Three times the reference written by the test author was
+the thing at fault, and the disagreement was the test doing its job: the FFT's fixture generator
+lost the sign of every negative value (`mpf.man_exp` returns a magnitude); a `long double`
+`cosl(2π m / n)` failed 23 of 8,192 entries near the function's zeros until the angle was
+reduced by exact integer arithmetic first; a reference computing a hotspot's centre in
+`uint32_t` wrapped at 0xFFFFFFFF where `spec.hpp`'s `uint64_t` does not. In each the code
+followed the specification. What caught them: an input of all ones, and every entry of a table rather
+than a sample. A disagreement is
+a question about both sides; start with the one written most recently by hand.
+
+### 4.21 Guessing what the instrumented builds cost
+
+*Waves 1 to 3 (streams 06, 08, 11, 27).* The cost of a test in the debug, coverage or sanitizer
+build was guessed and the guess was wrong, in both directions: the executor soak was cut to a
+tenth under the sanitizers on the guess that they would be much slower, and measured 7.7 s, 9 s
+and 8 s for the same hundred thousand runs (§1.50); one dense-linear test took 14 s because an
+unoptimised build leaves the upper ymm halves dirty (§1.35); one graph check took 1.5 s under
+the coverage preset against 0.1 s plain (atomic counters), and a four-iteration byte loop at
+4.7 million uses ran the oracle tier past eleven CPU-minutes; the CLI over the shared fake
+spent 25 s in an hwmon scan the real `/sys` does in milliseconds. Measure each tier's time the
+first time it runs, in the builds that matter, and put the figure in the fragment so that the
+next stream plans from it.
+
+### 4.22 A brief that contradicts the repository's documents
+
+*Waves 1 to 4 (streams 01, 02, 04, 10, 18, 19, 20, 21, 24).* Briefs named things the tree did
+not have or disagreed with its documents: `tools/install-git-hooks.sh` did not exist (streams
+18, 20, 24); the brief said to open a pull request where the stream's instructions said the
+manager does (01, 02, 04); a brief asked for "a different cache domain" where verification.md
+§7 needs the nearest core (§2.40); M3's exit criterion 6 says checks happen outside benchmark
+windows where `runner.hpp` states the lower-duty-cycle fallback; verification.md §3 says sparse
+has a preconditioner. The rule that worked, in every case: the repository's documents win, the
+disagreement is written in the fragment (stream 10 did it in full), and the manager
+corrects the brief or the document afterwards. A brief is generated from the documents at one
+moment and goes stale; the stream's question to ask is which of the two the tree agrees with.
+
 ---
 
 ## 5. Process knowledge
@@ -2782,6 +3385,19 @@ runner. Three changes cut the queue: clang-tidy in four shards with a process pe
 credential this work runs under cannot cancel or re-run a job (403), so a push is the only
 way to restart one, and an unneeded push costs a full run.
 
+
+### 5.12 Two integrations of one controller: whichever lands second adapts to the first
+
+The M2 and M3 integrations (#90, #87) each extended the same controller and command line, in
+different directions, on branches that could not see each other. Each was right alone. Merged,
+they conflicted in eleven files and, beyond the text, in meaning: both used exit codes 4 and 5
+for different things, and both probed the telemetry sources. Then M3's contract corrections
+(#92) removed the function M2's banner called, and a merge with no textual conflict did not
+compile. The order did not change the work, only who did it: the second to land is adapted to
+the first, with the full gate set, and the decisions recorded where both can be read (the
+journal fragment of stream 11). What made it tractable was the rule that the second branch
+re-earns its green on the merged tree (§4.16), never inherits it.
+
 ---
 
 ## 6. Open threads
@@ -2906,6 +3522,50 @@ Kept short and current; move an item to the relevant document once it is settled
   is `reviews/review-request-2026-10-20-1841-UTC.md` (#68). Everything since supervision
   still has had no independent reviewer.
 
+- **Contract questions from the stream fragments, folded 2026-10-21 18:20 UTC.** The fragments in
+  `docs/journal/` keep the questions as the streams asked them; this is where each stands.
+  *Resolved by a contract change:*
+  - Wave 1's questions (one suite per header, the `for_each_index` NOLINT, the `oracle.hpp`
+    visits, the dense-linear and compression specification wording, isolation's four readings)
+    were decided in #84, and the shared coverage flag in #67:
+    `docs/journal/wave-1-integration-2026-10-20-1840-UTC.md`.
+  - The M3 integration's seven disagreements, with stream 13's question about the energy unit,
+    were decided in #92: `docs/journal/m3-contract-corrections-2026-10-21-1145-UTC.md` (§2.42 to §2.44).
+  - The M2 integration's five disagreements (stream 11: `select_path` against a workload's paths,
+    the runner's lock policy, the decomposition missing from `Provenance`, one CPU for a
+    multi-thread unit, `physical_core` as one number) are in progress. There is no decision
+    file yet; the same change takes the stream-02 runner items the owner deferred.
+  *Open:*
+  - **Scratch.** One piece per unit against one per slot, and whether the caller's writes before
+    `run()` are visible to the tasks (§2.38; streams 17, 20, 22 to 26, 31).
+  - **Vector kernels.** Whether a workload stream may own files under `src/primitives/simd/`
+    (§2.36; streams 22, 23, 24).
+  - **Parseval.** The specification's (1 ± 2^-20) test cannot be met for that check (§1.48;
+    streams 22, 27).
+  - **Declared classes and versions.** Ray tracing (§2.31, stream 30) and the stencil (stream 23)
+    give more than their class names; `Descriptor::version` against the specification's
+    `kVersion` (streams 05, 25).
+  - **Deferred by the owner, still open:** a `kMalformed` decode fault and a rule for over-long
+    text (stream 01); `runs_here()` on a subject (streams 06, 18, 26); the floating-point
+    re-assert policy (stream 07).
+  - **`RunResult` gaps** (streams 12, 21): per-phase counter results are on the console and in no
+    file; a worker's death leaves no telemetry field; `Observers` cannot say sampling stopped;
+    the fingerprint carries no reason for an absent field and `topology::Unavailable` has no
+    remediation; `scope` is printed as prose; nothing turns the two tick counters into a
+    utilisation.
+  - **Specification figures to correct:** adaptive mesh's "about 50 leaves in a cell" (88
+    measured) and "6913 leaves in all" (4096 holds); the particles specification test named
+    "...DefaultIsOne" that asserts 2; verification.md §3's preconditioner for sparse; the raytrace
+    specification names neither which pixel of a tile is sampled nor whether the tile-sum slots
+    past `tile_count` are checked (stream 32). Sparse's derivation 2 is no longer an assumption
+    (§1.47).
+  - **Captures wanted (F21):** hwmon, thermal, fan and cpufreq trees, EDAC, powercap and a laptop's
+    fingerprint files; hybrid and big.LITTLE topologies; a NEON golden row for the particles.
+    The VM offers none (§1.42), so T11 stays open.
+  - **GCC's ThreadSanitizer preset** fails to build `src/worker/ipc/heartbeat.cpp`
+    (`atomic_thread_fence`, streams 16 and 20); Clang's runtime does install and run
+    (stream 21).
+
 ---
 
 ## 7. Stream journals
@@ -2921,3 +3581,10 @@ stream learned what, and resolves the contract questions in a contract change.
 
 The first fragment is `docs/journal/00-contracts-and-streams.md`, from the change that
 wrote the contracts.
+
+**Folded 2026-10-21 18:20 UTC.** The fragments of waves 1 to 4 (00 to 10, 12 to 20, 22 to 28 and
+30 to 32), the two integrations (11 and 21) and the two decision files beside them were folded
+into the sections above: §1.33 to §1.50, §2.34 to §2.48, §4.18 to §4.22, and the state of every
+contract question in §6. Streams 29, 33 and 34 have no fragment yet. Each file is kept unchanged
+as the record of which stream learned what. The next fold is at the end of the next wave; the
+numbering continues from §1.50, §2.48 and §4.22.
