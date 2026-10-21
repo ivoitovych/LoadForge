@@ -489,3 +489,38 @@ executable tests fails the plan, as it would fail its sweep. Tests: `tests/tools
 **Smaller things.** The milestone suffix stays `m2` (M3 did not move it). Every `Reporter` in
 M3's tests gained `isolation_finished`. The version is unchanged.
 
+
+## Merging the M3 contract corrections (2026-10-21 15:37 UTC)
+
+Main merged #92. It removed `telemetry::probe_capabilities()`: the sampler's `probe()` is the
+only prober, and `render_capabilities()` only renders the sampler's report. The controller's
+banner called the removed function for a run that does not sample.
+
+**Decision: the capability report reaches the controller as text, from the caller's sampler.**
+`RunOptions::sources` (sources for the controller to probe) is gone; `RunOptions::capabilities`
+is the report already rendered. The controller states it in the banner and probes nothing, so it
+cannot probe twice. `src/main` is the caller on every path and takes each report from a
+sampler's `probe()`:
+
+- a sampled run: the rig's report, printed before the run as before (the banner field stays
+  empty there, so it is stated once);
+- a run that samples nothing and keeps `capabilities` on: a rig built the same way, probed,
+  never sampled, its report rendered into `RunOptions::capabilities`. It is probed once, before
+  the first fork (the sources hold their descriptors before any worker is born), and lives to
+  the end of the run.
+
+Options weighed: (a) a `CapabilityReport` in `RunOptions`, rendered by the controller:
+`controller` would then include the renderer as before, but carries a structure it only prints;
+(b) the rendered text (chosen): the controller needs nothing of the telemetry module for the
+banner; (c) always sample, even when asked not to: changes what `sample == false` means.
+A rig for an unsampled run costs one probe and a few series on a small timeline.
+
+**Follow-ups of #92 done here.** `run_result.cpp` builds its windows with
+`statistics::run_window()` and `statistics::phase_window()` (the copies and `kWindowEndMargin`
+are gone; `cli::run_window` is removed, `phase_windows` only labels what the statistics contract
+builds). The console says, per EDAC series, when `resets` or `unavailable_samples` is above zero
+("was not read throughout ... the verdict is incomplete there"). The metric count in the tests
+was already 27 after the merge (`counters.pmu_share`); the result schema in the tests was
+already 2. The exit-code composition in `outcome.*` is unchanged: `derive_verdict` yields
+incomplete for a blind EDAC counter, and a run with verified workers then exits "not verified"
+(`ExitCodeComposed` covers the order).
