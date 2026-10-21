@@ -1,0 +1,8 @@
+workers 1
+phase run
+workload cycling cores
+step 0 | c0 1 of 1 | cycling cores
+step 5000000000 | c1 1 of 1 | cycling cores
+step 10000000000 | c2 1 of 1 | cycling cores
+step 15000000000 | c3 1 of 1 | cycling cores
+digest 9a57b5a4

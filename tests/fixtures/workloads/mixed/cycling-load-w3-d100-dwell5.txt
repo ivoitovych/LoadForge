@@ -1,0 +1,84 @@
+workers 3
+phase run
+workload cycling load
+step 0 | c0 idle | cycling load
+  worker 0: pause
+  worker 1: pause
+  worker 2: pause
+step 5000000000 | c1 heavy | cycling load
+  worker 0: resume
+  worker 1: resume
+  worker 2: resume
+step 10000000000 | c2 moderate | cycling load
+  worker 0: set duty 500 1000000000
+  worker 1: set duty 500 1000000000
+  worker 2: set duty 500 1000000000
+step 15000000000 | c3 heavy | cycling load
+  worker 0: set duty 1000 1000000000
+  worker 1: set duty 1000 1000000000
+  worker 2: set duty 1000 1000000000
+step 20000000000 | c4 idle | cycling load
+  worker 0: pause
+  worker 1: pause
+  worker 2: pause
+step 25000000000 | c5 heavy | cycling load
+  worker 0: resume
+  worker 1: resume
+  worker 2: resume
+step 30000000000 | c6 moderate | cycling load
+  worker 0: set duty 500 1000000000
+  worker 1: set duty 500 1000000000
+  worker 2: set duty 500 1000000000
+step 35000000000 | c7 heavy | cycling load
+  worker 0: set duty 1000 1000000000
+  worker 1: set duty 1000 1000000000
+  worker 2: set duty 1000 1000000000
+step 40000000000 | c8 idle | cycling load
+  worker 0: pause
+  worker 1: pause
+  worker 2: pause
+step 45000000000 | c9 heavy | cycling load
+  worker 0: resume
+  worker 1: resume
+  worker 2: resume
+step 50000000000 | c10 moderate | cycling load
+  worker 0: set duty 500 1000000000
+  worker 1: set duty 500 1000000000
+  worker 2: set duty 500 1000000000
+step 55000000000 | c11 heavy | cycling load
+  worker 0: set duty 1000 1000000000
+  worker 1: set duty 1000 1000000000
+  worker 2: set duty 1000 1000000000
+step 60000000000 | c12 idle | cycling load
+  worker 0: pause
+  worker 1: pause
+  worker 2: pause
+step 65000000000 | c13 heavy | cycling load
+  worker 0: resume
+  worker 1: resume
+  worker 2: resume
+step 70000000000 | c14 moderate | cycling load
+  worker 0: set duty 500 1000000000
+  worker 1: set duty 500 1000000000
+  worker 2: set duty 500 1000000000
+step 75000000000 | c15 heavy | cycling load
+  worker 0: set duty 1000 1000000000
+  worker 1: set duty 1000 1000000000
+  worker 2: set duty 1000 1000000000
+step 80000000000 | c16 idle | cycling load
+  worker 0: pause
+  worker 1: pause
+  worker 2: pause
+step 85000000000 | c17 heavy | cycling load
+  worker 0: resume
+  worker 1: resume
+  worker 2: resume
+step 90000000000 | c18 moderate | cycling load
+  worker 0: set duty 500 1000000000
+  worker 1: set duty 500 1000000000
+  worker 2: set duty 500 1000000000
+step 95000000000 | c19 heavy | cycling load
+  worker 0: set duty 1000 1000000000
+  worker 1: set duty 1000 1000000000
+  worker 2: set duty 1000 1000000000
+digest 1701ceb2

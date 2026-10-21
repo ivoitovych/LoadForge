@@ -1,0 +1,38 @@
+workers 4
+phase r0 mixed
+workload adaptive_mesh+compression+dense_linear+fft
+start adaptive_mesh 4194304
+start compression 4194304
+start dense_linear 8388608
+start fft 8388608
+step 10000000000 | r1 compute-heavy | dense_linear+fft+particles+raytrace
+  worker 0: switch particles 8098657079197054944 8388608 0 1 1
+  worker 1: switch raytrace 18132056956735150474 4194304 0 1 1
+  worker 2: switch dense_linear 15079175254002790402 4194304 0 1 1
+  worker 3: switch fft 127357793626528201 8388608 0 1 1
+step 20000000000 | r2 memory-heavy | adaptive_mesh+sort+sparse+stencil
+  worker 0: switch sort 7275302540993280812 8388608 0 1 1
+  worker 1: switch sparse 3710172498438220430 8388608 0 1 1
+  worker 2: switch stencil 17540403602862148172 8388608 0 1 1
+  worker 3: switch adaptive_mesh 17829319162898198118 8388608 0 1 1
+step 30000000000 | r3 move | adaptive_mesh+sort+sparse+stencil
+  worker 0: rebind 1
+  worker 1: rebind 2
+  worker 2: rebind 3
+  worker 3: rebind 0
+step 40000000000 | r4 all-join | sparse
+  worker 0: switch sparse 1761688652215318065 4194304 0 1 1
+  worker 1: switch sparse 6945392109687443785 4194304 0 1 1
+  worker 2: switch sparse 1469304915165207650 8388608 0 1 1
+  worker 3: switch sparse 15846408968974665386 4194304 0 1 1
+step 50000000000 | r5 mixed | adaptive_mesh+compression+dense_linear+stencil
+  worker 0: switch stencil 14050796042492341427 8388608 0 1 1
+  worker 1: switch adaptive_mesh 12336822074657865802 8388608 0 1 1
+  worker 2: switch compression 9052385590485416408 4194304 0 1 1
+  worker 3: switch dense_linear 10701033096058406089 4194304 0 1 1
+step 60000000000 | r6 move | adaptive_mesh+compression+dense_linear+stencil
+  worker 0: rebind 2
+  worker 1: rebind 3
+  worker 2: rebind 0
+  worker 3: rebind 1
+digest 530e584a

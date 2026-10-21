@@ -22,6 +22,24 @@
 //                   operation.
 //   move            nothing changes but where the workers run.
 //
+// THE ORDER AND THE RULES
+// -----------------------
+// Rotation r (from 0, the start, which is a "mixed") is the phase
+// plan[r mod 5] of  mixed, compute-heavy, memory-heavy, balanced, all-join,
+// except that with CPU sets to move across every third rotation (r > 0, r mod 3
+// = 0) is a "move" instead: worker s takes set (s + r / 3) mod n, so that with
+// as many sets as workers each CPU holds one worker still. In any other phase
+// each worker is given a Switch: the workload is entry (h + s) mod n of the
+// phase's pool, h a draw of rotation r alone (s is 0 for all-join, so all
+// workers take the same entry), and the pool is the roster's entries of the
+// phase's class (the whole roster for mixed and all-join, and for a class the
+// roster lacks); balanced uses the compute pool for even s and the memory pool
+// for odd. The Switch's seed is a draw of (r, s), its footprint the whole of
+// the options' or half of it by another draw's low bit (the whole when half is
+// less than the entry accepts), its decomposition 0, its duty cycle the
+// options'. tests/fixtures/workloads/mixed/generate.py is a second
+// implementation of exactly this paragraph, in Python.
+//
 // The classes are by the usual reading of each algorithm's arithmetic
 // intensity (dense linear algebra, FFT, Monte Carlo, particles and ray tracing
 // against sort, stencil, sparse, graph and adaptive mesh), written down in
