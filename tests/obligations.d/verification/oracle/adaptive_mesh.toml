@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/adaptive_mesh and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/adaptive_mesh"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T3", "T5", "T5b"]
+provides = ["OracleContract"]
+note     = """
+The adaptive mesh workload's independent oracle, written from \
+workloads/adaptive_mesh/spec.hpp and nothing of the workload: the mesh built \
+by a plain recursion, the leaf count of every coarse cell compared exactly, \
+and the integral of 32 sampled coarse cells summed in leaf order and compared \
+within the tolerance the specification derives. The values of a leaf and the \
+tolerance come from the specification's helpers, as it requires. \
+\
+P1: the items in their order (256 counts, then the 32 sampled integrals), a \
+failure ending the check and blocks_compared counting the items evaluated; \
+where sample j lies (an index in [8 j, 8 j + 8)); the tolerance held at 99% \
+of itself and breached at 101% on a cell of 1024 leaves, and one ulp held and \
+three refused on a cell of one leaf; the refusals of create(). \
+\
+P3: a cell of one leaf and of the most leaves (1024, 256 hotspots one to each \
+level-8 cell); every hotspot at (0, 0) and at (511, 511), the last \
+coordinate of the lattice; a coordinate of 512, 513, 2^31 and 2^32 - 1 in \
+either axis, of the first and last hotspot (NotChecked); a leaf count of \
+zero and of 2^32 - 1 stored; a stored integral that is NaN, infinite and \
+negative; the integral of a cell nobody samples. \
+\
+P4: every verdict the contract allows a bounded oracle. A leaf count that \
+differs is a BoundedMismatch with the residual |stored - expected|, tolerance \
+0.5 and the cell as element; an integral outside tau is a BoundedMismatch \
+with the residual |c - c'|, tau, the cell as element and no condition \
+number; wrong-sized evidence and a hotspot off the lattice are NotChecked. \
+OracleContract runs against the oracle in tests/unit with good units from a \
+model that finds the mesh by the occupied cells of each level and a stack \
+(not by recursion) and wrong units for a count and for sampled integrals. \
+T5: every bit of every leaf count is caught with the residual it makes; \
+every bit of every sampled integral is judged against the tolerance the test \
+works out in long double, so a flip below tau is agreed with and one above \
+is caught; the bits of an unsampled cell are not looked at; the bits of the \
+input are NotChecked when they leave the lattice and judged when they do \
+not. T5b: wrong sizes, a hotspot off the lattice even over a corrupt output, \
+and a plan that gets no oracle are each a check not made, never an \
+Agreement. \
+\
+T3: there is no reference tool for a synthetic mesh, so the reference is \
+exact arithmetic: a coarse cell's exact integral held in fixed point (every \
+x_leaf is a multiple of 2^-75), against which the specification's bound \
+|c' - E| <= gamma_(m-1) E is checked on every coarse cell of generated units, \
+the reverse and pairwise orders of adding are shown inside tau and agreed \
+with, and the mesh is known by hand (one hotspot: 16 leaves in its cell, 1 in \
+every other). \
+\
+No P2: the oracle makes no system call and allocates only the strings of a \
+verdict. Not P5: check() shares nothing between calls and holds no lock or \
+atomic; the contract's concurrency test runs it from a thread per unit."""

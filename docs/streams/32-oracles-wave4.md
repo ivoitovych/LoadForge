@@ -1,6 +1,6 @@
 # Stream 32 — Oracles: ray tracing and adaptive mesh
 
-**State:** not started  
+**State:** built, awaiting merge (2026-10-20 18:10 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 4  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  
