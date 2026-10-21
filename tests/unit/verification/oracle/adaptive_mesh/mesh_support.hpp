@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_case.hpp"
 #include "primitives/rng/philox.hpp"
 #include "workloads/adaptive_mesh/spec.hpp"
 

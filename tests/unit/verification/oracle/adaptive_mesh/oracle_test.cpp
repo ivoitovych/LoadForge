@@ -370,8 +370,4 @@ using AdaptiveMeshOracleSubjects =
     ::testing::Types<verification::oracle::adaptive_mesh::AdaptiveMeshOracleSubject>;
 INSTANTIATE_TYPED_TEST_SUITE_P(AdaptiveMeshOracle, OracleContract, AdaptiveMeshOracleSubjects);
 }  // namespace
-
-// The registry's suite comes with the header; the registry is the
-// integration stream's to provide (oracle.hpp), not this module's.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 }  // namespace loadforge::contracts

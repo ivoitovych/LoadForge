@@ -229,8 +229,3 @@ TEST(AdaptiveMeshNotChecked, APlanThatIsNotAnAdaptiveMeshUnitGivesNoOracleAtAll)
 
 }  // namespace
 }  // namespace loadforge::verification::oracle::adaptive_mesh
-
-namespace loadforge::contracts {
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleContract);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
-}  // namespace loadforge::contracts

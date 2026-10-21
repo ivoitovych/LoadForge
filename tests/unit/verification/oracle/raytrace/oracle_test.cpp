@@ -534,6 +534,5 @@ namespace {
 using RaytraceOracleSubjects =
     ::testing::Types<verification::oracle::raytrace::RaytraceOracleSubject>;
 INSTANTIATE_TYPED_TEST_SUITE_P(RaytraceOracle, OracleContract, RaytraceOracleSubjects);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 }  // namespace
 }  // namespace loadforge::contracts
