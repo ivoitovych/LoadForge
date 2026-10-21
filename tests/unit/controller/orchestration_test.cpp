@@ -209,6 +209,8 @@ struct Rig {
   void worker_exits(std::size_t slot, int raw_status) {
     syscalls.worker_releases_end(slot == 0 ? kRecordWrite0 : kRecordWrite1);
     syscalls.worker_releases_end(slot == 0 ? kControlRead0 : kControlRead1);
+    // Terminated, and a zombie until the reap below delivers it.
+    syscalls.child_exits(slot == 0 ? kFirstPid : kSecondPid);
     reaps.push_back(
         FakeSyscalls::WaitStep{Reaped{slot == 0 ? kFirstPid : kSecondPid, raw_status}, 0});
     syscalls.script_nonblocking_reaps(reaps);
@@ -393,15 +395,46 @@ TEST(ControllerTest, TheChildOfAFailedExecReturnsItsOwnExitCodeAndTouchesNothing
 
 // --- the catalogue ---------------------------------------------------------------
 
-TEST(ControllerTest, AWorkerWhoseBeatGoesStaleIsTerminatedThenKilledAndTimedOut) {
+TEST(ControllerTest, AWorkerWhoseSignalsAreRefusedAsGoneIsNeitherCountedSignalledNorBlamed) {
   Rig rig;
   rig.config.run.duration = core::Duration{1000};
   rig.options.stale_after_ns = 30 * kMs;
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
   // Worker 0 beat once, at 0: stale by timestamp once the allowance passes.
   // Worker 1 never beat: stale once the allowance has passed since the start.
-  // Both at tick 4. Worker 1 has vanished by the time its signals go: ESRCH
-  // is not an error, and the reap that follows says how it went.
+  // Both at tick 4. Worker 1's signals are refused with ESRCH, which the
+  // kernel gives only for a child already reaped: tolerated, but no signal
+  // was sent, so none is recorded, and the worker is signalled again on the
+  // next tick until the reap says how it went.
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 1, 0);
+    } else if (line == "worker 0: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  rig.syscalls.fail_signal_for(kSecondPid, ESRCH);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(result.value().workers[0].termination, "killed by signal 9");
+  EXPECT_EQ(result.value().workers[0].stop, "SIGKILL sent");
+  // Worker 1 was never successfully signalled: its death is a kill nobody
+  // here is shown to have caused.
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kKilled);
+  EXPECT_EQ(result.value().workers[1].stop, "running");
+  for (const std::string& event : rig.reporter.events) {
+    EXPECT_FALSE(starts_with(event, "worker 1: sent signal")) << event;
+  }
+  EXPECT_FALSE(all_clean(result.value()));
+}
+
+TEST(ControllerTest, AWorkerWhoseBeatGoesStaleIsTerminatedThenKilledAndTimedOut) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
   rig.reporter.on_event = [&rig](const std::string& line) {
     if (starts_with(line, "spawned")) {
       rig.beat(0, 1, 0);
@@ -410,7 +443,6 @@ TEST(ControllerTest, AWorkerWhoseBeatGoesStaleIsTerminatedThenKilledAndTimedOut)
       rig.worker_exits(1, SIGKILL);
     }
   };
-  rig.syscalls.fail_signal_for(kSecondPid, ESRCH);
   auto result = rig.run();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   for (const WorkerReport& worker : result.value().workers) {
@@ -418,6 +450,9 @@ TEST(ControllerTest, AWorkerWhoseBeatGoesStaleIsTerminatedThenKilledAndTimedOut)
     EXPECT_EQ(worker.termination, "killed by signal 9");
     EXPECT_EQ(worker.stop, "SIGKILL sent");
   }
+  // Each escalation looked first: SIGTERM and SIGKILL for two workers.
+  EXPECT_EQ(rig.syscalls.exit_peeks(),
+            (std::vector<pid_t>{kFirstPid, kSecondPid, kFirstPid, kSecondPid}));
   // Stale at tick 4 (40 ms past a 30 ms allowance), SIGKILL 20 ms of grace
   // later (tick 6).
   EXPECT_EQ(rig.syscalls.signals_sent(),
@@ -727,8 +762,7 @@ TEST(ControllerOomTest, ASigkillTheCountAccountsForIsAnOomKillAndTheOtherWorkerC
                           0,
                           {"started: slot 0 pid 1001",
                            "OOM kill: the scripted count counted 1 during the run, one or more for "
-                           "each of the 1 worker(s) killed by a SIGKILL the controller did not "
-                           "send"}}));
+                           "each of the 1 worker(s) killed by a SIGKILL"}}));
   EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kCompleted);
   EXPECT_EQ(result.value().workers[1].records, (std::vector<std::string>{"finished: done"}))
       << "a worker the count does not concern carries no word about it";
@@ -822,7 +856,7 @@ TEST(ControllerOomTest, TwoSigkillsAndOneCountedKillAttributeNeither) {
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   const std::string note =
       "not attributed to the OOM killer: the scripted count counted 1 OOM kill(s) during the run "
-      "for 2 workers killed by a SIGKILL the controller did not send, and a count does not say "
+      "for 2 workers killed by a SIGKILL, and a count does not say "
       "which";
   for (const WorkerReport& worker : result.value().workers) {
     EXPECT_EQ(worker.fate, WorkerFate::kKilled) << worker.slot;
@@ -831,13 +865,112 @@ TEST(ControllerOomTest, TwoSigkillsAndOneCountedKillAttributeNeither) {
   EXPECT_EQ(record.reads, 2);
 }
 
-TEST(ControllerOomTest, TheControllersOwnSigkillIsNeverAskedAbout) {
-  // Both workers stale, both escalated to SIGKILL by the controller: their
-  // deaths have a cause already, and the count is not read again.
+/// Both workers stale and both escalated to SIGKILL by the controller on the
+/// same tick; `before_second` runs between the two escalations, which is the
+/// one place a test can act inside a tick (the first escalation's event).
+void both_escalated(Rig& rig, ScriptedOomRecord& record,
+                    const std::function<void()>& before_second) {
+  rig.options.oom_record = &record;
+  rig.config.run.duration = core::Duration{1000};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig, before_second](const std::string& line) {
+    if (line == "worker 0: sent signal 9 (heartbeat stale)") {
+      before_second();
+    } else if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+}
+
+TEST(ControllerOomTest, TheControllersOwnSigkillIsAskedAboutAndStaysItsStopWhenTheCountDidNotMove) {
+  // An attempted SIGKILL proves nothing about the cause (kill succeeds on a
+  // zombie), so the count is read; unmoved, the attempt stands.
   Rig rig;
   ScriptedOomRecord record;
-  record.readings = {std::uint64_t{0}};
+  record.readings = {std::uint64_t{0}, std::uint64_t{0}};
+  both_escalated(rig, record, [&rig] { rig.worker_exits(0, SIGKILL); });
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTimedOut);
+  EXPECT_EQ(record.reads, 2) << "read again after the last reap: an attempt is not a cause";
+  EXPECT_EQ(result.value().workers[1].records.back(),
+            "not attributed to the OOM killer: the scripted count counted no OOM kill during the "
+            "run");
+}
+
+TEST(ControllerOomTest, ARiseInTheCountOutranksTheControllersAttemptedSigkill) {
+  // The worker died of SIGKILL in the instant between the controller's look
+  // and its kill (the look said running: it is not a zombie yet in the fake),
+  // and the count rose by one: the OOM killer, not the controller.
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{5}, std::uint64_t{6}};
   rig.options.oom_record = &record;
+  rig.config.run.duration = core::Duration{1000};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      // Worker 0 beats on, from far in the future, and never becomes stale.
+      rig.beat(0, 7, 100'000 * kMs);
+    } else if (line == "worker 1: sent signal 15 (heartbeat stale)") {
+      rig.deliver(0, ipc::RecordType::kFinished, "done");
+      rig.worker_exits(0, 0);
+    } else if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      // Dead of SIGKILL, but unseen by the look that came before the kill.
+      rig.syscalls.worker_releases_end(kRecordWrite1);
+      rig.syscalls.worker_releases_end(kControlRead1);
+      rig.reaps.push_back(FakeSyscalls::WaitStep{Reaped{kSecondPid, SIGKILL}, 0});
+      rig.syscalls.script_nonblocking_reaps(rig.reaps);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kCompleted);
+  const WorkerReport& killed = result.value().workers[1];
+  EXPECT_EQ(killed.stop, "SIGKILL sent");
+  EXPECT_EQ(killed.fate, WorkerFate::kOomKilled) << describe(killed.fate);
+  EXPECT_EQ(record.reads, 2);
+}
+
+TEST(ControllerOomTest, ACountThatCannotSpeakLeavesTheControllersSigkillAmbiguous) {
+  // Two workers dead of the controller's attempted SIGKILL and one OOM kill
+  // counted: a count does not say which. Neither is claimed as the
+  // controller's stop nor as an OOM kill.
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}, std::uint64_t{1}};
+  both_escalated(rig, record, [&rig] { rig.worker_exits(0, SIGKILL); });
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  for (const WorkerReport& worker : result.value().workers) {
+    EXPECT_EQ(worker.fate, WorkerFate::kKilled) << worker.slot;
+    EXPECT_EQ(worker.stop, "SIGKILL sent") << "the attempt stays in the report";
+  }
+  const std::vector<std::string>& notes = result.value().workers[0].records;
+  ASSERT_FALSE(notes.empty());
+  EXPECT_EQ(notes.back(),
+            "not attributed to the OOM killer: the scripted count counted 1 OOM kill(s) during "
+            "the run for 2 workers killed by a SIGKILL, and a count does not say which");
+}
+
+TEST(ControllerOomTest, ACountUnreadableLeavesTheControllersSigkillAmbiguousToo) {
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}, std::string{"no count after"}};
+  both_escalated(rig, record, [&rig] { rig.worker_exits(0, SIGKILL); });
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  for (const WorkerReport& worker : result.value().workers) {
+    EXPECT_EQ(worker.fate, WorkerFate::kKilled) << worker.slot;
+  }
+}
+
+TEST(ControllerOomTest, WithNoRecordAnAttemptedSigkillIsTheControllersStop) {
+  // Nothing consulted: nothing to contradict the attempt, as before.
+  Rig rig;
   rig.config.run.duration = core::Duration{1000};
   rig.options.stale_after_ns = 30 * kMs;
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
@@ -851,7 +984,55 @@ TEST(ControllerOomTest, TheControllersOwnSigkillIsNeverAskedAbout) {
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kTimedOut);
   EXPECT_EQ(result.value().workers[1].fate, WorkerFate::kTimedOut);
-  EXPECT_EQ(record.reads, 1);
+}
+
+// --- EXT-01: a worker already dead is never signalled ---------------------------------
+
+TEST(ControllerExitedTest, AWorkerKilledFromOutsideBeforeItsEscalationIsNeverSignalledNorBlamed) {
+  // Both workers are due SIGKILL on the same tick. After the first is sent
+  // (the controller's own kill of a running worker), the second is killed
+  // from outside and is a zombie when its turn comes. Before the fix the
+  // controller's kill of the zombie succeeded, was recorded, and the report
+  // called the outside kill its own timeout.
+  Rig rig;
+  ScriptedOomRecord record;
+  record.readings = {std::uint64_t{0}, std::uint64_t{0}};
+  both_escalated(rig, record, [&rig] {
+    rig.worker_exits(0, SIGKILL);  // The controller's kill landing.
+    rig.worker_exits(1, SIGKILL);  // An outside SIGKILL, unreaped.
+  });
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const WorkerReport& controllers = result.value().workers[0];
+  const WorkerReport& outside = result.value().workers[1];
+  EXPECT_EQ(controllers.fate, WorkerFate::kTimedOut) << "its own kill of a running worker";
+  EXPECT_EQ(outside.fate, WorkerFate::kKilled) << describe(outside.fate);
+  EXPECT_EQ(outside.stop, "SIGTERM sent") << "no SIGKILL was sent to a worker already dead";
+  const std::vector<std::pair<pid_t, int>> signals = rig.syscalls.signals_sent();
+  EXPECT_EQ(std::ranges::count(signals, std::pair<pid_t, int>{kSecondPid, SIGKILL}), 0)
+      << "never signal a worker known dead";
+  EXPECT_EQ(rig.reporter.events.end(),
+            std::ranges::find(rig.reporter.events, "worker 1: sent signal 9 (heartbeat stale)"));
+  EXPECT_EQ(record.reads, 2) << "the OOM count is consulted";
+  EXPECT_EQ(outside.records.front(), "signal 9 not sent: the worker had already exited");
+  EXPECT_EQ(outside.records.back(),
+            "not attributed to the OOM killer: the scripted count counted no OOM kill during the "
+            "run");
+}
+
+TEST(ControllerExitedTest, ARefusedLookIsAControllerErrorAndNothingIsSent) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.options.stale_after_ns = 30 * kMs;
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.syscalls.fail_has_exited(EINVAL);
+  auto result = rig.run();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().stage, "signal");
+  EXPECT_NE(result.error().detail.find("waitid"), std::string::npos) << result.error().detail;
+  for (const auto& [pid, signal] : rig.syscalls.signals_sent()) {
+    EXPECT_NE(signal, SIGTERM) << pid;
+  }
 }
 
 TEST(ControllerOomTest, WithNoRecordOfferedASigkillIsAKillAndNothingIsSaidAboutOom) {

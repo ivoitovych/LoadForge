@@ -78,7 +78,21 @@ WorkerFate classify_exit(const Evidence& evidence) noexcept {
 
 WorkerFate classify_signal(const Evidence& evidence) noexcept {
   const int signal = evidence.status.signal();
-  if (evidence.signal_sent.has_value() && *evidence.signal_sent == signal) {
+  if (evidence.signal_attempted.has_value() && *evidence.signal_attempted == signal) {
+    // A matching number is an attempt that met a death, not proof that it
+    // caused it: kill(2) succeeds on a zombie, so the same SIGKILL status is
+    // what an OOM kill or somebody's `kill -9` leaves when it landed first
+    // (EXT-01, journal §1.27). Only a SIGKILL can be anyone else's, and the
+    // kernel's count is the one witness: a rise in it outranks the attempt,
+    // and a count that could not speak leaves the provenance ambiguous, which
+    // is the neutral kKilled. A count read and unmoved, or none consulted,
+    // leaves the attempt as the best-supported reading.
+    if (signal == SIGKILL && evidence.oom_kill_recorded) {
+      return WorkerFate::kOomKilled;
+    }
+    if (signal == SIGKILL && evidence.oom_inconclusive) {
+      return WorkerFate::kKilled;
+    }
     return evidence.stale_when_signalled ? WorkerFate::kTimedOut : WorkerFate::kStoppedByController;
   }
   if (is_fault_signal(signal)) {
@@ -124,7 +138,7 @@ bool oom_candidate(const Evidence& evidence) noexcept {
       evidence.status.termination() != platform::Termination::kSignalled) {
     return false;
   }
-  return evidence.status.signal() == SIGKILL && evidence.signal_sent != SIGKILL;
+  return evidence.status.signal() == SIGKILL;
 }
 
 OomFinding judge_oom_kills(const core::Result<std::uint64_t, std::string>& before,
@@ -155,19 +169,18 @@ OomFinding judge_oom_kills(const core::Result<std::uint64_t, std::string>& befor
   const std::uint64_t counted = last - first;
   if (counted == 0) {
     note += " counted no OOM kill during the run";
-    return OomFinding{false, std::move(note)};
+    return OomFinding{false, std::move(note), true};
   }
   if (counted < candidates) {
     note += " counted " + std::to_string(counted) + " OOM kill(s) during the run for ";
-    note += std::to_string(candidates) + " workers killed by a SIGKILL the controller did not ";
-    note += "send, and a count does not say which";
+    note += std::to_string(candidates) + " workers killed by a SIGKILL, and a count does not ";
+    note += "say which";
     return OomFinding{false, std::move(note)};
   }
   std::string found = "OOM kill: ";
   found += scope;
   found += " counted " + std::to_string(counted) + " during the run, one or more for each of the ";
-  found +=
-      std::to_string(candidates) + " worker(s) killed by a SIGKILL the controller did not send";
+  found += std::to_string(candidates) + " worker(s) killed by a SIGKILL";
   return OomFinding{true, std::move(found)};
 }
 

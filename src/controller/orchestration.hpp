@@ -28,9 +28,11 @@ struct RunOptions {
   std::optional<config::MemoryBudget> budget;
   std::string budget_unread;
   /// The kernel's OOM-kill count for the workers' cgroup, read before the
-  /// first fork and, when a worker died of a SIGKILL the controller did not
-  /// send, after the last reap (judge_oom_kills has the rule). Null when none
-  /// is consulted: such a death is then reported as a kill, which is the fact.
+  /// first fork and, when a worker died of a SIGKILL -- one the controller
+  /// attempted too, since an attempt proves nothing about the cause
+  /// (journal §1.27) -- after the last reap (judge_oom_kills has the rule).
+  /// Null when none is consulted: such a death is then reported as a kill,
+  /// or as the controller's stop where it attempted the SIGKILL.
   /// Not owned; it must outlive the run.
   resources::OomKillRecord* oom_record = nullptr;
   /// The machine, described once before the first fork (docs/PLAN.md §4.1;
