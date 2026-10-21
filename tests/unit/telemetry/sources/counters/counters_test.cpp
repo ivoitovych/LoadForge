@@ -30,7 +30,7 @@
 #include <variant>
 #include <vector>
 
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/telemetry/source_contract.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
@@ -55,8 +55,6 @@ using telemetry::Source;
 using telemetry::Unavailable;
 using telemetry::Unit;
 using topology::Availability;
-
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TimelineContract);
 
 constexpr std::string_view kParanoidFile = "/proc/sys/kernel/perf_event_paranoid";
 
