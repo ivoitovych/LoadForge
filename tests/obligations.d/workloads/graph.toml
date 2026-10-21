@@ -15,7 +15,10 @@ sweep with its tail of terms that fill no whole vector -- each taken by a \
 generated unit and by hand-built graphs (a ring, a star, self-loops, a path of \
 32768 levels) against an independent reference that is exact because the \
 specification pins every operation (T3). The three kernels (scalar, AVX2, \
-NEON) are one table behind the dispatch seam and are held to the same bits. \
+NEON) are one table behind the dispatch seam and are held to the same bits; \
+the two vector sweeps are under src/primitives/simd/{x86,arm}/ (the \
+portability workflow refuses intrinsics in the workload), and this module's \
+tests cover them through the table. \
 P3: the totality of compute() over input bytes -- a vertex number not below V \
 is reduced modulo V, every constant byte pattern and random bytes are an input \
 with an exact answer -- and the edges of the configuration: a decomposition \

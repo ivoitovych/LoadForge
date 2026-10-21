@@ -16,10 +16,6 @@ namespace {
 
 using namespace graph_test;
 
-// The contract header registers the registry suite too; this binary has no
-// registry, which is the integration stream's.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-
 template <std::uint32_t kDecomposition, simd::IsaPath kPath>
 struct Subject {
   static constexpr std::string_view kName = graph_test::spec::kName;

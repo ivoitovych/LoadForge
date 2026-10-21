@@ -129,3 +129,31 @@ this container did not have installed; it was installed with apt.
    distances, per sweep every tail and gathered rank read and every rank written, and the
    output); `operations` is sixteen sweeps of `2E + (a + 1)V` floating-point operations
    plus one examination per edge. Both are estimates for rates, not measurements.
+
+## Intrinsics move to the primitives layer (2026-10-21)
+
+The portability workflow refuses x86 intrinsics outside `src/primitives/simd/x86/` (and
+NEON outside `src/primitives/simd/arm/`); `src/workloads/graph/kernels.cpp` used both
+directly. Decision, following the dense-linear workload:
+
+1. **Options.** (a) Exempt the file from the check: rejected, the rule is the point of the
+   check and dispatch.hpp states it. (b) Move the vector sweeps into the primitives layer as
+   dense-linear did: chosen. (c) Rewrite the sweeps with compiler vector extensions in the
+   workload: rejected, it hides the instruction choice the bits depend on and changes the
+   code under a bit-exact contract.
+2. **Result.** `graph_sweep_avx2.{hpp,cpp}` joins the x86 library and `graph_sweep_neon.{hpp,cpp}`
+   the ARM one; both libraries already define `LOADFORGE_SIMD_X86_KERNELS` /
+   `LOADFORGE_SIMD_ARM_KERNELS` for whatever links them, and the graph library now links
+   them when the targets exist, so the table holds a vector sweep exactly when one was built
+   (no `__x86_64__` test in the workload any more). `kernels.cpp` keeps the scalar sweep and
+   a thin wrapper per path that sends the accumulator counts narrower than a vector (1 for
+   AVX2 and NEON, 2 for AVX2) to the scalar sweep, as before. `rank_of`, `add_tail` and
+   `kMaxAccumulators`, which every sweep ends with, moved to `kernels.hpp` as inline so the
+   scalar and the vector code share one text and the arithmetic is the same operations in
+   the same order.
+3. **Behaviour.** Unchanged: the same operations in the same order, the AVX2 function still
+   without FMA. The only addition is `_mm256_zeroupper()` at the end of the AVX2 sweep, as
+   the dense-linear kernel does, which affects speed only.
+4. **Ledger.** The module fragments of `primitives/simd/x86` and `arm` and of this module
+   say that the sweeps live there and are covered through the graph tests; the tiers are
+   unchanged.
