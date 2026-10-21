@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/record and nothing else.
+
+[[module]]
+path     = "src/verification/record"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T5"]
+provides = ["RecordCodecContract"]
+note     = """
+The provider of encode() and decode() declared in verification/record.hpp, \
+the first validity rule a record breaks in words (broken_rule), and the \
+record rendered for a person (render). The encoding is written down in \
+codec.hpp: fixed-width little-endian fields, presence flags of 0 or 1, so \
+every record has exactly one encoding and whatever decode() accepts \
+re-encodes to the same bytes. \
+\
+P1: every field read succeeding and failing (the contract suite's every \
+strict prefix of every sample ends inside each field in turn), every \
+optional present and absent, each kind, each rule of broken_rule broken \
+alone. \
+\
+P3: an empty input, one byte of a good and of a bad version, a text of \
+exactly 1024 bytes and one of 1025, a window of 64 and of 65, a length of \
+2^64 - 1 refused before any allocation, a NaN with a payload and a signed \
+zero kept bit for bit, the largest blocks_compared, and the edges of the \
+printable range in rendered text. \
+\
+P4: the codec is a verification of the channel's bytes with a classification \
+per corruption -- kEmpty, kVersion, kKind, kTruncated, kTrailing, kInvalid. \
+Each is injected alone in the unit tier with the field and offset its detail \
+names. T5 (tests/fault_injection/verification/record) corrupts a stream of \
+eleven encoded records at every byte, every bit and one random replacement \
+each, decodes it record by record as the frames would deliver it, and asserts \
+that untouched records decode unchanged, that each of the five faults a \
+corrupted record can produce is produced, and that a corrupted record that \
+decodes is valid and re-encodes to exactly the corrupted bytes -- read, never \
+guessed. The same property is held over misaligned windows of the stream and \
+over twenty thousand noise records under a valid header. \
+\
+RecordCodecContract runs against verification::encode and decode from \
+tests/unit/verification/record/codec_contract_test.cpp.\
+"""
