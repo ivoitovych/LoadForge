@@ -17,6 +17,7 @@ add_executable(loadforge_unit_tests
   unit/main/run_result_test.cpp
   unit/main/contract_mocks_test.cpp
   unit/controller/contract_mocks_test.cpp
+  unit/controller/journal_model_test.cpp
   unit/controller/orchestration_telemetry_test.cpp
   unit/config/config_test.cpp
   unit/platform/syscall_error_test.cpp
