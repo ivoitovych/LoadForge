@@ -2,7 +2,7 @@
 #ifndef LOADFORGE_TESTS_CONTRACTS_VERIFICATION_ORACLE_CONTRACT_HPP
 #define LOADFORGE_TESTS_CONTRACTS_VERIFICATION_ORACLE_CONTRACT_HPP
 
-// Provider-side suites for src/verification/oracle.hpp (ADR 0003, 0004).
+// Provider-side suite for src/verification/oracle.hpp (ADR 0003, 0004).
 //
 // OracleContract<Subject>:
 //   Subject::kWorkload   the workload's name.
@@ -18,10 +18,8 @@
 //                        oracle samples -- choose corruptions in every block,
 //                        or in the blocks the index samples.
 //
-// OracleRegistryContract<Subject>:
-//   Subject::make()        std::unique_ptr<OracleRegistry>.
-//   Subject::config(name)  a WorkloadConfig, and Subject::plan(name) the Plan,
-//                          for which the named oracle can be created.
+// The registry's suite is OracleRegistryContract, in
+// oracle_registry_contract.hpp.
 
 #include <gtest/gtest.h>
 
@@ -34,36 +32,10 @@
 #include <variant>
 #include <vector>
 
+#include "contracts/verification/oracle_case.hpp"
 #include "verification/oracle.hpp"
 
 namespace loadforge::contracts {
-
-struct OracleCase {
-  std::uint64_t index = 0;
-  std::vector<std::byte> input;
-  std::vector<std::byte> output;
-};
-
-namespace oracle_suite {
-
-inline verification::Verdict check(const verification::Oracle& oracle, const OracleCase& unit) {
-  return oracle.check(verification::UnitEvidence{unit.index, unit.input, unit.output});
-}
-
-inline std::string name_of(const verification::Verdict& verdict) {
-  switch (verdict.index()) {
-    case 0:
-      return "Agreement";
-    case 1:
-      return "ExactMismatch";
-    case 2:
-      return "BoundedMismatch";
-    default:
-      return "NotChecked";
-  }
-}
-
-}  // namespace oracle_suite
 
 template <typename Subject>
 class OracleContract : public ::testing::Test {};
@@ -162,34 +134,6 @@ REGISTER_TYPED_TEST_SUITE_P(OracleContract, ItNamesItsWorkloadAndContract,
                             AWrongOutputIsCaughtAsTheContractsKindOfMismatch,
                             EvidenceOfTheWrongSizeIsNotCheckedNeverAgreed,
                             TheVerdictIsAFunctionOfTheEvidence, ChecksRunConcurrently);
-
-template <typename Subject>
-class OracleRegistryContract : public ::testing::Test {};
-TYPED_TEST_SUITE_P(OracleRegistryContract);
-
-TYPED_TEST_P(OracleRegistryContract, EachNameCreatesTheOracleForThatWorkload) {
-  const auto registry = TypeParam::make();
-  const std::vector<std::string> names = registry->names();
-  EXPECT_FALSE(names.empty());
-  EXPECT_TRUE(std::is_sorted(names.begin(), names.end()));
-  EXPECT_EQ(std::adjacent_find(names.begin(), names.end()), names.end());
-  for (const std::string& name : names) {
-    const auto created = registry->create(name, TypeParam::config(name), TypeParam::plan(name));
-    ASSERT_TRUE(created.has_value()) << name << ": " << created.error().detail;
-    EXPECT_EQ(created.value()->workload(), name);
-  }
-}
-
-TYPED_TEST_P(OracleRegistryContract, AnUnknownNameIsRefusedAsUnknown) {
-  const auto registry = TypeParam::make();
-  const auto created = registry->create("no_such_workload", workloads::WorkloadConfig{},
-                                        workloads::Plan{1, 1, 0, 1, 1, 0, 0});
-  ASSERT_FALSE(created.has_value());
-  EXPECT_EQ(created.error().fault, verification::OracleFault::kUnknownWorkload);
-}
-
-REGISTER_TYPED_TEST_SUITE_P(OracleRegistryContract, EachNameCreatesTheOracleForThatWorkload,
-                            AnUnknownNameIsRefusedAsUnknown);
 
 }  // namespace loadforge::contracts
 

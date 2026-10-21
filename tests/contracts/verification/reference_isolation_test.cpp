@@ -46,14 +46,18 @@ class ReferenceIsolatorImpl final : public verification::Isolator {
       return answer_of(outcome);
     };
     report.answers.same_core = step(Rung::kSameCore, placement.cpu, placement.threads);
+    if (placement.threads == 1) {
+      // The same-core re-run was the single-thread re-run, whatever it found.
+      report.answers.single_thread = report.answers.same_core;
+    }
     if (report.answers.same_core == Answer::kYes) {
       if (!placement.other_cores.empty()) {
         report.answers.other_core =
             step(Rung::kOtherCore, placement.other_cores[0], placement.threads);
       }
-      report.answers.single_thread = placement.threads == 1
-                                         ? report.answers.same_core
-                                         : step(Rung::kSingleThread, placement.cpu, 1);
+      if (placement.threads != 1) {
+        report.answers.single_thread = step(Rung::kSingleThread, placement.cpu, 1);
+      }
     }
     report.finding = verification::derive_finding(report.answers);
     report.confidence = verification::confidence_of(report.finding);

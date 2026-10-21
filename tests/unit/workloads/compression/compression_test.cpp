@@ -71,7 +71,6 @@ INSTANTIATE_TYPED_TEST_SUITE_P(Compression, WorkloadContract, CompressionSubject
 
 // The header also registers the registry's suite, which is the integration
 // stream's to run: a workload is not a registry.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
 
 }  // namespace
 }  // namespace loadforge::contracts
