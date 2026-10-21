@@ -15,7 +15,7 @@
 #include <map>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_case.hpp"
 #include "workloads/monte_carlo/spec.hpp"
 
 namespace loadforge::tests::mc_units {

@@ -26,10 +26,10 @@ The classes and tiers are a starting point taken from `docs/IMPLEMENTATION.md` �
 
 **You provide** — run each suite against your implementation, from your own tests:
 
-- `FpControlContract` — `tests/contracts/fpenv/fpenv_contract.hpp`
-- `FpCheckContract` — `tests/contracts/fpenv/fpenv_contract.hpp`
-- `IsaProbeContract` — `tests/contracts/simd/dispatch_contract.hpp`
-- `SelectPathContract` — `tests/contracts/simd/dispatch_contract.hpp`
+- `FpControlContract` — `tests/contracts/fpenv/fp_control_contract.hpp`
+- `FpCheckContract` — `tests/contracts/fpenv/fp_check_contract.hpp`
+- `IsaProbeContract` — `tests/contracts/simd/isa_probe_contract.hpp`
+- `SelectPathContract` — `tests/contracts/simd/select_path_contract.hpp`
 
 **Headers you build against** (frozen):
 

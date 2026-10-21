@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "contracts/equality.hpp"
+#include "contracts/workloads/registry_contract.hpp"
 #include "contracts/workloads/workload_contract.hpp"
 #include "primitives/rng/philox.hpp"
 #include "workloads/workload.hpp"

@@ -28,7 +28,7 @@
 #include <variant>
 #include <vector>
 
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/telemetry/source_contract.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
 #include "support/fake_syscalls.hpp"
@@ -56,8 +56,6 @@ using topology::Availability;
 
 // The contract header registers the timeline suite too; this module has no
 // timeline, and a binary that instantiates only one of the two would fail.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TimelineContract);
-
 const std::filesystem::path kFixtures =
     std::filesystem::path{LOADFORGE_SOURCE_DIR} / "tests" / "fixtures" / "sysfs" / "edac";
 

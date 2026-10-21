@@ -6,20 +6,20 @@
 // sixteen thousand of them is an integer count of 2^-79 that fits 128 bits,
 // and the comparison with the oracle's double is exact.
 
+#include <gtest/gtest.h>
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
-#include "contracts/verification/oracle_contract.hpp"
+#include "contracts/verification/oracle_case.hpp"
 #include "monte_carlo_units.hpp"
 #include "verification/oracle/monte_carlo/monte_carlo_oracle.hpp"
 #include "workloads/monte_carlo/spec.hpp"
 
 namespace loadforge::contracts {
 // The contract header registers both suites; this binary runs neither.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleContract);
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(OracleRegistryContract);
 }  // namespace loadforge::contracts
 
 namespace loadforge::tests {

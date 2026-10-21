@@ -17,10 +17,6 @@
 
 namespace loadforge::contracts {
 
-// workload_contract.hpp also registers RegistryContract, which only the
-// integration stream's registry instantiates.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(RegistryContract);
-
 namespace {
 
 namespace rtt = loadforge::tests::raytrace;

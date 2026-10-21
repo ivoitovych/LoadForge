@@ -76,6 +76,10 @@ void for_each_index(Executor& executor, std::size_t count, Body& body) noexcept 
                 "the body is called as body(index, slot) and must be noexcept");
   executor.run(
       count,
+      // The signature is the Task type's (context, index, slot), fixed by run(); the two
+      // adjacent std::size_t are not a choice of this lambda, so the check cannot be
+      // satisfied here and would fail every workload that instantiates the helper.
+      // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
       [](void* context, std::size_t index, std::size_t slot) noexcept {
         (*static_cast<Body*>(context))(index, slot);
       },

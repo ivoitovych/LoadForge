@@ -158,6 +158,17 @@ TYPED_TEST_P(IsolatorContract, AnOriginalSingleThreadSkipsTheThirdRungAndKeepsIt
   EXPECT_EQ(report.finding, Finding::kNotCoreLocal);
 }
 
+TYPED_TEST_P(IsolatorContract, AOneThreadOriginalThatComesOutCleanAnswersNoSingleThreadedToo) {
+  ScriptedRerunner rerunner({{Rung::kSameCore, RerunOutcome::kClean}});
+  const auto report = this->run(rerunner, verification::Placement{5, 1, {9}});
+  EXPECT_EQ(rerunner.requests, (std::vector<RerunRequest>{{Rung::kSameCore, 5, 1}}));
+  EXPECT_EQ(report.answers.same_core, Answer::kNo);
+  EXPECT_EQ(report.answers.single_thread, Answer::kNo)
+      << "the same-core re-run was the single-thread re-run";
+  EXPECT_EQ(report.answers.other_core, Answer::kUnknown);
+  EXPECT_EQ(report.finding, Finding::kNonReproducibleTransient);
+}
+
 TYPED_TEST_P(IsolatorContract, AnOtherCoreRerunThatCannotBeMadeLeavesTheLadderRunning) {
   ScriptedRerunner rerunner({{Rung::kSameCore, RerunOutcome::kReproduced},
                              {Rung::kOtherCore, RerunOutcome::kNotPerformed},
@@ -184,6 +195,7 @@ REGISTER_TYPED_TEST_SUITE_P(IsolatorContract, CleanOnTheSameCoreIsATransientAndS
                             CleanSingleThreadedIsConcurrencyDependent,
                             WithNoOtherCoreTheSecondRungIsSkippedAndUnknown,
                             AnOriginalSingleThreadSkipsTheThirdRungAndKeepsItsAnswer,
+                            AOneThreadOriginalThatComesOutCleanAnswersNoSingleThreadedToo,
                             AnOtherCoreRerunThatCannotBeMadeLeavesTheLadderRunning,
                             ABoundedFailureClimbsTheSameLadder);
 

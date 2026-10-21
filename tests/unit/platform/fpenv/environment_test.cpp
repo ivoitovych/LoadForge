@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "contracts/fpenv/fpenv_contract.hpp"
+#include "contracts/fpenv/fp_control_contract.hpp"
 
 namespace loadforge::fpenv {
 namespace {

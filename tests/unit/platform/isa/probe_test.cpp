@@ -8,7 +8,7 @@
 
 #include <memory>
 
-#include "contracts/simd/dispatch_contract.hpp"
+#include "contracts/simd/isa_probe_contract.hpp"
 #include "fake_source.hpp"
 
 namespace loadforge::isa {
@@ -97,7 +97,6 @@ using Probes = ::testing::Types<NativeSubject, DescribedX86, DescribedAarch64, D
 INSTANTIATE_TYPED_TEST_SUITE_P(Probe, IsaProbeContract, Probes);
 
 // The header also declares select_path()'s suite, which belongs to src/primitives/simd.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(SelectPathContract);
 
 }  // namespace
 }  // namespace loadforge::contracts

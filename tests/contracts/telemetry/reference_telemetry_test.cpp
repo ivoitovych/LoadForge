@@ -12,7 +12,8 @@
 #include <vector>
 
 #include "contracts/equality.hpp"
-#include "contracts/telemetry/telemetry_contract.hpp"
+#include "contracts/telemetry/source_contract.hpp"
+#include "contracts/telemetry/timeline_contract.hpp"
 #include "telemetry/sample.hpp"
 #include "telemetry/source.hpp"
 #include "telemetry/timeline.hpp"
