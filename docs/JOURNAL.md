@@ -3385,6 +3385,19 @@ runner. Three changes cut the queue: clang-tidy in four shards with a process pe
 credential this work runs under cannot cancel or re-run a job (403), so a push is the only
 way to restart one, and an unneeded push costs a full run.
 
+
+### 5.12 Two integrations of one controller: whichever lands second adapts to the first
+
+The M2 and M3 integrations (#90, #87) each extended the same controller and command line, in
+different directions, on branches that could not see each other. Each was right alone. Merged,
+they conflicted in eleven files and, beyond the text, in meaning: both used exit codes 4 and 5
+for different things, and both probed the telemetry sources. Then M3's contract corrections
+(#92) removed the function M2's banner called, and a merge with no textual conflict did not
+compile. The order did not change the work, only who did it: the second to land is adapted to
+the first, with the full gate set, and the decisions recorded where both can be read (the
+journal fragment of stream 11). What made it tractable was the rule that the second branch
+re-earns its green on the merged tree (§4.16), never inherits it.
+
 ---
 
 ## 6. Open threads
