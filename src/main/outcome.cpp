@@ -60,9 +60,9 @@ int exit_code_for(results::Verdict verdict, bool workers_clean, bool verified) n
 }
 
 bool has_verified_worker(const controller::RunReport& report) noexcept {
-  return std::ranges::any_of(
-      report.workers,
-      [](const controller::WorkerReport& worker) { return worker.work.has_value(); });
+  return std::ranges::any_of(report.workers, [](const controller::WorkerReport& worker) {
+    return worker.work.has_value();
+  });
 }
 
 int with_output_failure(int code) noexcept {

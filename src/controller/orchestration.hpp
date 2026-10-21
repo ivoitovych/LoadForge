@@ -16,8 +16,8 @@
 #include "platform/syscalls.hpp"
 #include "resources/oom_kill_record.hpp"
 #include "telemetry/sampler.hpp"
-#include "telemetry/timeline.hpp"
 #include "telemetry/source.hpp"
+#include "telemetry/timeline.hpp"
 #include "topology/snapshot.hpp"
 
 namespace loadforge::controller {

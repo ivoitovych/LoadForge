@@ -637,7 +637,8 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     return with_output_failure(exit_code_for(report, config));
   }
   out << summary_text(result.value(), report, timeline, summarizer, reading.gaps);
-  const int code = exit_code_for(result.value().verdict, workers_clean, has_verified_worker(report));
+  const int code =
+      exit_code_for(result.value().verdict, workers_clean, has_verified_worker(report));
   if (stress_options.formats.empty()) {
     return code;
   }

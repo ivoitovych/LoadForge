@@ -539,7 +539,9 @@ TEST(CliStressTest, ATestThatCannotNameItsExecutableOrDescribeTheMachineIsRefuse
     std::ostringstream out;
     std::ostringstream err;
     const std::vector<std::string_view> args{"compression", "--duration", "1s"};
-    EXPECT_EQ(stress_test(args, LOADFORGE_SOURCE_DIR "/no-such-link", "/sys", StressOptions{}, out, err), 1);
+    EXPECT_EQ(
+        stress_test(args, LOADFORGE_SOURCE_DIR "/no-such-link", "/sys", StressOptions{}, out, err),
+        1);
     EXPECT_NE(err.str().find("cannot resolve this executable for the workers"), std::string::npos)
         << err.str();
   }
@@ -548,7 +550,9 @@ TEST(CliStressTest, ATestThatCannotNameItsExecutableOrDescribeTheMachineIsRefuse
     std::ostringstream out;
     std::ostringstream err;
     const std::vector<std::string_view> args{"compression", "--duration", "1s"};
-    EXPECT_EQ(stress_test(args, link.path(), LOADFORGE_SOURCE_DIR "/no-such-sysfs", StressOptions{}, out, err), 1);
+    EXPECT_EQ(stress_test(args, link.path(), LOADFORGE_SOURCE_DIR "/no-such-sysfs", StressOptions{},
+                          out, err),
+              1);
     EXPECT_NE(err.str().find("cannot describe this machine before starting workers"),
               std::string::npos)
         << err.str();
@@ -563,7 +567,8 @@ TEST(CliStressTest, ATestRunsRealWorkersForRealAndReportsWhatTheyChecked) {
   const std::vector<std::string_view> args{"compression", "--duration",  "1s",    "--workers",
                                            "2",           "--footprint", "6MiB",  "--seed",
                                            "7",           "--isa",       "scalar"};
-  EXPECT_EQ(stress_test(args, link.path(), "/sys", StressOptions{}, out, err), 0) << out.str() << err.str();
+  EXPECT_EQ(stress_test(args, link.path(), "/sys", StressOptions{}, out, err), 0)
+      << out.str() << err.str();
   const std::string text = out.str();
   EXPECT_NE(text.find("stress for 1s with 2 worker(s)\n"), std::string::npos) << text;
   EXPECT_NE(text.find("  workload compression: 1 thread(s) on cpu "), std::string::npos) << text;
@@ -590,7 +595,8 @@ TEST(CliStressTest, WithoutWorkersOrAFootprintATestTakesOneWorkerPerCpuTheProces
   std::ostringstream err;
   const std::vector<std::string_view> args{"compression", "--duration", "1s", "--footprint",
                                            "4MiB"};
-  EXPECT_EQ(stress_test(args, link.path(), "/sys", StressOptions{}, out, err), 0) << out.str() << err.str();
+  EXPECT_EQ(stress_test(args, link.path(), "/sys", StressOptions{}, out, err), 0)
+      << out.str() << err.str();
   EXPECT_NE(out.str().find("worker(s) completed"), std::string::npos) << out.str();
 }
 
@@ -632,11 +638,10 @@ TEST(CliStressTest, AVerifiedRunSamplesTelemetryAndWritesTheResultWhenAskedTo) {
   std::ostringstream out;
   std::ostringstream err;
   const std::string where = directory.string();
-  const std::vector<std::string_view> args{"compression",   "--duration",  "1s",
-                                           "--workers",     "2",           "--footprint",
-                                           "6MiB",          "--output",    "json,csv",
-                                           "--output-dir",  where,         "--sample-interval",
-                                           "100ms"};
+  const std::vector<std::string_view> args{
+      "compression", "--duration", "1s",       "--workers",    "2",   "--footprint",
+      "6MiB",        "--output",   "json,csv", "--output-dir", where, "--sample-interval",
+      "100ms"};
   EXPECT_EQ(stress_test(args, link.path(), "/sys", StressOptions{}, out, err), 0)
       << out.str() << err.str();
   const std::string text = out.str();
@@ -722,9 +727,9 @@ TEST(CliStressTest, ARegisteredWorkloadThatIsSwitchedOffDoesNotMakeTheRunAVerify
   config.workloads[0] = config::Workload{"compression", config::Threads::count(1), false, {}};
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(
-      run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), supervisor_only(), out, err),
-      120);
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), supervisor_only(),
+                       out, err),
+            120);
   std::vector<std::string_view> tail;
   const std::vector<std::string>& argv = syscalls.last_exec_argv();
   for (std::size_t at = 2; at < argv.size(); ++at) {
@@ -746,7 +751,8 @@ TEST(CliStressTest, AMachineWhoseCacheLineIsNotKnownDoesNotRunAWorkload) {
   config.workloads[0].name = "compression";
   std::ostringstream out;
   std::ostringstream err;
-  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, supervisor_only(), out, err), 1);
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", machine, supervisor_only(), out, err),
+            1);
   EXPECT_NE(err.str().find("compression: the machine's cache-line size is not known"),
             std::string::npos)
       << err.str();

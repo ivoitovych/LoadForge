@@ -250,7 +250,8 @@ TEST(AssembleResultTest, OnlyEnabledWorkloadsAreInTheResultAndNoneClaimsAVerific
   EXPECT_TRUE(workload.findings.empty());
 }
 
-TEST(AssembleResultTest, AVerifyingWorkersTallyAndFindingsAreTheResultsAndTheIdleWorkloadsStandDown) {
+TEST(AssembleResultTest,
+     AVerifyingWorkersTallyAndFindingsAreTheResultsAndTheIdleWorkloadsStandDown) {
   const Sampled run;
   const config::Config config = two_workloads(true);
   controller::RunReport report = report_of_two_workers();
