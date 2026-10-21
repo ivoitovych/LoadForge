@@ -1947,6 +1947,55 @@ decomposition, where the T6 comparison across decompositions needs one bound).
 less about versions than these two. Bringing them level is a contract change of its own,
 between waves.
 
+### 2.30 The wave-3 specifications: FFT, stencil, sparse, graph, particles
+
+*Written 2026-10-20 15:55 UTC.* Five frozen headers, `src/workloads/<name>/spec.hpp`, each
+with a `kName`, a `kVersion` that versions the specification (the workload's own bits
+are `Descriptor::version`), the exact generator, the decomposition, the class, and the
+check with its bound derived in the header. Every bound was run against real
+computations in a throwaway harness (a long-double reference, fused and unfused,
+shuffled summation orders); the observed error is 1-5% of the bound everywhere
+(FFT 2-norm 2%, stencil 3%, particles 0.8%, sparse rows 12%).
+
+**Decisions, and what was rejected**
+
+- *FFT.* Radix 2 and 4 only, so a butterfly is twiddle products plus sums with factors
+  ±1, ±i and no rounded constant; the bound is then Higham's 2-norm recursion, proved in
+  the header. Twiddles are *defined* as the correctly rounded table (unique, so two
+  tables agree bit for bit; `|W - w| <= u`). Rejected: radix 8/16 (rounded √½
+  constants break the stage model); libm twiddles (not reproducible, determinism.md §4);
+  a per-bin bound (a rigorous one is no tighter than the 2-norm one, so the single-bin
+  tolerance is about 50x looser than the observed error; accepted). Round trip left to
+  the workload's tests: it needs a second FFT. Parseval is checked on all bins.
+- *Stencil.* The update is `u/2 + (N+S+E+W)/8`, not `u + α(Σ - 4u)`: non-negative weights
+  summing to 1 give the maximum principle, so the error is `2γ_{4T}·M0` with no growth
+  factor. Ring is fixed. Tile edge is the decomposition, though the spec does not
+  require bits to differ across tile edges (recorded as a possible contract question).
+- *Sparse.* Plain CG, 16 fixed iterations, no preconditioner (the diagonal is constant, a
+  Jacobi one would change nothing). The output carries the workload's explicit residual
+  so the oracle's row-by-row check against its own SpMV is rigorous (`γ_{m+1}`). The
+  residual-norm check uses the exact-arithmetic CG bound `3·5⁻ᴷ‖b‖`; finite precision is
+  *not* proved, only shown to leave five orders of room (observed 2.2e-16 vs 2e-11).
+  Rejected: a derived finite-precision CG bound (none is closed-form); a 2^10 safety
+  margin (it would blunt the check for no gain).
+- *Graph.* PageRank's arithmetic is pinned (accumulator count `a` is the decomposition,
+  `c + fl(d·S)`, no FMA), so the ranks are one byte string per `a` and **the oracle is
+  exact** (`Contract::kExact`), covering the whole output by a full scalar recompute
+  rather than a subgraph. Class stays BitExactFixedDecomposition (bits differ across
+  `a`; they happen to agree across ISA paths). Rejected: a bounded PageRank (needs a
+  second verdict kind on one oracle) and splitting into two workloads.
+- *Particles.* A cutoff force `(1-q/4)²·d`: a neighbour list finds exactly the pairs of
+  the direct sum, so the only difference is summation order. Rejected: Barnes-Hut
+  (approximation error is not arithmetic and cannot be derived). The evaluation model of
+  one term is pinned, since the bound holds only for that model.
+
+**Contract questions for the manager.** (1) Sparse check 2 rests on floating-point CG
+following the exact bound; the sparse stream should record the worst
+`‖r‖/‖b‖` over seeds and ISA paths. (2) The stencil and particles specs let the tile
+edge / cell size change bits without requiring it; if a stream finds none, the class
+is revisited by contract change. (3) The ledger fragments and
+`tests/contracts/headers/workloads_<name>_spec.cpp` were added alongside, as a7791a2 did.
+
 ### 2.31 Wave 4's specifications: ray tracing and adaptive mesh (2026-10-20 13:05 UTC)
 
 Both headers (`src/workloads/raytrace/spec.hpp`, `src/workloads/adaptive_mesh/spec.hpp`) are
