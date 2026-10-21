@@ -463,7 +463,7 @@ class Prober {
     statuses_->emplace_back();
     MetricStatus& status = statuses_->back();
     status.metric.name = kPackageMetric;
-    status.metric.unit = Unit::kJoules;
+    status.metric.unit = Unit::kMicrojoules;
     status.metric.kind = Kind::kCounter;
     status.metric.scope = Scope::kPackage;
     status.metric.scope_index = package;

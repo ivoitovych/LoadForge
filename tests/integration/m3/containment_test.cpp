@@ -85,8 +85,8 @@ TEST(ContainmentTest, ASourceThatBreaksItsContractIsReportedMalformedAndShiftsNo
 TEST(ContainmentTest, ATimelineThatFillsKeepsWhatItHoldsRefusesTheRestAndTheStatisticsStillWork) {
   Stack stack;
   stack.machine.install_everything();
-  // Room for the first round of 26 series and a third of the second.
-  stack.start(26 + 9);
+  // Room for the first round of 27 series and a third of the second.
+  stack.start(27 + 9);
   stack.round();
   const auto refused = stack.rig->sampler().round(stack.now);
   ASSERT_FALSE(refused.has_value());
@@ -101,7 +101,7 @@ TEST(ContainmentTest, ATimelineThatFillsKeepsWhatItHoldsRefusesTheRestAndTheStat
   EXPECT_EQ(longer, 9U);
   const auto taken = stack.summarizer.summarize(stack.timeline(), {kSecond, 3 * kSecond});
   ASSERT_TRUE(taken.has_value());
-  EXPECT_EQ(taken.value().metrics.size(), 26U);
+  EXPECT_EQ(taken.value().metrics.size(), 27U);
 }
 
 }  // namespace

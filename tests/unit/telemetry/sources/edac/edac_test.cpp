@@ -4,7 +4,7 @@
 //
 // LOADFORGE P7 FIXTURE BUILDER
 //
-// Two states cannot be committed and are built here. A counter that wraps and
+// Two states cannot be committed and are built here. A counter that steps down and
 // a controller that disappears mid-run are events, not states: only a test
 // that changes the files between two samples produces them. And a file the
 // caller may not read arrives from a clone readable, because git records the
@@ -211,7 +211,8 @@ TEST(EdacSourceTest, EachControllerReportsItsCorrectedAndUncorrectedCounts) {
       EXPECT_EQ(status->metric.unit, Unit::kCount);
       EXPECT_EQ(status->metric.kind, Kind::kCounter);
       EXPECT_EQ(status->metric.scope, Scope::kMemoryController);
-      EXPECT_EQ(status->metric.modulus, std::uint64_t{1} << 32U);
+      EXPECT_FALSE(status->metric.modulus.has_value())
+          << "it does not wrap within a run: a step down is a reset";
       EXPECT_EQ(status->metric.provider, "edac:sysfs");
     }
   }
@@ -436,7 +437,7 @@ TEST(EdacSourceTest, ADriverThatFailsTheReadIsUnreadableAtProbeAndAtSample) {
 
 // --- counter wraps --------------------------------------------------------------
 
-TEST(EdacSourceTest, ACounterThatWrapsAtItsModulusHasADeltaAcrossTheWrap) {
+TEST(EdacSourceTest, AStepDownIsAResetBecauseTheCounterDoesNotWrapWithinARun) {
   FakeRig rig{[](FakeSyscalls& syscalls) {
                 with_two_controllers(syscalls);
                 syscalls.add_file(std::string{kMc0Ce}, "4294967290\n");
@@ -448,12 +449,14 @@ TEST(EdacSourceTest, ACounterThatWrapsAtItsModulusHasADeltaAcrossTheWrap) {
               }};
   const auto statuses = rig.probe();
   const auto modulus = statuses[0].metric.modulus;
-  ASSERT_TRUE(modulus.has_value());
+  ASSERT_FALSE(modulus.has_value());
   const auto before = std::get<Counter>(sample_once(rig)[0]);
   const auto after = std::get<Counter>(sample_once(rig)[0]);
   EXPECT_EQ(before.raw, 4294967290U);
   EXPECT_EQ(after.raw, 5U);
-  EXPECT_EQ(telemetry::counter_delta(before.raw, after.raw, modulus), 11U);
+  EXPECT_EQ(telemetry::counter_advance(before.raw, after.raw, modulus), std::nullopt)
+      << "not 11 errors that wrapped the 32-bit count: nothing counts 4 billion in a run";
+  EXPECT_EQ(telemetry::EdacSource::kRange, std::uint64_t{1} << 32U);
 }
 
 // --- the remedies, one per state ------------------------------------------------

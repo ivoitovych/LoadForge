@@ -30,8 +30,9 @@ namespace loadforge::telemetry {
 /// Reports `edac.corrected` and `edac.uncorrected`, counters of events with
 /// scope kMemoryController and the controller's number as index -- the names
 /// result.hpp's verdict reads. The kernel keeps each count in 32 bits and
-/// prints it unsigned, so both are counters with modulus 2^32 and a larger
-/// value is refused as malformed rather than passed on.
+/// prints it unsigned, so both are counters with no modulus (sample.hpp: a
+/// step down is a reset, not a wrap) and a value of 2^32 or more is refused as
+/// malformed rather than passed on.
 ///
 /// Controllers are found by number, mc0 upwards, stopping at the first whose
 /// ce_count is absent: the kernel numbers them contiguously as they register.
@@ -42,8 +43,12 @@ namespace loadforge::telemetry {
 class EdacSource final : public Source {
  public:
   static constexpr std::string_view kDefaultSysfsRoot = "/sys";
-  /// The width of the kernel's counters: readings are below this.
-  static constexpr std::uint64_t kModulus = std::uint64_t{1} << 32U;
+  /// The width of the kernel's counters: readings are below this. It is a range
+  /// and not the metric's modulus: at one corrected error a second the counter
+  /// takes 136 years to wrap, so a step down is the controller's counters being
+  /// reset (mc/reset_counters, a driver reloaded), which the summarizer counts
+  /// as a reset and does not read as an advance of 2^32 - n errors.
+  static constexpr std::uint64_t kRange = std::uint64_t{1} << 32U;
 
   explicit EdacSource(platform::FileSystem& filesystem,
                       std::string_view sysfs_root = kDefaultSysfsRoot);

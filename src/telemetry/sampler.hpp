@@ -8,8 +8,17 @@
 //
 //   Provider: the telemetry-pipeline stream (src/telemetry/sampler/).
 //   Consumers: the controller, which probes at the start of a run, states the
-//     capability report, and calls a round every sampling interval; the
-//     capability probe of M2a, which is probe() without the rounds.
+//     capability report, and calls a round every sampling interval.
+//
+// THE SAMPLER IS THE ONLY PROBER
+// ------------------------------
+// probe() is the one place Source::probe() is called (source.hpp: once), because
+// it must also register the present metrics as series on the timeline, in the
+// order the sources report them. The capability report (CapabilityReport) is
+// probe()'s answer; telemetry/capability renders it and probes nothing. A
+// controller that wants the report calls probe() -- as often as it likes, for a
+// repeat answers the same report and probes nothing -- and never probes the
+// sources some other way before or beside it.
 //
 // ROUNDS, DRIVEN BY THE CALLER
 // ----------------------------

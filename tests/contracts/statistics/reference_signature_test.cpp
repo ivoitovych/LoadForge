@@ -105,9 +105,14 @@ class ReferenceSummarizerImpl final : public statistics::Summarizer {
         } else if (const auto* raw = std::get_if<Counter>(&point.reading)) {
           ++counter.samples;
           if (previous.has_value()) {
-            counter.delta +=
-                telemetry::counter_delta(previous->second, raw->raw, summary.metric.modulus);
-            span_ns += point.timestamp_ns - previous->first;
+            const auto advance =
+                telemetry::counter_advance(previous->second, raw->raw, summary.metric.modulus);
+            if (advance.has_value()) {
+              counter.delta += *advance;
+              span_ns += point.timestamp_ns - previous->first;
+            } else {
+              ++counter.resets;
+            }
           }
           previous = std::make_pair(point.timestamp_ns, raw->raw);
         } else {
@@ -155,9 +160,21 @@ TEST(SignatureDefinition, FaultNamesAndMemberwiseEquality) {
        [](GaugeSummary& g) { g.stddev.reset(); }, [](GaugeSummary& g) { g.first = 9; },
        [](GaugeSummary& g) { g.last = 9; }, [](GaugeSummary& g) { g.slope_per_second.reset(); }});
   expect_memberwise_equality(
-      CounterSummary{1, 2, 3.0},
+      CounterSummary{1, 2, 3.0, 4},
       {[](CounterSummary& c) { c.samples = 9; }, [](CounterSummary& c) { c.delta = 9; },
-       [](CounterSummary& c) { c.rate_per_second.reset(); }});
+       [](CounterSummary& c) { c.rate_per_second.reset(); },
+       [](CounterSummary& c) { c.resets = 9; }});
+}
+
+TEST(SignatureDefinition, TheWindowsOfARunAndItsPhasesCloseOnTheReadingAtTheirEnd) {
+  const std::vector<telemetry::PhaseMark> marks = {{100, "run"}, {400, "settle"}, {700, "stop"}};
+  EXPECT_EQ(statistics::run_window(100, 900), (Window{100, 901}));
+  EXPECT_EQ(statistics::phase_window(marks, 0, 900), (Window{100, 401}))
+      << "the reading on the next mark is in the phase it closes";
+  EXPECT_EQ(statistics::phase_window(marks, 1, 900), (Window{400, 701}));
+  EXPECT_EQ(statistics::phase_window(marks, 2, 900), (Window{700, 901}))
+      << "the last phase closes on the run's last round";
+  EXPECT_EQ(statistics::kClosingMargin, 1);
 }
 
 }  // namespace

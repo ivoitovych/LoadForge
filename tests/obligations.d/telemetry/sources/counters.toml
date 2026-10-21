@@ -13,13 +13,18 @@ counter's states are the kernel's answers, not files, so the states are \
 scripted on the fake seam (the builder): present; absent (ENOENT for every \
 hardware event, as the development VM answers for real); denied; malformed \
 (a sysctl that is not a number, a counter that never ran); vanished (ENODEV \
-on a read, then back); wraps (a 64-bit raw count passing 2^64). \
+on a read, then back); a step down (a 64-bit raw count passing 2^64 is a \
+reset: the metric has no modulus). \
 perf_event_paranoid is a state of its own: the level is read, named in the \
 detail, and chooses the remedy -- above 2 the advice is to lower it, at 2 or \
 below it is not (the sysctl is not what refuses). P2 is every errno the man \
 page documents for perf_event_open, sixteen of them, each injected and \
 classified (denied, unsupported, or a failure of this attempt), plus a \
 failing reset and a failing enable and the three read failures. P3 is the \
-scaling of a multiplexed counter: running equal to enabled, half, zero, and \
-a product wider than 64 bits. The real kernel's answers on the machine \
+multiplexed counter: the raw count is reported, never scaled up (a count that \
+was scaled went down between rounds), and `counters.pmu_share` is the smallest \
+time-running to time-enabled ratio of the hardware events read: running equal \
+to enabled, half, zero enabled, running above enabled, and no event readable. \
+The software event is opened with the kernel included (a context switch is \
+counted there) and its denial names CAP_PERFMON and perf_event_paranoid 1. The real kernel's answers on the machine \
 running the tests are asserted in a test that can fail."""

@@ -63,7 +63,7 @@ TEST(CsvFileTest, ARealFileReadsBackAsTheSameTableTheStreamHeld) {
   ASSERT_GT(records.size(), 100U);
   EXPECT_EQ(records[0][0], "schema_version");
   EXPECT_EQ(records[1][1], "schema_version");
-  EXPECT_EQ(records[1][2], "1");
+  EXPECT_EQ(records[1][2], "2");
 }
 
 TEST(CsvFileTest, AFullDiskIsAFailureNotAShortFile) {

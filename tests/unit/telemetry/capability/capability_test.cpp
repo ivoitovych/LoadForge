@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The capability probe: what a machine offers, probed once at the start of a
-// run, and rendered with the remedy for every metric that is not there.
+// The capability report: what a machine offers, rendered with the remedy for
+// every metric that is not there.
+//
+// The report is the sampler's probe (telemetry/sampler.hpp), which is the only
+// caller of Source::probe(); this module renders it and probes nothing. The
+// report_of() below stands in for the sampler's probe, once per source in
+// order, so that these tests build reports without the sampler.
 //
 // LOADFORGE P7 FIXTURE BUILDER
 //
-// The probe has no capability state of its own; it carries whatever the
-// sources it is given report, so the six states reach it as the statuses of
-// scripted sources (this module's own mock of the Source contract, run
-// against the source suite, ADR 0003) and, for the real-against-real tier, from
-// the four real sources over the machine captured in tests/fixtures
-// (thermal/fan/frequency absent, procfs present) and over the machine the tests
-// run on.
+// The report has no capability state of its own; it carries whatever the
+// sources it is given report, so the six states reach it as scripted statuses
+// and, for the real-against-real tier, from the four real sources over the
+// machine captured in tests/fixtures (thermal/fan/frequency absent, procfs
+// present) and over the machine the tests run on.
 
 #include "telemetry/capability/capability.hpp"
 
@@ -20,12 +23,12 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "contracts/telemetry/source_contract.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
 #include "telemetry/sample.hpp"
@@ -67,38 +70,38 @@ class ScriptedSource final : public Source {
   [[nodiscard]] std::string_view name() const noexcept override { return name_; }
   [[nodiscard]] std::vector<MetricStatus> probe() override {
     ++probes_;
-    probed_ = true;
     return statuses_;
   }
-  void sample(std::vector<Reading>& out) override {
-    if (!probed_) {
-      return;
-    }
-    for (const MetricStatus& status : statuses_) {
-      if (!status.unavailable.has_value()) {
-        out.emplace_back(Gauge{1.0});
-      }
-    }
-  }
+  void sample(std::vector<Reading>& /*out*/) override {}
 
   [[nodiscard]] int probes() const noexcept { return probes_; }
 
  private:
   std::string name_;
   std::vector<MetricStatus> statuses_;
-  bool probed_ = false;
   int probes_ = 0;
 };
 
-// --- probing
+CapabilityReport report_of(std::span<Source* const> sources) {
+  CapabilityReport report;
+  for (Source* const source : sources) {
+    SourceStatus status;
+    status.source = std::string{source->name()};
+    status.metrics = source->probe();
+    report.sources.push_back(std::move(status));
+  }
+  return report;
+}
 
-TEST(CapabilityProbeTest, EverySourceIsProbedOnceAndInTheOrderGiven) {
+// --- the report
+
+TEST(CapabilityReportTest, TheReportHoldsEachSourcesProbeInTheOrderGiven) {
   ScriptedSource thermal("thermal", {present("thermal.package")});
   ScriptedSource fan("fan", {missing("fan.speed", Availability::kAbsent, "none")});
   ScriptedSource memory("memory", {present("memory.total"), present("memory.free")});
   Source* const sources[] = {&thermal, &fan, &memory};
 
-  const CapabilityReport report = probe_capabilities(sources);
+  const CapabilityReport report = report_of(sources);
   ASSERT_EQ(report.sources.size(), 3U);
   EXPECT_EQ(report.sources[0].source, "thermal");
   EXPECT_EQ(report.sources[1].source, "fan");
@@ -112,18 +115,8 @@ TEST(CapabilityProbeTest, EverySourceIsProbedOnceAndInTheOrderGiven) {
   EXPECT_EQ(count(report).present, 3U);
 }
 
-TEST(CapabilityProbeTest, ASourceProbedHereIsReadyToBeSampledByTheSamplerThatFollows) {
-  ScriptedSource thermal("thermal", {present("thermal.package")});
-  Source* const sources[] = {&thermal};
-  static_cast<void>(probe_capabilities(sources));
-  std::vector<Reading> readings;
-  thermal.sample(readings);
-  EXPECT_EQ(readings.size(), 1U);
-  EXPECT_EQ(thermal.probes(), 1) << "the report did not need a second probe";
-}
-
-TEST(CapabilityProbeTest, NoSourcesIsAnEmptyReportThatSaysSo) {
-  const CapabilityReport report = probe_capabilities({});
+TEST(CapabilityReportTest, NoSourcesIsAnEmptyReportThatSaysSo) {
+  const CapabilityReport report = report_of({});
   EXPECT_TRUE(report.sources.empty());
   EXPECT_EQ(render_capabilities(report), "telemetry capability: 0 of 0 metric(s) present\n");
 }
@@ -241,7 +234,7 @@ TEST(CapabilityRealSourcesTest, TheCapturedMachineReportsWhatItHasAndSaysWhatItL
   MemorySource memory(files);
   Source* const sources[] = {&thermal, &fan, &frequency, &memory};
 
-  const CapabilityReport report = probe_capabilities(sources);
+  const CapabilityReport report = report_of(sources);
   ASSERT_EQ(report.sources.size(), 4U);
   EXPECT_EQ(count(report).metrics, 1U + 1U + 6U + 7U);
   EXPECT_EQ(count(report).present, 2U + 7U) << "the two tick counters and the seven memory figures";
@@ -272,7 +265,7 @@ TEST(CapabilityRealSourcesTest, ThisMachineRendersWithARemedyForEveryAbsence) {
   MemorySource memory(files);
   Source* const sources[] = {&thermal, &fan, &frequency, &memory};
 
-  const CapabilityReport report = probe_capabilities(sources);
+  const CapabilityReport report = report_of(sources);
   ASSERT_EQ(report.sources.size(), 4U);
   for (const SourceStatus& source : report.sources) {
     ASSERT_FALSE(source.metrics.empty()) << source.source << ": a silent column";
@@ -290,48 +283,5 @@ TEST(CapabilityRealSourcesTest, ThisMachineRendersWithARemedyForEveryAbsence) {
   EXPECT_GE(counts.present, 1U);
 }
 
-// --- this module's mock, against the source suite (ADR 0003)
-
-struct MockPresent {
-  static constexpr int kRounds = 3;
-  static std::unique_ptr<Source> make() {
-    return std::make_unique<ScriptedSource>(
-        "thermal", std::vector<MetricStatus>{present("thermal.package", Scope::kPackage, 0),
-                                             present("thermal.core", Scope::kCore, 0)});
-  }
-};
-
-struct MockAbsent {
-  static constexpr int kRounds = 2;
-  static std::unique_ptr<Source> make() {
-    return std::make_unique<ScriptedSource>(
-        "fan", std::vector<MetricStatus>{missing("fan.speed", Availability::kAbsent, "none here")});
-  }
-};
-
-struct MockMixed {
-  static constexpr int kRounds = 2;
-  static std::unique_ptr<Source> make() {
-    return std::make_unique<ScriptedSource>(
-        "thermal",
-        std::vector<MetricStatus>{
-            present("thermal.package", Scope::kPackage, 0),
-            missing("thermal.sensor", Availability::kDenied, "udev", Scope::kDevice, 1),
-            missing("thermal.sensor", Availability::kMalformed, "driver", Scope::kDevice, 2)});
-  }
-};
-
 }  // namespace
 }  // namespace loadforge::telemetry
-
-namespace loadforge::contracts {
-
-namespace {
-
-using CapabilityMocks =
-    ::testing::Types<telemetry::MockPresent, telemetry::MockAbsent, telemetry::MockMixed>;
-
-INSTANTIATE_TYPED_TEST_SUITE_P(CapabilityScriptedSource, SourceContract, CapabilityMocks);
-
-}  // namespace
-}  // namespace loadforge::contracts

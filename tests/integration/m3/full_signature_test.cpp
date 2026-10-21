@@ -33,8 +33,8 @@ TEST(FullSignatureTest, EverySourceContributesToOneSignatureFromFixturesAlone) {
   stack.machine.install_everything();
   script_counters(stack.machine, 1'000'000);
   stack.start();
-  ASSERT_EQ(count(stack.capabilities()).metrics, 26U);
-  ASSERT_EQ(count(stack.capabilities()).present, 26U);
+  ASSERT_EQ(count(stack.capabilities()).metrics, 27U);
+  ASSERT_EQ(count(stack.capabilities()).present, 27U);
 
   std::uint64_t energy = 123'456'789'012;
   for (int round = 0; round < 5; ++round) {
@@ -46,7 +46,7 @@ TEST(FullSignatureTest, EverySourceContributesToOneSignatureFromFixturesAlone) {
     stack.round();
   }
   const statistics::LoadSignature signature = stack.signature();
-  EXPECT_EQ(signature.metrics.size(), 26U) << "one summary per series, none for an absent one";
+  EXPECT_EQ(signature.metrics.size(), 27U) << "one summary per series, none for an absent one";
 
   const auto* package =
       std::get_if<GaugeSummary>(&Stack::find(signature, "thermal.package")->value);
@@ -74,7 +74,7 @@ TEST(FullSignatureTest, EverySourceContributesToOneSignatureFromFixturesAlone) {
   const auto* joules =
       std::get_if<CounterSummary>(&Stack::find(signature, "power.package", 0)->value);
   ASSERT_NE(joules, nullptr);
-  EXPECT_EQ(joules->delta, 20'000'000U) << "four steps of 5 J, in the raw counter's own unit";
+  EXPECT_EQ(joules->delta, 20'000'000U) << "four steps of 5 J, in microjoules";
 
   const auto* cycles =
       std::get_if<CounterSummary>(&Stack::find(signature, "counters.cycles")->value);
@@ -101,7 +101,7 @@ TEST(FullSignatureTest, EverySourceContributesToOneSignatureFromFixturesAlone) {
     EXPECT_NE(json.find(std::string{"\"name\": \""} + name + "\""), std::string::npos) << name;
     EXPECT_NE(csv.find(name), std::string::npos) << name;
   }
-  EXPECT_NE(json.find("\"schema_version\": 1"), std::string::npos);
+  EXPECT_NE(json.find("\"schema_version\": 2"), std::string::npos);
   EXPECT_NE(json.find("\"delta\": 2,"), std::string::npos) << "the corrected errors, in the JSON";
 }
 

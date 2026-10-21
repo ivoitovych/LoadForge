@@ -46,6 +46,15 @@ struct FindingCounts {
 [[nodiscard]] bool counter_advanced(const statistics::LoadSignature& signature,
                                     std::string_view name);
 
+/// Whether any series named `name` in the signature was blind for part of the
+/// window: it has Unavailable readings (`unavailable_samples` above zero), or
+/// it is a counter that was reset (`resets` above zero). What happened in that
+/// part is not known, so "it did not move" cannot be said of the series. A
+/// series that was never registered, because its metric was absent at probe,
+/// is not in the signature and is not blind: the capability report says it was
+/// never read.
+[[nodiscard]] bool counter_blind(const statistics::LoadSignature& signature, std::string_view name);
+
 /// Sets the schema version and the verdict a result's contents imply, the
 /// last thing done to a result before it is written.
 void seal(RunResult& result);
