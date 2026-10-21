@@ -91,8 +91,7 @@ double pair_value(std::uint64_t seed, std::uint64_t unit, std::size_t row,
 class SparseWorkload final : public Workload {
  public:
   SparseWorkload(const WorkloadConfig& config, const Plan& plan, KernelsAt kernels) noexcept
-      : descriptor_{std::string(kName), 1, DeterminismClass::kBitExactFixedDecomposition,
-                    verification::Contract::kBounded, simd::kernel_paths(kKernelTable)},
+      : descriptor_(workload_descriptor()),
         plan_(plan),
         seed_(config.seed),
         kernels_(kernels) {}
@@ -178,6 +177,11 @@ class SparseWorkload final : public Workload {
 };
 
 }  // namespace
+
+Descriptor workload_descriptor() {
+  return Descriptor{std::string(kName), 1, DeterminismClass::kBitExactFixedDecomposition,
+                    verification::Contract::kBounded, simd::kernel_paths(kKernelTable)};
+}
 
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   const KernelsAt kernels = simd::kernel_at(kKernelTable, config.isa);

@@ -22,6 +22,10 @@ namespace loadforge::workloads::stencil {
 [[nodiscard]] core::Result<std::unique_ptr<Workload>, WorkloadError> create(
     const WorkloadConfig& config);
 
+/// What every stencil workload says about itself, without creating one: the
+/// descriptor of any workload create() returns (Registry::descriptor).
+[[nodiscard]] Descriptor workload_descriptor();
+
 }  // namespace loadforge::workloads::stencil
 
 #endif

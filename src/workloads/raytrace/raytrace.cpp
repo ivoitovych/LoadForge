@@ -108,6 +108,16 @@ class RaytraceWorkload final : public Workload {
 
 }  // namespace
 
+Descriptor workload_descriptor() {
+  Descriptor descriptor;
+  descriptor.name = std::string(kName);
+  descriptor.version = kVersion;
+  descriptor.determinism = DeterminismClass::kBitExactFixedDecomposition;
+  descriptor.contract = verification::Contract::kExact;
+  descriptor.paths = simd::kernel_paths(row_kernels());
+  return descriptor;
+}
+
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   const std::uint32_t edge = config.decomposition == 0 ? kDefaultTileEdge : config.decomposition;
   if (!is_tile_edge(edge)) {
@@ -129,12 +139,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
                                                          std::to_string(config.footprint_bytes));
   }
 
-  Descriptor descriptor;
-  descriptor.name = std::string(kName);
-  descriptor.version = kVersion;
-  descriptor.determinism = DeterminismClass::kBitExactFixedDecomposition;
-  descriptor.contract = verification::Contract::kExact;
-  descriptor.paths = simd::kernel_paths(table);
+  Descriptor descriptor = workload_descriptor();
 
   Plan plan;
   plan.input_bytes = kInputBytes;

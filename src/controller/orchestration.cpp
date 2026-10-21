@@ -1263,7 +1263,13 @@ core::Result<RunReport, ControllerError> Run::finish() {
     entry.not_performed = worker.not_performed;
     entry.findings_dropped = worker.findings_dropped;
     entry.commands = worker.commands;
-    entry.commands.unacknowledged = worker.unanswered.size();
+    // A Stop the worker never read is not a message it failed to answer: a
+    // worker paces itself by the same duration and usually leaves on its own
+    // before the controller's Stop is read, and its exit is the answer.
+    entry.commands.unacknowledged = static_cast<std::uint64_t>(std::ranges::count_if(
+        worker.unanswered, [](const Tracked::Unanswered& each) {
+          return !std::holds_alternative<worker::Stop>(each.command);
+        }));
     if (options_->schedule != nullptr) {
       entry.records.push_back(describe(entry.commands));
     }

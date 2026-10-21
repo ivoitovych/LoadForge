@@ -354,6 +354,16 @@ class GraphWorkload final : public Workload {
 
 }  // namespace
 
+Descriptor workload_descriptor() {
+  Descriptor descriptor;
+  descriptor.name = std::string(kName);
+  descriptor.version = kWorkloadVersion;
+  descriptor.determinism = DeterminismClass::kBitExactFixedDecomposition;
+  descriptor.contract = verification::Contract::kExact;
+  descriptor.paths = simd::kernel_paths(sweep_kernels());
+  return descriptor;
+}
+
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   const std::uint32_t accumulators =
       config.decomposition == 0 ? kDefaultAccumulators : config.decomposition;
@@ -383,12 +393,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
                              " bytes of footprint, " + std::to_string(config.footprint_bytes) +
                              " given"};
   }
-  Descriptor descriptor;
-  descriptor.name = std::string(kName);
-  descriptor.version = kWorkloadVersion;
-  descriptor.determinism = DeterminismClass::kBitExactFixedDecomposition;
-  descriptor.contract = verification::Contract::kExact;
-  descriptor.paths = simd::kernel_paths(kernels);
+  Descriptor descriptor = workload_descriptor();
   return std::unique_ptr<Workload>(
       std::make_unique<GraphWorkload>(std::move(descriptor), plan, config.seed, kernel));
 }

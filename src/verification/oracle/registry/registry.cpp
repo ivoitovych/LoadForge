@@ -10,14 +10,28 @@
 
 #include "core/result.hpp"
 #include "verification/oracle.hpp"
+#include "verification/oracle/adaptive_mesh/oracle.hpp"
 #include "verification/oracle/compression/oracle.hpp"
 #include "verification/oracle/dense_linear/dense_linear.hpp"
+#include "verification/oracle/fft/fft_oracle.hpp"
+#include "verification/oracle/graph/graph_oracle.hpp"
 #include "verification/oracle/monte_carlo/monte_carlo_oracle.hpp"
+#include "verification/oracle/particles/particles_oracle.hpp"
+#include "verification/oracle/raytrace/oracle.hpp"
 #include "verification/oracle/sort/sort_oracle.hpp"
+#include "verification/oracle/sparse/sparse_oracle.hpp"
+#include "verification/oracle/stencil/stencil_oracle.hpp"
+#include "workloads/adaptive_mesh/spec.hpp"
 #include "workloads/compression/compression.hpp"
 #include "workloads/dense_linear/dense_linear.hpp"
+#include "workloads/fft/spec.hpp"
+#include "workloads/graph/spec.hpp"
 #include "workloads/monte_carlo/spec.hpp"
+#include "workloads/particles/spec.hpp"
+#include "workloads/raytrace/spec.hpp"
 #include "workloads/sort/spec.hpp"
+#include "workloads/sparse/spec.hpp"
+#include "workloads/stencil/spec.hpp"
 #include "workloads/workload.hpp"
 
 namespace loadforge::verification {
@@ -55,11 +69,18 @@ struct Entry {
 };
 
 // Sorted by name, as the workload registry's table is.
-constexpr std::array<Entry, 4> kEntries{{
+constexpr std::array<Entry, 11> kEntries{{
+    {workloads::adaptive_mesh::kName, &oracle::adaptive_mesh::create},
     {workloads::compression::kName, &compression_oracle},
     {workloads::dense_linear::kName, &dense_linear_oracle},
+    {workloads::fft::kName, &oracle::fft::create},
+    {workloads::graph::kName, &oracle::graph::create},
     {workloads::monte_carlo::kName, &monte_carlo_oracle},
+    {workloads::particles::kName, &oracle::particles::create},
+    {workloads::raytrace::kName, &oracle::raytrace::create},
     {workloads::sort::kName, &sort_oracle},
+    {workloads::sparse::kName, &oracle::sparse::create},
+    {workloads::stencil::kName, &oracle::stencil::create},
 }};
 
 }  // namespace

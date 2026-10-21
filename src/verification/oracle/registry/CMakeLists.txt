@@ -4,7 +4,14 @@ loadforge_component(loadforge_verification_oracle_registry
   SOURCES
     registry.cpp
   LINK
+    loadforge_verification_oracle_adaptive_mesh
     loadforge_verification_oracle_compression
     loadforge_verification_oracle_dense_linear
+    loadforge_verification_oracle_fft
+    loadforge_verification_oracle_graph
     loadforge_verification_oracle_monte_carlo
-    loadforge_verification_oracle_sort)
+    loadforge_verification_oracle_particles
+    loadforge_verification_oracle_raytrace
+    loadforge_verification_oracle_sort
+    loadforge_verification_oracle_sparse
+    loadforge_verification_oracle_stencil)

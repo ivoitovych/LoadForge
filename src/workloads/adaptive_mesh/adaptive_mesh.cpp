@@ -133,8 +133,7 @@ void run_leaf(void* context, std::size_t index, std::size_t slot) noexcept {
 class AdaptiveMesh final : public Workload {
  public:
   AdaptiveMesh(const WorkloadConfig& config, std::uint64_t units)
-      : descriptor_{std::string(kName), kWorkloadVersion, DeterminismClass::kBoundedResidual,
-                    verification::Contract::kBounded, simd::IsaSet{simd::IsaPath::kScalar}},
+      : descriptor_(workload_descriptor()),
         plan_{kInputBytes, kOutputBytes, kScratchBytes, units, 1, kLogicalBytes, kOperations},
         seed_(config.seed) {}
 
@@ -192,6 +191,11 @@ class AdaptiveMesh final : public Workload {
 };
 
 }  // namespace
+
+Descriptor workload_descriptor() {
+  return Descriptor{std::string(kName), kWorkloadVersion, DeterminismClass::kBoundedResidual,
+                    verification::Contract::kBounded, simd::IsaSet{simd::IsaPath::kScalar}};
+}
 
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   if (config.decomposition > 1) {

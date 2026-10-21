@@ -86,7 +86,9 @@ struct FindingReport {
 ///   refused         acknowledged kRefused; each is also a line in the worker's
 ///                   records, with the worker's reason.
 ///   unacknowledged  still unanswered when the worker was gone: a worker that
-///                   died, or was stopped, with a message unread.
+///                   died with a message unread. Not a Stop: a worker usually
+///                   ends by its own duration before it reads the controller's,
+///                   and its exit is the answer.
 ///   dropped         not sent, because the worker had too many unanswered
 ///                   already (a worker that does not read its pipe).
 struct CommandReport {

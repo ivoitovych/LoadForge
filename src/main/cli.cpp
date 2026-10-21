@@ -16,6 +16,7 @@
 
 #include "config/config.hpp"
 #include "controller/isolate.hpp"
+#include "controller/journal/file_ops.hpp"
 #include "controller/orchestration.hpp"
 #include "controller/rerun.hpp"
 #include "controller/results/fingerprint.hpp"
@@ -23,8 +24,10 @@
 #include "core/duration.hpp"
 #include "core/parse_error.hpp"
 #include "core/parse_number.hpp"
+#include "main/journal_rig.hpp"
 #include "main/outcome.hpp"
 #include "main/run_result.hpp"
+#include "main/schedules.hpp"
 #include "main/selftest.hpp"
 #include "platform/affinity.hpp"
 #include "platform/fpenv/real_control.hpp"
@@ -46,6 +49,7 @@
 #include "verification/isolation/ladder.hpp"
 #include "worker/entry.hpp"
 #include "worker/services.hpp"
+#include "workloads/mixed/cycling.hpp"
 #include "workloads/registry/registry.hpp"
 
 namespace loadforge::cli {
@@ -84,17 +88,29 @@ void print_usage(std::ostream& out) {
       << "  loadforge --help\n"
       << "  loadforge --check-config FILE   parse and validate a configuration\n"
       << "  loadforge stress --config FILE [--output FORMATS] [--output-dir DIR]\n"
-      << "                   [--sample-interval DURATION]\n"
+      << "                   [--sample-interval DURATION] [--journal FILE]\n"
       << "                                  run a configuration under supervision,\n"
       << "                                  sampling every telemetry source; FORMATS is\n"
       << "                                  json, csv or json,csv, written to DIR/run.<format>\n"
       << "  loadforge stress --test NAME [--duration D] [--workers N] [--footprint SIZE]\n"
       << "                   [--isa scalar|avx2|avx512|neon] [--seed N]\n"
-      << "                   [--lock require|try|none]\n"
+      << "                   [--lock require|try|none] [--journal FILE]\n"
       << "                   [--output FORMATS] [--output-dir DIR] [--sample-interval DURATION]\n"
       << "                                  stress with one verified workload, sampled and\n"
       << "                                  written the same way; NAME is one of\n"
-      << "                                  compression, dense_linear, monte_carlo, sort\n"
+      << "                                  adaptive_mesh, compression, dense_linear, fft, graph,\n"
+      << "                                  monte_carlo, particles, raytrace, sort, sparse,\n"
+      << "                                  stencil, or one of the two runs made of a schedule:\n"
+      << "                                  mixed [--rotation D]   the flagship: workloads rotate\n"
+      << "                                  across the workers, and the workers across the CPUs,\n"
+      << "                                  while every unit goes on being verified\n"
+      << "                                  cycling [--workload NAME] [--cycle load|cores]\n"
+      << "                                  [--dwell D]   thermal and power cycling\n"
+      << "  loadforge journal FILE          print a crash journal and say how it ended\n"
+      << "\n"
+      << "With --journal, a run writes a crash journal to FILE (an entry every few seconds,\n"
+      << "each synced to disk) and, at the next start, says how the previous one ended and\n"
+      << "keeps it as FILE.1, FILE.2 ... if it did not end cleanly.\n"
       << "\n"
       << "The configured run.duration is the time the workers run, counted from the moment\n"
       << "the last of them has been started; starting them is not part of it, and a run on a\n"
@@ -121,6 +137,11 @@ struct TestArgs {
   std::vector<std::string> formats;  ///< --output: none given is none written.
   std::optional<std::string> output_dir;
   std::optional<std::int64_t> sample_interval_ns;
+  std::optional<std::string> journal;
+  std::optional<core::Duration> rotation;  ///< mixed only.
+  std::optional<core::Duration> dwell;     ///< cycling only.
+  std::optional<mixed::CycleKind> cycle;   ///< cycling only.
+  std::optional<std::string> on_workload;  ///< cycling only.
 };
 
 /// The sample interval a flag names, in nanoseconds, or what is wrong with it.
@@ -244,6 +265,56 @@ std::optional<std::string> take_sample_interval(const Written& option, TestArgs&
   return std::nullopt;
 }
 
+std::optional<std::string> take_journal(const Written& option, TestArgs& out) {
+  out.journal = std::string{option.value};
+  return std::nullopt;
+}
+
+/// A duration that is above zero and that a run can have.
+core::Result<core::Duration, std::string> positive_duration(const Written& option) {
+  auto duration = core::parse_duration(option.value);
+  if (!duration.has_value()) {
+    return refused(option.key, std::string{core::describe(duration.error())});
+  }
+  if (duration.value().count() <= 0 || duration.value().count() > kLongestMilliseconds) {
+    return refused(option.key, "must be above zero and no longer than a run can be");
+  }
+  return duration.value();
+}
+
+std::optional<std::string> take_rotation(const Written& option, TestArgs& out) {
+  auto duration = positive_duration(option);
+  if (!duration.has_value()) {
+    return duration.error();
+  }
+  out.rotation = duration.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_dwell(const Written& option, TestArgs& out) {
+  auto duration = positive_duration(option);
+  if (!duration.has_value()) {
+    return duration.error();
+  }
+  out.dwell = duration.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_cycle(const Written& option, TestArgs& out) {
+  for (const mixed::CycleKind kind : {mixed::CycleKind::kLoad, mixed::CycleKind::kCores}) {
+    if (option.value == mixed::describe(kind)) {
+      out.cycle = kind;
+      return std::nullopt;
+    }
+  }
+  return refused(option.key, "'" + std::string{option.value} + "' is none of load, cores");
+}
+
+std::optional<std::string> take_on_workload(const Written& option, TestArgs& out) {
+  out.on_workload = std::string{option.value};
+  return std::nullopt;
+}
+
 /// Each option of `stress --test`: how it is read, and whether it has been.
 struct Option {
   std::string_view key;
@@ -251,7 +322,7 @@ struct Option {
   bool (*given)(const TestArgs&);
 };
 
-constexpr std::array<Option, 9> kOptions{{
+constexpr std::array<Option, 14> kOptions{{
     {"--duration", &take_duration, [](const TestArgs& a) { return a.duration.has_value(); }},
     {"--workers", &take_workers, [](const TestArgs& a) { return a.workers.has_value(); }},
     {"--footprint", &take_footprint, [](const TestArgs& a) { return a.footprint.has_value(); }},
@@ -262,6 +333,11 @@ constexpr std::array<Option, 9> kOptions{{
     {"--output-dir", &take_output_dir, [](const TestArgs& a) { return a.output_dir.has_value(); }},
     {"--sample-interval", &take_sample_interval,
      [](const TestArgs& a) { return a.sample_interval_ns.has_value(); }},
+    {"--journal", &take_journal, [](const TestArgs& a) { return a.journal.has_value(); }},
+    {"--rotation", &take_rotation, [](const TestArgs& a) { return a.rotation.has_value(); }},
+    {"--dwell", &take_dwell, [](const TestArgs& a) { return a.dwell.has_value(); }},
+    {"--cycle", &take_cycle, [](const TestArgs& a) { return a.cycle.has_value(); }},
+    {"--workload", &take_on_workload, [](const TestArgs& a) { return a.on_workload.has_value(); }},
 }};
 
 /// The options after `--test`: its name, then any of the options in any order,
@@ -372,6 +448,7 @@ struct StressFlags {
   std::optional<std::string_view> output;
   std::optional<std::string_view> output_dir;
   std::optional<std::string_view> interval;
+  std::optional<std::string_view> journal;
 };
 
 /// The place a flag's value goes, or null for a flag stress does not take.
@@ -387,6 +464,9 @@ std::optional<std::string_view>* slot_of(StressFlags& flags, std::string_view fl
   }
   if (flag == "--sample-interval") {
     return &flags.interval;
+  }
+  if (flag == "--journal") {
+    return &flags.journal;
   }
   return nullptr;
 }
@@ -439,6 +519,9 @@ core::Result<StressArgs, std::string> parse_stress_args(std::span<const std::str
     }
     parsed.options.sample_interval_ns = interval.value();
   }
+  if (flags.journal.has_value()) {
+    parsed.options.journal_path = std::string{*flags.journal};
+  }
   return parsed;
 }
 
@@ -463,6 +546,80 @@ int stress(std::string_view path, const std::string& self_link, std::string_view
   return run_stress(syscalls, config, launch->executable, launch->machine, options, out, err);
 }
 
+namespace {
+
+/// What making a schedule needs that the request does not carry.
+struct SchedulePlan {
+  const workloads::Registry* registry;
+  std::size_t workers;
+  const std::vector<std::uint32_t>* cpus;
+  std::uint64_t seed;
+  core::Duration duration;
+  std::uint64_t footprint_bytes;  ///< When the request names none.
+};
+
+/// The run `--test mixed` or `--test cycling` asked for, or why it cannot be had.
+core::Result<ScheduledRun, std::string> plan_scheduled_run(const TestArgs& test,
+                                                           const std::string& workload,
+                                                           const SchedulePlan& plan) {
+  if (test.workload == "mixed") {
+    MixedRequest request;
+    request.registry = plan.registry;
+    request.workers = plan.workers;
+    request.cpus = *plan.cpus;
+    request.seed = plan.seed;
+    request.duration_ms = plan.duration.count();
+    if (test.rotation.has_value()) {
+      request.rotation_ms = test.rotation->count();
+    }
+    request.footprint_bytes = plan.footprint_bytes;
+    if (test.footprint.has_value()) {
+      if (!test.footprint->is_absolute()) {
+        return std::string{"--footprint must be a size, not a share of memory"};
+      }
+      request.footprint_bytes = test.footprint->byte_count();
+    }
+    return plan_mixed(request);
+  }
+  CyclingRequest request;
+  request.workload = workload;
+  request.kind = test.cycle.value_or(mixed::CycleKind::kLoad);
+  request.workers = plan.workers;
+  request.duration_ms = plan.duration.count();
+  if (test.dwell.has_value()) {
+    request.dwell_ms = test.dwell->count();
+  }
+  request.footprint = test.footprint;
+  return plan_cycling(request);
+}
+
+}  // namespace
+
+namespace {
+
+/// The option of `stress --test` that does not belong to the run asked for, or
+/// nothing: the schedules' options mean nothing to a plain workload, and a
+/// mixed run takes no cycle's.
+std::optional<std::string_view> misplaced_option(const TestArgs& test) {
+  const bool mixed_run = test.workload == "mixed";
+  const bool cycling_run = test.workload == "cycling";
+  if (!mixed_run && test.rotation.has_value()) {
+    return "--rotation";
+  }
+  if (!cycling_run && test.dwell.has_value()) {
+    return "--dwell";
+  }
+  if (!cycling_run && test.cycle.has_value()) {
+    return "--cycle";
+  }
+  if (!cycling_run && test.on_workload.has_value()) {
+    return "--workload";
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
 int stress_test(std::span<const std::string_view> args, const std::string& self_link,
                 std::string_view sysfs_root, const StressOptions& base, std::ostream& out,
                 std::ostream& err) {
@@ -472,10 +629,20 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
     return kUsageError;
   }
   const TestArgs& test = parsed.value();
+  if (const auto misplaced = misplaced_option(test); misplaced.has_value()) {
+    err << "loadforge: stress --test " << test.workload << ": " << *misplaced
+        << " is not an option of this run\n";
+    return kUsageError;
+  }
+  const bool mixed_run = test.workload == "mixed";
+  const bool cycling_run = test.workload == "cycling";
   const workloads::BuiltinRegistry registry;
   const std::vector<std::string> names = registry.names();
-  if (std::ranges::find(names, test.workload) == names.end()) {
-    err << "loadforge: stress --test: no workload named '" << test.workload << "'; this build has:";
+  // The workload the workers run, when one workload is what they run.
+  const std::string workload = cycling_run ? test.on_workload.value_or("dense_linear")
+                                           : test.workload;
+  if (!mixed_run && std::ranges::find(names, workload) == names.end()) {
+    err << "loadforge: stress --test: no workload named '" << workload << "'; this build has:";
     for (const std::string& name : names) {
       err << " " << name;
     }
@@ -488,17 +655,12 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
     return kConfigRefused;
   }
   const std::vector<std::uint32_t> cpus = allowed_cpus(syscalls, launch->machine);
-  config::Config config;
-  config.run.mode = config::Mode::kStress;
-  config.run.duration = test.duration.value_or(core::Duration{kDefaultTestMilliseconds});
+  const core::Duration duration = test.duration.value_or(core::Duration{kDefaultTestMilliseconds});
   // One worker per CPU the process may use, each pinned to its own: the
   // placement a finding needs to be repeated on another core.
   const std::size_t workers = test.workers.has_value()
                                   ? static_cast<std::size_t>(*test.workers)
                                   : std::clamp<std::size_t>(cpus.size(), 1, kMostDefaultWorkers);
-  for (std::size_t index = 0; index < workers; ++index) {
-    config.workloads.emplace_back(test.workload, config::Threads::count(1), true, test.footprint);
-  }
   StressOptions options = base;
   options.isa = test.isa;
   options.seed = test.seed.value_or(options.seed);
@@ -509,7 +671,32 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
   if (!test.formats.empty()) {
     options.formats = test.formats;
   }
+  if (test.journal.has_value()) {
+    options.journal_path = *test.journal;
+  }
   options.sample_interval_ns = test.sample_interval_ns.value_or(options.sample_interval_ns);
+
+  // The run made of a schedule, held here to the end of the run.
+  std::optional<ScheduledRun> scheduled;
+  config::Config config;
+  if (mixed_run || cycling_run) {
+    const SchedulePlan plan{&registry, workers, &cpus, options.seed, duration,
+                            options.footprint_bytes};
+    auto planned = plan_scheduled_run(test, workload, plan);
+    if (!planned.has_value()) {
+      err << "loadforge: stress --test " << test.workload << ": " << planned.error() << "\n";
+      return kConfigRefused;
+    }
+    scheduled = std::move(planned).value();
+    config = scheduled->config;
+    options.schedule = &scheduled->schedule;
+  } else {
+    config.run.mode = config::Mode::kStress;
+    config.run.duration = duration;
+    for (std::size_t index = 0; index < workers; ++index) {
+      config.workloads.emplace_back(workload, config::Threads::count(1), true, test.footprint);
+    }
+  }
   return run_stress(syscalls, config, launch->executable, launch->machine, options, out, err);
 }
 
@@ -525,6 +712,20 @@ struct Ending {
   const telemetry::TimelineView* timeline = nullptr;
   ResultSink* sink = nullptr;
 };
+
+/// Says that the run ended, in the journal: the terminator a replay reads as a
+/// clean end. Whether the run did end cleanly is not asked here: the run came
+/// back to say how it went, which is all a terminator claims -- a machine that
+/// dies, or a controller that is killed, never gets here.
+void end_journal(std::optional<RunJournal>& journal, std::ostream& err) {
+  if (!journal.has_value()) {
+    return;
+  }
+  if (auto closed = journal->writer->close(); !closed.has_value()) {
+    err << "loadforge: the journal could not be closed, and will read as ended abnormally: "
+        << closed.error().detail << "\n";
+  }
+}
 
 /// The result of a run, said and written (M3), and the exit code it comes to.
 int conclude_run(const Ending& ending, std::ostream& out, std::ostream& err) {
@@ -602,6 +803,31 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     }
   }
 
+  // The crash journal: what the previous run left at the path is replayed, said
+  // and kept before anything is started, and a run asked to journal that cannot
+  // is refused, not run without the evidence.
+  journal::RealFileOps real_ops;
+  RealJournalFiles real_files;
+  std::optional<RunJournal> journal_open;
+  if (!stress_options.journal_path.empty()) {
+    journal::FileOps& ops = stress_options.journal_ops != nullptr ? *stress_options.journal_ops
+                                                                  : real_ops;
+    JournalFiles& housekeeping = stress_options.journal_files != nullptr
+                                     ? *stress_options.journal_files
+                                     : real_files;
+    auto opened = open_run_journal(ops, housekeeping, stress_options.journal_path);
+    if (!opened.has_value()) {
+      err << "loadforge: " << opened.error() << "\n";
+      return kConfigRefused;
+    }
+    journal_open = std::move(opened).value();
+    if (!journal_open->previous.empty()) {
+      out << journal_open->previous << "\n";
+    }
+    options.journal = journal_open->writer.get();
+  }
+  options.schedule = stress_options.schedule;
+
   // The verified runs: the workloads this build has, the ISA path chosen once
   // from what this CPU can run, and the floating-point registers established
   // and asserted before anything starts (M2a exit criteria 1 and 5; M2b 4).
@@ -671,6 +897,8 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   }
   const telemetry::BoundedTimeline no_timeline(0);
   const telemetry::BoundedTimeline& timeline = rig != nullptr ? rig->timeline() : no_timeline;
+  TimelineNotes journal_notes(timeline);
+  options.journal_notes = &journal_notes;
 
   reporters::ConsoleReporter reporter(out);
   controller::Controller supervisor(syscalls, reporter);
@@ -680,6 +908,7 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   err.flush();
   auto ran = supervisor.run(config, options);
   if (!ran.has_value()) {
+    end_journal(journal_open, err);
     err << "loadforge: " << describe(ran.error()) << "\n";
     return kConfigRefused;
   }
@@ -688,6 +917,7 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   if (child_code.has_value()) {
     return *child_code;  // This process is a worker that could not exec.
   }
+  end_journal(journal_open, err);
   // The workers are gone: what is left to do is repeat the units that came
   // out wrong, in processes of their own and say what that shows (M2); then
   // put the result together, say it, and write it (M3). A re-run that could
@@ -698,6 +928,17 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   const auto conclude = [&ending, &out, &err] { return conclude_run(ending, out, err); };
   return after_isolation(report, &snapshot, isolator, rerunner, stress_options.isolation_limit,
                          reporter, conclude);
+}
+
+int show_journal(const std::string& path, journal::FileOps& ops, JournalFiles& files,
+                 std::ostream& out, std::ostream& err) {
+  auto shown = read_journal(ops, files, path);
+  if (!shown.has_value()) {
+    err << "loadforge: " << shown.error() << "\n";
+    return kConfigRefused;
+  }
+  out << render_replay(shown.value(), path, true);
+  return kOk;
 }
 
 namespace {
@@ -780,6 +1021,15 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
     }
     return stress(parsed.value().config_path, "/proc/self/exe", topology::kDefaultSysfsRoot,
                   parsed.value().options, out, err);
+  }
+  if (command == "journal") {
+    if (args.size() != 2) {
+      err << "loadforge: journal takes exactly one FILE\n";
+      return kUsageError;
+    }
+    journal::RealFileOps ops;
+    RealJournalFiles files;
+    return show_journal(std::string{args[1]}, ops, files, out, err);
   }
   if (args.size() > 1) {
     err << "loadforge: expected a single argument, got " << args.size() << "\n";

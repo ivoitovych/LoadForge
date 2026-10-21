@@ -12,9 +12,11 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/journal/file_ops.hpp"
 #include "controller/results/result.hpp"
 #include "core/result.hpp"
 #include "core/version.hpp"
+#include "main/journal_rig.hpp"
 #include "main/outcome.hpp"
 #include "main/result_files.hpp"
 #include "main/telemetry_rig.hpp"
@@ -24,6 +26,7 @@
 #include "statistics/signature.hpp"
 #include "topology/snapshot.hpp"
 #include "verification/runner.hpp"
+#include "workloads/mixed/schedule.hpp"
 
 namespace loadforge::cli {
 
@@ -93,6 +96,17 @@ struct HostFacts {
 ///   isolation_limit  the most wrong results of one worker that fault isolation repeats.
 ///   lock             what each worker's runner does about locking its working set
 ///                    (verification::LockPolicy); `stress --test --lock` sets it.
+///
+/// What the workers are told while they run, and the crash journal (M5):
+///   schedule         the flagship mixed workload's rotations or thermal and
+///                    power cycling's levels (workloads/mixed): carried out by
+///                    the controller. Not owned. Null: the workers run what
+///                    they were started as. `stress --test mixed` and
+///                    `stress --test cycling` make one.
+///   journal_path     the crash journal (main/journal_rig.hpp): empty, none is
+///                    written. `--journal FILE` sets it.
+///   journal_ops, journal_files   how the journal reaches the filesystem; null
+///                    is the real one. A test names a double that fails.
 struct StressOptions {
   std::vector<std::string> formats;
   std::string output_dir = ".";
@@ -110,11 +124,16 @@ struct StressOptions {
   std::uint64_t footprint_bytes = std::uint64_t{32} << 20U;
   std::size_t isolation_limit = 16;
   verification::LockPolicy lock = verification::LockPolicy::kTry;
+  const mixed::Schedule* schedule = nullptr;
+  std::string journal_path;
+  journal::FileOps* journal_ops = nullptr;
+  JournalFiles* journal_files = nullptr;
 };
 
 /// The stress command's arguments after "stress": `--config FILE`, and
-/// optionally `--output FORMATS`, `--output-dir DIR` and `--sample-interval
-/// DURATION`, in any order, each once. (`--test NAME` is stress_test's.)
+/// optionally `--output FORMATS`, `--output-dir DIR`, `--sample-interval
+/// DURATION` and `--journal FILE`, in any order, each once. (`--test NAME` is
+/// stress_test's.)
 struct StressArgs {
   std::string config_path;
   StressOptions options;
@@ -138,11 +157,24 @@ struct StressArgs {
 /// [options]`. `args` starts at NAME. A workload this build does not have, or
 /// an option misused, is a usage error that says which. One worker per CPU the
 /// process may use, unless told otherwise, each pinned to its own. It takes the
-/// options of `--output`, `--output-dir` and `--sample-interval` as stress does;
-/// those it is given override the ones in `base`.
+/// options of `--output`, `--output-dir`, `--sample-interval` and `--journal` as
+/// stress does; those it is given override the ones in `base`.
+///
+/// Two names are not workloads but runs made of a schedule (M5): `mixed`, the
+/// flagship, in which the workers' workloads rotate while they go on verifying
+/// (`--rotation DURATION` between rotations), and `cycling`, thermal and power
+/// cycling of one workload (`--workload NAME`, `--cycle load|cores`, `--dwell
+/// DURATION` per level).
 [[nodiscard]] int stress_test(std::span<const std::string_view> args, const std::string& self_link,
                               std::string_view sysfs_root, const StressOptions& base,
                               std::ostream& out, std::ostream& err);
+
+/// `loadforge journal FILE`: the crash journal at FILE, every entry in words and
+/// how it ended. Exit 0 whatever the ending (an abnormal ending is what it is
+/// there to show), 1 when there is no journal or it cannot be read. The
+/// operations are named so that a test can fail them.
+[[nodiscard]] int show_journal(const std::string& path, journal::FileOps& ops, JournalFiles& files,
+                               std::ostream& out, std::ostream& err);
 
 /// The stress command past its argument handling: a loaded configuration,
 /// the executable the workers will be, the topology snapshot already taken,
