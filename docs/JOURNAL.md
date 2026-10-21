@@ -712,6 +712,83 @@ hybrid machine as §1.24 (v1 memory controller, root):
   refused with `EACCES`. The test skips there and quotes the refusal; CI runs it a second
   time as root, where a skip is turned into a failure (§2.24).
 
+### 1.26 Mull's runner, read from its source; and what a sweep of this tree costs
+
+The first full mutation run on GitHub's runners (ubuntu-24.04, 4 vCPUs), one job over the
+whole project, reached the six-hour job limit and was cancelled. It was reported to this
+change before 2026-10-20 10:40 UTC, and a cancelled job leaves no report, so the cause
+cannot be read from it. What follows was established between 2026-10-20 10:40 and
+11:40 UTC from Mull 0.34.2's source (the pinned release's tag), from replicas of its
+argument and configuration parsing built with the same crate versions, and by measuring
+the test binary on a 4-core machine shared with another build (load average 2.5 to 3.9,
+so the times are upper bounds).
+
+- **`--timeout` does not bound a mutant.** It bounds only the two unmutated runs, warm-up
+  and baseline, and defaults to 3000 ms; either one failing is fatal. Each mutant gets
+  `max(10 × baseline, --minimum-timeout)`, the floor defaulting to 30 ms
+  (`rust/mull-tools/mull-runner.rs`).
+- **A timed-out mutant is reported as killed.** The IDE reporter counts every status but
+  "passed" and "not covered" as killed. So a timeout that cuts off a healthy run turns a
+  survivor into a kill: the gate's dangerous direction, and why its floor is 20 s against a
+  suite that takes under half a second.
+- **Mull can wait for ever after its own timeout fires.** It kills the program it started,
+  then reads that program's stdout and stderr to the end (`runner.rs`). A child the
+  program forked inherits both pipes; if a mutant leaves one alive -- a broken kill, a
+  broken reap, `pause()` waiting for a signal that never comes -- end of file never
+  arrives and that worker thread never returns. With `--no-mutant-output` a mutant's
+  output goes to `/dev/null` and there is no pipe to wait on. Nothing the gate reads comes
+  from that output.
+- **Without a `mull.yml`, everything compiled with the plugin is mutated.** The workflow
+  passed the plugin in `CMAKE_CXX_FLAGS`, which reach every target: the unit tests' own
+  code and GoogleTest's sources as well as `src/`. `includePaths` are Rust regular
+  expressions matched unanchored against the absolute path the compiler recorded, applied
+  twice, by the compiler plugin and again by `mull-runner`. A `mull.yml` that does not
+  parse is a warning and Mull falls back to its defaults, and unknown keys are ignored --
+  both silently mutate everything, which the gate's scope check now refuses.
+- **Test-program arguments follow the executable, after `--`.** A replica of
+  `mull-runner`'s command line, compiled from its own `clap` definitions with the same
+  `clap` 4.6.0, parses `mull-runner [options] ./binary -- --gtest_filter=...` with the
+  filter as the program's argument. Options after the executable but before `--` are
+  still Mull's.
+- **The unit-test binary is fast; it is its forks that are dangerous.** 722 tests, 0.45 to
+  0.69 s for the whole binary. Run one at a time under `strace -f`, exactly 21 tests create
+  a process (one more creates a thread); each already had `Real` in its suite's name, though
+  so did many tests that do not fork. Without them, 701
+  tests take 0.25 to 0.39 s, and 200 runs four at a time all passed: every temporary path
+  the tests make carries the process id.
+- **What leaving the forking tests out costs.** Source-based coverage of the 701 tests
+  against all 722 differs in 15 lines, all in `src/platform/syscalls.cpp`:
+  `fork_process` and `reap_any_nonblocking`, whose comparisons (`pid < 0`, `pid == 0`)
+  only a test that forks executes. Five mutants under Mull's defaults; they will survive
+  until the decision moves above the seam (§2.28).
+- **How big a sweep is.** Mull's default operators counted from clang's AST of every
+  translation unit in the test binary, deduplicated by location and weighted as
+  `cxx_default` mutates them (two mutants per `<`, `<=`, `>`, `>=`; one per `==`, `!=`,
+  arithmetic operator and `++`): platform 179, worker 144, topology 138, controller 111,
+  resources 72, core 49, config 44, main 14, reporters 1; 752 in all. The header-only
+  modules contribute none: nothing in this binary instantiates them yet.
+
+**The estimate for a shard**, at the measured throughput of four parallel runs (0.46 s of
+wall time per mutant) and assuming, pessimistically, that one mutant in five hangs and is
+cut off at the 20 s floor:
+
+| Shard | Mutants (est.) | Running them | Job, with about 8 min to install and build |
+|---|---|---|---|
+| platform | 179 | 4.4 min | 13 min |
+| worker | 144 | 3.5 min | 12 min |
+| topology | 138 | 3.4 min | 12 min |
+| controller | 111 | 2.7 min | 11 min |
+| resources | 72 | 1.8 min | 10 min |
+| core | 49 | 1.2 min | 9 min |
+| config | 44 | 1.1 min | 9 min |
+| main | 14 | 0.4 min | 9 min |
+| reporters | 1 | — | 8 min |
+
+So the sweep's own work is minutes, and its cost is set-up. The six hours were not
+mutants of `src/` running against a slow suite; with no output to read, the two
+mechanisms above -- every target mutated, and a forked child holding Mull's pipes -- each
+suffice to explain them, and neither can be confirmed until a run reports.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -1685,7 +1762,192 @@ the worker failed when the kernel said its controller had gone.
 until it has reaped that worker or found a bad frame on it, so a live controller never
 causes the EPIPE; a 124 from a worker it reaps is `kControllerLostReported` as before.
 
-### 2.28 The wave-3 specifications: FFT, stencil, sparse, graph, particles
+### 2.28 The mutation sweep runs one job per module, against the tests that create no process
+
+Taken 2026-10-20 11:45 UTC, after the first full run was cancelled at six hours (§1.26).
+
+**One shard per module.** `tools/mutation-shard.py plan` makes one CI job per top-level
+module under `src/` that has a source file, derived from the tree on every run, so a new
+module is swept from its first commit. A module with headers only is swept in the `core`
+shard until it gains a source file; a shard of its own would mutate nothing and fail as an
+empty run. Each shard writes a `mull.yml` whose `includePaths` are anchored at the
+checkout's absolute path, and runs the gate with `--scope` (below). A verdict job fails the
+run unless the plan and every shard succeeded, and each shard is cut off at an hour.
+*Rejected:* a fixed list of shards (a second record of what exists, which drifts, and a
+new module would go unswept without a word); balanced groups (with about 750 mutants the
+work is minutes and set-up dominates, so balancing buys nothing yet, and a module's
+shard would change name as the tree grows); building once and sharing the binary between
+shards (it would leave the runner's filter as the only filter, and the scope check is
+what makes two of them worth having).
+
+**The gate judges one shard.** `--scope PATH` (repeatable): every mutant in the report
+must lie under the scope, killed ones included, or the run is refused -- Mull mutated
+what the shard did not ask for. A report that hides its killed mutants is therefore
+refused under a scope. Only allowlist entries under the scope are applied or can be
+stale; every refusal of the whole-run gate holds inside a shard (each fixture is run
+both ways in `tests/tools/test_tooling.sh`). So that no entry escapes review by belonging
+to no shard, the plan fails on one, and an allowlist line that is not a
+`path:line:column:mutator` key is now refused whether or not a scope is given.
+
+**Every mutant runs the tests that create no process.** The 21 tests that fork are renamed
+`RealProcess*` and every mutant runs with `--gtest_filter=-RealProcess*`. A forked child is
+the one thing Mull's timeout cannot contain (§1.26), and a mutant in fork or reap code can
+also swap the two sides of a fork, sending the parent down the child's `_exit(0)` --
+which Mull reads as a passing run. The name is checked both ways on every shard's binary
+(`mutation-shard.py check-processes`, under `strace -f`): the filtered set creates no
+process, and every `RealProcess*` test creates one, so the name cannot become a place to
+park an inconvenient test that would otherwise kill mutants. *Rejected:* a list of
+excluded tests (a second record that drifts); a separate binary (it moves tests between
+targets that components own, ADR 0003); keeping the forking tests and relying on
+`--no-mutant-output` alone (it ends the unbounded wait, but not a child left running into
+later mutants, nor a parent sent down the child's path).
+
+*The cost, and what follows.* The five mutants in `fork_process` and
+`reap_any_nonblocking` (§1.26) are expected to survive the platform shard. They are not
+equivalent mutants and do not belong in the allowlist. The remedy is the exclusion
+ladder's first rung (IMPLEMENTATION §2.6): move the decision on the returned pid above the
+seam into a function the in-process tests call, leaving the seam the bare call. Left to
+its own change, once the first sharded run has named the exact keys.
+
+**Timeouts.** `--timeout 120000` bounds warm-up and baseline (Mull's 3 s default would
+fail a slow runner's warm-up for nothing); `--minimum-timeout 20000` is the per-mutant
+floor, forty times the suite's run time, because a timeout is a kill and too short a one
+fails open; `--no-mutant-output` removes the pipes Mull would otherwise wait on. All three
+are passed on every run, including the integration test's, which now proves on the real
+Mull that the test program's arguments arrive, that a hanging mutant is reported killed,
+and that a report is accepted under its own scope and refused under another.
+
+*Rejected:* building the mutation binary with LLVM coverage, which would make Mull skip
+the mutants the filtered tests never reach and report them "not covered". Faster, and the
+gate would refuse those mutants without an allowlist entry -- but it adds a path through
+Mull (reading the profile, and matching it to mutants by file name when the paths differ)
+that nothing has run against the real tool (F21). Worth revisiting when the sweep grows.
+
+**The first sharded run** (run 39416345694, 2026-10-20 11:38 UTC, on the branch before it
+merged) did what the six-hour run could not: every shard finished in four minutes or less,
+set-up included, against the ten-minute estimate of §1.26. The gate ran on the real Mull
+in every shard, and refused no report as malformed or out of scope. It found 56 unexplained
+survivors in six of nine shards. Shards `core`, `main` and `reporters` passed.
+
+| Shard | Mutants | Survivors |
+|---|---|---|
+| `platform` | 146 | 23 (`syscalls.cpp` 16, `worker_pool.cpp` 3, `clock.cpp` 2, `syscall_error.cpp` 2) |
+| `controller` | 97 | 10 (`orchestration.cpp` 9, `safety.cpp` 1) |
+| `topology` | 133 | 10 (`cache.cpp` 6, `numa.cpp` 3, `cpu_topology.cpp` 1) |
+| `worker` | 117 | 8 (`heartbeat.cpp` 4, `record.cpp` 2, `entry.cpp` 1, `scheduler.cpp` 1) |
+| `resources` | 70 | 4 (`cgroup.cpp`) |
+| `config` | 39 | 1 (`config.cpp`) |
+
+The `fork_process` and `reap_any_nonblocking` survivors predicted above are among the
+platform shard's (`syscalls.cpp:91`, `:99`, `:410` and `:416`). Most of the others are
+boundary mutants (`<` to `<=`, `>` to `>=`) that the 100% branch coverage reaches but no
+test discriminates. That is the gap mutation testing exists to find. Each is killed by a
+test at the boundary, or allowlisted with a written reason if it is equivalent, in
+follow-up changes per module (ROADMAP item 11b). The sweep merges first: it is weekly and
+gates no pull request, so a red sweep holds nothing up and names exactly what is left.
+
+*Platform, 2026-10-20 15:44 UTC.* All 23 killed by hand, none allowlisted. The five in
+`fork_process` and `reap_any_nonblocking` went as planned above: the decision on the pid
+is now `fork_result` and `reap_result`, pure functions tested at -1, 0 and a positive pid,
+and the seam methods are the bare call and an errno read. In the rest of `syscalls.cpp`,
+a return of 0 from `open`, `memfd_create` and `write` is a real success (descriptor 0 with
+standard input closed; a zero-byte write) and is now tested; `readlink` and a blocking
+`waitpid` never return 0, so they test for -1, which removes the boundary. The five mask
+mutants survived because the affinity tests restored the process's mask *through the
+conversion under test*: a conversion that kept only CPU 0 pinned the process there, after
+which the glibc cross-check saw one CPU both ways. The conversions are now public and held
+to `CPU_SET`/`CPU_ISSET` on all 1024 bits (nodes too: a `cpu_set_t` is the kernel bitmap
+type `mbind` reads), and the restore goes through glibc. `exec`'s reserve is killed by an
+empty argument list; `describe`'s reserve is gone; the clock's two are message arithmetic,
+now asserted exactly; `WorkerPool`'s two slot loops are one `std::find_if`, and `pid_at` is
+killed at slot 0 of an empty pool, where the mutant reads storage never allocated. The new
+tests met §1.22's trap twice: `Reaped`'s and `CpuMask`'s defaulted comparisons are now
+defaulted out of line in `syscalls.cpp`.
+
+*The controller and worker shards' 18 survivors* (2026-10-20 12:59 UTC) are all gone, and
+none is allowlisted. Most fell to a test at the boundary: a memory total equal to
+`limits.memory`, an allowance equal to the interval, a region of `kMaxWorkers` attached, a
+frame of the largest payload read back. The fake's clocks start at zero, where `now - last`
+and `now + last` agree, so both torn-slot tests (controller and worker) also run with the
+clock a day past zero. The beat count, the poll timeout and the teardown's wait count are now
+asserted. A reap after the last worker meets a scripted `ECHILD`, as from the kernel. A pipe
+end numbered 0 (what the kernel hands out when standard input is closed) is closed by the
+teardown, through the fake's new `number_pipes_from`. The rest were equivalent and are gone
+from the code. The teardown's `live_ > 0` guard decided nothing that the wait loop did not.
+`put_u32` is unrolled, and `slot_at`'s span takes the region's length. The seqlock writer's
+two stores now both derive from the odd value, so a wrong sign leaves the sequence unchanged,
+and every reader sees that. The torn reader reports the attempts it made, so 65 no longer
+passes for 64. Each kill was proved by hand: mutate, build, and see the named test fail under
+`--gtest_filter=-RealProcess*`.
+
+**The `topology`, `resources` and `config` survivors (ROADMAP item 11b).** All 15 are
+killed or removed; none is allowlisted. Seven were boundary mutants killed by tests at the
+boundary: id 65535 accepted (`cpu_topology.cpp:46`, `cache.cpp:72`; tests
+`TheLargestIdTheKernelCanAssignIsAccepted`, `TheLargestIdACacheAttributeHoldsIsAccepted`),
+two L1 caches of one CPU that do not nest (`cache.cpp:236`, `TwoCachesAtOneLevelNeedNotNestInEachOther`),
+a claim of an offline CPU while other CPUs are online (`numa.cpp:120`, which a one-CPU
+fixture cannot tell from a correct claim), the octal escape `\377` (`cgroup.cpp:57`, `:62`),
+and a configuration lying past the first 4 KiB read (`config.cpp:511`: the old padding was
+a trailing comment, so a truncated read parsed the same; the padding now comes first). Eight
+were equivalent as written, because the comparison sat after an inequality test or one
+element past the end of a view that always has a space or NUL there, and were refactored
+away: `ordered_before` is one tuple comparison (`cache.cpp:298`, `:301`, `:303`), and the
+digit scans (`cache.cpp:332`, `numa.cpp:46`), the escape length check (`cgroup.cpp:51`)
+and the separator search (`cgroup.cpp:188`) use `find_first_not_of`, `substr` and
+`std::find`, which cannot read past the end. Each boundary kill was proved by hand: apply
+the mutation, rebuild, run the module's tests, see the named test fail, revert.
+
+### 2.29 The sort and Monte Carlo specifications
+
+*2026-10-20 12:34 UTC.* The wave-2 prerequisite (ADR 0004: a workload's specification
+lands before its wave). Each header names its workload (`kName`), states every range as
+the generator produces it, pins which failure is named when several occur and what
+`blocks_compared` counts, and says what a version change means: the lessons wave 1's
+streams recorded against the first two specifications.
+
+**Sort — chosen:** the output carries a witness, each key's input position beside it (a
+keys region, then a u32 index region), and the order is on (key, index), so the sort is
+stable and the output a function of the input alone: `BitExact`, `kExact`. The oracle
+checks in three steps, the first failure deciding: the indices are a permutation (first
+out-of-range or repeated index named, no difference); every key equals the input key its
+index names (a `Difference` over the keys' region, its expected bytes known exactly); the
+pairs strictly increase (first break named, no difference). Linear, no sort, and one
+flipped key bit is reported as one flipped bit, because the index check runs first and an
+index flip can only read as an index fault. The decomposition is a chunk count, which
+cannot change the output, so the T6 tier can vary it as `BitExact` requires.
+*Rejected:* keys alone, checked by a multiset hash (probabilistic, no expected bits), by
+binary-search counting (O(n log n), a scratch array, still no expected bits), or by a
+second sort (verification.md §3 forbids it); keys generated so that their rank is
+computable (the check becomes a bucket placement, and the data stops being uniform 64-bit
+keys); no decomposition at all, as compression has (the T6 sweep over decompositions would
+have nothing to vary).
+
+**Monte Carlo — chosen:** the estimate of pi/4 as the mean of sqrt(1 - x^2): one
+multiplication, one subtraction and one square root, each correctly rounded and unfused,
+so every f_k is the same double on every path and in the oracle. The input is one Philox
+key per batch, so the samples are drawn inside `compute()` and the input-integrity bracket
+still covers what they are drawn from. The decomposition is the chunk length of the
+per-batch sum, within which the order is the ISA path's. The tolerance is a rounding
+bound, derived in full in the header: two sums of the same S non-negative terms differ by
+at most 2a/(1-2a) of either, a = (S-1)u, which is at most 2Su = 2^-38 whenever
+2S(S-1) <= 2^53 (a compile-time assertion). The tolerance is therefore an exact
+power-of-two scaling, and Sterbenz's lemma makes the residual exact wherever the verdict
+could turn, so the (1 ± epsilon) tests decide the exact comparison.
+*Rejected:* a statistical bound (the oracle replays the same samples, so a bound of a few
+standard deviations, about 28.6 per batch, would pass nearly any corruption and
+false-alarm at its own significance level); a transcendental in the integrand, or normal
+variates by Box-Muller (`log`, `cos`: not reproducible, determinism.md §3); FMA in the
+integrand (x86-64's baseline has no FMA instruction, so the scalar path's `std::fma` would
+be a library call; unfused, every path's f_k is identical); random numbers stored in the
+input (the unit becomes a memory stream, and Philox, the load the brief names, leaves
+`compute()`); a tolerance that depends on the chunk length (tighter, but one per
+decomposition, where the T6 comparison across decompositions needs one bound).
+
+**Left open:** the compression and dense-linear specifications carry no `kName` and say
+less about versions than these two. Bringing them level is a contract change of its own,
+between waves.
+
+### 2.30 The wave-3 specifications: FFT, stencil, sparse, graph, particles
 
 *Written 2026-10-20 15:55 UTC.* Five frozen headers, `src/workloads/<name>/spec.hpp`, each
 with a `kName`, a `kVersion` that versions the specification (the workload's own bits
@@ -1733,6 +1995,60 @@ following the exact bound; the sparse stream should record the worst
 edge / cell size change bits without requiring it; if a stream finds none, the class
 is revisited by contract change. (3) The ledger fragments and
 `tests/contracts/headers/workloads_<name>_spec.cpp` were added alongside, as a7791a2 did.
+
+### 2.31 Wave 4's specifications: ray tracing and adaptive mesh (2026-10-20 13:05 UTC)
+
+Both headers (`src/workloads/raytrace/spec.hpp`, `src/workloads/adaptive_mesh/spec.hpp`) are
+contracts under ADR 0004. Their definitions are tested in
+`tests/contracts/workloads/spec_raytrace_test.cpp` and `spec_adaptive_mesh_test.cpp`, each in
+its own file so that the specifications other sessions add beside them cannot conflict.
+
+**Ray tracing.** A unit is one 64 x 64 frame of 128 spheres and 128 triangles, seen from a
+fixed pinhole; the output is a 16-byte record per pixel (t, primitive index) and one sum of
+t per tile. *Chosen:* the arithmetic is shared and the algorithm is not. The draws'
+decoding, the camera ray and the two intersection tests are defined once, as code in the
+header, in an exact sequence of binary64 operations (no fused multiply-add, no reciprocal);
+the workload's hierarchy and the oracle's brute force then have to produce the same bits,
+so the check is exact (`Contract::kExact`), not bounded. *Rejected:* each stream writing the
+intersection arithmetic from prose. A different dot-product order is one last bit, and one
+last bit is a false corruption report on healthy hardware; the independence that matters is
+hierarchy against brute force, and it is untouched. Shared code can share a typo, which is
+why every branch of both tests is taken in the contract tests and two values are checked
+against a computation made outside C++. *Also rejected:* secondary rays, shading and a
+camera in the input. Each adds operations to pin and nothing the oracle needs; the camera
+and the eye are fixed so every hit is at t >= 3.75 and the near root of a sphere is the hit.
+*Tie rule:* the lower primitive index wins an equal t, so brute force in index order is
+unambiguous. *Oracle sampling:* 64 pixels, one in each tile of the 8 x 8 tiling, so every
+region is sampled whichever tile edge is configured. *Failure and count:* the items are
+evaluated in a fixed order, the first failure is named, and `blocks_compared` counts the
+items evaluated, the failing one included.
+
+**Adaptive mesh.** A unit is 256 hotspots on a 512 x 512 lattice; a quadtree is refined
+around them (integers only), and the output is, for each of 16 x 16 coarse cells, the
+integral of a rational field over its leaves and the leaf count. *Chosen:* everything is
+exact or pinned except one thing, the order in which a coarse cell's leaves are added by
+the threads that finish them. That is the dynamic load balancing that makes the class
+`kBoundedResidual`, and it is also what the tolerance is derived from: any order of m
+positive terms is within gamma_{m-1} of the exact sum (Higham 4.2), the oracle's fixed
+order likewise, so the two differ by at most 2 gamma_m c' / (1 - gamma_m); the header derives
+it step by step, including that the subtraction is exact where it matters (Sterbenz), that
+the denominator 1 - 2mu is exact, and a slack of 1 + 2^-40 that keeps the computed tolerance
+above the real one whatever its roundings. The contract tests check that excess on both
+sides for every m from 1 to 1024. *Rejected:* a stencil or an advected field, whose
+oracle would be the workload run again; a field using exp(), which determinism.md §3 rules
+out; a tolerance left for the oracle stream to derive, which is how dense-linear's spec was
+left open and why this one is not. *Leaf counts* are compared exactly by a bounded oracle
+(`BoundedMismatch`, tolerance 0.5, residual the integer difference), because
+`ExactMismatch` is not valid for a bounded contract; all 256 are checked, the integrals of
+32 sampled cells.
+
+**Contract question for the manager.** The roadmap declares ray tracing
+`kBitExactFixedDecomposition`. The specification makes its pixel records identical on every
+ISA path and architecture, and only the tile sums depend on the tile edge, so the workload
+would hold `kBitExact` over the pixels. The tile sums were added so that the declared class
+is true and the decomposition (the tile edge, 8, 16 or 32) is real; if the manager prefers
+`kBitExact`, the tile sums and the decomposition come out of the header and nothing else
+changes.
 
 ---
 
@@ -2208,6 +2524,12 @@ Kept short and current; move an item to the relevant document once it is settled
   the topology snapshot before the fork (§2.25), the stop-byte row without its race (§2.26),
   and `EPIPE` on a record pipe as the controller lost (§2.27). Every M1 exit criterion is
   met; the milestone waits only on the first mutation sweep over `src/`.
+- **The first mutation sweep (§1.26, §2.28):** the run over the whole project as one job
+  was cancelled at six hours with no report. The sweep now runs one job per module against
+  the tests that create no process. Expected from its first run: five survivors in
+  `src/platform/syscalls.cpp`, in `fork_process` and `reap_any_nonblocking`, which only a
+  forking test reaches; they are not equivalent mutants, and the remedy is to move the
+  decision on the returned pid above the seam, in its own change.
 - **A known gap, from §2.20:** when the controller itself is `SIGKILL`ed, a grandchild of a
   worker survives: the death signal is cleared across fork and nobody is left to sweep the
   group. The real worker forks nothing, so nothing is exposed today; the first workload that

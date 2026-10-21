@@ -146,6 +146,8 @@ TEST(LimitsTest, MemoryIsCheckedAgainstTheBudgetBeforeAnyWorkerStarts) {
             "the workloads' memory adds up to 600MiB, past limits.memory of 400MiB");
   limited.limits.memory = ByteSize::bytes(800 * kMiB);
   EXPECT_TRUE(check_memory(limited, roomy).has_value()) << "600 MiB within limits.memory";
+  limited.limits.memory = ByteSize::bytes(600 * kMiB);
+  EXPECT_TRUE(check_memory(limited, roomy).has_value()) << "600 MiB fills limits.memory exactly";
 
   Config one_without_memory = config;
   one_without_memory.workloads.push_back(

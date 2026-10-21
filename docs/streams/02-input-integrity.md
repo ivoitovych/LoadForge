@@ -1,6 +1,6 @@
 # Stream 02 — Input integrity: the slice runner, its bracket, and protected control state
 
-**State:** not started  
+**State:** complete on `feature/input-integrity`, awaiting review (2026-10-20 11:25 UTC)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 1  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

@@ -1,6 +1,6 @@
 # Stream 31 — Workload: adaptive mesh
 
-**State:** not started  
+**State:** built, pushed on feature/workload-adaptive-mesh, pull request not yet opened  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 4  
 **Tier:** Tier A — a bounded component built against a written contract  

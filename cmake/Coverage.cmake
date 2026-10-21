@@ -10,6 +10,13 @@ function(loadforge_enable_coverage target)
   if(NOT LOADFORGE_COVERAGE)
     return()
   endif()
-  target_compile_options(${target} PRIVATE --coverage -O0 -g -fno-inline)
+  # -fprofile-update=atomic: plain gcov counters are incremented without
+  # synchronisation, so code that tests run on several threads (the executor,
+  # the oracles' concurrency tests, the workloads' thread-count tests) loses
+  # increments, and the arithmetic gcov does over them can produce negative
+  # branch counts, which gcovr refuses outright (GCC bug 68080). It turned
+  # the coverage job red on a race, not on a coverage gap. Wave 1's streams
+  # each set it on their own targets; it belongs here, for every target.
+  target_compile_options(${target} PRIVATE --coverage -fprofile-update=atomic -O0 -g -fno-inline)
   target_link_options(${target} PRIVATE --coverage)
 endfunction()

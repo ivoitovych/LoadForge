@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "resources/cgroup.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -48,12 +49,14 @@ std::optional<std::string> unescape(std::string_view field) {
       out.push_back(field[i]);
       continue;
     }
-    if (i + 3 >= field.size()) {
+    // substr clamps at the end of the field, so a short tail is short here
+    // rather than a read past it.
+    const std::string_view digits = field.substr(i + 1, 3);
+    if (digits.size() < 3) {
       return std::nullopt;
     }
     unsigned value = 0;
-    for (std::size_t k = 1; k <= 3; ++k) {
-      const char digit = field[i + k];
+    for (const char digit : digits) {
       if (digit < '0' || digit > '7') {
         return std::nullopt;
       }
@@ -184,11 +187,11 @@ core::Result<MountEntry, std::string> parse_mount_entry(std::string_view line) {
   // Six fixed fields, then optional ones, then "-" and exactly three more.
   constexpr std::size_t kFirstOptional = 6;
   constexpr std::size_t kAfterSeparator = 3;
-  std::size_t separator = kFirstOptional;
-  while (separator < f.size() && f[separator] != "-") {
-    ++separator;
-  }
-  if (separator == f.size() || separator + kAfterSeparator + 1 != f.size()) {
+  const auto first_optional =
+      f.begin() + static_cast<std::ptrdiff_t>(std::min(kFirstOptional, f.size()));
+  const auto dash = std::find(first_optional, f.end(), std::string_view{"-"});
+  const auto separator = static_cast<std::size_t>(dash - f.begin());
+  if (dash == f.end() || separator + kAfterSeparator + 1 != f.size()) {
     return std::string{"no \"-\" followed by exactly a type, a source and options"};
   }
   auto root = unescape(f[3]);
