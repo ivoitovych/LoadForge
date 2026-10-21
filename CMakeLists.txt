@@ -29,7 +29,7 @@ set(LOADFORGE_SIMD "auto" CACHE STRING "auto|scalar -- 'scalar' proves no ISA in
 
 # One authoritative version, generated into a header rather than repeated in
 # source. LOADFORGE_MILESTONE is appended so a build identifies its milestone.
-set(LOADFORGE_MILESTONE "m0" CACHE STRING "Milestone suffix for the version string")
+set(LOADFORGE_MILESTONE "m2" CACHE STRING "Milestone suffix for the version string")
 set(LOADFORGE_VERSION_STRING "${PROJECT_VERSION}-${LOADFORGE_MILESTONE}")
 configure_file(src/core/version.hpp.in "${CMAKE_BINARY_DIR}/generated/core/version.hpp" @ONLY)
 
@@ -103,13 +103,25 @@ loadforge_enable_coverage(loadforge_topology)
 # OOM-kill record's contract in resources (src/resources/CMakeLists.txt, below
 # by glob: a link names a target, so it may precede the definition); the
 # console reporter is the one voice it has at M1.
+#
+# From M2a it also plans what each worker runs (plan), collects the records and
+# tallies they send, repeats a wrong result in a process of its own (rerun) and
+# climbs the isolation ladder over a finished run's findings (isolate). The
+# libraries below the first line are the contracts' providers it links; the
+# registry is not among them, because the controller reads workloads through
+# workloads::Registry and is handed one.
 add_library(loadforge_controller STATIC
   src/controller/supervision.cpp
   src/controller/safety.cpp
+  src/controller/plan.cpp
+  src/controller/rerun.cpp
+  src/controller/isolate.cpp
   src/controller/orchestration.cpp
   src/reporters/console.cpp
 )
-target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config loadforge_resources)
+target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config loadforge_resources
+  loadforge_verification_record loadforge_verification_isolation loadforge_telemetry_capability
+  loadforge_primitives_simd loadforge_platform_fpenv)
 loadforge_set_warnings(loadforge_controller)
 loadforge_set_fp_contract(loadforge_controller)
 loadforge_enable_sanitizers(loadforge_controller)
@@ -118,10 +130,12 @@ loadforge_enable_coverage(loadforge_controller)
 # ---- cli --------------------------------------------------------------------
 # Everything a run is made of meets here: the supervisor, every telemetry
 # source and the pipeline behind them, the statistics, the result and its
-# writers. The libraries below are found by glob (src/*/CMakeLists.txt).
+# writers, and the registry of workloads a verified run draws on. The
+# libraries below are found by glob (src/*/CMakeLists.txt).
 add_library(loadforge_cli STATIC
   src/main/cli.cpp
   src/main/selftest.cpp
+  src/main/outcome.cpp
   src/main/telemetry_rig.cpp
   src/main/run_result.cpp
   src/main/result_files.cpp
@@ -132,7 +146,7 @@ target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadf
   loadforge_telemetry_sources_edac loadforge_telemetry_sampler loadforge_telemetry_timeline
   loadforge_telemetry_capability loadforge_statistics loadforge_controller_results
   loadforge_reporters_json loadforge_reporters_csv loadforge_platform_fpenv loadforge_platform_isa
-  loadforge_primitives_simd)
+  loadforge_primitives_simd loadforge_workloads_registry)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)
@@ -160,9 +174,20 @@ loadforge_enable_coverage(loadforge_ipc)
 
 add_library(loadforge_worker STATIC
   src/worker/scheduler.cpp
+  src/worker/frames.cpp
+  src/worker/verified_run.cpp
+  src/worker/services.cpp
   src/worker/entry.cpp
 )
-target_link_libraries(loadforge_worker PUBLIC loadforge_ipc)
+# From M2a the worker runs real workloads: it links the registries of
+# workloads and their oracles, the input-integrity runner, the executor, the
+# floating-point registers and the ISA probe, and the codec of the records it
+# sends. It links no workload by name; the registries do.
+target_link_libraries(loadforge_worker PUBLIC loadforge_ipc
+  loadforge_workloads_registry loadforge_verification_oracle_registry
+  loadforge_verification_integrity loadforge_worker_executor
+  loadforge_platform_fpenv loadforge_platform_isa loadforge_primitives_simd
+  loadforge_verification_record)
 loadforge_set_warnings(loadforge_worker)
 loadforge_set_fp_contract(loadforge_worker)
 loadforge_enable_sanitizers(loadforge_worker)

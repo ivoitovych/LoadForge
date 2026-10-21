@@ -34,12 +34,8 @@ struct ResultInputs {
   const statistics::Summarizer* summarizer = nullptr;
 };
 
-/// The window the whole run's signature is taken over: from the first round to
-/// one nanosecond past the last, because a window excludes its end and the
-/// last round is the run's closing reading.
-[[nodiscard]] statistics::Window run_window(const controller::SamplingReport& sampling) noexcept;
-
-/// The windows of the phases the timeline marked, each from its mark to one
+/// The windows of the phases the timeline marked, labelled, each built by
+/// statistics::phase_window (the statistics contract owns the rule): from its mark to one
 /// nanosecond past the next mark -- the boundary round belongs to both
 /// neighbours -- and the last to one nanosecond past `end_ns`.
 ///

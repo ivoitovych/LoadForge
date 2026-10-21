@@ -10,6 +10,7 @@ add_executable(loadforge_unit_tests
   unit/core/crc32_test.cpp
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
+  unit/main/outcome_test.cpp
   unit/main/result_files_test.cpp
   unit/main/telemetry_rig_test.cpp
   unit/main/cli_telemetry_test.cpp
@@ -37,6 +38,16 @@ add_executable(loadforge_unit_tests
   unit/worker/ipc/record_test.cpp
   unit/worker/scheduler_test.cpp
   unit/worker/entry_test.cpp
+  unit/worker/model_runner_test.cpp
+  unit/worker/verified_run_test.cpp
+  unit/worker/frames_test.cpp
+  unit/worker/entry_workload_test.cpp
+  unit/worker/model_codec_test.cpp
+  unit/controller/consumer_models_test.cpp
+  unit/controller/plan_test.cpp
+  unit/controller/rerun_test.cpp
+  unit/controller/isolate_test.cpp
+  unit/controller/orchestration_verified_test.cpp
   unit/controller/supervision_test.cpp
   unit/controller/safety_test.cpp
   unit/controller/orchestration_test.cpp
@@ -56,7 +67,10 @@ target_include_directories(loadforge_unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_
 # config and the refused fixtures, by absolute path so ctest's working
 # directory does not matter.
 target_compile_definitions(loadforge_unit_tests PRIVATE
-  LOADFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  LOADFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  LOADFORGE_BINARY="$<TARGET_FILE:loadforge>")
+# The CLI tests run the real binary as the workers of a real run.
+add_dependencies(loadforge_unit_tests loadforge)
 loadforge_set_fp_contract(loadforge_unit_tests)
 loadforge_enable_sanitizers(loadforge_unit_tests)
 loadforge_enable_coverage(loadforge_unit_tests)
@@ -70,7 +84,7 @@ gtest_discover_tests(loadforge_unit_tests)
 add_test(NAME cli_smoke_version COMMAND loadforge --version)
 add_test(NAME cli_smoke_help    COMMAND loadforge --help)
 add_test(NAME cli_smoke_usage   COMMAND loadforge)
-set_tests_properties(cli_smoke_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.0\\.0-m0")
+set_tests_properties(cli_smoke_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.0\\.0-m2")
 
 # The config module's T8: the real binary reads real files. One that parses,
 # one that does not exist, one that is refused by the schema -- and the refused
@@ -92,6 +106,12 @@ set_tests_properties(cli_check_config_refused PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_worker_bad_args_code
          COMMAND sh -c "'$<TARGET_FILE:loadforge>' --worker --slot 0; test $? -eq 125")
 add_test(NAME cli_worker_bad_args_message COMMAND loadforge --worker --slot 0)
+# The re-run switch through the real binary: misused, it refuses with its own
+# code; used, it runs one unit on one CPU with every check on and exits clean.
+add_test(NAME cli_rerun_bad_args_code
+         COMMAND sh -c "'$<TARGET_FILE:loadforge>' --rerun --cpu 0; test $? -eq 22")
+add_test(NAME cli_rerun_runs_a_unit_clean
+         COMMAND sh -c "'$<TARGET_FILE:loadforge>' --rerun --workload compression --seed 5 --footprint-bytes 1048576 --threads 1 --decomposition 0 --isa scalar --line-bytes 64 --version 1 --iteration 7 --cpu 0; test $? -eq 0")
 set_tests_properties(cli_worker_bad_args_message PROPERTIES
                      PASS_REGULAR_EXPRESSION "loadforge --worker: --workers: required")
 
@@ -113,6 +133,24 @@ add_test(NAME cli_stress_refuses_other_modes
 set_tests_properties(cli_stress_refuses_other_modes PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_stress_usage COMMAND loadforge stress)
 set_tests_properties(cli_stress_usage PROPERTIES WILL_FAIL TRUE)
+# M2a exit criterion 1 and 5 and M2b exit criterion 1 through the real binary:
+# each workload is stressed, checked by its oracle, and the run says what the
+# machine can and cannot be read for before it starts.
+foreach(workload IN ITEMS compression dense_linear)
+  add_test(NAME cli_stress_test_${workload}
+           COMMAND loadforge stress --test ${workload} --duration 2s --workers 2 --footprint 2MiB)
+  set_tests_properties(cli_stress_test_${workload} PROPERTIES
+                       RESOURCE_LOCK loadforge_pinned_workers
+                       PASS_REGULAR_EXPRESSION
+                       "2 of 2 worker\\(s\\) completed.*the oracle checked [1-9][0-9]* of them over [1-9][0-9]* sampled block\\(s\\) and found 0 wrong")
+endforeach()
+add_test(NAME cli_stress_test_states_the_capabilities_first
+         COMMAND loadforge stress --test compression --duration 1s --workers 2 --footprint 6MiB)
+set_tests_properties(cli_stress_test_states_the_capabilities_first PROPERTIES
+                     PASS_REGULAR_EXPRESSION
+                     "telemetry capability: [0-9]+ of [0-9]+ metric\\(s\\) present.*spawned 2 worker")
+add_test(NAME cli_stress_test_unknown_workload COMMAND loadforge stress --test no_such)
+set_tests_properties(cli_stress_test_unknown_workload PROPERTIES WILL_FAIL TRUE)
 
 # The fake worker the supervision tier drives the controller against.
 add_subdirectory(support/fake_worker)

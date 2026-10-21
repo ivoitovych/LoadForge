@@ -2,6 +2,8 @@
 #include "main/cli.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -13,26 +15,38 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/isolate.hpp"
 #include "controller/orchestration.hpp"
+#include "controller/rerun.hpp"
 #include "controller/results/fingerprint.hpp"
+#include "core/byte_size.hpp"
 #include "core/duration.hpp"
+#include "core/parse_error.hpp"
+#include "core/parse_number.hpp"
+#include "main/outcome.hpp"
 #include "main/run_result.hpp"
 #include "main/selftest.hpp"
+#include "platform/affinity.hpp"
 #include "platform/fpenv/real_control.hpp"
 #include "platform/fs.hpp"
 #include "platform/isa/probe.hpp"
 #include "platform/process.hpp"
 #include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
+#include "primitives/simd/dispatch.hpp"
 #include "reporters/console.hpp"
 #include "resources/cgroup.hpp"
 #include "resources/cgroup_oom_record.hpp"
 #include "resources/memory_budget.hpp"
 #include "statistics/summarizer.hpp"
 #include "telemetry/capability/capability.hpp"
+#include "topology/cache.hpp"
 #include "topology/cpu_topology.hpp"
 #include "topology/snapshot.hpp"
+#include "verification/isolation/ladder.hpp"
 #include "worker/entry.hpp"
+#include "worker/services.hpp"
+#include "workloads/registry/registry.hpp"
 
 namespace loadforge::cli {
 namespace {
@@ -40,15 +54,27 @@ namespace {
 constexpr int kOk = 0;
 constexpr int kConfigRefused = 1;  ///< Also: a run that could not start.
 constexpr int kUsageError = 2;
-constexpr int kRunNotClean = 3;   ///< The run ended and at least one worker did not complete.
-constexpr int kOutputFailed = 4;  ///< The run ended and a result file could not be written.
-constexpr int kFaultsFound = 5;   ///< The run ended and found a fault: see exit_code_for.
+
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
 /// The longest a run or an interval may be taken to be in nanoseconds-safe
 /// milliseconds: a quarter of what a signed 64-bit count of nanoseconds holds,
 /// about 73 years, so that sums of a few such lengths do not overflow.
 constexpr std::int64_t kLongestMilliseconds =
     std::numeric_limits<std::int64_t>::max() / kNanosecondsPerMillisecond / 4;
+
+/// How long a `--test` runs when it is not told.
+constexpr std::int64_t kDefaultTestMilliseconds = 10'000;
+/// The most workers a `--test` starts when it is not told how many: one per
+/// CPU the process may use, up to this.
+constexpr std::size_t kMostDefaultWorkers = 64;
+/// How stale a verifying worker's beat may be before it is called a hang. A
+/// slice is never shorter than one unit and a unit has no upper bound in the
+/// contracts (a worker cannot beat from inside compute()), so a controller that
+/// called every worker whose progress stood still for the M1 allowance of two
+/// seconds a hang would kill the healthy ones on a slow build or a loaded
+/// machine: a sort unit takes 0.4 s in a debug build and ten times that under a
+/// sanitizer (journal fragment 11). Ten seconds; null workloads keep their two.
+constexpr std::int64_t kVerifyingStaleAfterNs = 10'000'000'000;
 
 void print_usage(std::ostream& out) {
   out << "loadforge " << kVersion << "\n"
@@ -59,9 +85,15 @@ void print_usage(std::ostream& out) {
       << "  loadforge --check-config FILE   parse and validate a configuration\n"
       << "  loadforge stress --config FILE [--output FORMATS] [--output-dir DIR]\n"
       << "                   [--sample-interval DURATION]\n"
-      << "                                  run the null workload under supervision,\n"
+      << "                                  run a configuration under supervision,\n"
       << "                                  sampling every telemetry source; FORMATS is\n"
       << "                                  json, csv or json,csv, written to DIR/run.<format>\n"
+      << "  loadforge stress --test NAME [--duration D] [--workers N] [--footprint SIZE]\n"
+      << "                   [--isa scalar|avx2|avx512|neon] [--seed N]\n"
+      << "                   [--output FORMATS] [--output-dir DIR] [--sample-interval DURATION]\n"
+      << "                                  stress with one verified workload, sampled and\n"
+      << "                                  written the same way; NAME is one of\n"
+      << "                                  compression, dense_linear, monte_carlo, sort\n"
       << "\n"
       << "The configured run.duration is the time the workers run, counted from the moment\n"
       << "the last of them has been started; starting them is not part of it, and a run on a\n"
@@ -70,9 +102,240 @@ void print_usage(std::ostream& out) {
       << "Exit codes: 0 clean; 1 refused (configuration, or the run could not start);\n"
       << "2 usage; 3 the run ended with a worker that did not complete; 4 a result file\n"
       << "could not be written; 5 the run found a fault (a wrong result, or an error the\n"
-      << "hardware reported, corrected or not).\n"
+      << "hardware reported, corrected or not); 6 a check was not performed (a run that\n"
+      << "checked nothing is not clean). When several apply the first of 5, 4, 3, 6 is the\n"
+      << "code.\n"
       << "See docs/PLAN.md for what lands when.\n";
 }
+
+/// What `stress --test` was asked for.
+struct TestArgs {
+  std::string workload;
+  std::optional<core::Duration> duration;
+  std::optional<std::uint64_t> workers;
+  std::optional<core::ByteSize> footprint;
+  std::optional<simd::IsaPath> isa;
+  std::optional<std::uint64_t> seed;
+  std::vector<std::string> formats;  ///< --output: none given is none written.
+  std::optional<std::string> output_dir;
+  std::optional<std::int64_t> sample_interval_ns;
+};
+
+/// The sample interval a flag names, in nanoseconds, or what is wrong with it.
+core::Result<std::int64_t, std::string> sample_interval_of(std::string_view text) {
+  auto duration = core::parse_duration(text);
+  if (!duration.has_value()) {
+    return "--sample-interval: " + std::string{core::describe(duration.error())};
+  }
+  if (duration.value().count() <= 0) {
+    return std::string{"--sample-interval must be above zero"};
+  }
+  if (duration.value().count() > kLongestMilliseconds) {
+    return std::string{"--sample-interval is longer than any run can be"};
+  }
+  return duration.value().count() * kNanosecondsPerMillisecond;
+}
+
+/// "key: what" -- the shape of every refusal of an option, naming it.
+std::string refused(std::string_view key, const std::string& what) {
+  std::string text{key};
+  text += ": ";
+  text += what;
+  return text;
+}
+
+core::Result<std::uint64_t, std::string> whole_number(std::string_view key, std::string_view text) {
+  auto split = core::split_number_and_suffix(text);
+  if (!split.has_value() || !split.value().suffix.empty()) {
+    return refused(key, "expected a whole number, got '" + std::string{text} + "'");
+  }
+  return split.value().value;
+}
+
+/// An option as it was written: its key and the value after it. One argument
+/// where two string views would be swapped by mistake.
+struct Written {
+  std::string_view key;
+  std::string_view value;
+};
+
+std::optional<std::string> take_duration(const Written& option, TestArgs& out) {
+  auto duration = core::parse_duration(option.value);
+  if (!duration.has_value()) {
+    return refused(option.key, std::string{core::describe(duration.error())});
+  }
+  out.duration = duration.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_workers(const Written& option, TestArgs& out) {
+  auto count = whole_number(option.key, option.value);
+  if (!count.has_value()) {
+    return count.error();
+  }
+  if (count.value() == 0) {
+    return refused(option.key, "must be at least 1");
+  }
+  out.workers = count.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_footprint(const Written& option, TestArgs& out) {
+  auto size = core::parse_byte_size(option.value);
+  if (!size.has_value()) {
+    return refused(option.key, std::string{core::describe(size.error())});
+  }
+  out.footprint = size.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_isa(const Written& option, TestArgs& out) {
+  out.isa = simd::parse_isa_path(option.value);
+  if (!out.isa.has_value()) {
+    return refused(option.key,
+                   "'" + std::string{option.value} + "' is none of scalar, avx2, avx512, neon");
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> take_seed(const Written& option, TestArgs& out) {
+  auto seed = whole_number(option.key, option.value);
+  if (!seed.has_value()) {
+    return seed.error();
+  }
+  out.seed = seed.value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_output(const Written& option, TestArgs& out) {
+  auto list = parse_formats(option.value);
+  if (!list.has_value()) {
+    return list.error();
+  }
+  out.formats = std::move(list).value();
+  return std::nullopt;
+}
+
+std::optional<std::string> take_output_dir(const Written& option, TestArgs& out) {
+  out.output_dir = std::string{option.value};
+  return std::nullopt;
+}
+
+std::optional<std::string> take_sample_interval(const Written& option, TestArgs& out) {
+  auto interval = sample_interval_of(option.value);
+  if (!interval.has_value()) {
+    return interval.error();
+  }
+  out.sample_interval_ns = interval.value();
+  return std::nullopt;
+}
+
+/// Each option of `stress --test`: how it is read, and whether it has been.
+struct Option {
+  std::string_view key;
+  std::optional<std::string> (*take)(const Written&, TestArgs&);
+  bool (*given)(const TestArgs&);
+};
+
+constexpr std::array<Option, 8> kOptions{{
+    {"--duration", &take_duration, [](const TestArgs& a) { return a.duration.has_value(); }},
+    {"--workers", &take_workers, [](const TestArgs& a) { return a.workers.has_value(); }},
+    {"--footprint", &take_footprint, [](const TestArgs& a) { return a.footprint.has_value(); }},
+    {"--isa", &take_isa, [](const TestArgs& a) { return a.isa.has_value(); }},
+    {"--seed", &take_seed, [](const TestArgs& a) { return a.seed.has_value(); }},
+    {"--output", &take_output, [](const TestArgs& a) { return !a.formats.empty(); }},
+    {"--output-dir", &take_output_dir, [](const TestArgs& a) { return a.output_dir.has_value(); }},
+    {"--sample-interval", &take_sample_interval,
+     [](const TestArgs& a) { return a.sample_interval_ns.has_value(); }},
+}};
+
+/// The options after `--test`: its name, then any of the options in any order,
+/// each once. A refusal names the option.
+core::Result<TestArgs, std::string> parse_test_args(std::span<const std::string_view> args) {
+  TestArgs parsed;
+  parsed.workload = std::string{args.front()};
+  for (std::size_t index = 1; index < args.size(); index += 2) {
+    const std::string_view key = args[index];
+    if (index + 1 >= args.size()) {
+      return refused(key, "missing its value");
+    }
+    const auto* const option = std::ranges::find(kOptions, key, &Option::key);
+    if (option == kOptions.end() || option->given(parsed)) {
+      return refused(key, "not an option of stress --test, or given twice");
+    }
+    if (auto refusal = option->take(Written{key, args[index + 1]}, parsed); refusal.has_value()) {
+      return *refusal;
+    }
+  }
+  return parsed;
+}
+
+/// The cache-line size the machine has, from its caches: the largest any of
+/// them reports (they agree wherever the hardware does), or 0 when none
+/// reports one. A classification by an assumed 64 would be a fabricated fact.
+std::uint32_t line_bytes_of(const topology::Snapshot& machine) {
+  std::uint32_t line = 0;
+  for (const topology::Cache& cache : machine.caches.caches()) {
+    line = std::max(line, cache.line_bytes.value_or(0));
+  }
+  return line;
+}
+
+/// The CPUs a worker may be placed on: those the process is allowed to run on
+/// that the snapshot found, ascending. When the kernel will not say what is
+/// allowed, the snapshot's CPUs: placement then fails per worker, by name, if
+/// one is withheld.
+std::vector<std::uint32_t> allowed_cpus(platform::Syscalls& syscalls,
+                                        const topology::Snapshot& machine) {
+  std::vector<std::uint32_t> found;
+  for (const topology::LogicalCpu& cpu : machine.cpus.cpus()) {
+    found.push_back(cpu.id);
+  }
+  platform::Affinity affinity(syscalls);
+  auto permitted = affinity.permitted();
+  if (!permitted.has_value()) {
+    return found;
+  }
+  const std::vector<std::uint32_t> allowed = platform::ids_of(permitted.value());
+  std::erase_if(found, [&allowed](std::uint32_t id) {
+    return std::ranges::find(allowed, id) == allowed.end();
+  });
+  return found;
+}
+
+/// The executable and the machine: what every run needs before its first
+/// fork, or the refusal.
+struct Launch {
+  std::string executable;
+  topology::Snapshot machine;
+};
+
+std::optional<Launch> prepare_launch(platform::Syscalls& syscalls, const std::string& self_link,
+                                     std::string_view sysfs_root, std::ostream& err) {
+  platform::ExecutablePath self(syscalls);
+  auto executable = self.resolve(self_link);
+  if (!executable.has_value()) {
+    err << "loadforge: cannot resolve this executable for the workers: "
+        << describe(executable.error()) << "\n";
+    return std::nullopt;
+  }
+  // The machine, described once and before any worker exists (docs/PLAN.md
+  // §4.1): the frame every later report is attributed against. A machine
+  // whose /sys contradicts itself is refused here rather than run on and
+  // described wrongly.
+  platform::FileSystem sysfs(syscalls);
+  auto machine = topology::take_snapshot(sysfs, sysfs_root);
+  if (!machine.has_value()) {
+    err << "loadforge: cannot describe this machine before starting workers: "
+        << topology::describe(machine.error()) << "\n";
+    return std::nullopt;
+  }
+  return std::optional<Launch>{std::in_place, std::move(executable).value(),
+                               std::move(machine).value()};
+}
+
+/// What `stress --test` is given beside its own options.
+const StressOptions kDefaultOptions{};
 
 }  // namespace
 
@@ -155,26 +418,13 @@ core::Result<StressArgs, std::string> parse_stress_args(std::span<const std::str
     parsed.options.formats = std::move(list).value();
   }
   if (flags.interval.has_value()) {
-    auto duration = core::parse_duration(*flags.interval);
-    if (!duration.has_value()) {
-      return "--sample-interval: " + std::string{core::describe(duration.error())};
+    auto interval = sample_interval_of(*flags.interval);
+    if (!interval.has_value()) {
+      return interval.error();
     }
-    if (duration.value().count() <= 0) {
-      return std::string{"--sample-interval must be above zero"};
-    }
-    if (duration.value().count() > kLongestMilliseconds) {
-      return std::string{"--sample-interval is longer than any run can be"};
-    }
-    parsed.options.sample_interval_ns = duration.value().count() * kNanosecondsPerMillisecond;
+    parsed.options.sample_interval_ns = interval.value();
   }
   return parsed;
-}
-
-int exit_code_for(results::Verdict verdict, bool workers_clean) noexcept {
-  if (verdict == results::Verdict::kFindings || verdict == results::Verdict::kCorrectedErrors) {
-    return kFaultsFound;
-  }
-  return workers_clean ? kOk : kRunNotClean;
 }
 
 int stress(std::string_view path, const std::string& self_link, std::string_view sysfs_root,
@@ -191,26 +441,121 @@ int stress(std::string_view path, const std::string& self_link, std::string_view
     return kConfigRefused;
   }
   platform::RealSyscalls syscalls;
-  platform::ExecutablePath self(syscalls);
-  auto executable = self.resolve(self_link);
-  if (!executable.has_value()) {
-    err << "loadforge: cannot resolve this executable for the workers: "
-        << describe(executable.error()) << "\n";
+  const std::optional<Launch> launch = prepare_launch(syscalls, self_link, sysfs_root, err);
+  if (!launch.has_value()) {
     return kConfigRefused;
   }
-  // The machine, described once and before any worker exists (docs/PLAN.md
-  // §4.1): the frame every later report is attributed against. A machine
-  // whose /sys contradicts itself is refused here rather than run on and
-  // described wrongly.
-  platform::FileSystem sysfs(syscalls);
-  auto machine = topology::take_snapshot(sysfs, sysfs_root);
-  if (!machine.has_value()) {
-    err << "loadforge: cannot describe this machine before starting workers: "
-        << topology::describe(machine.error()) << "\n";
-    return kConfigRefused;
-  }
-  return run_stress(syscalls, config, executable.value(), machine.value(), options, out, err);
+  return run_stress(syscalls, config, launch->executable, launch->machine, options, out, err);
 }
+
+int stress_test(std::span<const std::string_view> args, const std::string& self_link,
+                std::string_view sysfs_root, const StressOptions& base, std::ostream& out,
+                std::ostream& err) {
+  auto parsed = parse_test_args(args);
+  if (!parsed.has_value()) {
+    err << "loadforge: stress --test: " << parsed.error() << "\n";
+    return kUsageError;
+  }
+  const TestArgs& test = parsed.value();
+  const workloads::BuiltinRegistry registry;
+  const std::vector<std::string> names = registry.names();
+  if (std::ranges::find(names, test.workload) == names.end()) {
+    err << "loadforge: stress --test: no workload named '" << test.workload << "'; this build has:";
+    for (const std::string& name : names) {
+      err << " " << name;
+    }
+    err << "\n";
+    return kUsageError;
+  }
+  platform::RealSyscalls syscalls;
+  const std::optional<Launch> launch = prepare_launch(syscalls, self_link, sysfs_root, err);
+  if (!launch.has_value()) {
+    return kConfigRefused;
+  }
+  const std::vector<std::uint32_t> cpus = allowed_cpus(syscalls, launch->machine);
+  config::Config config;
+  config.run.mode = config::Mode::kStress;
+  config.run.duration = test.duration.value_or(core::Duration{kDefaultTestMilliseconds});
+  // One worker per CPU the process may use, each pinned to its own: the
+  // placement a finding needs to be repeated on another core.
+  const std::size_t workers = test.workers.has_value()
+                                  ? static_cast<std::size_t>(*test.workers)
+                                  : std::clamp<std::size_t>(cpus.size(), 1, kMostDefaultWorkers);
+  for (std::size_t index = 0; index < workers; ++index) {
+    config.workloads.emplace_back(test.workload, config::Threads::count(1), true, test.footprint);
+  }
+  StressOptions options = base;
+  options.isa = test.isa;
+  options.seed = test.seed.value_or(options.seed);
+  if (test.output_dir.has_value()) {
+    options.output_dir = *test.output_dir;
+  }
+  if (!test.formats.empty()) {
+    options.formats = test.formats;
+  }
+  options.sample_interval_ns = test.sample_interval_ns.value_or(options.sample_interval_ns);
+  return run_stress(syscalls, config, launch->executable, launch->machine, options, out, err);
+}
+
+namespace {
+
+/// Everything a run's ending needs from the run.
+struct Ending {
+  const config::Config* config = nullptr;
+  const controller::RunReport* report = nullptr;
+  platform::FileSystem* machine = nullptr;
+  const StressOptions* options = nullptr;
+  const Rig* rig = nullptr;  ///< Null when nothing was sampled.
+  const telemetry::TimelineView* timeline = nullptr;
+  ResultSink* sink = nullptr;
+};
+
+/// The result of a run, said and written (M3), and the exit code it comes to.
+int conclude_run(const Ending& ending, std::ostream& out, std::ostream& err) {
+  const StressOptions& stress_options = *ending.options;
+  const controller::RunReport& report = *ending.report;
+  const HostFacts host = stress_options.host.has_value() ? *stress_options.host : read_host_facts();
+  const statistics::CompensatedSummarizer real_summarizer;
+  const statistics::Summarizer& summarizer =
+      stress_options.summarizer != nullptr ? *stress_options.summarizer : real_summarizer;
+  results::FingerprintContext context;
+  context.build = results::this_build();
+  context.fp_environment = host.fp_environment;
+  context.isa_path = host.isa_path;
+  auto reading = results::read_fingerprint(*ending.machine, "", context);
+  ResultInputs inputs;
+  inputs.config = ending.config;
+  inputs.report = &report;
+  inputs.fingerprint = reading.fingerprint;
+  if (ending.rig != nullptr) {
+    inputs.capabilities = ending.rig->capabilities();
+  }
+  inputs.timeline = ending.timeline;
+  inputs.summarizer = &summarizer;
+  auto result = assemble_result(inputs);
+  if (!result.has_value()) {
+    err << "loadforge: cannot compute the result: " << result.error() << "\n";
+    return with_output_failure(exit_code_for(report, *ending.config));
+  }
+  out << summary_text(result.value(), report, *ending.timeline, summarizer, reading.gaps);
+  const int code = exit_code_for(result.value().verdict, controller::all_clean(report),
+                                 has_verified_worker(report));
+  if (stress_options.formats.empty()) {
+    return code;
+  }
+  auto written = write_results(result.value(), stress_options.formats, stress_options.output_dir,
+                               *ending.sink);
+  if (!written.has_value()) {
+    err << "loadforge: cannot write the result: " << written.error() << "\n";
+    return with_output_failure(code);
+  }
+  for (const std::string& file : written.value()) {
+    out << "result written: " << file << "\n";
+  }
+  return code;
+}
+
+}  // namespace
 
 int run_stress(platform::Syscalls& syscalls, const config::Config& config,
                const std::string& executable, const topology::Snapshot& snapshot,
@@ -241,11 +586,38 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     }
   }
 
+  // The verified runs: the workloads this build has, the ISA path chosen once
+  // from what this CPU can run, and the floating-point registers established
+  // and asserted before anything starts (M2a exit criteria 1 and 5; M2b 4).
+  const workloads::BuiltinRegistry registry;
+  const std::unique_ptr<simd::IsaProbe> probe = isa::make_native_probe();
+  fpenv::RealFpControl fp;
+  const std::vector<std::string> registered = registry.names();
+  const bool verifying =
+      std::ranges::any_of(config.workloads, [&registered](const config::Workload& w) {
+        return w.enabled && std::ranges::find(registered, w.name) != registered.end();
+      });
+  if (verifying) {
+    options.stale_after_ns = std::max(options.stale_after_ns, kVerifyingStaleAfterNs);
+  }
+  options.verification.registry = &registry;
+  options.verification.seed = stress_options.seed;
+  options.verification.footprint_bytes = stress_options.footprint_bytes;
+  options.verification.requested_isa = stress_options.isa;
+  options.verification.isa_probe = probe.get();
+  options.verification.line_bytes = line_bytes_of(snapshot);
+  options.verification.cpus = allowed_cpus(syscalls, snapshot);
+  options.fp = &fp;
+
   // The telemetry, probed before the first fork: what the machine offers is
   // stated first, with the remedy for each source that cannot be read, and the
-  // sources that hold descriptors hold them before any worker is born.
+  // sources that hold descriptors hold them before any worker is born. The
+  // sources are probed once, by the rig that samples them (telemetry/source.hpp:
+  // "called once, before any sample()"), so the controller is not also handed
+  // sources to probe for its banner: that is for a run that samples nothing.
   options.sample_interval_ns = stress_options.sample_interval_ns;
   std::unique_ptr<Rig> rig;
+  std::unique_ptr<Rig> probe_only;
   if (stress_options.sample) {
     const std::int64_t run_ms = std::min(config.run.duration.count(), kLongestMilliseconds);
     const std::int64_t run_ns = (run_ms * kNanosecondsPerMillisecond) + options.grace.stop_ns +
@@ -263,6 +635,22 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     options.sampler = &rig->sampler();
     options.timeline = &rig->timeline();
     out << telemetry::render_capabilities(rig->capabilities());
+  } else if (stress_options.capabilities) {
+    // A run that samples nothing still states what the machine offers, from a
+    // sampler's probe like every other path: a rig that is probed, rendered
+    // into the banner and never sampled. It lives to the end of the run, so the
+    // sources hold their descriptors before any worker is born.
+    auto made = make_rig(syscalls, machine, stress_options.roots,
+                         timeline_capacity({0, options.sample_interval_ns,
+                                            series_bound(snapshot.cpus.logical_cpu_count())}),
+                         stress_options.sources);
+    if (!made.has_value()) {
+      err << "loadforge: cannot set up telemetry: " << telemetry::describe(made.error().fault)
+          << ": " << made.error().detail << "\n";
+      return kConfigRefused;
+    }
+    probe_only = std::move(made).value();
+    options.capabilities = telemetry::render_capabilities(probe_only->capabilities());
   }
   const telemetry::BoundedTimeline no_timeline(0);
   const telemetry::BoundedTimeline& timeline = rig != nullptr ? rig->timeline() : no_timeline;
@@ -273,55 +661,26 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   // exits normally cannot replay buffered output.
   out.flush();
   err.flush();
-  auto report = supervisor.run(config, options);
-  if (!report.has_value()) {
-    err << "loadforge: " << describe(report.error()) << "\n";
+  auto ran = supervisor.run(config, options);
+  if (!ran.has_value()) {
+    err << "loadforge: " << describe(ran.error()) << "\n";
     return kConfigRefused;
   }
-  const std::optional<int> child_code = report.value().worker_exit_code;
+  controller::RunReport report = std::move(ran).value();
+  const std::optional<int> child_code = report.worker_exit_code;
   if (child_code.has_value()) {
     return *child_code;  // This process is a worker that could not exec.
   }
-  const bool workers_clean = controller::all_clean(report.value());
-
-  const HostFacts host = stress_options.host.has_value() ? *stress_options.host : read_host_facts();
-  const statistics::CompensatedSummarizer real_summarizer;
-  const statistics::Summarizer& summarizer =
-      stress_options.summarizer != nullptr ? *stress_options.summarizer : real_summarizer;
-  results::FingerprintContext context;
-  context.build = results::this_build();
-  context.fp_environment = host.fp_environment;
-  context.isa_path = host.isa_path;
-  auto reading = results::read_fingerprint(machine, "", context);
-  ResultInputs inputs;
-  inputs.config = &config;
-  inputs.report = &report.value();
-  inputs.fingerprint = reading.fingerprint;
-  if (rig != nullptr) {
-    inputs.capabilities = rig->capabilities();
-  }
-  inputs.timeline = &timeline;
-  inputs.summarizer = &summarizer;
-  auto result = assemble_result(inputs);
-  if (!result.has_value()) {
-    err << "loadforge: cannot compute the result: " << result.error() << "\n";
-    return kOutputFailed;
-  }
-  out << summary_text(result.value(), report.value(), timeline, summarizer, reading.gaps);
-  const int code = exit_code_for(result.value().verdict, workers_clean);
-  if (stress_options.formats.empty()) {
-    return code;
-  }
-  auto written =
-      write_results(result.value(), stress_options.formats, stress_options.output_dir, sink);
-  if (!written.has_value()) {
-    err << "loadforge: cannot write the result: " << written.error() << "\n";
-    return kOutputFailed;
-  }
-  for (const std::string& file : written.value()) {
-    out << "result written: " << file << "\n";
-  }
-  return code;
+  // The workers are gone: what is left to do is repeat the units that came
+  // out wrong, in processes of their own and say what that shows (M2); then
+  // put the result together, say it, and write it (M3). A re-run that could
+  // not exec is this process, and ends it.
+  verification::isolation::LadderIsolator isolator;
+  controller::RealRerunner rerunner(syscalls, executable, controller::RerunOptions{});
+  const Ending ending{&config, &report, &machine, &stress_options, rig.get(), &timeline, &sink};
+  const auto conclude = [&ending, &out, &err] { return conclude_run(ending, out, err); };
+  return after_isolation(report, &snapshot, isolator, rerunner, stress_options.isolation_limit,
+                         reporter, conclude);
 }
 
 namespace {
@@ -378,6 +737,13 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
     platform::RealSyscalls syscalls;
     return worker::run(syscalls, args.subspan(1), err);
   }
+  if (command == worker::kRerunSwitch) {
+    // The isolation ladder's re-run (docs/verification.md §7): one unit, one
+    // CPU, every check on, the answer in the exit code.
+    platform::RealSyscalls syscalls;
+    const worker::ProductionServices production;
+    return worker::run_rerun(syscalls, args.subspan(1), err, production.services());
+  }
   if (command == "--check-config") {
     if (args.size() != 2) {
       err << "loadforge: --check-config takes exactly one FILE\n";
@@ -386,6 +752,10 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
     return check_config(args[1], out, err);
   }
   if (command == "stress") {
+    if (args.size() >= 3 && args[1] == "--test") {
+      return stress_test(args.subspan(2), "/proc/self/exe", topology::kDefaultSysfsRoot,
+                         kDefaultOptions, out, err);
+    }
     const auto parsed = parse_stress_args(args.subspan(1));
     if (!parsed.has_value()) {
       err << "loadforge: " << parsed.error() << "\n";

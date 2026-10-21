@@ -160,14 +160,24 @@ jobs:
               excl = below(f, with_tests)
               if has_cpp(f, excl):
                   units.append({"name": f.removeprefix("src/").replace("/", "-"), "scopes": [f],
-                                "excludes": excl, "target": targets[f]})
+                                "excludes": excl})
           for name, scopes in shards.items():
               excl = [e for s in scopes for e in below(s, with_tests) + ([s] if s in with_tests else [])]
               if any(has_cpp(s, excl) for s in scopes):
-                  units.append({"name": name, "scopes": scopes, "excludes": excl,
-                                "target": "loadforge_unit_tests"})
+                  units.append({"name": name, "scopes": scopes, "excludes": excl})
           names = [u["name"] for u in units]
           assert len(names) == len(set(names)), names
+          # Every executable that holds tests of the unit's modules, its own
+          # program (a fragment with one) and the shared one among them, not
+          # one program per unit: a mutant is killed by whichever detects it,
+          # and the gate merges the runs by mutant. A unit no executable tests
+          # fails the plan, as it would fail its sweep.
+          for u in units:
+              args = [a for s in u["scopes"] for a in ("--scope", s)]
+              args += [a for e in u["excludes"] for a in ("--exclude", e)]
+              u["targets"] = subprocess.check_output(
+                  ["./tools/mutation-shard.py", "unit-targets", *args], text=True,
+                  stderr=subprocess.DEVNULL).split()
           # Units that need the other architecture's SIMD are not built here.
           import platform
           arch = platform.machine()
@@ -221,7 +231,7 @@ jobs:
         unit: ${{ fromJSON(needs.plan.outputs.units) }}
     env:
       UNIT: ${{ matrix.unit.name }}
-      UNIT_TARGET: ${{ matrix.unit.target }}
+      UNIT_TARGETS: ${{ toJSON(matrix.unit.targets) }}
       UNIT_SCOPES: ${{ toJSON(matrix.unit.scopes) }}
       UNIT_EXCLUDES: ${{ toJSON(matrix.unit.excludes) }}
     steps:
@@ -278,13 +288,28 @@ jobs:
           echo "MULL_CONFIG=$config" >> "$GITHUB_ENV"
       - env: { CC: clang-18, CXX: clang++-18 }
         run: cmake --preset debug -DCMAKE_CXX_FLAGS="-fpass-plugin=/usr/lib/mull-ir-frontend-18 -g -grecord-command-line"
-      - run: cmake --build --preset debug --target "$UNIT_TARGET"
-      - name: Find the test program
+      - name: This unit's test executables
+        # Every executable that holds a test of the unit's modules, not the one
+        # program M1 had (M2a exit criterion 6): a mutant is compiled into each
+        # executable that links the code it sits in, and is killed when the
+        # tests of any of them detect it (tools/mutation-gate.py merges the
+        # runs by mutant). A unit with a test program of its own is swept by it
+        # (the units step of the plan, above), and by any other that holds tests
+        # of its modules; which those are follows from where the tests live
+        # (tools/mutation-shard.py unit-targets, run by the plan).
         run: |
           set -euo pipefail
-          program="$(find build/debug -name "$UNIT_TARGET" -type f -perm -u+x | head -n 1)"
-          [ -n "$program" ] || { echo "no $UNIT_TARGET was built" >&2; exit 1; }
-          echo "TEST_PROGRAM=./$program" >> "$GITHUB_ENV"
+          targets="$(echo "$UNIT_TARGETS" | python3 -c 'import json,sys; print(*json.load(sys.stdin))')"
+          echo "$targets"
+          # Word splitting on purpose: one CMake target per word.
+          cmake --build --preset debug --target $targets
+          binaries=()
+          for target in $targets; do
+            path="$(find build/debug -type f -perm -u+x -name "$target" | head -n 1)"
+            [ -n "$path" ] || { echo "no executable was built for $target" >&2; exit 1; }
+            binaries+=("./$path")
+          done
+          printf '%s\n' "${binaries[@]}" > "$RUNNER_TEMP/binaries-$UNIT.txt"
       - name: The gate agrees with the real Mull
         # Compiles a known-surviving mutant, runs Mull, and checks that the gate
         # parses the exact mutator identifier and that a reviewed key for one
@@ -298,7 +323,12 @@ jobs:
         # (tools/mutation-shard.py). This checks the name against what each
         # test really does, on this binary: the rest create no process, and
         # each RealProcess* test creates one.
-        run: ./tools/mutation-shard.py check-processes "$TEST_PROGRAM"
+        run: |
+          set -euo pipefail
+          while read -r binary; do
+            echo "== $binary"
+            ./tools/mutation-shard.py check-processes "$binary"
+          done < "$RUNNER_TEMP/binaries-$UNIT.txt"
       - name: Run mutants and enforce the gate
         run: |
           set -euo pipefail
@@ -307,13 +337,15 @@ jobs:
             scope_args+=(--scope "$path")
           done
           filter="$(./tools/mutation-shard.py gtest-filter)"
-          ./tools/mutation-gate.py "$TEST_PROGRAM" \
+          mapfile -t binaries < "$RUNNER_TEMP/binaries-$UNIT.txt"
+          ./tools/mutation-gate.py "${binaries[@]}" \
             "${scope_args[@]}" --test-arg="--gtest_filter=$filter" 2>&1 | tee "$RUNNER_TEMP/gate.log"
       - name: Report the verdict
         if: always()
         run: |
           {
-            echo "### Mutation unit \`$UNIT\` (\`$UNIT_TARGET\`)"
+            echo "### Mutation unit \`$UNIT\`"
+            sed 's/^/- /' "$RUNNER_TEMP/binaries-$UNIT.txt"
             echo '```'
             grep -E '^(mutation gate|  (UNEXPLAINED|STALE|NOT-COVERED|MUTANT OUTSIDE))' \
               "$RUNNER_TEMP/gate.log" || echo "the gate did not run"

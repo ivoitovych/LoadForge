@@ -2,6 +2,7 @@
 #ifndef LOADFORGE_MAIN_CLI_HPP
 #define LOADFORGE_MAIN_CLI_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <iosfwd>
 #include <optional>
@@ -14,6 +15,7 @@
 #include "controller/results/result.hpp"
 #include "core/result.hpp"
 #include "core/version.hpp"
+#include "main/outcome.hpp"
 #include "main/result_files.hpp"
 #include "main/telemetry_rig.hpp"
 #include "platform/fpenv/fpenv.hpp"
@@ -43,15 +45,7 @@ inline constexpr std::string_view kVersion = core::kVersion;
 /// `args` excludes argv[0]. Returns the process exit code.
 [[nodiscard]] int run(std::span<const std::string_view> args, std::ostream& out, std::ostream& err);
 
-/// What `loadforge stress` is asked for beyond its configuration.
-///
-///   formats          the result formats to write ("json", "csv"); none writes
-///                    no file, and the run is reported on the console alone.
-///   output_dir       where "run.<format>" goes.
-///   sample_interval_ns   how often the sampler reads every source.
-///   roots            where the machine's files are: the running machine's.
-///   host             what the machine's registers say that no file does.
-///   sink             where the result's bytes go; null is the filesystem.
+/// What the machine's registers say that no file does.
 struct HostFacts {
   std::optional<fpenv::FpState> fp_environment;
   std::optional<simd::IsaPath> isa_path;
@@ -61,6 +55,41 @@ struct HostFacts {
 /// select, as the fingerprint records them.
 [[nodiscard]] HostFacts read_host_facts();
 
+/// What a run is given beyond a configuration.
+///
+/// What is written and how the machine is watched (M3):
+///   formats          the result formats to write ("json", "csv"); none writes
+///                    no file, and the run is reported on the console alone.
+///   output_dir       where "run.<format>" goes.
+///   sample_interval_ns   how often the sampler reads every source.
+///   roots            where the machine's files are: the running machine's.
+///   host             what the machine's registers say that no file does.
+///   sink             where the result's bytes go; null is the filesystem.
+///   sample           false runs the supervisor alone: no source is probed, no
+///                    round taken. The command line never says it; the tests
+///                    of the memory budget and the OOM record, which script
+///                    the seam's reads in the order those readers make them,
+///                    do.
+///   sources, summarizer   how the sources are made, and what summarises the
+///                    timeline; the defaults are the real ones (make_sources,
+///                    CompensatedSummarizer). A test names others to reach
+///                    what the real ones never do: a probe the timeline
+///                    refuses, a window the summarizer refuses.
+///
+/// What the workers verify (M2):
+///   capabilities     for a run that does not sample: whether the telemetry
+///                    sources are probed, once, for the banner. A run that
+///                    samples states the report of the probe its sampler made
+///                    and no other (a source is probed once). Always, for a
+///                    real run; a test that runs over a fake of the system
+///                    calls turns it off, because a fake that answers every
+///                    path with the same file gives the hwmon scan (which
+///                    walks every chip number) thousands of chips to read.
+///   isa              the ISA path asked for; none: the best the machine and
+///                    each workload offer.
+///   seed             the run's seed; worker i runs seed + i * controller::kSeedStride.
+///   footprint_bytes  a worker's footprint when its configuration names none.
+///   isolation_limit  the most wrong results of one worker that fault isolation repeats.
 struct StressOptions {
   std::vector<std::string> formats;
   std::string output_dir = ".";
@@ -68,22 +97,20 @@ struct StressOptions {
   MachineRoots roots;
   std::optional<HostFacts> host;  ///< Null: read_host_facts().
   ResultSink* sink = nullptr;
-  /// False runs the supervisor alone: no source is probed, no round taken. The
-  /// command line never says it; the tests of the memory budget and the OOM
-  /// record, which script the seam's reads in the order those readers make
-  /// them, do.
   bool sample = true;
-  /// How the sources are made, and what summarises the timeline; the defaults
-  /// are the real ones (make_sources, CompensatedSummarizer). A test names
-  /// others to reach what the real ones never do: a probe the timeline
-  /// refuses, a window the summarizer refuses.
   SourceFactory sources = make_sources;
   const statistics::Summarizer* summarizer = nullptr;
+
+  bool capabilities = true;
+  std::optional<simd::IsaPath> isa;
+  std::uint64_t seed = 1;
+  std::uint64_t footprint_bytes = std::uint64_t{32} << 20U;
+  std::size_t isolation_limit = 16;
 };
 
 /// The stress command's arguments after "stress": `--config FILE`, and
 /// optionally `--output FORMATS`, `--output-dir DIR` and `--sample-interval
-/// DURATION`, in any order, each once.
+/// DURATION`, in any order, each once. (`--test NAME` is stress_test's.)
 struct StressArgs {
   std::string config_path;
   StressOptions options;
@@ -91,12 +118,6 @@ struct StressArgs {
 
 [[nodiscard]] core::Result<StressArgs, std::string> parse_stress_args(
     std::span<const std::string_view> args);
-
-/// The exit code of a run that ended and whose result was computed: 5 when the
-/// verdict is a fault (findings, or hardware errors counted), whatever the
-/// workers did; else 3 when a worker did not complete; else 0. A tool whose
-/// purpose is to find faults must not exit 0 on one.
-[[nodiscard]] int exit_code_for(results::Verdict verdict, bool workers_clean) noexcept;
 
 /// The stress command: loads the configuration, refuses a mode this build
 /// does not run, resolves the worker executable from `self_link` (always
@@ -108,6 +129,16 @@ struct StressArgs {
 [[nodiscard]] int stress(std::string_view config_path, const std::string& self_link,
                          std::string_view sysfs_root, const StressOptions& options,
                          std::ostream& out, std::ostream& err);
+
+/// The stress command for one named workload: `loadforge stress --test NAME
+/// [options]`. `args` starts at NAME. A workload this build does not have, or
+/// an option misused, is a usage error that says which. One worker per CPU the
+/// process may use, unless told otherwise, each pinned to its own. It takes the
+/// options of `--output`, `--output-dir` and `--sample-interval` as stress does;
+/// those it is given override the ones in `base`.
+[[nodiscard]] int stress_test(std::span<const std::string_view> args, const std::string& self_link,
+                              std::string_view sysfs_root, const StressOptions& base,
+                              std::ostream& out, std::ostream& err);
 
 /// The stress command past its argument handling: a loaded configuration,
 /// the executable the workers will be, the topology snapshot already taken,

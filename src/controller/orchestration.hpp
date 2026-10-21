@@ -5,14 +5,18 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "config/config.hpp"
+#include "controller/plan.hpp"
 #include "controller/report.hpp"
 #include "controller/safety.hpp"
 #include "core/result.hpp"
+#include "platform/fpenv/fpenv.hpp"
 #include "platform/syscalls.hpp"
 #include "resources/oom_kill_record.hpp"
 #include "telemetry/sampler.hpp"
+#include "telemetry/source.hpp"
 #include "telemetry/timeline.hpp"
 #include "topology/snapshot.hpp"
 
@@ -44,6 +48,20 @@ struct RunOptions {
   /// without one. Null when none is offered, which the plan then says. Not
   /// owned; it must outlive the run.
   const topology::Snapshot* topology = nullptr;
+  /// The workloads that verify themselves (plan.hpp). Without a registry a
+  /// configured name is a label for the null workload, as at M1.
+  VerificationOptions verification;
+  /// The floating-point control the run establishes and asserts at startup
+  /// (docs/determinism.md §3) and states in the banner; none: not asserted.
+  /// Not owned; it must outlive the run.
+  fpenv::FpControl* fp = nullptr;
+  /// The capability report the banner states (M2a exit criterion 5), already
+  /// rendered (telemetry::render_capabilities) from the answer of a sampler's
+  /// probe(): the controller never probes a source, because the sampler is the
+  /// only prober (telemetry/capability/capability.hpp). The caller probes once,
+  /// before the first fork, and hands the text over; empty: the banner states
+  /// no capabilities (the caller states them itself, as for a sampled run).
+  std::string capabilities;
   /// The telemetry sampler (telemetry/sampler.hpp), already probed by the
   /// caller, which states the capability report before the run and keeps it
   /// for the result. The controller calls round() on its own tick, so sampling

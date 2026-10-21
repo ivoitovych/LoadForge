@@ -483,6 +483,44 @@ def check_scope(ide: dict, scopes: list[str]) -> int:
     return sum(len(records[label]) for label in LABELS)
 
 
+def merge_runs(runs: list[dict]) -> dict:
+    """One view of several runs of the same project, one per test executable.
+
+    Every executable is built from the same instrumented libraries, so a mutant
+    sits at the same place in each of those that link its code, and each run
+    reports what that executable's tests made of it. A mutant that ANY
+    executable's tests killed is killed: the tests that detect it need not be
+    the ones in the executable that happened to be run first. Otherwise it
+    survived if any executable ran it and none detected it, and was not covered
+    only if no executable ran it at all. Each run was judged whole before it
+    came here (parsed, reconciled, cross-checked), so nothing is merged that was
+    not first believed.
+
+    The merged view lists its killed mutants (the scope check needs them), and
+    states one total, the number of distinct mutants, in every header.
+    """
+    chosen: dict[str, tuple[int, dict]] = {}
+    for run in runs:
+        for rank, label in enumerate(("Killed", "Survived", "Not Covered")):
+            for record in run["records"][label]:
+                best = chosen.get(record["key"])
+                if best is None or rank < best[0]:
+                    chosen[record["key"]] = (rank, record)
+    records = {label: [] for label in LABELS}
+    for key in sorted(chosen):
+        rank, record = chosen[key]
+        records[("Killed", "Survived", "Not Covered")[rank]].append(record)
+    total = len(chosen)
+    headers = {label: (len(records[label]), total) for label in LABELS if records[label]}
+    killed = len(records["Killed"])
+    return {
+        "records": records,
+        "headers": headers,
+        "score": killed * 100 // total if total else None,
+        "all_killed": total > 0 and killed == total,
+    }
+
+
 def run_mull(
     binary: str,
     runner: str,
@@ -558,12 +596,20 @@ def _read_reports(report_dir: pathlib.Path) -> tuple[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("binary", nargs="?", help="test binary to mutate")
+    parser.add_argument(
+        "binary",
+        nargs="*",
+        help="the test executable(s) to mutate; with several, a mutant is killed when any of "
+        "them kills it",
+    )
     parser.add_argument("--runner", default="mull-runner-18", help="Mull runner executable")
     parser.add_argument(
         "--report-dir",
         type=pathlib.Path,
-        help="read mutation.txt and mutation.sarif from here instead of running Mull",
+        action="append",
+        default=[],
+        help="read mutation.txt and mutation.sarif from here instead of running Mull "
+        "(repeatable: one directory per test executable, merged as for several binaries)",
     )
     parser.add_argument("--allowlist", type=pathlib.Path, help="reviewed-survivor file")
     parser.add_argument(
@@ -595,18 +641,26 @@ def main() -> int:
 
     try:
         scopes = [parse_scope(raw) for raw in args.scope]
-        if args.report_dir is not None:
-            ide_text, sarif_text = _read_reports(args.report_dir)
+        runs = []
+        if args.report_dir:
+            report_texts = [_read_reports(directory) for directory in args.report_dir]
         elif args.binary:
-            ide_text, sarif_text = run_mull(
-                args.binary, args.runner, root / "build" / "mutation", args.test_arg
-            )
+            report_texts = []
+            for index, binary in enumerate(args.binary):
+                # One executable keeps the directory the workflow has always
+                # uploaded; several each get one of their own.
+                directory = root / "build" / "mutation"
+                if len(args.binary) > 1:
+                    directory = directory / f"{index}-{pathlib.Path(binary).name}"
+                report_texts.append(run_mull(binary, args.runner, directory, args.test_arg))
         else:
             parser.error("give a test binary to mutate, or --report-dir to judge existing reports")
-
-        ide = parse_ide_report(ide_text, root)
-        reconcile_ide(ide)
-        cross_check(ide, parse_sarif(sarif_text, root))
+        for ide_text, sarif_text in report_texts:
+            one = parse_ide_report(ide_text, root)
+            reconcile_ide(one)
+            cross_check(one, parse_sarif(sarif_text, root))
+            runs.append(one)
+        ide = runs[0] if len(runs) == 1 else merge_runs(runs)
         allowed = load_allowlist(allowlist_path)
         if scopes:
             in_shard = check_scope(ide, scopes)

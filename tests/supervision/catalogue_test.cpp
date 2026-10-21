@@ -146,6 +146,7 @@ class Recorder final : public Reporter {
     }
   }
   void run_finished(const RunReport& /*report*/) override {}
+  void isolation_finished(const RunReport& /*report*/) override {}
 
   /// When `line` was reported, if it was.
   [[nodiscard]] std::optional<std::int64_t> when(std::string_view line) const {

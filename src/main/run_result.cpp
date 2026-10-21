@@ -10,13 +10,12 @@
 #include <variant>
 
 #include "controller/results/aggregate.hpp"
+#include "main/outcome.hpp"
 #include "verification/record.hpp"
 
 namespace loadforge::cli {
 
 namespace {
-
-constexpr std::int64_t kWindowEndMargin = 1;
 
 std::string series_name(const telemetry::Metric& metric) {
   std::string text = metric.name;
@@ -42,19 +41,13 @@ results::WorkloadResult idle_workload(const config::Workload& workload) {
 
 }  // namespace
 
-statistics::Window run_window(const controller::SamplingReport& sampling) noexcept {
-  return statistics::Window{sampling.first_round_ns, sampling.last_round_ns + kWindowEndMargin};
-}
-
 std::vector<PhaseWindow> phase_windows(const telemetry::TimelineView& timeline,
                                        std::int64_t end_ns) {
   const std::span<const telemetry::PhaseMark> marks = timeline.phases();
   std::vector<PhaseWindow> windows(marks.size());
   for (std::size_t at = 0; at < marks.size(); ++at) {
-    const bool last = at + 1 == marks.size();
-    const std::int64_t end = last ? end_ns : marks[at + 1].start_ns;
     windows[at].label = marks[at].label;
-    windows[at].window = {marks[at].start_ns, end + kWindowEndMargin};
+    windows[at].window = statistics::phase_window(marks, at, end_ns);
   }
   return windows;
 }
@@ -103,6 +96,26 @@ std::size_t points_until(const telemetry::TimelineView& timeline, std::int64_t a
     }
   }
   return count;
+}
+
+/// One line for every EDAC counter the run did not read throughout: it reset or
+/// dropped out, so the verdict is incomplete there and the counts are a lower bound.
+std::string edac_blind_notes(const results::RunResult& result) {
+  std::ostringstream text;
+  for (const statistics::MetricSummary& summary : result.signature.metrics) {
+    if (summary.metric.name != results::kCorrectedErrorsMetric &&
+        summary.metric.name != results::kUncorrectedErrorsMetric) {
+      continue;
+    }
+    const auto* counter = std::get_if<statistics::CounterSummary>(&summary.value);
+    const std::uint64_t resets = counter != nullptr ? counter->resets : 0;
+    if (resets > 0 || summary.unavailable_samples > 0) {
+      text << "edac: " << series_name(summary.metric) << " was not read throughout (" << resets
+           << " reset(s), " << summary.unavailable_samples
+           << " unavailable sample(s)): the verdict is incomplete there\n";
+    }
+  }
+  return text.str();
 }
 
 }  // namespace
@@ -156,6 +169,7 @@ std::string summary_text(const results::RunResult& result, const controller::Run
     if (deltas.empty()) {
       text << "edac: no error counted in any phase\n";
     }
+    text << edac_blind_notes(result);
   }
   for (const results::FingerprintGap& gap : gaps) {
     text << "fingerprint: " << gap.field << " not recorded: " << topology::describe(gap.why)
@@ -166,27 +180,29 @@ std::string summary_text(const results::RunResult& result, const controller::Run
 
 core::Result<results::RunResult, std::string> assemble_result(const ResultInputs& inputs) {
   const controller::RunReport& report = *inputs.report;
-  results::RunResult result;
-  result.mode = inputs.config->run.mode;
-  result.elapsed_ns = report.elapsed_ns;
+  // What the workers did, as the results' types hold it: a workload's tally,
+  // its findings with what isolation made of them, a worker's CPU.
+  results::RunResult result = to_run_result(report, *inputs.config);
   result.fingerprint = inputs.fingerprint;
   result.capabilities = inputs.capabilities;
   if (report.sampling.rounds > 0) {
-    auto signature = inputs.summarizer->summarize(*inputs.timeline, run_window(report.sampling));
+    auto signature = inputs.summarizer->summarize(
+        *inputs.timeline,
+        statistics::run_window(report.sampling.first_round_ns, report.sampling.last_round_ns));
     if (!signature.has_value()) {
       return std::string{statistics::describe(signature.error().fault)} + ": " +
              signature.error().detail;
     }
     result.signature = std::move(signature).value();
   }
-  for (const config::Workload& workload : inputs.config->workloads) {
-    if (workload.enabled) {
-      result.workloads.push_back(idle_workload(workload));
+  // A run with no verifying worker (the null workload) reports each configured
+  // workload as idle, as M3 did; one with them reports what they verified.
+  if (result.workloads.empty()) {
+    for (const config::Workload& workload : inputs.config->workloads) {
+      if (workload.enabled) {
+        result.workloads.push_back(idle_workload(workload));
+      }
     }
-  }
-  for (const controller::WorkerReport& worker : report.workers) {
-    result.workers.push_back(
-        results::WorkerResult{worker.slot, worker.fate, std::nullopt, worker.termination});
   }
   result.observers.sample_interval_ns = report.sampling.interval_ns;
   if (report.sampling.enabled && report.elapsed_ns > 0) {

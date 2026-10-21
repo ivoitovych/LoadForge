@@ -78,6 +78,7 @@ class KillingReporter final : public Reporter {
     }
   }
   void run_finished(const RunReport& /*report*/) override {}
+  void isolation_finished(const RunReport& /*report*/) override {}
 
   pid_t victim = 0;
   std::vector<std::string> events;

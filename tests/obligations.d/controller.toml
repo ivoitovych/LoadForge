@@ -3,11 +3,36 @@
 
 [[module]]
 path    = "src/controller"
-classes = ["P1", "P2", "P3", "P6"]
-tiers   = ["T1", "T2", "T7"]
-consumes = ["SamplerContract", "TimelineContract"]
+classes = ["P1", "P2", "P3", "P4", "P6"]
+tiers   = ["T1", "T2", "T7", "T8"]
+consumes = ["SourceContract", "FpControlContract", "IsaProbeContract", "SelectPathContract",
+            "IsolatorContract", "SamplerContract", "TimelineContract"]
 note    = """
-The supervisor. P6 is its whole subject: the topology snapshot the stress \
+From M2a the controller also joins the verifying pieces, and the paragraphs \
+after the first are what that added. P4: it is the one place a worker's wrong \
+result becomes a finding, and it must not become one from garbage: an error \
+record is kept only when the frame's checksum verified AND the payload decodes \
+to a record the contract allows AND it is about the workload the worker was \
+told to run; a tally smaller than the last one is not a running total. Each \
+refusal closes the channel and makes the worker kChannelCorrupt, with no \
+finding (a table of seven kinds of garbage, a single-bit flip of every byte \
+of a frame, and a fuzz of well-framed random payloads of every record type). \
+P2: the floating-point registers that will not take the required state refuse \
+the run before any fork; a workload the registry refuses is a refusal of the \
+run; the record channel is drained to empty each tick (bounded), because a \
+worker with a persistent fault makes a record a unit and would otherwise \
+block in write and be judged a hang. Consumed contracts are run against the \
+controller's own models of them (consumer_models_test.cpp): a telemetry source \
+(the capability probe, once, before the first fork), the registers, the ISA \
+probe and the three-set path choice, the isolation ladder. The re-runner \
+(provider of verification::Rerunner) executes this binary with --rerun, one \
+process a rung; what comes of it is the exit code, and a death by signal is \
+never a clean re-run (EXT-03). T8 and T7: tests/supervision/ladder_test.cpp \
+runs every rung of the ladder against really re-run workers, N = 2, with the \
+faulty worker (corrupting everywhere, on one core, never on a re-run, only \
+with several threads), and tests/integration/m2 runs every workload end to end.\
+\
+The supervisor, as M1 shipped it. P6 is its whole subject: the topology snapshot the stress \
 command takes before the run and the plan carries before the first fork \
 (START to RUNNING; refused by the command when /sys will not describe the \
 machine), spawn, the controller's own beat before the first fork, the deadline's stop request, the escalation ladder \

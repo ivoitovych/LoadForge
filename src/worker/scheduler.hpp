@@ -39,12 +39,18 @@ struct Pacing {
 ///                         the only way to see it.
 ///   kControllerUnreadable the controller's slot could not be read: it died
 ///                         inside a publish.
+///   kRunnerStopped        the verifying runner ended the run itself: its
+///                         control state could not be trusted, and a run that
+///                         goes on without it would not be the run that was
+///                         asked for. Its records say why; the worker did
+///                         what it was asked and the controller did not stop.
 enum class StopReason : std::uint8_t {
   kDurationElapsed,
   kStopRequested,
   kControllerHungUp,
   kControllerStale,
   kControllerUnreadable,
+  kRunnerStopped,
 };
 
 [[nodiscard]] std::string_view describe(StopReason reason) noexcept;
@@ -78,6 +84,37 @@ struct Session {
   Pacing pacing;
 };
 
+/// Watching the controller from a worker's loop: the two questions every
+/// worker loop asks each tick, whatever work it does between them -- is the
+/// controller still there, and has it asked me to stop. Shared by the null
+/// workload and the verifying one so that "the worker must not outlive its
+/// controller" (docs/PLAN.md F9) is written once.
+class ControllerWatch {
+ public:
+  /// `first_read_ns` is the running-clock reading the loop began at: a slot
+  /// that cannot be read is a reason to leave only once it has stayed so for
+  /// longer than the allowance, counted from the last consistent sample or,
+  /// before any, from here.
+  ControllerWatch(platform::Syscalls& syscalls, const Session& session,
+                  std::int64_t first_read_ns) noexcept
+      : syscalls_(&syscalls), session_(&session), last_read_ns_(first_read_ns) {}
+
+  /// The reason to leave that the controller's slot gives, if any: unreadable,
+  /// stale, or never beat past the allowance.
+  [[nodiscard]] std::optional<StopReason> gone(const platform::TimePoint& now,
+                                               std::int64_t elapsed_ns);
+
+  /// One look at the control pipe, waiting at most `interval_ms` for it (0
+  /// looks and returns): a reason to stop, nothing (the interval passed), or a
+  /// failure of the pipe itself.
+  [[nodiscard]] core::Result<std::optional<StopReason>, WorkerError> wait(int interval_ms);
+
+ private:
+  platform::Syscalls* syscalls_;
+  const Session* session_;
+  std::int64_t last_read_ns_;
+};
+
 /// The null workload: a loop that does no work and does everything else a
 /// workload must -- beat, watch the controller, stop on request, stop on
 /// time. M1 exit criterion 1 (docs/IMPLEMENTATION.md §4) is this loop under a
@@ -101,20 +138,6 @@ class NullWorkload {
   [[nodiscard]] core::Result<Outcome, WorkerError> run();
 
  private:
-  /// The reason to leave that the controller's slot gives, if any: unreadable,
-  /// stale, or never beat past the allowance. `last_read_ns` is when the slot
-  /// last gave a consistent sample, kept by the caller across ticks: a slot
-  /// that cannot be read is a reason to leave only once it has stayed so for
-  /// longer than the allowance.
-  [[nodiscard]] std::optional<StopReason> controller_gone(const platform::TimePoint& now,
-                                                          std::int64_t elapsed_ns,
-                                                          std::int64_t& last_read_ns) const;
-
-  /// One interval spent watching the control pipe: a reason to stop, nothing
-  /// (the interval passed), or a failure of the pipe itself.
-  [[nodiscard]] core::Result<std::optional<StopReason>, WorkerError> wait_on_control(
-      int interval_ms);
-
   platform::Syscalls* syscalls_;
   Session session_;
 };

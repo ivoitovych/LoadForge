@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/workloads/registry and nothing else.
+
+[[module]]
+path     = "src/workloads/registry"
+classes  = ["P1", "P3"]
+tiers    = ["T1"]
+provides = ["RegistryContract"]
+note     = """
+The registry of every workload in the build, by name (compression, \
+dense_linear, monte_carlo, sort). P1: a sorted table, so names() is sorted and \
+without duplicates by construction, and each name creates the workload whose \
+descriptor carries that name (the contract's suite, run against the real \
+registry). P3: an unknown name, the empty name and a name in the wrong case are \
+refused as unknown, and a workload's own refusal (a footprint that holds no \
+unit, a decomposition it does not have) is passed on unchanged and not turned \
+into anything else. A workload joins the build with one line here and the \
+oracle registry's tests fail until its oracle joins too."""

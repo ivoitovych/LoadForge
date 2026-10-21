@@ -69,7 +69,8 @@ class Stack {
   /// The whole run's signature, as the command line takes it.
   [[nodiscard]] statistics::LoadSignature signature() const {
     const controller::SamplingReport sampling = sampling_report();
-    const auto taken = summarizer.summarize(rig->timeline(), cli::run_window(sampling));
+    const auto taken = summarizer.summarize(
+        rig->timeline(), statistics::run_window(sampling.first_round_ns, sampling.last_round_ns));
     EXPECT_TRUE(taken.has_value());
     return taken.value();
   }

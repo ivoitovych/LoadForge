@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/verification/oracle/registry and nothing else.
+
+[[module]]
+path     = "src/verification/oracle/registry"
+classes  = ["P1", "P3"]
+tiers    = ["T1"]
+provides = ["OracleRegistryContract"]
+note     = """
+The independent oracle of every workload in the build, by the workload's name. \
+P1: names() is exactly the workload registry's names (a workload without an \
+oracle is a stress test with no verdict), and each oracle holds the contract \
+(exact or bounded) its workload declares. P3: an unknown name is refused as \
+unknown, and an oracle's own refusal of a plan it does not describe is passed \
+on unchanged. The plans the oracles are created for are the ones the real \
+workloads resolve from the same configuration, which is the contract's own \
+wording."""

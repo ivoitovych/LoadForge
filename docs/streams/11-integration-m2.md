@@ -1,6 +1,6 @@
 # Stream 11 — Integration: compression and dense linear algebra end to end
 
-**State:** not started  
+**State:** complete, awaiting review — M2a and M2b exit criteria met except M2b 5 (T11, no thermal sensors here) and M2a 6 (needs M1 complete); see the journal fragment
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  
