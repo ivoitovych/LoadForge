@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           curl -1sLf 'https://dl.cloudsmith.io/public/mull-project/mull-stable/setup.deb.sh' \
             | sudo -E bash
-          sudo apt-get update -qq
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* && sudo apt-get update -qq
           # apt-get download saves the .deb in the working directory as the
           # runner user; a find over apt's own cache trips on its root-only
           # partial/ directory and, under pipefail, fails the job.
@@ -248,7 +248,7 @@ jobs:
       - name: Install Mull (checksum required)
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* && sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build clang-18 llvm-18 strace
           curl -fsSL --retry 3 "${{ inputs.mull_deb_url || env.MULL_DEB_URL }}" -o /tmp/mull.deb
           echo "${{ inputs.mull_deb_sha256 || env.MULL_DEB_SHA256 }}  /tmp/mull.deb" | sha256sum --check --strict

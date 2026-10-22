@@ -13,6 +13,7 @@
 
 #include "config/config.hpp"
 #include "controller/journal/file_ops.hpp"
+#include "controller/orchestration.hpp"
 #include "controller/results/result.hpp"
 #include "core/result.hpp"
 #include "core/version.hpp"
@@ -177,6 +178,13 @@ struct StressArgs {
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 [[nodiscard]] int show_journal(const std::string& path, journal::FileOps& ops, JournalFiles& files,
                                std::ostream& out, std::ostream& err);
+
+/// The allowances a run of verified units needs, raised in `options` and never
+/// lowered: a worker beats and sees a stop request only between units, and a
+/// unit has no upper bound, so its beat may stand still for ten seconds before
+/// it is called a hang and it is given ten seconds to stop before SIGTERM.
+/// Public so that the values the controller is handed are tested directly.
+void allow_for_verified_units(controller::RunOptions& options);
 
 /// The stress command past its argument handling: a loaded configuration,
 /// the executable the workers will be, the topology snapshot already taken,

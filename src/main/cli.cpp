@@ -82,6 +82,24 @@ constexpr std::size_t kMostDefaultWorkers = 64;
 /// machine: a sort unit takes 0.4 s in a debug build and ten times that under a
 /// sanitizer (journal fragment 11). Ten seconds; null workloads keep their two.
 constexpr std::int64_t kVerifyingStaleAfterNs = 10'000'000'000;
+/// How long a verifying worker is given to stop before it is terminated. The same
+/// fact as above: a worker sees the stop request only between units, and a
+/// unit has no upper bound. The default grace of one second killed healthy
+/// workers that were mid-unit at the deadline: on a 2-core runner under
+/// ThreadSanitizer a verified dense-linear unit takes about 1.5 s, and the run
+/// ended with "worker 0: killed by signal 15 ... 0 of 2 worker(s) completed"
+/// and the verdict incomplete (CI, TSan x86 job, 2026-10-22 01:06 UTC). Ten
+/// seconds; null workloads keep their one.
+constexpr std::int64_t kVerifyingStopGraceNs = 10'000'000'000;
+
+}  // namespace
+
+void allow_for_verified_units(controller::RunOptions& options) {
+  options.stale_after_ns = std::max(options.stale_after_ns, kVerifyingStaleAfterNs);
+  options.grace.stop_ns = std::max(options.grace.stop_ns, kVerifyingStopGraceNs);
+}
+
+namespace {
 
 void print_usage(std::ostream& out) {
   out << "loadforge " << kVersion << "\n"
@@ -865,7 +883,7 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
         return w.enabled && std::ranges::find(registered, w.name) != registered.end();
       });
   if (verifying) {
-    options.stale_after_ns = std::max(options.stale_after_ns, kVerifyingStaleAfterNs);
+    allow_for_verified_units(options);
   }
   options.verification.registry = &registry;
   options.verification.seed = stress_options.seed;
