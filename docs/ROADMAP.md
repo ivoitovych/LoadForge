@@ -89,13 +89,12 @@ change (ADR 0004, "Changing a contract"):
   `docs/JOURNAL.md`, proposed ADRs numbered, `docs/IMPLEMENTATION.md` §3 and §10
   reconciled with what landed, and this file's state brought up to date.
 
-**State on 2026-10-21 21:19 UTC.** Waves 1 to 4 are merged (wave 3: #69 to #74; wave 4: #75, #76, #77),
-and so are both integrations: 21 (M3, #87) and 11 (M2, #90). The contract changes for the
-twelve disagreements they recorded are in: M3's seven (#92) and M2's five
-(`docs/journal/m2-contract-corrections-2026-10-21-1802-UTC.md`). The end-of-wave folding of
-the streams' journal fragments into `docs/JOURNAL.md` is done for waves 1 to 4 and the
-integrations 11 and 21 (#93; JOURNAL §7). Stream 29, the M5 integration, lands with this
-state line's update (2026-10-22 11:45 UTC); 33 and 34 follow it.
+**State on 2026-10-22 16:30 UTC.** Waves 1 to 4 are merged (wave 3: #69 to #74; wave 4: #75, #76, #77),
+and so are the integrations 21 (M3, #87), 11 (M2, #90) and 29 (M5, #96). The contract
+changes for the twelve disagreements the M2 and M3 integrations recorded are in: M3's seven
+(#92) and M2's five (#95). The streams' journal fragments up to the M2 and M3 integrations
+are folded into `docs/JOURNAL.md` (#93; JOURNAL §7); stream 29's fragment is not yet folded.
+Stream 33 (explore on the controller) is being built; 34 follows it.
 
 #### Wave 1
 

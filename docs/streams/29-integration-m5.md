@@ -1,6 +1,6 @@
 # Stream 29 — Integration: the mixed workload, cycling, worker control, the journal
 
-**State:** pull request opened 2026-10-22 11:45 UTC, with CI as its gate; merged when green  
+**State:** merged, #96, 2026-10-22 16:29 UTC  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 4  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  
