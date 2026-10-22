@@ -157,7 +157,7 @@ See [`packaging/README.md`](packaging/README.md).
 ```bash
 loadforge stress --test sort --duration 2s             # one verified workload, a worker per CPU
 loadforge stress --test mixed --duration 1h --journal run.journal --output json --output-dir out
-loadforge stress --config config/quick.toml            # a run from a configuration file
+loadforge stress --config run.toml                     # a run from a configuration file (below)
 loadforge --check-config config/quick.toml             # check a configuration without running it
 loadforge explore --objective frequency.busy_ticks:rate:higher \
     --candidate one:sort:1 --candidate two:sort:2 --duration 4s \
@@ -179,6 +179,29 @@ run ended after 2.238 s: 4 of 4 worker(s) completed
     findings: 0 wrong result(s), 0 check(s) not performed
 verdict: clean
 ```
+
+A configuration file names the mode, the duration, optional limits and the workloads:
+
+```toml
+schema_version = 1
+
+[run]
+mode     = "stress"
+duration = "30s"
+
+[limits]
+memory = "512MiB"
+
+[[workload]]
+name    = "sort"
+threads = 2
+memory  = "64MiB"
+```
+
+`config/quick.toml` names the `null` workload, which exercises the supervision and
+verifies nothing: it exits 0 with the verdict `incomplete`. Name a real workload to verify.
+An unknown key is refused by name. `max_temperature_c` is accepted and not enforced
+(`docs/safety.md`).
 
 **Exit codes** (`loadforge --help` has the same list):
 
