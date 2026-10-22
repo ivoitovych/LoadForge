@@ -122,6 +122,13 @@ bool has_record(const WorkerReport& worker, std::string_view text) {
   });
 }
 
+/// `asked` commands were done; the Stop at the deadline is one more when the
+/// worker read it before it left on its own duration, and is not otherwise.
+void expect_done(const WorkerReport& worker, std::uint64_t asked) {
+  EXPECT_GE(worker.commands.done, asked) << "slot " << worker.slot;
+  EXPECT_LE(worker.commands.done, asked + 1) << "slot " << worker.slot;
+}
+
 void expect_whole(const RunReport& report) {
   ASSERT_EQ(report.workers.size(), 2U);
   for (const WorkerReport& worker : report.workers) {
@@ -152,7 +159,7 @@ TEST(ControlOverRealWorkers, PauseHoldsOneWorkerStillUntilResumeAndTheOtherDoesN
   const WorkerReport& told = report->workers[0];
   const WorkerReport& left = report->workers[1];
   EXPECT_EQ(told.commands.sent, 3U) << "two commands, and the Stop at the deadline";
-  EXPECT_EQ(told.commands.done, 2U);
+  expect_done(told, 2);
   EXPECT_EQ(left.commands.sent, 1U) << "only the Stop";
   EXPECT_LT(told.tally.units_computed, left.tally.units_computed)
       << "it worked for a fifth of the run";
@@ -165,7 +172,7 @@ TEST(ControlOverRealWorkers, ADutyCycleMakesOneWorkerDoLessThanItsNeighbour) {
   const auto report = run(schedule_of({step(100, "slowed", 0, {duty})}), 1800);
   ASSERT_TRUE(report.has_value());
   expect_whole(*report);
-  EXPECT_EQ(report->workers[0].commands.done, 1U);
+  expect_done(report->workers[0], 1);
   EXPECT_LT(report->workers[0].tally.units_computed, report->workers[1].tally.units_computed);
 }
 
@@ -178,7 +185,7 @@ TEST(ControlOverRealWorkers, ARebindMovesAWorkerAndItKeepsVerifyingWhatItWasDoin
           1400);
   ASSERT_TRUE(report.has_value());
   expect_whole(*report);
-  EXPECT_EQ(report->workers[0].commands.done, 2U);
+  expect_done(report->workers[0], 2);
   EXPECT_EQ(report->workers[0].commands.refused, 0U);
   EXPECT_EQ(report->workers[1].commands.sent, 1U) << "only the Stop at the deadline";
 }
@@ -190,7 +197,7 @@ TEST(ControlOverRealWorkers, ASwitchChangesWhatAWorkerRunsAndTheTallyRunsOnAcros
       1500);
   ASSERT_TRUE(report.has_value());
   expect_whole(*report);
-  EXPECT_EQ(report->workers[0].commands.done, 1U);
+  expect_done(report->workers[0], 1);
   EXPECT_EQ(report->workers[0].not_performed, 0U) << "every unit on both sides was checked";
 }
 
@@ -208,7 +215,7 @@ TEST(ControlOverRealWorkers, ARefusedCommandIsCountedAndNamedAndTheWorkerGoesOnW
   const WorkerReport& told = report->workers[0];
   EXPECT_EQ(told.commands.sent, 3U);
   EXPECT_EQ(told.commands.refused, 2U);
-  EXPECT_EQ(told.commands.done, 0U);
+  expect_done(told, 0);
   EXPECT_TRUE(has_record(told, "refused rebind")) << "the reason is in the worker's story";
   EXPECT_TRUE(has_record(told, "refused switch"));
   EXPECT_GT(told.tally.units_computed, 0U);
@@ -223,7 +230,7 @@ TEST(ControlOverRealWorkers, ACommandForEveryWorkerAtOnceIsAnsweredByEach) {
   ASSERT_TRUE(report.has_value());
   expect_whole(*report);
   for (const WorkerReport& worker : report->workers) {
-    EXPECT_EQ(worker.commands.done, 2U);
+    expect_done(worker, 2);
   }
 }
 
@@ -294,7 +301,7 @@ TEST(ControlOverRealWorkers, ACorruptionIsFoundAboutWhicheverWorkloadAWorkerRanW
   ::unsetenv("LOADFORGE_FAULT");
   ASSERT_TRUE(report.has_value());
   ASSERT_EQ(report->workers.size(), 2U);
-  EXPECT_EQ(report->workers[0].commands.done, 1U);
+  expect_done(report->workers[0], 1);
   const auto workload_of = [](const FindingReport& finding) {
     return std::visit([](const auto& each) { return each.provenance.workload.value_or("none"); },
                       finding.record);

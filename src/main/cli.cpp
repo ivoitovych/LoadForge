@@ -60,6 +60,9 @@ constexpr int kConfigRefused = 1;  ///< Also: a run that could not start.
 constexpr int kUsageError = 2;
 
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
+/// How long a worker under a schedule has to finish its unit and leave once asked.
+constexpr std::int64_t kScheduledStopGraceNs = 5'000'000'000;
+
 /// The longest a run or an interval may be taken to be in nanoseconds-safe
 /// milliseconds: a quarter of what a signed 64-bit count of nanoseconds holds,
 /// about 73 years, so that sums of a few such lengths do not overflow.
@@ -639,8 +642,8 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
   const workloads::BuiltinRegistry registry;
   const std::vector<std::string> names = registry.names();
   // The workload the workers run, when one workload is what they run.
-  const std::string workload = cycling_run ? test.on_workload.value_or("dense_linear")
-                                           : test.workload;
+  const std::string workload =
+      cycling_run ? test.on_workload.value_or("dense_linear") : test.workload;
   if (!mixed_run && std::ranges::find(names, workload) == names.end()) {
     err << "loadforge: stress --test: no workload named '" << workload << "'; this build has:";
     for (const std::string& name : names) {
@@ -680,8 +683,8 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
   std::optional<ScheduledRun> scheduled;
   config::Config config;
   if (mixed_run || cycling_run) {
-    const SchedulePlan plan{&registry, workers, &cpus, options.seed, duration,
-                            options.footprint_bytes};
+    const SchedulePlan plan{&registry,    workers,  &cpus,
+                            options.seed, duration, options.footprint_bytes};
     auto planned = plan_scheduled_run(test, workload, plan);
     if (!planned.has_value()) {
       err << "loadforge: stress --test " << test.workload << ": " << planned.error() << "\n";
@@ -810,11 +813,10 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   RealJournalFiles real_files;
   std::optional<RunJournal> journal_open;
   if (!stress_options.journal_path.empty()) {
-    journal::FileOps& ops = stress_options.journal_ops != nullptr ? *stress_options.journal_ops
-                                                                  : real_ops;
-    JournalFiles& housekeeping = stress_options.journal_files != nullptr
-                                     ? *stress_options.journal_files
-                                     : real_files;
+    journal::FileOps& ops =
+        stress_options.journal_ops != nullptr ? *stress_options.journal_ops : real_ops;
+    JournalFiles& housekeeping =
+        stress_options.journal_files != nullptr ? *stress_options.journal_files : real_files;
     auto opened = open_run_journal(ops, housekeeping, stress_options.journal_path);
     if (!opened.has_value()) {
       err << "loadforge: " << opened.error() << "\n";
@@ -827,6 +829,13 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     options.journal = journal_open->writer.get();
   }
   options.schedule = stress_options.schedule;
+  if (options.schedule != nullptr) {
+    // A schedule moves a worker between workloads whose units differ widely in
+    // length, and a worker is only asked to stop between two units: a stop
+    // grace long enough for one workload's unit would kill a worker in the
+    // middle of another's.
+    options.grace.stop_ns = kScheduledStopGraceNs;
+  }
 
   // The verified runs: the workloads this build has, the ISA path chosen once
   // from what this CPU can run, and the floating-point registers established
