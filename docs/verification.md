@@ -403,6 +403,11 @@ from one without.
 
 ## 9. `loadforge selftest`
 
+> **Status, 2026-10-22 23:42 UTC: not built.** This section is the design. What exists is
+> `loadforge --selftest-digest`, a hash over a fixed corpus that must be the same for one
+> version on x86-64 and ARM64, and `packaging/validate-machine.sh`
+> (`docs/hardware-validation.md` §4); the hardware-failure issue template asks about those.
+
 Runs the golden vectors and a fast oracle comparison before any long run begins.
 
 Its purpose is triage, and the conclusion it supports is narrower than it first looks:

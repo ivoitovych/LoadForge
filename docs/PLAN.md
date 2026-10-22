@@ -279,7 +279,7 @@ answer, every report gets dismissed.
 
 Required, not optional:
 
-- **`loadforge selftest`** — reference vectors checked before any long run begins.
+- **`loadforge selftest`** — reference vectors checked before any long run begins. *(Status, 2026-10-22 23:42 UTC: not built. The self-checks that exist are `loadforge --selftest-digest` and `packaging/validate-machine.sh`; see CONTRIBUTING.)*
 - **Fault isolation on failure.** Re-run the failing unit of work (a) on the same core,
   (b) on a different core, (c) single-threaded. The reproduction pattern *is* the
   diagnosis: core-local, thread-count-dependent, or fully reproducible are three very
@@ -1458,7 +1458,7 @@ important inbound report is "my machine failed your test", and such a report is 
 without provenance. The template must require:
 
 - Did `loadforge selftest` pass? *(This is the first triage question — it separates a
-  broken build or unsupported machine from a genuine finding.)*
+  broken build or unsupported machine from a genuine finding.)* *(Status, 2026-10-22 23:42 UTC: not built. The self-checks that exist are `loadforge --selftest-digest` and `packaging/validate-machine.sh`; see CONTRIBUTING.)*
 - `run.json` (carries version, fingerprint, capability set — F12)
 - The error records with full provenance: core, NUMA node, offset, XOR delta (F2)
 - Fault-isolation output: did it reproduce on another core? single-threaded?

@@ -757,6 +757,14 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` Â
 
 ## 10. Status
 
+**Status on 2026-10-22 23:42 UTC: M0 to M6 are built and merged (M2 #90, M3 #87, M5 #96,
+M6 #99, with the contract corrections #92 and #95). M1's last condition, a first mutation
+sweep that reports clean, has not run yet. M6's thermal half and the whole of M7's hardware
+validation wait for the owner's machines (`docs/hardware-validation.md`); M7's remaining
+software items are 34a to 34c in `docs/ROADMAP.md`.**
+
+The paragraphs below were written while M1 was finishing and are kept as its record.
+
 **M0 complete. M1: every exit criterion met; complete once the first mutation sweep reports clean.
 The contracts for M2a to M7 are written and the work after M1 is planned as streams in
 waves (ADR 0004, `docs/ROADMAP.md`, `docs/streams/`).**
