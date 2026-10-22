@@ -104,6 +104,10 @@ TEST(MixedSoak, ARotatedWorkerGrowsNothingAndLosesNoVerification) {
   ASSERT_TRUE(made.has_value()) << made.error();
   const mixed::Schedule& schedule = made.value();
 
+  // ThreadSanitizer's runtime starts a thread of its own at the first thread
+  // this process creates, and keeps it: one thread made and joined here puts it
+  // in the baseline, so that the count compares the worker's threads alone.
+  std::thread([] {}).join();
   const std::int64_t threads_before = status_field("Threads");
   const std::int64_t descriptors_before = open_descriptors();
 
@@ -149,6 +153,38 @@ TEST(MixedSoak, ARotatedWorkerGrowsNothingAndLosesNoVerification) {
     result = run.run();
   });
 
+  // The records are read while the worker writes them: a pipe holds 64 KiB, and
+  // a worker whose records nobody reads blocks in write() and never ends (a
+  // 60 s soak did, and the nightly one runs for hours). Counted as they come,
+  // never kept, so that the reader adds nothing to the resident set measured.
+  std::size_t answered = 0;
+  std::uint64_t previous_units = 0;
+  std::uint64_t last_units = 0;
+  std::size_t findings = 0;
+  std::thread reader([&] {
+    ipc::RecordSource source(syscalls, records.read_fd);
+    while (!source.at_end()) {
+      auto drained = source.drain();
+      ASSERT_TRUE(drained.has_value());
+      for (const ipc::Record& record : drained.value().records) {
+        if (record.type == kControlAckFrameType) {
+          const ControlAck ack = decode_ack(record.payload).value();
+          EXPECT_EQ(ack.status, AckStatus::kDone) << ack.detail;
+          ++answered;
+        } else if (record.type == kTallyFrameType) {
+          const auto tally = decode_tally(record.payload).value();
+          EXPECT_GE(tally.units_computed, previous_units) << "the tally ran backwards";
+          previous_units = tally.units_computed;
+          last_units = tally.units_computed;
+          EXPECT_EQ(tally.oracle_failed, 0U);
+          EXPECT_EQ(tally.integrity_failed, 0U);
+        } else if (record.type == verification::kErrorRecordFrameType) {
+          ++findings;
+        }
+      }
+    }
+  });
+
   const auto begun = std::chrono::steady_clock::now();
   std::uint32_t sequence = 0;
   std::size_t next_step = 0;
@@ -179,35 +215,10 @@ TEST(MixedSoak, ARotatedWorkerGrowsNothingAndLosesNoVerification) {
       syscalls.write(control.write_fd, ipc::encode(kControlFrameType, stop).value()).has_value());
   worker.join();
   ASSERT_TRUE(syscalls.close(records.write_fd).has_value());
+  reader.join();  // the write end closed, the reader meets the end of the records
 
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(result.value().outcome.reason, StopReason::kStopRequested);
-
-  std::size_t answered = 0;
-  std::uint64_t previous_units = 0;
-  std::uint64_t last_units = 0;
-  std::size_t findings = 0;
-  ipc::RecordSource source(syscalls, records.read_fd);
-  while (!source.at_end()) {
-    auto drained = source.drain();
-    ASSERT_TRUE(drained.has_value());
-    for (const ipc::Record& record : drained.value().records) {
-      if (record.type == kControlAckFrameType) {
-        const ControlAck ack = decode_ack(record.payload).value();
-        EXPECT_EQ(ack.status, AckStatus::kDone) << ack.detail;
-        ++answered;
-      } else if (record.type == kTallyFrameType) {
-        const auto tally = decode_tally(record.payload).value();
-        EXPECT_GE(tally.units_computed, previous_units) << "the tally ran backwards";
-        previous_units = tally.units_computed;
-        last_units = tally.units_computed;
-        EXPECT_EQ(tally.oracle_failed, 0U);
-        EXPECT_EQ(tally.integrity_failed, 0U);
-      } else if (record.type == verification::kErrorRecordFrameType) {
-        ++findings;
-      }
-    }
-  }
   EXPECT_EQ(answered, sent + 1) << "every message, and the Stop, was answered";
   EXPECT_EQ(findings, 0U) << "nothing wrong and nothing left unchecked";
   EXPECT_GT(last_units, 0U);

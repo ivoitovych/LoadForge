@@ -3245,6 +3245,27 @@ disagreement is written in the fragment (stream 10 did it in full), and the mana
 corrects the brief or the document afterwards. A brief is generated from the documents at one
 moment and goes stale; the stream's question to ask is which of the two the tree agrees with.
 
+### 4.23 Twice a "timing flake" was a defect, found only once the failure could be read
+
+*M2 corrections and M5 integration (#95, #96), 2026-10-21 and 2026-10-22.* Both failures passed
+alone and failed under load, and both were first read as a margin too small:
+
+- `cli_stress_test_dense_linear` failed in CI. The first diagnosis, a run window too short
+  for the coverage build, was wrong, and widening the window did not hold. Once CI printed
+  the failed test's output (the test steps now rerun failed tests with
+  `--output-on-failure`, #95), the cause was plain: a worker sees a stop only between units,
+  a dense-linear unit takes about 1.5 s in that build, and the stop grace was 1 s, so a
+  healthy worker was killed. Verified runs now get a 10 s stop grace (`cli.cpp`).
+- `ControlOverRealWorkers.PauseHolds…` failed once in a local full-suite run. With six CPU
+  hogs beside it, it failed 2 in 12: the test assumed the controller always sends its
+  deadline Stop, and `request_stop` sends nothing to a worker that left on its own duration
+  and was already reaped. The test now admits either outcome.
+
+What worked: get the failing output first (CI's rerun step, or a local run with
+`--output-on-failure`), then reproduce under load (`timeout 300 sh -c 'while :; do :; done'`
+six times), and read which assertion fails before changing anything. A wider margin is a
+fix only when the output shows that the margin is the cause.
+
 ---
 
 ## 5. Process knowledge
@@ -3397,6 +3418,15 @@ compile. The order did not change the work, only who did it: the second to land 
 the first, with the full gate set, and the decisions recorded where both can be read (the
 journal fragment of stream 11). What made it tractable was the rule that the second branch
 re-earns its green on the merged tree (§4.16), never inherits it.
+
+### 5.13 The runners' package mirror can fail a job before any of this project's code runs
+
+On 2026-10-22 at about 11:00 UTC, the coverage job on #95 failed in `apt-get update`:
+`packages.microsoft.com` answered 403 and apt treated the source as unsigned. The source
+comes with the runner image and nothing here installs from it. Since a job cannot be re-run
+from here (§5.11), the workflows now delete `/etc/apt/sources.list.d/microsoft-prod.*` before
+every `apt-get update` (#95). An outside service that can fail a job is either removed from
+the job's path or made unable to fail it; waiting for it to recover costs a push either way.
 
 ---
 

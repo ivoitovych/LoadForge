@@ -165,6 +165,10 @@ class RotatingWorker {
       VerifiedRun run(syscalls_, writer, session, args_, unit_, services_);
       result_ = run.run();
     });
+    // Read while the worker writes: a pipe holds 64 KiB, and a worker whose
+    // records nobody reads blocks in write() and never ends. Every unit of a run
+    // with no oracle writes a finding, so a fast machine fills the pipe.
+    reader_ = std::thread([this] { seen_ = read_all(); });
   }
 
   void send(const ControlMessage& message) {
@@ -176,7 +180,10 @@ class RotatingWorker {
   void finish() {
     thread_.join();
     EXPECT_TRUE(syscalls_.close(records_.write_fd).has_value());
+    reader_.join();  // the write end closed, the reader meets the end of the records
   }
+
+  [[nodiscard]] const core::Result<VerifiedOutcome, WorkerError>& result() const { return result_; }
 
   /// Everything the worker wrote, decoded.
   struct Seen {
@@ -185,7 +192,11 @@ class RotatingWorker {
     verification::Tally last_tally;
   };
 
-  Seen seen() {
+  /// What the worker wrote; read in full once finish() has returned.
+  [[nodiscard]] const Seen& seen() const { return seen_; }
+
+ private:
+  Seen read_all() {
     Seen out;
     ipc::RecordSource source(syscalls_, records_.read_fd);
     while (!source.at_end()) {
@@ -207,9 +218,6 @@ class RotatingWorker {
     return out;
   }
 
-  [[nodiscard]] const core::Result<VerifiedOutcome, WorkerError>& result() const { return result_; }
-
- private:
   platform::RealSyscalls syscalls_;
   std::optional<ipc::HeartbeatRegion> region_;
   platform::PipeEnds records_;
@@ -221,6 +229,8 @@ class RotatingWorker {
   WorkerArgs args_;
   WorkloadArgs unit_;
   std::thread thread_;
+  std::thread reader_;
+  Seen seen_;
   core::Result<VerifiedOutcome, WorkerError> result_{WorkerError{"not run", ""}};
 };
 
