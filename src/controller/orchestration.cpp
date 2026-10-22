@@ -1482,7 +1482,12 @@ core::Result<RunReport, ControllerError> Run::execute() {
   plan.duration = config_->run.duration;
   plan.workers = workers_.size();
   plan.executable = options_->executable;
-  const std::string watching = temperature_.has_value() ? temperature_->describe_sensors() : "";
+  // Named and assigned: a conditional of a string and a literal leaves a cleanup edge no
+  // test can take (docs/JOURNAL.md section 1.13).
+  std::string watching;
+  if (temperature_.has_value()) {
+    watching = temperature_->describe_sensors();
+  }
   plan.limits = limit_statuses(*config_, options_->budget, options_->budget_unread, watching);
   if (options_->topology != nullptr) {
     plan.topology = topology::describe(*options_->topology);

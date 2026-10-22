@@ -162,7 +162,11 @@ Observation TemperatureWatch::observe(std::int64_t round_ns, std::int64_t elapse
     const telemetry::Gauge* gauge =
         taken ? std::get_if<telemetry::Gauge>(&points.back().reading) : nullptr;
     if (gauge == nullptr) {
-      last_reason_ = taken ? reason_of(points.back().reading) : "no reading was taken";
+      if (taken) {
+        last_reason_ = reason_of(points.back().reading);
+      } else {
+        last_reason_ = "no reading was taken";
+      }
       if (sensor.readable) {
         seen.notes.push_back(with_provider(sensor) + " can no longer be read: " + last_reason_);
       }

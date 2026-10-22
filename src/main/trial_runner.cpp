@@ -226,7 +226,11 @@ core::Result<std::unique_ptr<ControllerTrialRunner>, TrialError> ControllerTrial
     detail += std::to_string(*options.max_temperature_c);
     detail += " C and no temperature can be read, so the ceiling could not be enforced: ";
     const std::string unread = unread_temperature(probed.value()->capabilities());
-    detail += unread.empty() ? "no temperature sensor was offered" : unread;
+    if (unread.empty()) {
+      detail += "no temperature sensor was offered";
+    } else {
+      detail += unread;
+    }
     detail += "; leave the option out to run without a ceiling";
     return refuse(TrialFault::kRun, std::move(detail));
   }
