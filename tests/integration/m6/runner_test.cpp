@@ -112,22 +112,35 @@ TEST(M6Runner, ASettlePhaseOnAGaugeThatHoldsStillSettlesBeforeTheLoadStarts) {
 
 TEST(M6Runner, ASettleOnTheTemperatureOfAMachineWithNoSensorIsRefusedAndNothingStarts) {
   RealRunner runner;
+  // A machine reads its package temperature, says why it cannot (no sensor at
+  // all: the metric is listed unavailable, with the reason), or does not list
+  // it (a sensor that is not the package's, such as a thermal zone, which a CI
+  // runner has): the last two are both refused.
   bool has_sensor = false;
+  bool listed_unavailable = false;
   for (const auto& source : runner.capabilities().sources) {
     for (const auto& status : source.metrics) {
-      has_sensor = has_sensor ||
-                   (status.metric.name == "thermal.package" && !status.unavailable.has_value());
+      if (status.metric.name == "thermal.package") {
+        has_sensor = has_sensor || !status.unavailable.has_value();
+        listed_unavailable = listed_unavailable || status.unavailable.has_value();
+      }
     }
   }
   if (has_sensor) {
-    GTEST_SKIP() << "this machine has a temperature sensor, which is the other case";
+    GTEST_SKIP() << "this machine reads its package temperature, which is the other case";
   }
   Candidate candidate = RealControllerRunner::candidate();
   candidate.settle = explore::Settle{"thermal.package"};
   const auto outcome = runner.run(candidate);
   ASSERT_FALSE(outcome.has_value());
   EXPECT_EQ(outcome.error().fault, explore::TrialFault::kMetricUnavailable);
-  EXPECT_NE(outcome.error().detail.find("hwmon"), std::string::npos) << outcome.error().detail;
+  const std::string& detail = outcome.error().detail;
+  EXPECT_NE(detail.find("'thermal.package'"), std::string::npos) << detail;
+  if (listed_unavailable) {
+    EXPECT_NE(detail.find("hwmon"), std::string::npos) << "the source's reason: " << detail;
+  } else {
+    EXPECT_NE(detail.find("not a gauge in the capability report"), std::string::npos) << detail;
+  }
 }
 
 }  // namespace
