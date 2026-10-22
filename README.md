@@ -200,8 +200,10 @@ memory  = "64MiB"
 
 `config/quick.toml` names the `null` workload, which exercises the supervision and
 verifies nothing: it exits 0 with the verdict `incomplete`. Name a real workload to verify.
-An unknown key is refused by name. `max_temperature_c` is accepted and not enforced
-(`docs/safety.md`).
+An unknown key is refused by name. `limits.max_temperature_c` (1 to 150) is a temperature
+ceiling: the run stops when any sensor reads that much or more, and is refused if no sensor
+can be read (`docs/safety.md`). `stress --test` and `explore` take the same ceiling as
+`--max-temperature C`.
 
 **Exit codes** (`loadforge --help` has the same list):
 
@@ -214,9 +216,13 @@ An unknown key is refused by name. `max_temperature_c` is accepted and not enfor
 | 4 | a result file could not be written |
 | 5 | a fault: a wrong result, or an error the hardware reported, corrected or not |
 | 6 | a check was not performed: a run that checked nothing is not clean |
+| 7 | the temperature ceiling ended the run: a sensor read at or above `max_temperature_c`, or no sensor could be read any more |
 
-When several apply, the first of 5, 4, 3, 6 is the code. `explore` uses 0, 1, 2, 3, 5 and 6
-for the same things, per candidate. The verdict is one of `clean`, `corrected errors`,
+When several apply, the first of 5, 7, 4, 3, 6 is the code: a fault is the finding and
+outranks everything; 7 outranks a failed write (4), the workers it killed (3) and the
+checks it cut short (6), because it is why they happened. A ceiling that cannot be read
+when the run starts is not 7: nothing started, and that is a refusal (1). `explore` uses
+0, 1, 2, 3, 5 and 6 for the same things, per candidate; a trial the ceiling ends is 3. The verdict is one of `clean`, `corrected errors`,
 `incomplete`, `findings`.
 
 `--selftest-digest` prints a hash over a fixed corpus; for one version it must be the same
@@ -299,14 +305,18 @@ is exactly the condition most likely to expose the problem, which is the point, 
 carries real risk.
 
 What it does: a hard deadline for every run; a memory check before the workers start; a
-heartbeat watchdog that stops a hung worker; workers that die with the controller; a crash
-journal that survives a power cut; and no writes to the machine's configuration (it reads
-`/proc` and `/sys`, and writes only the files you ask for).
+temperature ceiling you can set (`limits.max_temperature_c`, or `--max-temperature C`),
+which stops the run when any sensor the machine exposes reads that or more, and refuses to
+start if none can be read; a heartbeat watchdog that stops a hung worker; workers that die
+with the controller; a crash journal that survives a power cut; and no writes to the
+machine's configuration (it reads `/proc` and `/sys`, and writes only the files you ask
+for).
 
-What it does **not** do: **it does not stop a run because the machine is too hot.** A
-configured `max_temperature_c` is read and reported as not enforced. Ctrl-C ends the run
-at once and writes no report. Watch the temperature yourself, start short, and do not run
-it unattended on a machine whose cooling you have not seen work. The full account is
+What it does **not** do: **it sets no ceiling for you.** A run with no `max_temperature_c`
+is not stopped for heat, and the ceiling is software, behind the CPU's own throttling and
+thermal shutdown and never instead of them. Ctrl-C ends the run at once and writes no
+report. Set a ceiling you have chosen, start short, and do not run it unattended on a
+machine whose cooling you have not seen work. The full account is
 [`docs/safety.md`](docs/safety.md).
 
 ---

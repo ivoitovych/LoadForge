@@ -92,7 +92,8 @@ TEST(Cli, HelpFlagPrintsUsage) {
     const Outcome r = invoke({flag});
     EXPECT_EQ(r.code, 0) << flag;
     EXPECT_NE(r.out.find("Usage:"), std::string::npos) << flag;
-    EXPECT_NE(r.out.find("[--max-temperature C]"), std::string::npos) << "stress --test and explore";
+    EXPECT_NE(r.out.find("[--max-temperature C]"), std::string::npos)
+        << "stress --test and explore";
     EXPECT_NE(r.out.find("7 the temperature ceiling ended the run"), std::string::npos) << flag;
     EXPECT_NE(r.out.find("the first of 5, 7, 4, 3, 6 is the code"), std::string::npos);
   }
@@ -502,8 +503,7 @@ TEST(CliStressTest, EveryOptionIsRefusedByNameWhenItIsMisused) {
        "--lock: not an option of stress --test, or given twice"},
       {{"--max-temperature", "hot"}, "--max-temperature: expected a whole number, got 'hot'"},
       {{"--max-temperature", "90C"}, "--max-temperature: expected a whole number, got '90C'"},
-      {{"--max-temperature", "0"},
-       "--max-temperature: must be between 1 and 150 degrees Celsius"},
+      {{"--max-temperature", "0"}, "--max-temperature: must be between 1 and 150 degrees Celsius"},
       {{"--max-temperature", "151"},
        "--max-temperature: must be between 1 and 150 degrees Celsius"},
       {{"--max-temperature", "90", "--max-temperature", "95"},
@@ -613,16 +613,15 @@ TEST(CliStressTest, ATestRunsRealWorkersForRealAndReportsWhatTheyChecked) {
 
 TEST(CliStressTest, ATestsCeilingOnAMachineWithNoSensorIsRefusedBeforeAnyWorkerStarts) {
   const LinkToTheBinary link;
-  const std::filesystem::path bare = std::filesystem::temp_directory_path() /
-                                     ("loadforge-cli-bare-" + std::to_string(::getpid()));
+  const std::filesystem::path bare =
+      std::filesystem::temp_directory_path() / ("loadforge-cli-bare-" + std::to_string(::getpid()));
   std::filesystem::create_directories(bare);
   StressOptions base;
   base.roots = roots_under(bare.string());  // A machine with no /sys: no sensor to read.
   std::ostringstream out;
   std::ostringstream err;
-  const std::vector<std::string_view> args{"compression", "--duration",        "1s",
-                                           "--workers",   "2",                 "--max-temperature",
-                                           "70"};
+  const std::vector<std::string_view> args{"compression", "--duration",        "1s", "--workers",
+                                           "2",           "--max-temperature", "70"};
   EXPECT_EQ(stress_test(args, link.path(), "/sys", base, out, err), 1) << out.str() << err.str();
   EXPECT_NE(err.str().find("loadforge: temperature: the temperature ceiling is 70 C and no "
                            "temperature can be read, so it could not be enforced: "
@@ -633,8 +632,8 @@ TEST(CliStressTest, ATestsCeilingOnAMachineWithNoSensorIsRefusedBeforeAnyWorkerS
   // The same run without the option has no ceiling to refuse.
   std::ostringstream plain_out;
   std::ostringstream plain_err;
-  const std::vector<std::string_view> plain{"compression", "--duration", "1s", "--workers", "2",
-                                            "--footprint", "6MiB"};
+  const std::vector<std::string_view> plain{"compression", "--duration",  "1s",  "--workers",
+                                            "2",           "--footprint", "6MiB"};
   EXPECT_EQ(stress_test(plain, link.path(), "/sys", base, plain_out, plain_err), 0)
       << plain_out.str() << plain_err.str();
   EXPECT_EQ(plain_out.str().find("limit temperature"), std::string::npos);

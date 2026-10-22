@@ -129,7 +129,7 @@ core::Result<core::Ok, std::string> check_temperature(const config::Config& conf
   }
   if (watch->hot_at_start().has_value()) {
     std::string refusal = "the machine is already at its ceiling, before any worker started: ";
-    refusal += describe(*watch->hot_at_start());
+    refusal += describe_reading(*watch->hot_at_start());
     return refusal;
   }
   return core::Ok{};

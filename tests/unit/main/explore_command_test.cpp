@@ -279,12 +279,12 @@ TEST(ExploreArgs, TheCeilingIsAWholeNumberOfDegreesInTheRangeAConfigurationHas) 
         << bad;
   }
   for (const std::string_view bad : {"hot", "90C", "-5"}) {
-    EXPECT_TRUE(contains(refusal_of(with_required({"--max-temperature", bad})),
-                         "expected a whole number"))
+    EXPECT_TRUE(
+        contains(refusal_of(with_required({"--max-temperature", bad})), "expected a whole number"))
         << bad;
   }
-  EXPECT_FALSE(parse(with_required({"--max-temperature", "90", "--max-temperature", "95"}))
-                   .has_value());
+  EXPECT_FALSE(
+      parse(with_required({"--max-temperature", "90", "--max-temperature", "95"})).has_value());
 }
 
 TEST(ExploreSearch, EveryCandidateAndTheReferenceShareTheDurationAndTheSettlePhase) {
@@ -639,9 +639,10 @@ TEST(ExploreCommand, ACeilingNothingCanBeReadForRefusesTheCommandBeforeTheFirstT
                                "a:sort:1", "--max-temperature", "85"},
                               "/proc/self/exe", "/sys", base);
   EXPECT_EQ(ran.code, 1);
-  EXPECT_TRUE(contains(ran.err, "loadforge: explore: --max-temperature is 85 C and no temperature "
-                                "can be read, so the ceiling could not be enforced: no "
-                                "temperature sensor was offered; leave the option out"))
+  EXPECT_TRUE(contains(ran.err,
+                       "loadforge: explore: --max-temperature is 85 C and no temperature "
+                       "can be read, so the ceiling could not be enforced: no "
+                       "temperature sensor was offered; leave the option out"))
       << ran.err;
   EXPECT_TRUE(ran.out.empty()) << "nothing was probed for the user to read, nothing ran";
 }

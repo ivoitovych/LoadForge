@@ -317,8 +317,8 @@ class Run {
   [[nodiscard]] core::Result<core::Ok, ControllerError> arm_temperature();
   /// Looks at the round just taken against the ceiling, and ends the run when
   /// a sensor is at or above it or none can be read any more.
-  [[nodiscard]] core::Result<core::Ok, ControllerError> enforce_temperature(
-      std::int64_t elapsed_ns, std::int64_t now_ns);
+  [[nodiscard]] core::Result<core::Ok, ControllerError> enforce_temperature(std::int64_t elapsed_ns,
+                                                                            std::int64_t now_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> stop_for_temperature(
       const TemperatureStop& stop, std::int64_t now_ns);
   void take_round(std::int64_t now_ns, bool force);

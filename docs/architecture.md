@@ -63,7 +63,9 @@ kills the worker's group, so nothing a worker forked outlives it (`JOURNAL.md` ย
    limit. The kernel's OOM-kill count is read before the first fork, to attribute a
    `SIGKILL` death afterwards.
 4. **Probe the telemetry** (`src/telemetry/capability`, `docs/telemetry-sources.md`) and
-   print the capability report.
+   print the capability report. With a temperature ceiling configured, the baseline round
+   (taken before the first fork) must give at least one temperature, and none may already
+   be at the ceiling; otherwise the run is refused here, with the thermal source's reason.
 5. **Plan each worker** (`src/controller/plan`): workload, its footprint, the CPUs and
    thread count, the ISA path (the best that this CPU, this build and this workload all
    have, or the one asked for, or a refusal; never a silent substitute), the duty cycle,
@@ -74,9 +76,14 @@ kills the worker's group, so nothing a worker forked outlives it (`JOURNAL.md` ย
    mistaken for a hang. The duration counts from the moment the last one has started.
 7. **Run**: each tick the controller reads every worker's beat, drains their record pipes,
    takes a telemetry round on its schedule and writes the journal. It judges each worker
-   by its beat (alive, stale, torn) and its fate (below).
-8. **Stop** at the deadline: a stop byte on the control pipe, then `SIGTERM`, then
-   `SIGKILL`, each after its grace (`docs/safety.md` ยง2). It then reaps every worker and
+   by its beat (alive, stale, torn) and its fate (below). When a temperature ceiling is
+   configured it then looks at the point every temperature series received in that round
+   (`src/controller/temperature`), reading back the timeline the sampler wrote and never
+   the sensors themselves; a sensor at or above the ceiling ends the run as the deadline
+   does (step 8), with its own exit code.
+8. **Stop** at the deadline, or when the temperature ceiling is reached: a stop request on
+   the control pipe, then `SIGTERM`, then `SIGKILL`, each after its grace
+   (`docs/safety.md` ยง2). It then reaps every worker and
    takes a last telemetry round.
 9. **Isolate** each wrong result found (ยง5), if any.
 10. **Report**: the console, and `run.json` / `run.csv` if asked. The exit code is derived
@@ -213,8 +220,10 @@ never uses a metric the machine cannot read: that is exit code 1 before anything
 `0` clean; `1` refused (the configuration, or the run could not start); `2` usage; `3` a
 worker did not complete; `4` a result file could not be written; `5` a fault: a wrong
 result, an uncorrected error, or corrected errors; `6` a check was not performed (a run
-that checked nothing is not clean). When several apply, the first of 5, 4, 3, 6 is the
-code. Explore uses 0, 1, 2, 3, 5 and 6 with their meaning for a candidate's trial.
+that checked nothing is not clean); `7` the temperature ceiling ended the run. When
+several apply, the first of 5, 7, 4, 3, 6 is the code (`README.md` says why 7 sits where it
+does). Explore uses 0, 1, 2, 3, 5 and 6 with their meaning for a candidate's trial; a trial
+the ceiling ends is 3.
 `loadforge journal FILE` exits 0 whatever the ending and 1 for no journal.
 
 ## 8. The platform boundary and how it is tested

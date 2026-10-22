@@ -96,9 +96,10 @@ TEST(LimitsTest, TheDurationIsAlwaysEnforcedAndTheOthersSayWhatTheyAre) {
             (std::vector<LimitStatus>{
                 LimitStatus{"duration", true, "30s"},
                 LimitStatus{"temperature", false, "no temperature can be read; configured 95 C"}}));
-  EXPECT_EQ(limit_statuses(with_temperature, std::nullopt, "", "thermal.package 0, thermal.core x4")[1],
-            (LimitStatus{"temperature", true,
-                         "stops the run at 95 C; watching thermal.package 0, thermal.core x4"}));
+  EXPECT_EQ(
+      limit_statuses(with_temperature, std::nullopt, "", "thermal.package 0, thermal.core x4")[1],
+      (LimitStatus{"temperature", true,
+                   "stops the run at 95 C; watching thermal.package 0, thermal.core x4"}));
   EXPECT_EQ(limit_statuses(plain, std::nullopt, "", "thermal.package 0").size(), 1U)
       << "sensors watched without a ceiling state nothing";
 
@@ -178,9 +179,12 @@ TEST(LimitsTest, MemoryIsCheckedAgainstTheBudgetBeforeAnyWorkerStarts) {
 // --- the temperature ceiling, refused when it cannot be kept ------------------------------
 
 mocks::MockTimeline& hot_board(mocks::MockTimeline& timeline, double reading) {
-  const telemetry::Metric metric{"thermal.package",     telemetry::Unit::kCelsius,
-                                 telemetry::Kind::kGauge, telemetry::Scope::kPackage,
-                                 0,                     std::nullopt,
+  const telemetry::Metric metric{"thermal.package",
+                                 telemetry::Unit::kCelsius,
+                                 telemetry::Kind::kGauge,
+                                 telemetry::Scope::kPackage,
+                                 0,
+                                 std::nullopt,
                                  "hwmon:coretemp"};
   const auto id = timeline.add_series(metric).value();
   EXPECT_TRUE(timeline.append(id, {1, telemetry::Gauge{reading}}).has_value());
@@ -219,9 +223,12 @@ TEST(TemperatureCeilingTest, SensorsThatDidNotAnswerTheBaselineRefuseWithWhatThe
   Config config = base_config();
   config.limits.max_temperature_c = 90;
   mocks::MockTimeline timeline;
-  const telemetry::Metric metric{"thermal.core",         telemetry::Unit::kCelsius,
-                                 telemetry::Kind::kGauge, telemetry::Scope::kCore,
-                                 2,                     std::nullopt,
+  const telemetry::Metric metric{"thermal.core",
+                                 telemetry::Unit::kCelsius,
+                                 telemetry::Kind::kGauge,
+                                 telemetry::Scope::kCore,
+                                 2,
+                                 std::nullopt,
                                  "hwmon:coretemp"};
   const auto id = timeline.add_series(metric).value();
   ASSERT_TRUE(timeline
@@ -231,8 +238,9 @@ TEST(TemperatureCeilingTest, SensorsThatDidNotAnswerTheBaselineRefuseWithWhatThe
   const TemperatureWatch deaf(timeline, 90, 1, 1);
   auto refused = check_temperature(config, &deaf, "ignored: the sensors were found");
   ASSERT_FALSE(refused.has_value());
-  EXPECT_NE(refused.error().find("none of the 1 temperature sensor(s) answered: permission denied; "),
-            std::string::npos)
+  EXPECT_NE(
+      refused.error().find("none of the 1 temperature sensor(s) answered: permission denied; "),
+      std::string::npos)
       << refused.error();
 }
 
@@ -248,8 +256,7 @@ TEST(TemperatureCeilingTest, AMachineAlreadyAtTheCeilingIsRefusedAndOneBelowItIs
   ASSERT_FALSE(refused.has_value());
   EXPECT_EQ(refused.error(),
             "the machine is already at its ceiling, before any worker started: "
-            "thermal.package 0 (hwmon:coretemp) read 90.0 C, at or above the ceiling of 90 C, "
-            "0.000 s into the run");
+            "thermal.package 0 (hwmon:coretemp) read 90.0 C, at or above the ceiling of 90 C");
 }
 
 }  // namespace

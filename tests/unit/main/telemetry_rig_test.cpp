@@ -14,9 +14,9 @@
 #include <vector>
 
 #include "platform/fs.hpp"
+#include "support/fake_syscalls.hpp"
 #include "telemetry/source.hpp"
 #include "topology/source.hpp"
-#include "support/fake_syscalls.hpp"
 
 namespace loadforge::cli {
 namespace {
@@ -90,7 +90,7 @@ TEST(TelemetryRigTest, TheRigHoldsATimelineOfTheCapacityAskedAndTheSeriesTheProb
 telemetry::MetricStatus status_of(std::string name, telemetry::Unit unit, telemetry::Kind kind,
                                   std::optional<telemetry::Unavailable> why = std::nullopt) {
   telemetry::MetricStatus status;
-  status.metric = telemetry::Metric{std::move(name), unit, kind, telemetry::Scope::kPackage, 0,
+  status.metric = telemetry::Metric{std::move(name), unit,  kind, telemetry::Scope::kPackage, 0,
                                     std::nullopt,    "mock"};
   status.unavailable = std::move(why);
   return status;
@@ -104,10 +104,9 @@ telemetry::Unavailable absent(std::string detail) {
 TEST(TelemetryRigTest, ATemperatureIsAPresentGaugeInDegreesCelsiusFromAnySource) {
   telemetry::CapabilityReport report;
   EXPECT_FALSE(has_temperature(report));
-  report.sources.push_back(
-      {"thermal",
-       {status_of("thermal.package", telemetry::Unit::kCelsius, telemetry::Kind::kGauge,
-                  absent("no chip"))}});
+  report.sources.push_back({"thermal",
+                            {status_of("thermal.package", telemetry::Unit::kCelsius,
+                                       telemetry::Kind::kGauge, absent("no chip"))}});
   EXPECT_FALSE(has_temperature(report)) << "an absent sensor is not a temperature";
   report.sources.push_back(
       {"power", {status_of("power.package", telemetry::Unit::kWatts, telemetry::Kind::kGauge)}});
@@ -124,8 +123,8 @@ TEST(TelemetryRigTest, WhyNoTemperatureIsOfferedIsTheThermalSourcesOwnWordsAndNo
   telemetry::CapabilityReport report;
   EXPECT_EQ(unread_temperature(report), "");
   report.sources.push_back(
-      {"fan", {status_of("fan.speed", telemetry::Unit::kRpm, telemetry::Kind::kGauge,
-                         absent("no fan"))}});
+      {"fan",
+       {status_of("fan.speed", telemetry::Unit::kRpm, telemetry::Kind::kGauge, absent("no fan"))}});
   EXPECT_EQ(unread_temperature(report), "") << "another source's absence is not the reason";
   report.sources.push_back(
       {"thermal",

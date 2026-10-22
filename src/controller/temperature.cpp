@@ -58,15 +58,21 @@ bool operator==(const TemperatureStop& lhs, const TemperatureStop& rhs) noexcept
                                             rhs.at_ns, rhs.detail, rhs.blind_ns);
 }
 
+std::string describe_reading(const TemperatureStop& stop) {
+  std::string text = stop.sensor;
+  text += " read ";
+  text += fixed(stop.celsius, 1);
+  text += " C, at or above the ceiling of ";
+  text += std::to_string(stop.ceiling_c);
+  text += " C";
+  return text;
+}
+
 std::string describe(const TemperatureStop& stop) {
   std::string text;
   if (stop.cause == StopCause::kReached) {
-    text = stop.sensor;
-    text += " read ";
-    text += fixed(stop.celsius, 1);
-    text += " C, at or above the ceiling of ";
-    text += std::to_string(stop.ceiling_c);
-    text += " C, ";
+    text = describe_reading(stop);
+    text += ", ";
   } else {
     text = "no temperature could be read for ";
     text += seconds(stop.blind_ns, 1);

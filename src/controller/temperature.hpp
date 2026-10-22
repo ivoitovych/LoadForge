@@ -54,16 +54,20 @@ enum class StopCause : std::uint8_t {
 /// Why a run was ended by the ceiling, and when.
 struct TemperatureStop {
   StopCause cause = StopCause::kReached;
-  std::string sensor;        ///< kReached: the sensor, with its provider.
-  double celsius = 0.0;      ///< kReached: what it read.
+  std::string sensor;    ///< kReached: the sensor, with its provider.
+  double celsius = 0.0;  ///< kReached: what it read.
   std::int64_t ceiling_c = 0;
-  std::int64_t at_ns = 0;    ///< Into the run (the controller's elapsed time).
-  std::string detail;        ///< kUnwatched: why the last sensor could not be read.
-  std::int64_t blind_ns = 0; ///< kUnwatched: for how long no sensor was read.
+  std::int64_t at_ns = 0;     ///< Into the run (the controller's elapsed time).
+  std::string detail;         ///< kUnwatched: why the last sensor could not be read.
+  std::int64_t blind_ns = 0;  ///< kUnwatched: for how long no sensor was read.
 
   /// Defined once, in temperature.cpp (docs/JOURNAL.md section 1.22).
   friend bool operator==(const TemperatureStop& lhs, const TemperatureStop& rhs) noexcept;
 };
+
+/// A stop of kReached without its time: "thermal.core 3 (hwmon:coretemp) read
+/// 91.0 C, at or above the ceiling of 90 C".
+[[nodiscard]] std::string describe_reading(const TemperatureStop& stop);
 
 /// One sentence, for the console, the journal's reader and the result:
 /// "thermal.core 3 (hwmon:coretemp) read 91.0 C, at or above the ceiling of

@@ -190,8 +190,8 @@ TEST(TemperatureSupervision, ASensorThatCrossesTheCeilingMidRunStopsTheRealWorke
   }
   bool told = false;
   for (const std::string& line : reporter.events) {
-    told = told || line.find("temperature ceiling: thermal.package 0 (hwmon:coretemp) read 95.0 C") ==
-                       0;
+    told = told ||
+           line.find("temperature ceiling: thermal.package 0 (hwmon:coretemp) read 95.0 C") == 0;
   }
   EXPECT_TRUE(told);
   ASSERT_EQ(reporter.limits.size(), 2U);
@@ -244,7 +244,8 @@ TEST(TemperatureSupervision, ACeilingWithNoSensorOnTheMachineStartsNothing) {
 class LinkToTheBinary {
  public:
   LinkToTheBinary()
-      : path_(fs::temp_directory_path() / ("loadforge-ceiling-link-" + std::to_string(::getpid()))) {
+      : path_(fs::temp_directory_path() /
+              ("loadforge-ceiling-link-" + std::to_string(::getpid()))) {
     fs::remove(path_);
     fs::create_symlink(LOADFORGE_BINARY, path_);
   }
@@ -294,9 +295,10 @@ TEST(TemperatureSupervision, TheCommandEndsWithItsOwnExitCodeAndSaysWhereItWrote
   const std::string journal_path = (machine.root() / "run.journal").string();
   const std::string where = out_dir.string();
   const std::vector<std::string_view> args{
-      "sort",     "--duration", "120s",     "--workers", "2",    "--footprint",      "6MiB",
-      "--seed",   "3",          "--max-temperature", "90", "--sample-interval", "100ms",
-      "--output", "json,csv",   "--output-dir", where,   "--journal", journal_path};
+      "sort",      "--duration", "120s",     "--workers",         "2",   "--footprint",
+      "6MiB",      "--seed",     "3",        "--max-temperature", "90",  "--sample-interval",
+      "100ms",     "--output",   "json,csv", "--output-dir",      where, "--journal",
+      journal_path};
   cli::StressOptions base;
   base.roots = cli::roots_under(machine.root().string());
   std::ostringstream out;
@@ -359,9 +361,9 @@ TEST(TemperatureSupervision, TheCommandEndsWithItsOwnExitCodeAndSaysWhereItWrote
 TEST(TemperatureSupervision, TheCommandBelowItsCeilingIsCleanAndNamesTheSensorsItWatched) {
   const FakeMachine machine;
   const LinkToTheBinary link;
-  const std::vector<std::string_view> args{"sort", "--duration", "2s", "--workers", "2",
-                                           "--footprint", "6MiB", "--max-temperature", "90",
-                                           "--sample-interval", "100ms"};
+  const std::vector<std::string_view> args{"sort", "--duration",        "2s",   "--workers",
+                                           "2",    "--footprint",       "6MiB", "--max-temperature",
+                                           "90",   "--sample-interval", "100ms"};
   cli::StressOptions base;
   base.roots = cli::roots_under(machine.root().string());
   std::ostringstream out;

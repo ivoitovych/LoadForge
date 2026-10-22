@@ -69,6 +69,14 @@ there is no `thermal.package`.** The temperature, if the machine has one, is a
 `thermal.zone` or a `thermal.sensor`; use that series for anything that asks for a
 temperature, including the thermal procedure in `docs/hardware-validation.md`.
 
+**The temperature ceiling reads these series.** `limits.max_temperature_c` is enforced
+against every `thermal.*` series that is present (any gauge in degrees Celsius, whichever
+source made it): a reading at or above the ceiling from any one of them ends the run. The
+ceiling does not guess which sensor is "the" temperature, so a motherboard or chipset
+sensor counts as much as the package. If none of them is present, or none answers before
+the first worker, a run with a ceiling is refused and the message carries this source's
+reason and remedy (`docs/safety.md` §2).
+
 **Fan.** The label file is not read: whether an input is the CPU fan, a case fan or a
 pump is the board's business and is often unlabelled. A reading of 0 is a stopped fan
 and is a reading.

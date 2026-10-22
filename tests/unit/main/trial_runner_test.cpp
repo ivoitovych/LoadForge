@@ -694,8 +694,9 @@ TEST(TrialRunnerCeiling, ASourceWithoutAReasonStillRefusesAndSaysNoSensorWasOffe
   const auto made = ControllerTrialRunner::create(machine.syscalls, machine.snapshot,
                                                   machine.registry, machine.options);
   ASSERT_FALSE(made.has_value());
-  EXPECT_TRUE(contains(made.error().detail, "could not be enforced: no temperature sensor was "
-                                            "offered; leave the option out"))
+  EXPECT_TRUE(contains(made.error().detail,
+                       "could not be enforced: no temperature sensor was "
+                       "offered; leave the option out"))
       << made.error().detail;
 }
 

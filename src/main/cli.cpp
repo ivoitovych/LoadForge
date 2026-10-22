@@ -186,10 +186,10 @@ struct TestArgs {
   std::optional<std::int64_t> sample_interval_ns;
   std::optional<std::string> journal;
   std::optional<std::int64_t> max_temperature;  ///< The ceiling, in degrees Celsius.
-  std::optional<core::Duration> rotation;  ///< mixed only.
-  std::optional<core::Duration> dwell;     ///< cycling only.
-  std::optional<mixed::CycleKind> cycle;   ///< cycling only.
-  std::optional<std::string> on_workload;  ///< cycling only.
+  std::optional<core::Duration> rotation;       ///< mixed only.
+  std::optional<core::Duration> dwell;          ///< cycling only.
+  std::optional<mixed::CycleKind> cycle;        ///< cycling only.
+  std::optional<std::string> on_workload;       ///< cycling only.
 };
 
 /// The sample interval a flag names, in nanoseconds, or what is wrong with it.

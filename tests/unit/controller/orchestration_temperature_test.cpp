@@ -85,9 +85,8 @@ class Plant final : public Reporter {
   }
 
   [[nodiscard]] bool told(std::string_view part) const {
-    return std::ranges::any_of(events, [part](const std::string& event) {
-      return event.find(part) != std::string::npos;
-    });
+    return std::ranges::any_of(
+        events, [part](const std::string& event) { return event.find(part) != std::string::npos; });
   }
 
   FakeSyscalls* syscalls = nullptr;
@@ -101,8 +100,12 @@ class Plant final : public Reporter {
 };
 
 telemetry::Metric celsius(std::string name, telemetry::Scope scope, std::uint32_t index) {
-  return telemetry::Metric{std::move(name), telemetry::Unit::kCelsius, telemetry::Kind::kGauge,
-                           scope,           index,                     std::nullopt,
+  return telemetry::Metric{std::move(name),
+                           telemetry::Unit::kCelsius,
+                           telemetry::Kind::kGauge,
+                           scope,
+                           index,
+                           std::nullopt,
                            "hwmon:mock"};
 }
 
@@ -217,8 +220,9 @@ TEST(OrchestrationTemperatureTest, AReadingAtTheCeilingStopsEveryWorkerBeforeThe
   EXPECT_GT(stop.at_ns, 0);
   EXPECT_LT(stop.at_ns, 5000 * kMs) << "long before the deadline";
   EXPECT_FALSE(run.reporter.told("deadline reached"));
-  EXPECT_TRUE(run.reporter.told("temperature ceiling: thermal.package 0 (hwmon:mock) read 85.0 C, "
-                                "at or above the ceiling of 85 C, "));
+  EXPECT_TRUE(
+      run.reporter.told("temperature ceiling: thermal.package 0 (hwmon:mock) read 85.0 C, "
+                        "at or above the ceiling of 85 C, "));
   EXPECT_TRUE(run.reporter.told("s into the run: stop requested"));
   // Every worker was asked, exactly as at the deadline: a Stop on each control pipe.
   ASSERT_EQ(report.workers.size(), 2U);
@@ -257,9 +261,8 @@ TEST(OrchestrationTemperatureTest, OfSeveralSensorsTheOneThatCrossesIsNamedAndTh
       celsius("thermal.package", telemetry::Scope::kPackage, 0),
       celsius("thermal.core", telemetry::Scope::kCore, 0),
       celsius("thermal.core", telemetry::Scope::kCore, 1)};
-  Heated run(sensors,
-             then(repeated(3, {reads(60), reads(61), reads(62)}),
-                  repeated(1, {reads(70), reads(71), reads(90.25)})));
+  Heated run(sensors, then(repeated(3, {reads(60), reads(61), reads(62)}),
+                           repeated(1, {reads(70), reads(71), reads(90.25)})));
   auto result = run.go();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   ASSERT_TRUE(result.value().temperature_stop.has_value());
@@ -281,8 +284,9 @@ TEST(OrchestrationTemperatureTest, ASensorThatDropsOutIsToldAndTheOthersKeepTheC
   Heated run(sensors, std::move(rounds));
   auto result = run.go();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
-  EXPECT_TRUE(run.reporter.told("temperature: thermal.package 0 (hwmon:mock) can no longer be "
-                                "read: the sensor behind hwmon:mock disappeared"));
+  EXPECT_TRUE(
+      run.reporter.told("temperature: thermal.package 0 (hwmon:mock) can no longer be "
+                        "read: the sensor behind hwmon:mock disappeared"));
   EXPECT_TRUE(run.reporter.told("temperature: thermal.package 0 (hwmon:mock) can be read again"));
   ASSERT_TRUE(result.value().temperature_stop.has_value());
   EXPECT_EQ(result.value().temperature_stop->sensor, "thermal.core 0 (hwmon:mock)")
@@ -305,7 +309,8 @@ TEST(OrchestrationTemperatureTest, WhenEverySensorIsGoneForTooLongTheRunIsStoppe
   EXPECT_EQ(result.value().workers[0].commands.sent, 1U) << "the workers were stopped";
 }
 
-TEST(OrchestrationTemperatureTest, WhenSamplingEndsMidRunTheCeilingCanNoLongerBeHeldAndTheRunStops) {
+TEST(OrchestrationTemperatureTest,
+     WhenSamplingEndsMidRunTheCeilingCanNoLongerBeHeldAndTheRunStops) {
   mocks::MockTimeline timeline;
   mocks::PointSampler sampler(timeline, celsius("thermal.package", telemetry::Scope::kPackage, 0));
   ASSERT_TRUE(sampler.probe().has_value());
@@ -342,8 +347,9 @@ TEST(OrchestrationTemperatureTest, WithoutAReasonTheRefusalSaysNoSensorWasOffere
   Heated run(kPackage, repeated(1, {reads(40)}), 85, false);
   auto result = run.go();
   ASSERT_FALSE(result.has_value());
-  EXPECT_NE(result.error().detail.find("could not be enforced: no temperature sensor was offered; "),
-            std::string::npos)
+  EXPECT_NE(
+      result.error().detail.find("could not be enforced: no temperature sensor was offered; "),
+      std::string::npos)
       << result.error().detail;
 }
 

@@ -29,9 +29,9 @@ constexpr std::int64_t kS = 1'000'000'000;
 
 telemetry::Metric celsius(std::string name, telemetry::Scope scope, std::uint32_t index,
                           std::string provider = "hwmon:mock") {
-  return telemetry::Metric{std::move(name), telemetry::Unit::kCelsius, telemetry::Kind::kGauge,
-                           scope,           index,                     std::nullopt,
-                           std::move(provider)};
+  return telemetry::Metric{
+      std::move(name), telemetry::Unit::kCelsius, telemetry::Kind::kGauge, scope, index,
+      std::nullopt,    std::move(provider)};
 }
 
 telemetry::Reading gone(std::string detail) {
@@ -73,15 +73,15 @@ class PlainView final : public telemetry::TimelineView {
 };
 
 TEST(TemperatureWatchTest, OnlyGaugesInDegreesCelsiusAreTemperatures) {
-  Board board({celsius("thermal.package", telemetry::Scope::kPackage, 0, "hwmon:coretemp"),
-               telemetry::Metric{"power.package", telemetry::Unit::kWatts, telemetry::Kind::kGauge,
-                                 telemetry::Scope::kPackage, 0, std::nullopt, "powercap"},
-               telemetry::Metric{"edac.corrected", telemetry::Unit::kCelsius,
-                                 telemetry::Kind::kCounter, telemetry::Scope::kMachine, 0,
-                                 std::nullopt, "edac"},
-               celsius("thermal.machine", telemetry::Scope::kMachine, 0, "mock")});
-  board.round(1, {telemetry::Gauge{50}, telemetry::Gauge{20}, telemetry::Counter{1},
-                  telemetry::Gauge{40}});
+  Board board(
+      {celsius("thermal.package", telemetry::Scope::kPackage, 0, "hwmon:coretemp"),
+       telemetry::Metric{"power.package", telemetry::Unit::kWatts, telemetry::Kind::kGauge,
+                         telemetry::Scope::kPackage, 0, std::nullopt, "powercap"},
+       telemetry::Metric{"edac.corrected", telemetry::Unit::kCelsius, telemetry::Kind::kCounter,
+                         telemetry::Scope::kMachine, 0, std::nullopt, "edac"},
+       celsius("thermal.machine", telemetry::Scope::kMachine, 0, "mock")});
+  board.round(
+      1, {telemetry::Gauge{50}, telemetry::Gauge{20}, telemetry::Counter{1}, telemetry::Gauge{40}});
   const TemperatureWatch watch(board.timeline, 90, 10 * kS, 1);
   ASSERT_EQ(watch.sensors().size(), 2U);
   EXPECT_EQ(watch.sensors()[0].series, 0U);
@@ -139,6 +139,8 @@ TEST(TemperatureWatchTest, AReadingBelowAtAndAboveTheCeilingIsToldApart) {
   Observation above = watch.observe(4, 4 * kS);
   ASSERT_TRUE(above.stop.has_value());
   EXPECT_EQ(above.stop->celsius, 91.25);
+  EXPECT_EQ(describe_reading(*above.stop),
+            "thermal.package 0 (hwmon:coretemp) read 91.2 C, at or above the ceiling of 85 C");
   EXPECT_EQ(describe(*above.stop),
             "thermal.package 0 (hwmon:coretemp) read 91.2 C, at or above the ceiling of 85 C, "
             "4.000 s into the run");
@@ -149,8 +151,8 @@ TEST(TemperatureWatchTest, OfSeveralSensorsTheOneThatCrossesIsNamedAndTheHottest
                celsius("thermal.core", telemetry::Scope::kCore, 0),
                celsius("thermal.core", telemetry::Scope::kCore, 1),
                celsius("thermal.zone", telemetry::Scope::kDevice, 0)});
-  board.round(1, {telemetry::Gauge{40}, telemetry::Gauge{40}, telemetry::Gauge{40},
-                  telemetry::Gauge{40}});
+  board.round(
+      1, {telemetry::Gauge{40}, telemetry::Gauge{40}, telemetry::Gauge{40}, telemetry::Gauge{40}});
   TemperatureWatch watch(board.timeline, 90, 10 * kS, 1);
 
   board.round(2, {telemetry::Gauge{60}, telemetry::Gauge{89.9}, telemetry::Gauge{91},
@@ -159,16 +161,16 @@ TEST(TemperatureWatchTest, OfSeveralSensorsTheOneThatCrossesIsNamedAndTheHottest
   ASSERT_TRUE(one.stop.has_value());
   EXPECT_EQ(one.stop->sensor, "thermal.core 1 (hwmon:mock)") << "only core 1 is at 90";
 
-  board.round(3, {telemetry::Gauge{92}, telemetry::Gauge{95}, telemetry::Gauge{91},
-                  telemetry::Gauge{95}});
+  board.round(
+      3, {telemetry::Gauge{92}, telemetry::Gauge{95}, telemetry::Gauge{91}, telemetry::Gauge{95}});
   Observation several = watch.observe(3, 2 * kS);
   ASSERT_TRUE(several.stop.has_value());
   EXPECT_EQ(several.stop->sensor, "thermal.core 0 (hwmon:mock)")
       << "of two at 95 the first, and not the hottest-last";
   EXPECT_EQ(several.stop->celsius, 95.0);
 
-  board.round(4, {telemetry::Gauge{97}, telemetry::Gauge{91}, telemetry::Gauge{91},
-                  telemetry::Gauge{91}});
+  board.round(
+      4, {telemetry::Gauge{97}, telemetry::Gauge{91}, telemetry::Gauge{91}, telemetry::Gauge{91}});
   Observation first_is_hottest = watch.observe(4, 3 * kS);
   ASSERT_TRUE(first_is_hottest.stop.has_value());
   EXPECT_EQ(first_is_hottest.stop->sensor, "thermal.package 0 (hwmon:mock)");
@@ -236,7 +238,8 @@ TEST(TemperatureWatchTest, NoSensorReadForLongerThanTheAllowanceMeansTheCeilingI
   EXPECT_EQ(lost.notes.size(), 1U);
 
   board.round(15 * kS, {gone("driver unloaded")});
-  EXPECT_FALSE(watch.observe(15 * kS, 5 * kS).stop.has_value()) << "exactly the allowance is not past it";
+  EXPECT_FALSE(watch.observe(15 * kS, 5 * kS).stop.has_value())
+      << "exactly the allowance is not past it";
 
   board.round(16 * kS, {gone("driver unloaded")});
   Observation blind = watch.observe(16 * kS, 6 * kS);
