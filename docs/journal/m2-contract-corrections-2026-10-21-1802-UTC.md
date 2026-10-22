@@ -193,3 +193,28 @@ the lift is a one-line revert, and the red would be a test that maps without a p
 * A `stress --config` has no key for the lock policy (the config schema is another component's
   contract): it runs the default, `try`.
 * The project still needs an outside reviewer.
+
+## The stop grace of a verified run (2026-10-22 01:34 UTC)
+
+**Defect.** CI's TSan x86 job (2026-10-22 01:06 UTC), `loadforge stress --test dense_linear
+--duration 6s --workers 2 --footprint 2MiB` on a 2-core runner, ended with "worker 0: sent signal 15",
+"killed by signal 15", "0 of 2 worker(s) completed", verdict incomplete, and 4 units computed, 4
+checked, 0 wrong. A verified unit takes about 1.5 s there; a worker sees the stop request only between
+units, because it cannot beat from inside `compute()`; the controller's stop grace was the default 1 s,
+so a worker mid-unit at the deadline was terminated. The healthy run was reported as failed. On main
+the test passed only because the timing fell that way. The earlier change of the test to 6 s was a
+wrong diagnosis (it moved the deadline, not the grace).
+
+**Fix.** `allow_for_verified_units` in `src/main/cli.cpp` raises `grace.stop_ns` to
+`kVerifyingStopGraceNs` (10 s) beside `stale_after_ns` (10 s) when an enabled registered workload is
+present; null-workload runs keep 1 s and 2 s. The test is back to `--duration 2s`.
+
+**Where else grace feeds in.** The telemetry timeline's `run_ns` already adds `grace.stop_ns`, so
+it grows with the fix. The controller's final drain of a held channel waits one `grace.stop_ns`
+(orchestration.cpp), which now is the longer one too, as it should be. The controller's own deadline
+does not use the grace: it only decides when to ask for the stop, and escalation (`escalation_due`)
+reads `grace`. The re-run and isolation path uses `RerunOptions::timeout_ns`, never `grace`, so it
+needs nothing.
+
+**Test.** The fake cannot easily run a parent-side worker through `run_stress`, so the allowances are
+set by a public function the tests call directly and assert on the values the controller is handed.

@@ -738,6 +738,35 @@ TEST(CliStressTest, AWorkerOfTheNullWorkloadIsStillCalledAHangAfterTwoSeconds) {
   EXPECT_FALSE(parsed.value().workload.has_value());
 }
 
+TEST(CliStressTest, AVerifiedRunIsGivenTenSecondsToStopNotOneBecauseAUnitCannotBeInterrupted) {
+  // CI, TSan x86, 2026-10-22: a unit took 1.5 s, the worker was mid-unit at the
+  // deadline, and the default one-second grace killed it with SIGTERM.
+  controller::RunOptions options;
+  ASSERT_EQ(options.grace.stop_ns, 1'000'000'000) << "the default this test is about";
+  allow_for_verified_units(options);
+  EXPECT_EQ(options.grace.stop_ns, 10'000'000'000);
+  EXPECT_GT(options.grace.stop_ns, 3'000'000'000) << "a worker 3 s into its unit is not killed";
+  EXPECT_EQ(options.stale_after_ns, 10'000'000'000);
+}
+
+TEST(CliStressTest, AGraceAlreadyLongerThanTheVerifiedOneIsNotShortened) {
+  controller::RunOptions options;
+  options.grace.stop_ns = 30'000'000'000;
+  options.stale_after_ns = 20'000'000'000;
+  allow_for_verified_units(options);
+  EXPECT_EQ(options.grace.stop_ns, 30'000'000'000);
+  EXPECT_EQ(options.stale_after_ns, 20'000'000'000);
+}
+
+TEST(CliStressTest, ARunOfTheNullWorkloadIsStillTerminatedAfterOneSecond) {
+  // The null workload never reaches allow_for_verified_units: the stale test
+  // above shows its workers are given the two-second allowance, and the grace
+  // is the controller's own default, which only a verifying run raises.
+  const controller::RunOptions options;
+  EXPECT_EQ(options.grace.stop_ns, 1'000'000'000);
+  EXPECT_EQ(options.grace.kill_ns, 1'000'000'000);
+}
+
 TEST(CliStressTest, ARegisteredWorkloadThatIsSwitchedOffDoesNotMakeTheRunAVerifyingOne) {
   testing::FakeSyscalls syscalls;
   syscalls.advance_clocks_per_read(10'000'000);

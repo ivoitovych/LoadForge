@@ -136,13 +136,13 @@ set_tests_properties(cli_stress_usage PROPERTIES WILL_FAIL TRUE)
 # M2a exit criterion 1 and 5 and M2b exit criterion 1 through the real binary:
 # each workload is stressed, checked by its oracle, and the run says what the
 # machine can and cannot be read for before it starts.
-# The run must last long enough for the oracle to check a unit in the slowest
-# build CI runs: under the coverage instrumentation a dense-linear unit takes
-# most of a second, and with the whole suite running beside it a 2 s run checked
-# none (2026-10-21, #95's x86 coverage job; 3 units in 2 s on an idle core).
+# A worker sees the stop request only between units and a verified unit can take
+# 1.5 s under a sanitizer, so the controller gives a verifying run ten seconds
+# to stop (kVerifyingStopGraceNs in src/main/cli.cpp). The run is two seconds
+# long; a longer one only hid the one-second grace (2026-10-22, #95's TSan job).
 foreach(workload IN ITEMS compression dense_linear)
   add_test(NAME cli_stress_test_${workload}
-           COMMAND loadforge stress --test ${workload} --duration 6s --workers 2 --footprint 2MiB)
+           COMMAND loadforge stress --test ${workload} --duration 2s --workers 2 --footprint 2MiB)
   set_tests_properties(cli_stress_test_${workload} PROPERTIES
                        RESOURCE_LOCK loadforge_pinned_workers
                        PASS_REGULAR_EXPRESSION
