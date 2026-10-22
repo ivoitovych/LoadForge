@@ -1,6 +1,6 @@
 # Stream 34 — Hardening and 1.0
 
-**State:** not started  
+**State:** built, except the hardware half (updated 2026-10-22 22:09 UTC). The documents (`docs/architecture.md`, `docs/telemetry-sources.md`, `docs/safety.md`, `docs/hardware-validation.md`), the packaging (`packaging/`: a release build of the static and the dynamic artifact, a Debian package proven here by install, run and purge), the tag-driven `release` workflow, the scripted machine validation, `README.md` and `CONTRIBUTING.md` are done. **The hardware half waits for the owner**: M7 exit criterion 1 (several x86-64 and ARM64 machines, both artifacts on live media), the T11 thermal result and the hardware soak are procedures in `docs/hardware-validation.md`, with results to go in `tests/hardware/`; nothing in this container could run them. One known defect is open: the configured temperature limit is not enforced (`docs/safety.md` §1; journal fragment 34)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 6  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

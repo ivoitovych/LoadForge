@@ -28,6 +28,7 @@ echo "== package: $(dpkg-deb --field "$deb" Package) $want ($(dpkg-deb --field "
 echo "   Depends: $(dpkg-deb --field "$deb" Depends)"
 
 dpkg -i "$deb"
+hash -r
 [ "$(command -v loadforge)" = /usr/bin/loadforge ] || { echo "test-deb: loadforge is not /usr/bin/loadforge" >&2; exit 1; }
 
 reported="$(loadforge --version)"
@@ -51,6 +52,7 @@ echo "== installed: two-second stress run, verdict: clean"
 
 files="$(dpkg -L loadforge | grep -v '^/\.$')"
 dpkg --purge loadforge
+hash -r
 left=0
 while IFS= read -r f; do
   if [ -f "$f" ] || [ -L "$f" ]; then

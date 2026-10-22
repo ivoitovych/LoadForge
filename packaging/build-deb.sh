@@ -11,9 +11,10 @@
 # Depends is not written by hand: dpkg-shlibdeps reads the binary's DT_NEEDED
 # entries and the symbol versions it uses against the libraries of the machine
 # that builds it, so the package asks for the oldest libc6 and libstdc++6 that
-# carry every symbol the binary binds to. Built on Ubuntu 24.04 that is
-# libc6 >= 2.38-ish and libstdc++6 >= 13: Ubuntu 24.04 is the declared minimum
-# for the dynamic artifact (docs/IMPLEMENTATION.md Q11), and the static
+# carry every symbol the binary binds to (on the first build, libc6 >= 2.34 and
+# libstdc++6 >= 13.1). Ubuntu 24.04 is the declared minimum for the dynamic
+# artifact (docs/IMPLEMENTATION.md Q11): it is where the build is made and
+# tested, and the libstdc++ 13 it needs is what 24.04 ships. The static
 # artifact covers everything older.
 #
 # The Debian version is the binary's --version with the first '-' turned into

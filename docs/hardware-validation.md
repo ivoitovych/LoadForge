@@ -1,6 +1,6 @@
 # Hardware validation checklist (M7)
 
-**Written:** 2026-10-22 23:05 UTC
+**Written:** 2026-10-22 22:09 UTC
 **Milestone:** M7 (`docs/IMPLEMENTATION.md` §4). **Status of the work it asks for: not yet done.** This is
 the document the owner executes; the results go in `tests/hardware/` (section 7).
 
@@ -152,8 +152,9 @@ $ loadforge --selftest-digest
 e0ff849ff34906de
 ```
 
-(The digest is the same for every build type; that is part of what is checked, so compare
-the artifacts' digest with it only if the version string is `0.0.0-m2`.)
+The same digest came from the debug build, the static release build and the dynamic
+release build of this commit; compare the artifacts' digest with it only if the version
+string is `0.0.0-m2`.
 
 ### 4.5 What to look at by eye while it runs
 
@@ -191,7 +192,10 @@ image, a Debian 12 live image, SystemRescue):
 5. **Negative control.** On the same medium, run the *dynamic* binary:
    `./loadforge-VERSION-linux-ARCH-dynamic/loadforge --version`. On a userspace older than
    Ubuntu 24.04 it is expected to be refused by the dynamic loader with a message naming a
-   missing `GLIBC_…` or `GLIBCXX_…` version. That refusal is the reason Q11 declares 24.04
+   missing symbol version. The binary uses symbols up to `GLIBC_2.34` and
+   `GLIBCXX_3.4.32` (`objdump -T loadforge | grep -o 'GLIBCXX_[0-9.]*' | sort -Vu | tail -1`),
+   so the first to fail is the libstdc++: Ubuntu 22.04 and Debian 12 ship libstdc++ 12,
+   which has up to `GLIBCXX_3.4.30` and no `GLIBCXX_3.4.31`. That refusal is the reason Q11 declares 24.04
    the minimum for the dynamic build; save the exact message in the results file. If it
    runs, record that instead: it is information, not a failure.
 6. Also run the **dynamic artifact from a live medium that is Ubuntu 24.04 or later**

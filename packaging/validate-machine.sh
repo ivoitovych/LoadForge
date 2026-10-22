@@ -21,6 +21,9 @@
 #   --soak-hours   also run the mixed workload for this many hours and watch the
 #              controller's memory, descriptors and threads (default: no soak).
 #
+# VALIDATE_SOAK_UNIT=m (minutes) and VALIDATE_SOAK_POLL=SECONDS exist to test the soak
+# logic in minutes; a real soak leaves them unset (hours, one sample a minute).
+#
 # Exit code: 0 every scripted step gave the expected exit code and a clean
 # verdict; 1 one did not (the results file says which); 2 usage. The script does
 # not decide that the machine is good: the results file has a section only a
@@ -28,7 +31,7 @@
 set -uo pipefail
 
 usage() {
-  sed -n '4,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '4,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -209,7 +212,7 @@ fi
 soak_text=""
 if [ "$soak_hours" -gt 0 ]; then
   mkdir -p "$logs/soak"
-  "$lf" stress --test mixed --duration "${soak_hours}h" --rotation 60s --sample-interval 10s \
+  "$lf" stress --test mixed --duration "${soak_hours}${VALIDATE_SOAK_UNIT:-h}" --rotation 60s --sample-interval 10s \
     --journal "$logs/soak/journal" --output json --output-dir "$logs/soak" > "$logs/soak.log" 2>&1 &
   soak_pid=$!
   echo "time_utc,rss_kib,fds,threads,processes" > "$logs/soak-monitor.csv"
@@ -221,7 +224,7 @@ if [ "$soak_hours" -gt 0 ]; then
       procs="$(pgrep -P "$soak_pid" | wc -l)"
       echo "$(date -u +%H:%M:%S),${rss:-0},$fds,${threads:-0},$procs" >> "$logs/soak-monitor.csv"
     fi
-    sleep 60
+    sleep "${VALIDATE_SOAK_POLL:-60}"
   done
   wait "$soak_pid"
   soak_code=$?

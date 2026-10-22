@@ -1,6 +1,6 @@
 # Safety
 
-**Written:** 2026-10-22 22:20 UTC, against `main` at 97cf70e plus the release stream.
+**Written:** 2026-10-22 22:09 UTC, against `main` at 97cf70e plus the release stream.
 
 LoadForge is built to drive a machine to sustained full load on every core and a large
 part of its memory, for as long as you ask. A machine with a failing fan, dried paste,

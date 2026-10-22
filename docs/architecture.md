@@ -1,6 +1,6 @@
 # Architecture
 
-**Written:** 2026-10-22 22:40 UTC, against `main` at 97cf70e plus the release stream.
+**Written:** 2026-10-22 22:09 UTC, against `main` at 97cf70e plus the release stream.
 
 How LoadForge is put together, as the tree at this commit has it. This document describes
 what is built. The reasons behind the choices, and the alternatives rejected, are in

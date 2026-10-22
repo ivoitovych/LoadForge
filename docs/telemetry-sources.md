@@ -1,6 +1,6 @@
 # Telemetry sources
 
-**Written:** 2026-10-22 22:30 UTC, against `main` at 97cf70e plus the release stream.
+**Written:** 2026-10-22 22:09 UTC, against `main` at 97cf70e plus the release stream.
 
 What LoadForge reads from the machine while it runs, where each reading comes from, what
 makes it absent, and what you can do about it. The code is under `src/telemetry/`; the
