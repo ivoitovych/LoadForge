@@ -459,7 +459,7 @@ struct Searching {
 TEST(ExploreRun, ATrialThatCannotStartEndsTheSearchWithTheKernelsReason) {
   Searching search;
   search.syscalls.script_forks({{0, EAGAIN}});
-  EXPECT_EQ(search.run(search.config("memory.available:min:lower")), 3);
+  EXPECT_EQ(search.run(Searching::config("memory.available:min:lower")), 3);
   EXPECT_TRUE(contains(search.err.str(), "loadforge: explore: trial failed: ")) << search.err.str();
   EXPECT_TRUE(contains(search.err.str(), "fork")) << search.err.str();
   EXPECT_TRUE(search.out.str().empty()) << "no report of a search that did not end";
@@ -467,7 +467,7 @@ TEST(ExploreRun, ATrialThatCannotStartEndsTheSearchWithTheKernelsReason) {
 
 TEST(ExploreRun, AnUnrunnableTrialEndsTheSearchNamingTheCandidateAndWhy) {
   Searching search;
-  explore::SearchConfig config = search.config("memory.available:min:lower");
+  explore::SearchConfig config = Searching::config("memory.available:min:lower");
   config.reference.workloads = {"no_such_workload"};  // the first to run
   EXPECT_EQ(search.run(std::move(config)), 3);
   EXPECT_TRUE(contains(search.err.str(), "no workload named 'no_such_workload'"))
@@ -479,7 +479,7 @@ TEST(ExploreRun, AReferenceThatDidNotFinishCannotMeasureDriftAndEndsTheSearch) {
   Searching search;
   search.syscalls.script_forks({{1001, 0}});
   search.syscalls.script_nonblocking_reaps({{platform::Reaped{1001, 0}, 0}});
-  EXPECT_EQ(search.run(search.config("memory.available:min:lower")), 3);
+  EXPECT_EQ(search.run(Searching::config("memory.available:min:lower")), 3);
   EXPECT_TRUE(contains(search.err.str(), "reference unusable")) << search.err.str();
 }
 
@@ -487,7 +487,7 @@ TEST(ExploreRun, AWorkerWhoseExecFailedEndsTheSearchWithItsExitCodeAndSaysNothin
   Searching search;
   search.syscalls.script_forks({{0, 0}});
   search.syscalls.set_parent_pid(testing::FakeSyscalls::kFakePid);
-  EXPECT_EQ(search.run(search.config("memory.available:min:lower")), 120);
+  EXPECT_EQ(search.run(Searching::config("memory.available:min:lower")), 120);
   EXPECT_TRUE(search.err.str().empty()) << search.err.str();
   EXPECT_TRUE(search.out.str().empty());
   EXPECT_EQ(search.runner->worker_exit_code(), 120);
@@ -495,7 +495,7 @@ TEST(ExploreRun, AWorkerWhoseExecFailedEndsTheSearchWithItsExitCodeAndSaysNothin
 
 TEST(ExploreRun, ASearchThatIsNotWellFormedIsRefusedBeforeAnyWorkerStarts) {
   Searching search;
-  explore::SearchConfig config = search.config("memory.available:min:lower");
+  explore::SearchConfig config = Searching::config("memory.available:min:lower");
   config.reference.id = "a";  // the candidate's
   EXPECT_EQ(search.run(std::move(config)), 1);
   EXPECT_TRUE(contains(search.err.str(), "search not well formed")) << search.err.str();
@@ -504,7 +504,7 @@ TEST(ExploreRun, ASearchThatIsNotWellFormedIsRefusedBeforeAnyWorkerStarts) {
 
 TEST(ExploreRun, AnObjectiveThisMachineCannotReadIsRefusedWithTheSourcesRemedyAndNothingStarts) {
   Searching search;
-  EXPECT_EQ(search.run(search.config("thermal.package:max:higher")), 1);
+  EXPECT_EQ(search.run(Searching::config("thermal.package:max:higher")), 1);
   EXPECT_TRUE(contains(search.err.str(), "objective metric unavailable")) << search.err.str();
   EXPECT_TRUE(contains(search.err.str(), "hwmon")) << "the remedy: " << search.err.str();
   EXPECT_EQ(search.syscalls.fork_count(), 0);
@@ -514,7 +514,8 @@ TEST(ExploreRun, AnObjectiveThisMachineCannotReadIsRefusedWithTheSourcesRemedyAn
 TEST(ExploreRun, ASettleMetricThisMachineCannotReadIsRefusedTheSameWay) {
   Searching search;
   EXPECT_EQ(
-      search.run(search.config("memory.available:min:lower", {"--settle", "thermal.package"})), 1);
+      search.run(Searching::config("memory.available:min:lower", {"--settle", "thermal.package"})),
+      1);
   EXPECT_TRUE(contains(search.err.str(), "settle metric thermal.package")) << search.err.str();
   EXPECT_EQ(search.syscalls.fork_count(), 0);
 }

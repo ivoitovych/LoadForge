@@ -83,19 +83,19 @@ std::vector<std::string_view> split(std::string_view text, char separator) {
   }
 }
 
-core::Result<std::uint64_t, std::string> whole_number(std::string_view key, std::string_view text) {
-  auto split_text = core::split_number_and_suffix(text);
+core::Result<std::uint64_t, std::string> whole_number(const Written& option) {
+  auto split_text = core::split_number_and_suffix(option.value);
   if (!split_text.has_value() || !split_text.value().suffix.empty()) {
     std::string what = "expected a whole number, got '";
-    what += text;
+    what += option.value;
     what += "'";
-    return refused(key, what);
+    return refused(option.key, what);
   }
   return split_text.value().value;
 }
 
 core::Result<std::uint64_t, std::string> at_least_one(const Written& option) {
-  auto count = whole_number(option.key, option.value);
+  auto count = whole_number(option);
   if (!count.has_value()) {
     return count;
   }
@@ -147,7 +147,7 @@ std::optional<std::string> take_objective(const Written& option, Parsing& out) {
   }
   objective.metric = std::string{named[0]};
   if (named.size() == 2) {
-    auto index = whole_number(option.key, named[1]);
+    auto index = whole_number(Written{option.key, named[1]});
     if (!index.has_value()) {
       return index.error();
     }
@@ -321,7 +321,7 @@ std::optional<std::string> take_reference_replicates(const Written& option, Pars
 }
 
 std::optional<std::string> take_seed(const Written& option, Parsing& out) {
-  auto seed = whole_number(option.key, option.value);
+  auto seed = whole_number(option);
   if (!seed.has_value()) {
     return seed.error();
   }
