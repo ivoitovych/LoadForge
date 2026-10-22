@@ -16,8 +16,9 @@ computes fewer than its neighbour; a Rebind to the last CPU and back, and a Swit
 sort to compression, are Done and the run stays clean (no wrong result, nothing not
 performed). A Rebind to CPU 1000 and a Switch to a name no registry holds are both
 refused with the reason in the worker's story, and the worker goes on computing. The
-controller's own Stop is counted in `sent`: a worker that is paused at the deadline
-answers it Done, one that has already left on its own duration never reads it.
+controller's own Stop is counted in `sent` when it is sent: a worker that is paused at
+the deadline answers it Done, one that has already left on its own duration never reads
+it, and one already reaped is sent nothing (below).
 
 ### A killed controller leaves a journal that replays, and no worker outlives it
 
@@ -56,10 +57,14 @@ rotations than a timeline tick are legal but their phases are not all marked.
 ### A worker usually leaves on its own duration before it reads the controller's Stop
 
 The worker's clock starts after exec; the controller's deadline is measured from before the
-fork, so the Stop is written first, but a worker busy in a slice reads it at the next tick
-and a worker that has already counted its duration out leaves without reading it. Both are
-clean. So a Stop is excluded from "unanswered" (the count of messages with no answer
-at the end), and counted in "sent".
+fork, so the Stop is usually written first, but a worker busy in a slice reads it at the
+next tick and a worker that has already counted its duration out leaves without reading it.
+Both are clean. So a Stop is excluded from "unanswered" (the count of messages with no answer
+at the end), and counted in "sent" when it is written. It is not always written: on a loaded
+machine the controller's tick can come after the worker has left and been reaped, and
+`request_stop` sends nothing to a reaped worker. With six CPU hogs beside it, the pause test
+lost the Stop from both workers' `sent` in 2 runs of 12 (2026-10-22 11:40 UTC); the tests
+now admit the Stop or its absence in `sent`, as they already did in `done`.
 
 ## Decisions
 
