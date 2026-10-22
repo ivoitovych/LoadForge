@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install toolchain
         run: |
-          sudo apt-get update -qq
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* && sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build g++-13 clang-18
       - name: Configure
         env:
@@ -93,7 +93,7 @@ jobs:
         # tools/mutation-shard.py watches a test program with; its tests here
         # fail rather than skip without it.
         run: |
-          sudo apt-get update -qq
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* && sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck strace
           pip install --break-system-packages 'ruff==0.15.8'
       - run: ./tests/tools/test_tooling.sh
@@ -125,7 +125,7 @@ jobs:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build clang-format-18 clang-tidy-18
+      - run: sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* && sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build clang-format-18 clang-tidy-18
       - name: clang-format
         if: matrix.shard == 1
         run: find src tests -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror

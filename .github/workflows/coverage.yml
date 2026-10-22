@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: |
-          sudo apt-get update -qq
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* && sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build g++-13
           # Pinned: a gcovr release can change branch accounting and thereby change
           # what "100% branch coverage" means, with no repository change at all.
