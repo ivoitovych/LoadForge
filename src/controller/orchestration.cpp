@@ -94,6 +94,17 @@ bool operator==(const FindingReport& lhs, const FindingReport& rhs) {
          std::tie(rhs.record, rhs.isolation, rhs.not_isolated);
 }
 
+bool operator==(const RunOptions& lhs, const RunOptions& rhs) {
+  return std::tie(lhs.executable, lhs.interval_ns, lhs.stale_after_ns, lhs.grace, lhs.budget,
+                  lhs.budget_unread, lhs.oom_record, lhs.topology, lhs.verification, lhs.fp,
+                  lhs.capabilities, lhs.sampler, lhs.timeline, lhs.sample_interval_ns, lhs.schedule,
+                  lhs.journal, lhs.journal_interval_ns, lhs.journal_notes) ==
+         std::tie(rhs.executable, rhs.interval_ns, rhs.stale_after_ns, rhs.grace, rhs.budget,
+                  rhs.budget_unread, rhs.oom_record, rhs.topology, rhs.verification, rhs.fp,
+                  rhs.capabilities, rhs.sampler, rhs.timeline, rhs.sample_interval_ns, rhs.schedule,
+                  rhs.journal, rhs.journal_interval_ns, rhs.journal_notes);
+}
+
 std::string describe(const ControllerError& error) { return error.stage + ": " + error.detail; }
 
 std::string describe(const CommandReport& commands) {
@@ -438,13 +449,19 @@ void Run::begin_labels() {
   // own words for both.
   std::vector<std::string> names;
   for (const Tracked& worker : workers_) {
-    names.push_back(worker.plan.args.has_value() ? worker.plan.args->workload : "null");
+    std::string name = "null";
+    if (worker.plan.args.has_value()) {
+      name = worker.plan.args->workload;
+    }
+    names.push_back(std::move(name));
   }
   std::ranges::sort(names);
   names.erase(std::ranges::unique(names).begin(), names.end());
   std::string joined;
   for (const std::string& name : names) {
-    joined += joined.empty() ? "" : "+";
+    if (!joined.empty()) {
+      joined += '+';
+    }
     joined += name;
   }
   workload_label_ = mixed::bounded(std::move(joined));
@@ -619,8 +636,7 @@ core::Result<core::Ok, ControllerError> Run::request_stop(std::int64_t now_ns) {
   return core::Ok{};
 }
 
-core::Result<core::Ok, ControllerError> Run::command(Tracked& worker,
-                                                     const worker::Command& what) {
+core::Result<core::Ok, ControllerError> Run::command(Tracked& worker, const worker::Command& what) {
   if (worker.reaped) {
     return core::Ok{};
   }
@@ -687,8 +703,8 @@ journal::Entry Run::journal_entry(std::int64_t elapsed_ns) const {
     if (worker.tally_seen) {
       // The most units any worker has computed and checked: the units are
       // numbered from zero in each worker, so this is how far the furthest got.
-      entry.last_verified_unit = std::max(entry.last_verified_unit.value_or(0),
-                                          worker.tally.units_computed);
+      entry.last_verified_unit =
+          std::max(entry.last_verified_unit.value_or(0), worker.tally.units_computed);
     }
     entry.workers_alive += worker.reaped ? 0U : 1U;
     entry.workers_stale += (!worker.reaped && worker.stale_now) ? 1U : 0U;
@@ -700,9 +716,8 @@ journal::Entry Run::journal_entry(std::int64_t elapsed_ns) const {
 }
 
 void Run::journal_fault(const std::string& text, std::int64_t elapsed_ns) {
-  if (!journal_report_.fault.has_value()) {
-    journal_report_.fault = text;
-  }
+  // Journaling ends at the first fault, so there is never a second to keep.
+  journal_report_.fault = text;
   journal_live_ = false;
   reporter_->event(elapsed_ns, "journal: " + text);
 }
@@ -1266,8 +1281,8 @@ core::Result<RunReport, ControllerError> Run::finish() {
     // A Stop the worker never read is not a message it failed to answer: a
     // worker paces itself by the same duration and usually leaves on its own
     // before the controller's Stop is read, and its exit is the answer.
-    entry.commands.unacknowledged = static_cast<std::uint64_t>(std::ranges::count_if(
-        worker.unanswered, [](const Tracked::Unanswered& each) {
+    entry.commands.unacknowledged = static_cast<std::uint64_t>(
+        std::ranges::count_if(worker.unanswered, [](const Tracked::Unanswered& each) {
           return !std::holds_alternative<worker::Stop>(each.command);
         }));
     if (options_->schedule != nullptr) {

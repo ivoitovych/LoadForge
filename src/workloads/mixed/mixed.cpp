@@ -38,23 +38,11 @@ std::uint64_t draw(std::uint64_t seed, std::uint64_t rotation, std::uint64_t slo
 
 enum class Kind : std::uint8_t { kCompute, kMemory, kBalanced, kMixed, kJoin, kMove };
 
-std::string_view name_of(Kind kind) {
-  switch (kind) {
-    case Kind::kCompute:
-      return "compute-heavy";
-    case Kind::kMemory:
-      return "memory-heavy";
-    case Kind::kBalanced:
-      return "balanced";
-    case Kind::kMixed:
-      return "mixed";
-    case Kind::kJoin:
-      return "all-join";
-    case Kind::kMove:
-      return "move";
-  }
-  return "unrecognised kind";
-}
+/// The words a kind of phase goes by, in the order of the enumerators.
+constexpr std::array<std::string_view, 6> kNames{"compute-heavy", "memory-heavy", "balanced",
+                                                 "mixed",         "all-join",     "move"};
+
+std::string_view name_of(Kind kind) { return kNames[static_cast<std::size_t>(kind)]; }
 
 /// The order phases come in; a move replaces every third.
 constexpr std::array<Kind, 5> kPlan{Kind::kMixed, Kind::kCompute, Kind::kMemory, Kind::kBalanced,
@@ -159,7 +147,8 @@ core::Result<Schedule, std::string> make_mixed(const std::vector<RosterEntry>& r
   if (options.footprint_bytes == 0) {
     return std::string{"a mixed schedule needs a footprint"};
   }
-  const auto rotations = static_cast<std::uint64_t>((options.duration_ns - 1) / options.rotation_ns);
+  const auto rotations =
+      static_cast<std::uint64_t>((options.duration_ns - 1) / options.rotation_ns);
   if (rotations > kMaxSteps) {
     return "a rotation every " + std::to_string(options.rotation_ns / 1'000'000) + " ms for " +
            std::to_string(options.duration_ns / 1'000'000) + " ms is more than " +
@@ -195,7 +184,10 @@ core::Result<Schedule, std::string> make_mixed(const std::vector<RosterEntry>& r
   for (std::size_t slot = 0; slot < options.workers; ++slot) {
     const worker::Switch change =
         assignment(pick(kPlan[0], usable, options.seed, 0, slot), options, 0, slot);
-    schedule.start.push_back(Start{change.workload, change.footprint_bytes});
+    Start start;
+    start.workload = change.workload;
+    start.footprint_bytes = change.footprint_bytes;
+    schedule.start.push_back(std::move(start));
     first.push_back(change);
   }
   schedule.phase = phase_of(0, kPlan[0]);
@@ -215,8 +207,8 @@ core::Result<Schedule, std::string> make_mixed(const std::vector<RosterEntry>& r
         const std::size_t where = (slot + rotation / kMoveEvery) % options.placements.size();
         commands.commands.emplace_back(worker::Rebind{options.placements[where]});
       } else {
-        changes.push_back(assignment(pick(kind, usable, options.seed, rotation, slot), options,
-                                     rotation, slot));
+        changes.push_back(
+            assignment(pick(kind, usable, options.seed, rotation, slot), options, rotation, slot));
         commands.commands.emplace_back(changes.back());
       }
       step.workers.push_back(std::move(commands));

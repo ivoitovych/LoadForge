@@ -182,7 +182,8 @@ TEST(Cli, TheWorkerSwitchRunsARealWorkerInThisProcess) {
   auto records = syscalls.create_pipe();
   auto control = syscalls.create_pipe();
   ASSERT_TRUE(records.has_value() && control.has_value());
-  const std::vector<std::byte> stop_payload = worker::encode(worker::ControlMessage{1, worker::Stop{}});
+  const std::vector<std::byte> stop_payload =
+      worker::encode(worker::ControlMessage{1, worker::Stop{}});
   const std::vector<std::byte> stop = ipc::encode(worker::kControlFrameType, stop_payload).value();
   ASSERT_TRUE(syscalls.write(control.value().write_fd, stop).has_value());
 

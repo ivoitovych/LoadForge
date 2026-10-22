@@ -112,7 +112,8 @@ TEST(PlanMixed, WhatIsRefusedIsRefusedInTheSchedulesWords) {
   EXPECT_EQ(plan_mixed(request).error(), "a mixed schedule needs at least one worker");
   request = a_mixed_request(registry);
   request.footprint_bytes = 1024;
-  EXPECT_EQ(plan_mixed(request).error(), "no workload of the roster accepts a footprint of 1024 bytes");
+  EXPECT_EQ(plan_mixed(request).error(),
+            "no workload of the roster accepts a footprint of 1024 bytes");
 }
 
 TEST(PlanCycling, EveryWorkerRunsTheWorkloadAndTheScheduleCyclesIt) {
@@ -147,6 +148,8 @@ TEST(PlanCycling, ADwellAndAFootprintLeftOutAreTheDefaultsAndRefusalsAreSaid) {
   request.dwell_ms = 4'000;
   EXPECT_EQ(plan_cycling(request).value().schedule.steps.size(), 4U);
   request.duration_ms = 0;
+  EXPECT_EQ(plan_cycling(request).error(), "the duration is not one a schedule can be made for");
+  request.duration_ms = INT64_MAX / 1000;
   EXPECT_EQ(plan_cycling(request).error(), "the duration is not one a schedule can be made for");
   request.duration_ms = 16'000;
   request.workers = 0;

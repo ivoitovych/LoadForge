@@ -33,8 +33,7 @@ bool operator==(const Step& lhs, const Step& rhs) {
 }
 
 bool operator==(const Start& lhs, const Start& rhs) {
-  return std::tie(lhs.workload, lhs.footprint_bytes) ==
-         std::tie(rhs.workload, rhs.footprint_bytes);
+  return std::tie(lhs.workload, lhs.footprint_bytes) == std::tie(rhs.workload, rhs.footprint_bytes);
 }
 
 bool operator==(const Schedule& lhs, const Schedule& rhs) {
@@ -85,8 +84,8 @@ void add_command(std::string& text, const worker::Command& command) {
 
 std::optional<std::string> problem(const Schedule& schedule, std::size_t workers) {
   if (schedule.workers != workers) {
-    return "the schedule is for " + std::to_string(schedule.workers) + " worker(s) and the run has " +
-           std::to_string(workers);
+    return "the schedule is for " + std::to_string(schedule.workers) +
+           " worker(s) and the run has " + std::to_string(workers);
   }
   if (!schedule.start.empty() && schedule.start.size() != workers) {
     return std::string{"the schedule names a start for some workers and not for all"};

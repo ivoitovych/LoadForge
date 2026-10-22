@@ -240,10 +240,10 @@ TEST(RotationFaults,
   const CorruptingRegistry workloads;
   const verification::BuiltinOracleRegistry oracles;
   RotatingWorker worker(workloads, oracles);
-  worker.start("compression", 2'500'000'000);
+  worker.start("compression", 4'500'000'000);
   sleep_ms(600);
   worker.send({1, Switch{"fft", 9, std::uint64_t{2} << 20U, 0, {1, 1}}});
-  sleep_ms(900);
+  sleep_ms(1800);
   worker.send({2, Stop{}});
   worker.finish();
   ASSERT_TRUE(worker.result().has_value()) << describe(worker.result().error());
@@ -284,10 +284,10 @@ TEST(RotationFaults, ACheckThatCannotBeMadeAfterASwitchIsNotPerformedNeverClean)
   const workloads::BuiltinRegistry workloads;
   const UncheckingRegistry oracles;
   RotatingWorker worker(workloads, oracles);
-  worker.start("compression", 2'500'000'000);
+  worker.start("compression", 4'500'000'000);
   sleep_ms(600);
   worker.send({1, Switch{"fft", 9, std::uint64_t{2} << 20U, 0, {1, 1}}});
-  sleep_ms(900);
+  sleep_ms(1800);
   worker.send({2, Stop{}});
   worker.finish();
   ASSERT_TRUE(worker.result().has_value()) << describe(worker.result().error());

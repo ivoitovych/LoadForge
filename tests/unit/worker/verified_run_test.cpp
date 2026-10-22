@@ -874,9 +874,9 @@ TEST(VerifiedRunControl, AResumeRunsSlicesAgainAndOneWhileRunningIsAcknowledgedD
   auto outcome = rig.run();
   ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
   EXPECT_GE(rig.script.slices_run, 2);
-  EXPECT_EQ(rig.answers(), (std::vector<ControlAck>{{1, AckStatus::kDone, ""},
-                                                     {2, AckStatus::kDone, ""},
-                                                     {3, AckStatus::kDone, ""}}));
+  EXPECT_EQ(rig.answers(),
+            (std::vector<ControlAck>{
+                {1, AckStatus::kDone, ""}, {2, AckStatus::kDone, ""}, {3, AckStatus::kDone, ""}}));
   EXPECT_EQ(last_beat(rig).phase, NullWorkload::kPhaseRunning);
 }
 
@@ -1037,8 +1037,8 @@ TEST(VerifiedRunControl, ASwitchKeepsThePathTheWorkloadHasAndOtherwiseTakesTheBe
   };
   auto outcome = rig.run();
   ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
-  EXPECT_EQ(rig.answers(), (std::vector<ControlAck>{{1, AckStatus::kDone, ""},
-                                                     {2, AckStatus::kDone, ""}}));
+  EXPECT_EQ(rig.answers(),
+            (std::vector<ControlAck>{{1, AckStatus::kDone, ""}, {2, AckStatus::kDone, ""}}));
   ASSERT_EQ(rig.script.setups.size(), 3U);
   EXPECT_EQ(rig.script.setups[0].base.isa, *vector);
   EXPECT_EQ(rig.script.setups[1].base.isa, simd::IsaPath::kScalar) << "sort has no such kernel";
@@ -1244,6 +1244,30 @@ TEST(VerifiedRunControl, ARunnerReplacedMidRunMakesNoStatementOfWhatTheWholeRunD
   EXPECT_EQ(statements_made(rig), (std::vector<std::string>{"something else", "something else"}))
       << "one for each runner; the two statements about the whole run are dropped, at the "
          "replacement because the run is not over and at the end because it checked";
+}
+
+TEST(VerifiedRunControl, AFindingThatIsNoStatementOfAnUnrunCheckPassesEveryReplacementUntouched) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  verification::ExactBitCorruption wrong;
+  wrong.provenance.workload = "compression";
+  wrong.provenance.iteration = 3;
+  wrong.provenance.logical_cpu = 0;
+  wrong.check = "decoded output against input";
+  verification::SliceReport last;
+  last.records.emplace_back(wrong);
+  rig.script.final_report = last;
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({1, Rebind{{0}}});
+    }
+  };
+  ASSERT_TRUE(rig.run().has_value());
+  std::size_t kept = 0;
+  for (const verification::ErrorRecord& record : rig.findings()) {
+    kept += std::holds_alternative<verification::ExactBitCorruption>(record) ? 1U : 0U;
+  }
+  EXPECT_EQ(kept, 2U) << "one from each runner's last report";
 }
 
 TEST(VerifiedRunControl, AWholeRunThatCheckedNothingStatesItAtTheEndAndNotBefore) {

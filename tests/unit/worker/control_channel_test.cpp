@@ -74,7 +74,8 @@ TEST(ControlChannelLook, MessagesComeBackInTheOrderTheyWereSent) {
   ASSERT_EQ(looked.value().messages.size(), 3U);
   EXPECT_EQ(looked.value().messages[0], (ControlMessage{1, Pause{}}));
   EXPECT_EQ(looked.value().messages[1], (ControlMessage{2, SetDuty{250, 1'000'000'000}}));
-  EXPECT_EQ(looked.value().messages[2], (ControlMessage{3, Switch{"fft", 5, 1U << 20U, 0, {1, 1}}}));
+  EXPECT_EQ(looked.value().messages[2],
+            (ControlMessage{3, Switch{"fft", 5, 1U << 20U, 0, {1, 1}}}));
   EXPECT_FALSE(looked.value().lost.has_value());
 }
 
@@ -123,7 +124,8 @@ TEST(ControlChannelLook, AStopAndThenTheCloseAreBothSeenTheStopFirst) {
   ASSERT_TRUE(looked.has_value());
   ASSERT_EQ(looked.value().messages.size(), 1U);
   EXPECT_EQ(looked.value().messages[0], (ControlMessage{9, Stop{}}));
-  EXPECT_FALSE(looked.value().lost.has_value()) << "the data is read first; the end comes next time";
+  EXPECT_FALSE(looked.value().lost.has_value())
+      << "the data is read first; the end comes next time";
   auto next = rig.channel.look(0);
   ASSERT_TRUE(next.has_value());
   EXPECT_EQ(next.value().lost, StopReason::kControllerHungUp);
@@ -141,6 +143,19 @@ TEST(ControlChannelLook, AControllerThatDiedInsideAFrameHasHungUp) {
   ASSERT_TRUE(second.has_value());
   EXPECT_EQ(second.value().lost, StopReason::kControllerHungUp)
       << "a stream that ends inside a frame is a writer that died writing it";
+}
+
+TEST(ControlChannelLook, ALookThatReadsTheEndOfAStreamInsideAFrameIsTheControllerHungUp) {
+  Rig rig;
+  const std::string whole = control_frame({1, Pause{}});
+  rig.syscalls.deliver_to_pipe(rig.control.read_fd, whole.substr(0, whole.size() - 3));
+  ASSERT_TRUE(rig.syscalls.close(rig.control.write_fd).has_value());
+  ASSERT_TRUE(rig.channel.look(0).has_value());
+  // Poll says readable, as it does for a pipe with data; the read finds the end.
+  rig.syscalls.script_readiness(rig.control.read_fd, Readiness{true, true, false, false});
+  auto second = rig.channel.look(0);
+  ASSERT_TRUE(second.has_value());
+  EXPECT_EQ(second.value().lost, StopReason::kControllerHungUp);
 }
 
 TEST(ControlChannelLook, APipeThatCarriesNothingLikeAMessageBreaksTheChannel) {
@@ -218,8 +233,8 @@ TEST(ControlChannelAnswer, AnAcknowledgementIsAFrameOnTheRecordPipeWithTheSequen
 
 TEST(ControlChannelAnswer, AReasonLongerThanAnAcknowledgementHoldsIsCutNotRefused) {
   Rig rig;
-  const Delivery sent =
-      rig.channel.answer(1, AckStatus::kRefused, std::string(verification::kMaxTextBytes + 50, 'x'));
+  const Delivery sent = rig.channel.answer(1, AckStatus::kRefused,
+                                           std::string(verification::kMaxTextBytes + 50, 'x'));
   EXPECT_FALSE(sent.failure.has_value());
   const std::vector<ControlAck> answers = rig.answers();
   ASSERT_EQ(answers.size(), 1U);

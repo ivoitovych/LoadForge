@@ -153,7 +153,8 @@ TEST(CliSchedule, EachValueIsRefusedByNameWhenItIsMisused) {
     args.insert(args.end(), each.options.begin(), each.options.end());
     const Outcome r = invoke(args);
     EXPECT_EQ(r.code, 2) << each.expected;
-    EXPECT_EQ(r.err.substr(0, 26 + each.expected.size()), "loadforge: stress --test: " + each.expected)
+    EXPECT_EQ(r.err.substr(0, 26 + each.expected.size()),
+              "loadforge: stress --test: " + each.expected)
         << r.err;
   }
 }
@@ -171,8 +172,9 @@ TEST(CliSchedule, ARunThatCannotBeScheduledIsRefusedBeforeAnyWorker) {
   {
     const Outcome r = invoke({"stress", "--test", "mixed", "--footprint", "50%"});
     EXPECT_EQ(r.code, 1);
-    EXPECT_EQ(r.err,
-              "loadforge: stress --test mixed: --footprint must be a size, not a share of memory\n");
+    EXPECT_EQ(
+        r.err,
+        "loadforge: stress --test mixed: --footprint must be a size, not a share of memory\n");
   }
   {
     const Outcome r = invoke({"stress", "--test", "mixed", "--footprint", "1KiB"});
@@ -180,6 +182,16 @@ TEST(CliSchedule, ARunThatCannotBeScheduledIsRefusedBeforeAnyWorker) {
     EXPECT_EQ(r.err,
               "loadforge: stress --test mixed: no workload of the roster accepts a footprint of "
               "1024 bytes\n");
+  }
+  {
+    // With no footprint named the run's own default stands, and a rotation too short for the
+    // duration is refused all the same.
+    const Outcome r =
+        invoke({"stress", "--test", "mixed", "--duration", "10m", "--rotation", "1ms"});
+    EXPECT_EQ(r.code, 1);
+    EXPECT_EQ(r.err,
+              "loadforge: stress --test mixed: a rotation every 1 ms for 600000 ms is more than "
+              "100000 steps\n");
   }
   {
     const Outcome r = invoke({"stress", "--test", "cycling", "--duration", "0s"});
@@ -209,9 +221,9 @@ TEST(CliSchedule, AMixedRunRotatesTheWorkersAndKeepsVerifyingAndSaysSo) {
 
 TEST(CliSchedule, ACyclingRunRaisesAndLowersTheLoadOfOneWorkload) {
   const LinkToTheBinary link;
-  const Outcome r = run_test(link, {"cycling", "--workload", "compression", "--cycle", "load",
-                                    "--duration", "5s", "--dwell", "1s", "--workers", "2",
-                                    "--footprint", "1MiB"});
+  const Outcome r =
+      run_test(link, {"cycling", "--workload", "compression", "--cycle", "load", "--duration", "5s",
+                      "--dwell", "1s", "--workers", "2", "--footprint", "1MiB"});
   EXPECT_EQ(r.code, 0) << r.out << r.err;
   EXPECT_NE(r.out.find("phase c0 idle: cycling load"), std::string::npos) << r.out;
   EXPECT_NE(r.out.find("phase c1 heavy: "), std::string::npos) << r.out;
@@ -221,9 +233,9 @@ TEST(CliSchedule, ACyclingRunRaisesAndLowersTheLoadOfOneWorkload) {
 
 TEST(CliSchedule, TheCyclingOfCoresPausesSomeWorkersAndNotOthers) {
   const LinkToTheBinary link;
-  const Outcome r = run_test(link, {"cycling", "--workload", "compression", "--cycle", "cores",
-                                    "--duration", "3s", "--dwell", "1s", "--workers", "2",
-                                    "--footprint", "1MiB"});
+  const Outcome r =
+      run_test(link, {"cycling", "--workload", "compression", "--cycle", "cores", "--duration",
+                      "3s", "--dwell", "1s", "--workers", "2", "--footprint", "1MiB"});
   EXPECT_EQ(r.code, 0) << r.out << r.err;
   EXPECT_NE(r.out.find("phase c0 1 of 2: cycling cores"), std::string::npos) << r.out;
   EXPECT_NE(r.out.find("phase c1 1 of 2: "), std::string::npos) << r.out;
@@ -379,8 +391,9 @@ TEST(CliJournal, AJournalThatCannotBeWrittenIsSaidAndTheRunGoesOn) {
   testing::FakeSyscalls syscalls;
   syscalls.advance_clocks_per_read(10'000'000);
   syscalls.script_forks({{1001, 0}, {1002, 0}});
-  syscalls.script_nonblocking_reaps({testing::FakeSyscalls::WaitStep{platform::Reaped{1001, 0}, 0},
-                                     testing::FakeSyscalls::WaitStep{platform::Reaped{1002, 0}, 0}});
+  syscalls.script_nonblocking_reaps(
+      {testing::FakeSyscalls::WaitStep{platform::Reaped{1001, 0}, 0},
+       testing::FakeSyscalls::WaitStep{platform::Reaped{1002, 0}, 0}});
   cli_testing::MemoryFiles files;
   files.fail_write_from(1, ENOSPC);
   std::ostringstream out;

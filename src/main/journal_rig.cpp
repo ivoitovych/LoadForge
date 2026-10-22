@@ -56,11 +56,30 @@ std::string one_place(double value) {
   return text.str();
 }
 
+/// The name a journal is kept under: the path, a dot and a number.
+std::string kept_name(const std::string& path, int number) {
+  std::string name = path;
+  name += '.';
+  name += std::to_string(number);
+  return name;
+}
+
+/// Why a run is refused when every name for a kept journal is taken.
+std::string too_many_kept(const std::string& path) {
+  std::string text = "there are already ";
+  text += std::to_string(kMostKeptJournals);
+  text += " journals kept beside ";
+  text += path;
+  text += "; look at them and remove some";
+  return text;
+}
+
 }  // namespace
 
 std::string render_entry(const journal::Entry& entry) {
-  std::string text = "t=" + one_place(static_cast<double>(entry.elapsed_ns) / kNanosecondsPerSecond) +
-                     "s phase \"" + entry.phase + "\" workload " + entry.workload;
+  std::string text =
+      "t=" + one_place(static_cast<double>(entry.elapsed_ns) / kNanosecondsPerSecond) +
+      "s phase \"" + entry.phase + "\" workload " + entry.workload;
   if (entry.last_verified_unit.has_value()) {
     text += " units " + std::to_string(*entry.last_verified_unit);
   }
@@ -127,14 +146,16 @@ core::Result<RunJournal, std::string> open_run_journal(journal::FileOps& ops, Jo
       }
     } else {
       int number = 1;
-      while (number <= kMostKeptJournals && files.exists(path + "." + std::to_string(number))) {
+      while (number <= kMostKeptJournals) {
+        if (!files.exists(kept_name(path, number))) {
+          break;
+        }
         ++number;
       }
       if (number > kMostKeptJournals) {
-        return "there are already " + std::to_string(kMostKeptJournals) + " journals kept beside " +
-               path + "; look at them and remove some";
+        return too_many_kept(path);
       }
-      const std::string kept = path + "." + std::to_string(number);
+      const std::string kept = kept_name(path, number);
       if (auto moved = files.rename(path, kept); !moved.has_value()) {
         return moved.error();
       }

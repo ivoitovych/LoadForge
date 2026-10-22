@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,16 @@
 
 namespace loadforge::worker {
 
+namespace {
+
+/// A refusal at `stage`. One function builds it so that its strings are made
+/// and moved in one place (JOURNAL §1.13).
+WorkerError error_at(std::string_view stage, std::string detail) {
+  return WorkerError{std::string{stage}, std::move(detail)};
+}
+
+}  // namespace
+
 Delivery deliver(ipc::RecordWriter& records, std::uint16_t type,
                  const std::vector<std::byte>& bytes) {
   Delivery delivery;
@@ -29,7 +40,7 @@ Delivery deliver(ipc::RecordWriter& records, std::uint16_t type,
     delivery.controller_gone = true;
     return delivery;
   }
-  delivery.failure = WorkerError{"record channel", ipc::describe(written.error())};
+  delivery.failure = error_at("record channel", ipc::describe(written.error()));
   return delivery;
 }
 
@@ -38,7 +49,7 @@ core::Result<ControlLook, WorkerError> ControlChannel::look(int wait_ms) {
   const std::vector<int> watched{fd_};
   auto ready = syscalls_->poll_readable(watched, wait_ms);
   if (!ready.has_value()) {
-    return WorkerError{"control pipe", describe(ready.error())};
+    return error_at("control pipe", describe(ready.error()));
   }
   const platform::Readiness& control = ready.value().front();
   if (!control.readable) {
@@ -53,7 +64,7 @@ core::Result<ControlLook, WorkerError> ControlChannel::look(int wait_ms) {
   if (!drained.has_value()) {
     const std::optional<ipc::FrameError>& frame = drained.error().frame;
     if (!frame.has_value()) {
-      return WorkerError{"control pipe", ipc::describe(drained.error())};
+      return error_at("control pipe", ipc::describe(drained.error()));
     }
     // The stream ended inside a frame: the controller died writing it.
     found.lost = frame->fault == ipc::FrameFault::kTruncated ? StopReason::kControllerHungUp

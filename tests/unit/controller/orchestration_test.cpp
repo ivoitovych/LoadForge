@@ -299,10 +299,16 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   const RunReport& report = result.value();
   EXPECT_FALSE(report.worker_exit_code.has_value());
   ASSERT_EQ(report.workers.size(), 2U);
-  WorkerReport first{0, kFirstPid, WorkerFate::kCompleted, "exited with code 0",
-                     "stop requested", 7, {"finished: done"}};
-  WorkerReport second{1, kSecondPid, WorkerFate::kCompleted, "exited with code 0",
-                      "stop requested", 9, {"finished: done too"}};
+  WorkerReport first{
+      0, kFirstPid,         WorkerFate::kCompleted, "exited with code 0", "stop requested",
+      7, {"finished: done"}};
+  WorkerReport second{1,
+                      kSecondPid,
+                      WorkerFate::kCompleted,
+                      "exited with code 0",
+                      "stop requested",
+                      9,
+                      {"finished: done too"}};
   // The one message each was sent, the Stop, which these workers never answered.
   first.commands.sent = 1;
   second.commands.sent = 1;
@@ -2026,10 +2032,10 @@ TEST(ControllerControl, AScheduleThatDoesNotFitTheRunIsRefusedBeforeTheFirstFork
 
 TEST(ControllerControl, AcknowledgementsAreCountedAndARefusalIsToldWithTheWorkersReason) {
   Rig rig;
-  const mixed::Schedule schedule = schedule_of(
-      {step_of(0, "p0",
-               {tell(0, {worker::Pause{}, worker::Rebind{{5}}, worker::Resume{}}),
-                tell(1, {worker::Pause{}})})});
+  const mixed::Schedule schedule =
+      schedule_of({step_of(0, "p0",
+                           {tell(0, {worker::Pause{}, worker::Rebind{{5}}, worker::Resume{}}),
+                            tell(1, {worker::Pause{}})})});
   rig.options.schedule = &schedule;
   complete_at_deadline(rig);
   const auto before = rig.reporter.on_event;
@@ -2148,8 +2154,8 @@ TEST(ControllerControl, AFailureToWriteOnAControlPipeIsTheControllersAndAWorkerG
 
 TEST(ControllerControl, ACommandForAWorkerAlreadyReapedIsNotSent) {
   Rig rig;
-  const mixed::Schedule schedule =
-      schedule_of({step_of(30 * kMs, "late", {tell(0, {worker::Pause{}}), tell(1, {worker::Pause{}})})});
+  const mixed::Schedule schedule = schedule_of(
+      {step_of(30 * kMs, "late", {tell(0, {worker::Pause{}}), tell(1, {worker::Pause{}})})});
   rig.options.schedule = &schedule;
   rig.config.run.duration = core::Duration{100};
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
@@ -2179,7 +2185,8 @@ void spin_both(Rig& rig) {
 TEST(ControllerControl, AWorkerThatAcknowledgedAPauseIsNotATimedOutSpinAndOneThatDidNotIs) {
   Rig rig;
   spin_both(rig);
-  const mixed::Schedule schedule = schedule_of({step_of(0, "paused", {tell(0, {worker::Pause{}})})});
+  const mixed::Schedule schedule =
+      schedule_of({step_of(0, "paused", {tell(0, {worker::Pause{}})})});
   rig.options.schedule = &schedule;
   rig.reporter.on_event = [&rig](const std::string& line) {
     if (starts_with(line, "spawned")) {
@@ -2233,7 +2240,8 @@ TEST(ControllerControl, AResumeBringsTheJudgementBackAndASpinIsThenCaught) {
   // Paused until the tick the Resume was sent at (60 ms, the first at or after 50): the
   // stall is counted from then, so the termination comes more than the allowance later.
   const auto& events = rig.reporter.events;
-  const auto term = std::find(events.begin(), events.end(), "worker 0: sent signal 15 (heartbeat stale)");
+  const auto term =
+      std::find(events.begin(), events.end(), "worker 0: sent signal 15 (heartbeat stale)");
   ASSERT_NE(term, events.end());
   const std::int64_t at = rig.reporter.elapsed[static_cast<std::size_t>(term - events.begin())];
   EXPECT_GE(at, 60 * kMs + 30 * kMs);
@@ -2243,8 +2251,8 @@ TEST(ControllerControl, ADutyCycleExtendsTheStallAllowanceByTheIdlePartOfItsPeri
   Rig rig;
   spin_both(rig);
   // Idle for 100 ms of every 200: the stall allowance is the usual 30 ms plus 100.
-  const mixed::Schedule schedule = schedule_of(
-      {step_of(0, "duty", {tell(0, {worker::SetDuty{500, 200 * kMs}})})});
+  const mixed::Schedule schedule =
+      schedule_of({step_of(0, "duty", {tell(0, {worker::SetDuty{500, 200 * kMs}})})});
   rig.options.schedule = &schedule;
   rig.reporter.on_event = [&rig](const std::string& line) {
     if (starts_with(line, "spawned")) {
@@ -2260,8 +2268,10 @@ TEST(ControllerControl, ADutyCycleExtendsTheStallAllowanceByTheIdlePartOfItsPeri
   auto result = rig.run();
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   const auto& events = rig.reporter.events;
-  const auto plain = std::find(events.begin(), events.end(), "worker 1: sent signal 15 (heartbeat stale)");
-  const auto idle = std::find(events.begin(), events.end(), "worker 0: sent signal 15 (heartbeat stale)");
+  const auto plain =
+      std::find(events.begin(), events.end(), "worker 1: sent signal 15 (heartbeat stale)");
+  const auto idle =
+      std::find(events.begin(), events.end(), "worker 0: sent signal 15 (heartbeat stale)");
   ASSERT_NE(plain, events.end());
   ASSERT_NE(idle, events.end());
   EXPECT_LE(rig.reporter.elapsed[static_cast<std::size_t>(plain - events.begin())], 50 * kMs);
@@ -2272,7 +2282,8 @@ TEST(ControllerControl, ADutyCycleExtendsTheStallAllowanceByTheIdlePartOfItsPeri
 TEST(ControllerControl, ARefusedCommandChangesNothingAboutHowTheWorkerIsJudged) {
   Rig rig;
   spin_both(rig);
-  const mixed::Schedule schedule = schedule_of({step_of(0, "paused", {tell(0, {worker::Pause{}})})});
+  const mixed::Schedule schedule =
+      schedule_of({step_of(0, "paused", {tell(0, {worker::Pause{}})})});
   rig.options.schedule = &schedule;
   rig.reporter.on_event = [&rig](const std::string& line) {
     if (starts_with(line, "spawned")) {
@@ -2361,6 +2372,27 @@ class FixedNotes final : public JournalNotes {
   }
   int asked = 0;
 };
+
+TEST(ControllerJournal, TheOptionsOfAScheduleAndAJournalAreEachCompared) {
+  const RunOptions o;
+  RunOptions p = o;
+  EXPECT_EQ(o, p);
+  const mixed::Schedule schedule;
+  p.schedule = &schedule;
+  EXPECT_NE(o, p);
+  p = o;
+  controller_testing::RecordingWriter journal;
+  p.journal = &journal;
+  EXPECT_NE(o, p);
+  p = o;
+  p.journal_interval_ns = 1;
+  EXPECT_NE(o, p);
+  p = o;
+  FixedNotes notes;
+  p.journal_notes = &notes;
+  EXPECT_NE(o, p);
+  EXPECT_EQ(p, p);
+}
 
 TEST(ControllerJournal, AnEntryIsWrittenAtTheStartEveryIntervalAtEachPhaseAtTheStopAndAtTheEnd) {
   Rig rig;
@@ -2458,7 +2490,8 @@ TEST(ControllerJournal, AnAppendOrASyncTheStorageRefusesEndsTheJournalAndNeverTh
     EXPECT_TRUE(all_clean(result.value())) << "the run goes on";
     const JournalReport& report = result.value().journal;
     ASSERT_TRUE(report.fault.has_value());
-    EXPECT_EQ(*report.fault, append ? "append: storage failed: ENOSPC" : "sync: storage failed: EIO");
+    EXPECT_EQ(*report.fault,
+              append ? "append: storage failed: ENOSPC" : "sync: storage failed: EIO");
     EXPECT_EQ(report.entries, 2U);
     EXPECT_EQ(journal.appends, 3) << "once it failed it was not asked again";
     const auto& events = rig.reporter.events;

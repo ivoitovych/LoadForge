@@ -134,9 +134,12 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
       const bool stop = std::holds_alternative<Stop>(message.command);
       // Stop is answered before the worker says anything else; every other
       // command is one this loop has nothing to do for.
+      std::string reason;
+      if (!stop) {
+        reason = nothing_to(message.command);
+      }
       const Delivery sent =
-          stop ? channel.answer(message.sequence, AckStatus::kDone, "")
-               : channel.answer(message.sequence, AckStatus::kRefused, nothing_to(message.command));
+          channel.answer(message.sequence, stop ? AckStatus::kDone : AckStatus::kRefused, reason);
       if (sent.failure.has_value()) {
         return *sent.failure;
       }

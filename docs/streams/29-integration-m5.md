@@ -1,6 +1,6 @@
 # Stream 29 — Integration: the mixed workload, cycling, worker control, the journal
 
-**State:** not started  
+**State:** built and pushed on `feature/integration-m5`, 2026-10-22 00:16 UTC; coverage gate and final reports pending, no pull request opened  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 4  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  

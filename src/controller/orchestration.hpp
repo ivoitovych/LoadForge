@@ -115,9 +115,11 @@ struct RunOptions {
   std::int64_t journal_interval_ns = 5'000'000'000;
   /// Fills the readings of an entry; null: those fields are absent.
   JournalNotes* journal_notes = nullptr;
-
-  [[nodiscard]] friend bool operator==(const RunOptions&, const RunOptions&) = default;
 };
+
+/// Every member alike (the pointers by identity). Defined in the one translation unit
+/// that holds the controller, so that its lines are counted once.
+[[nodiscard]] bool operator==(const RunOptions& lhs, const RunOptions& rhs);
 
 /// Something the controller itself could not do, and at which step. A worker
 /// misbehaving is never this: that is a WorkerFate in the report.

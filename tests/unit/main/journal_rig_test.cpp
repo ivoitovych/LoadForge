@@ -13,7 +13,9 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "controller/journal/file_ops.hpp"
@@ -216,8 +218,8 @@ TEST(RunJournal, AStorageThatCannotBeReadTwiceIsNotAJournalToWrite) {
 }
 
 TEST(RunJournal, TheRealFilesystemDoesWhatTheDoubleDoes) {
-  const std::filesystem::path directory =
-      std::filesystem::temp_directory_path() / ("loadforge-journal-rig-" + std::to_string(::getpid()));
+  const std::filesystem::path directory = std::filesystem::temp_directory_path() /
+                                          ("loadforge-journal-rig-" + std::to_string(::getpid()));
   std::filesystem::create_directories(directory);
   const std::string path = (directory / "run.lfj").string();
   journal::RealFileOps ops;
@@ -309,8 +311,8 @@ telemetry::Metric metric(const char* name, telemetry::Kind kind, std::uint32_t i
   each.kind = kind;
   each.scope_index = index;
   each.modulus = modulus;
-  each.unit = kind == telemetry::Kind::kGauge ? telemetry::Unit::kCelsius
-                                              : telemetry::Unit::kMicrojoules;
+  each.unit =
+      kind == telemetry::Kind::kGauge ? telemetry::Unit::kCelsius : telemetry::Unit::kMicrojoules;
   return each;
 }
 
@@ -323,7 +325,8 @@ telemetry::Point count(std::int64_t at, std::uint64_t raw) {
 
 TEST(TimelineNotesTest, TheHottestPackageThePowerOfAllTheMeanFrequencyAndTheEccTotals) {
   telemetry::BoundedTimeline timeline(1000);
-  const auto add = [&timeline](const telemetry::Metric& each, std::vector<telemetry::Point> points) {
+  const auto add = [&timeline](const telemetry::Metric& each,
+                               std::vector<telemetry::Point> points) {
     const auto id = timeline.add_series(each);
     EXPECT_TRUE(id.has_value());
     for (const telemetry::Point& point : points) {
@@ -359,7 +362,8 @@ TEST(TimelineNotesTest, WhatIsNotThereOrCannotBeUsedLeavesTheFieldAbsent) {
   // A series with no points; a latest reading that is an absence; a counter that went back
   // (a reset: the advance across it is unknown); one reading only; and series that are none of
   // the entry's concern.
-  const auto add = [&timeline](const telemetry::Metric& each, std::vector<telemetry::Point> points) {
+  const auto add = [&timeline](const telemetry::Metric& each,
+                               std::vector<telemetry::Point> points) {
     const auto id = timeline.add_series(each);
     EXPECT_TRUE(id.has_value());
     for (const telemetry::Point& point : points) {
@@ -374,6 +378,8 @@ TEST(TimelineNotesTest, WhatIsNotThereOrCannotBeUsedLeavesTheFieldAbsent) {
   add(metric("power.package", telemetry::Kind::kCounter, 1), {count(1'000'000'000, 5)});
   add(metric("power.package", telemetry::Kind::kCounter, 2),
       {telemetry::Point{1, telemetry::Unavailable{}}, count(2, 3)});
+  add(metric("power.package", telemetry::Kind::kCounter, 3),
+      {count(1, 3), telemetry::Point{2, telemetry::Unavailable{}}});
   add(metric("frequency.cpu", telemetry::Kind::kGauge, 0), {});
   add(metric("edac.corrected", telemetry::Kind::kCounter, 0), {});
   add(metric("edac.uncorrected", telemetry::Kind::kCounter, 0),
@@ -387,6 +393,36 @@ TEST(TimelineNotesTest, WhatIsNotThereOrCannotBeUsedLeavesTheFieldAbsent) {
   EXPECT_FALSE(entry.frequency_hz.has_value());
   EXPECT_FALSE(entry.ecc_corrected.has_value());
   EXPECT_FALSE(entry.ecc_uncorrected.has_value());
+}
+
+/// A view of one series, whatever its points are: a timeline refuses two readings of one
+/// instant, and the notes must still not divide by the nothing between them.
+class OneSeries final : public telemetry::TimelineView {
+ public:
+  OneSeries(telemetry::Metric each, std::vector<telemetry::Point> points)
+      : metric_(std::move(each)), points_(std::move(points)) {}
+  [[nodiscard]] std::size_t series_count() const noexcept override { return 1; }
+  [[nodiscard]] const telemetry::Metric& metric(telemetry::SeriesId /*series*/) const override {
+    return metric_;
+  }
+  [[nodiscard]] std::span<const telemetry::Point> points(
+      telemetry::SeriesId /*series*/) const override {
+    return points_;
+  }
+  [[nodiscard]] std::span<const telemetry::PhaseMark> phases() const override { return {}; }
+
+ private:
+  telemetry::Metric metric_;
+  std::vector<telemetry::Point> points_;
+};
+
+TEST(TimelineNotesTest, TwoReadingsOfOneInstantDrewNoPowerThatCanBeSaid) {
+  const OneSeries view(metric("power.package", telemetry::Kind::kCounter, 0),
+                       {count(1'000'000'000, 10), count(1'000'000'000, 40)});
+  TimelineNotes notes(view);
+  journal::Entry entry = an_entry(1, "x");
+  notes.fill(entry);
+  EXPECT_FALSE(entry.package_power_w.has_value());
 }
 
 TEST(TimelineNotesTest, AWrappingCounterCountsAcrossItsModulusAndTwoReadingsOfOneInstantAreNone) {

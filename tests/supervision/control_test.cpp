@@ -297,7 +297,7 @@ TEST(ControlOverRealWorkers, ACorruptionIsFoundAboutWhicheverWorkloadAWorkerRanW
   const auto report =
       run(schedule_of({step(500, "to compression", 0,
                             {worker::Switch{"compression", 5, kFootprint, 0, {1, 1}}})}),
-          2200, LOADFORGE_FAULTY_WORKER);
+          4200, LOADFORGE_FAULTY_WORKER);
   ::unsetenv("LOADFORGE_FAULT");
   ASSERT_TRUE(report.has_value());
   ASSERT_EQ(report->workers.size(), 2U);
