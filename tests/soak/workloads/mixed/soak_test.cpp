@@ -104,6 +104,10 @@ TEST(MixedSoak, ARotatedWorkerGrowsNothingAndLosesNoVerification) {
   ASSERT_TRUE(made.has_value()) << made.error();
   const mixed::Schedule& schedule = made.value();
 
+  // ThreadSanitizer's runtime starts a thread of its own at the first thread
+  // this process creates, and keeps it: one thread made and joined here puts it
+  // in the baseline, so that the count compares the worker's threads alone.
+  std::thread([] {}).join();
   const std::int64_t threads_before = status_field("Threads");
   const std::int64_t descriptors_before = open_descriptors();
 
