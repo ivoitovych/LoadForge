@@ -86,7 +86,10 @@ std::vector<std::string_view> split(std::string_view text, char separator) {
 core::Result<std::uint64_t, std::string> whole_number(std::string_view key, std::string_view text) {
   auto split_text = core::split_number_and_suffix(text);
   if (!split_text.has_value() || !split_text.value().suffix.empty()) {
-    return refused(key, "expected a whole number, got '" + std::string{text} + "'");
+    std::string what = "expected a whole number, got '";
+    what += text;
+    what += "'";
+    return refused(key, what);
   }
   return split_text.value().value;
 }
@@ -499,7 +502,7 @@ std::string estimate_text(const explore::Estimate& estimate) {
   if (estimate.half_width.has_value()) {
     text += " +/- " + number(*estimate.half_width) +
             " (95% CI, n=" + std::to_string(estimate.replicates) + ", sd " +
-            number(*estimate.stddev) + ")";
+            number(estimate.stddev.value_or(0.0)) + ")";
   } else {
     text += " (n=" + std::to_string(estimate.replicates) + ", no spread from fewer than two)";
   }
@@ -584,6 +587,9 @@ int exit_code_for(const explore::ExploreError& error) noexcept {
   return kRefused;
 }
 
+// The two streams are the command's standard output and error, in the order every command
+// of this build takes them.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int run_explore(ControllerTrialRunner& runner, explore::SearchConfig config, std::ostream& out,
                 std::ostream& err) {
   auto searched = explore::explore(runner, std::move(config));

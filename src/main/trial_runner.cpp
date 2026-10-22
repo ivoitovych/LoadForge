@@ -162,14 +162,20 @@ std::optional<double> slope_of(const statistics::Summarizer& summarizer,
 }
 
 /// A trial's whole rig: the telemetry made for it, and its capacity.
+struct Pacing {
+  std::size_t series = 0;
+  std::int64_t settle_interval_ns = 0;
+};
+
 std::size_t capacity_for(const Candidate& candidate, const controller::RunOptions& options,
-                         std::size_t cpus, std::int64_t settle_interval_ns) {
+                         const Pacing& pacing) {
   const std::int64_t run_ns = candidate.duration_ns + options.grace.stop_ns +
                               options.grace.kill_ns + options.stale_after_ns;
-  const std::size_t bound = series_bound(cpus);
+  const std::size_t bound = pacing.series;
   std::size_t capacity = timeline_capacity(RunShape{run_ns, options.sample_interval_ns, bound});
   if (candidate.settle.has_value()) {
-    capacity += timeline_capacity(RunShape{candidate.settle->max_ns, settle_interval_ns, bound});
+    capacity +=
+        timeline_capacity(RunShape{candidate.settle->max_ns, pacing.settle_interval_ns, bound});
   }
   return capacity;
 }
@@ -203,11 +209,9 @@ core::Result<std::unique_ptr<ControllerTrialRunner>, TrialError> ControllerTrial
   // the end of this function, because each trial makes its own (sources are
   // probed once per rig, and a timeline holds one trial).
   platform::FileSystem files(syscalls);
-  auto probed =
-      make_rig(syscalls, files, options.roots,
-               timeline_capacity(RunShape{0, options.sample_interval_ns,
-                                          series_bound(machine.cpus.logical_cpu_count())}),
-               options.sources);
+  const RunShape shape{0, options.sample_interval_ns,
+                       series_bound(machine.cpus.logical_cpu_count())};
+  auto probed = make_rig(syscalls, files, options.roots, timeline_capacity(shape), options.sources);
   if (!probed.has_value()) {
     std::string detail = "cannot set up telemetry: ";
     detail += telemetry::describe(probed.error().fault);
@@ -261,7 +265,7 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
   config::Config config;
   config.run.mode = config::Mode::kExplore;
   const std::int64_t whole_ms = candidate.duration_ns / kNanosecondsPerMillisecond;
-  const std::int64_t part_ms =
+  const auto part_ms =
       static_cast<std::int64_t>((candidate.duration_ns % kNanosecondsPerMillisecond) != 0);
   config.run.duration = core::Duration{whole_ms + part_ms};
   for (std::size_t slot = 0; slot < candidate.threads; ++slot) {
@@ -297,7 +301,8 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
           : kSettleFloorNs;
   auto made = make_rig(
       *syscalls_, files_, options_.roots,
-      capacity_for(candidate, options, machine_->cpus.logical_cpu_count(), settle_interval_ns),
+      capacity_for(candidate, options,
+                   Pacing{series_bound(machine_->cpus.logical_cpu_count()), settle_interval_ns}),
       options_.sources);
   if (!made.has_value()) {
     std::string detail = "cannot set up telemetry: ";
@@ -347,7 +352,8 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
   inputs.config = &config;
   inputs.report = &report;
   inputs.capabilities = rig->capabilities();
-  inputs.timeline = &rig->timeline();
+  const telemetry::TimelineView& view = rig->timeline();
+  inputs.timeline = &view;
   inputs.summarizer = &summarizer;
   auto result = assemble_result(inputs);
   if (!result.has_value()) {

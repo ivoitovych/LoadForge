@@ -466,6 +466,8 @@ namespace {
 
 /// What `stress --test` is given beside its own options.
 const StressOptions kDefaultOptions{};
+/// And what `explore` is: the real machine's files and sources.
+const TrialOptions kDefaultTrialOptions{};
 
 }  // namespace
 
@@ -1088,7 +1090,7 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
   }
   if (command == "explore") {
     return explore_command(args.subspan(1), "/proc/self/exe", topology::kDefaultSysfsRoot,
-                           TrialOptions{}, out, err);
+                           kDefaultTrialOptions, out, err);
   }
   if (command == "journal") {
     if (args.size() != 2) {

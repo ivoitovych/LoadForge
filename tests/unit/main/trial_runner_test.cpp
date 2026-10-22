@@ -90,7 +90,9 @@ std::vector<std::unique_ptr<telemetry::Source>> blind_level(platform::Syscalls& 
   return sources;
 }
 
-/// More series than a timeline sized for a machine can take a few rounds of.
+/// More series than a timeline sized for a machine can take a few rounds of: with a
+/// sample interval of a thousand seconds it is built for eight rounds of 72 series, and
+/// a run takes three rounds of these 300.
 class CrowdSource final : public telemetry::Source {
  public:
   [[nodiscard]] std::string_view name() const noexcept override { return "crowd"; }
@@ -111,7 +113,7 @@ class CrowdSource final : public telemetry::Source {
   }
 
  private:
-  static constexpr std::uint32_t kSeries = 20'000;
+  static constexpr std::uint32_t kSeries = 300;
 };
 
 std::vector<std::unique_ptr<telemetry::Source>> crowd(platform::Syscalls& /*s*/,
@@ -418,6 +420,7 @@ TEST(TrialRunnerRun, AWorkerWhoseExecFailedIsThisProcessAndItsExitCodeIsKept) {
 TEST(TrialRunnerRun, TelemetryThatStopsMidTrialIsAKRunNotAWindowOfNothing) {
   Machine machine;
   machine.options.sources = crowd;
+  machine.options.sample_interval_ns = 1'000'000'000'000;
   machine.workers_that_exit_at_once(1);
   auto runner = machine.runner();
   const auto outcome = runner->run(a_candidate());

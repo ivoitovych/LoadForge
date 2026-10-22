@@ -248,6 +248,8 @@ TEST(ExploreArgs, ACountIsAWholeNumberOfAtLeastOne) {
     EXPECT_TRUE(contains(refusal_of(with_required({key, "0"})), "must be at least 1")) << key;
     EXPECT_TRUE(contains(refusal_of(with_required({key, "two"})), "expected a whole number"))
         << key;
+    EXPECT_TRUE(contains(refusal_of(with_required({key, "5x"})), "expected a whole number"))
+        << "a number with a unit is not a count: " << key;
   }
 }
 
@@ -429,8 +431,8 @@ struct Searching {
     runner = std::move(made).value();
   }
 
-  explore::SearchConfig config(std::string_view objective,
-                               std::vector<std::string_view> more = {}) {
+  static explore::SearchConfig config(std::string_view objective,
+                                      std::vector<std::string_view> more = {}) {
     std::vector<std::string_view> args{"--objective", objective, "--candidate", "a:sort:1"};
     args.insert(args.end(), more.begin(), more.end());
     const auto parsed = parse_explore_args(args);
