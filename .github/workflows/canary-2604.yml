@@ -30,7 +30,7 @@ jobs:
         # to read whole; the failed tests run once more at the end, so their
         # output is the last thing in the log. The step fails either way.
         run: |
-          ctest --preset debug || {
-            ctest --preset debug --rerun-failed --output-on-failure
+          ctest --preset debug --timeout 900 || {
+            ctest --preset debug --timeout 900 --rerun-failed --output-on-failure
             exit 1
           }
