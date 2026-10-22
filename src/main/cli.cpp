@@ -24,6 +24,7 @@
 #include "core/duration.hpp"
 #include "core/parse_error.hpp"
 #include "core/parse_number.hpp"
+#include "main/explore_command.hpp"
 #include "main/journal_rig.hpp"
 #include "main/outcome.hpp"
 #include "main/run_result.hpp"
@@ -127,6 +128,24 @@ void print_usage(std::ostream& out) {
       << "                                  while every unit goes on being verified\n"
       << "                                  cycling [--workload NAME] [--cycle load|cores]\n"
       << "                                  [--dwell D]   thermal and power cycling\n"
+      << "  loadforge explore --objective METRIC[@INDEX]:STATISTIC:higher|lower\n"
+      << "                   --candidate ID:WORKLOAD[+WORKLOAD...]:THREADS[:CPUS] ...\n"
+      << "                   [--reference ID:WORKLOAD[+WORKLOAD...]:THREADS[:CPUS]] [--duration "
+         "D]\n"
+      << "                   [--settle METRIC [--settle-slope PER_SECOND] [--settle-window D]\n"
+      << "                   [--settle-max D]] [--replicates N] [--final-replicates N]\n"
+      << "                   [--elimination N] [--interleave N] [--reference-replicates N]\n"
+      << "                   [--seed N] [--footprint SIZE] [--isa PATH] [--lock POLICY]\n"
+      << "                   [--sample-interval D] [--verbose]\n"
+      << "                                  search the candidates for the worst case of the\n"
+      << "                                  objective, drift-corrected against a reference and\n"
+      << "                                  reported with its replicates, spread and 95% "
+         "interval;\n"
+      << "                                  STATISTIC is mean, max, min, last, stddev, slope, "
+         "rate\n"
+      << "                                  or delta. An objective on a metric this machine "
+         "cannot\n"
+      << "                                  read is refused before anything runs\n"
       << "  loadforge journal FILE          print a crash journal and say how it ended\n"
       << "\n"
       << "With --journal, a run writes a crash journal to FILE (an entry every few seconds,\n"
@@ -142,7 +161,9 @@ void print_usage(std::ostream& out) {
       << "could not be written; 5 the run found a fault (a wrong result, or an error the\n"
       << "hardware reported, corrected or not); 6 a check was not performed (a run that\n"
       << "checked nothing is not clean). When several apply the first of 5, 4, 3, 6 is the\n"
-      << "code.\n"
+      << "code. explore: 0 every candidate scored; 1 refused before the first trial; 3 a trial\n"
+      << "could not be run; 5 a candidate's trial found a fault; 6 a candidate's trial did not\n"
+      << "finish, or a trial held no reading of the objective.\n"
       << "See docs/PLAN.md for what lands when.\n";
 }
 
@@ -382,6 +403,8 @@ core::Result<TestArgs, std::string> parse_test_args(std::span<const std::string_
   return parsed;
 }
 
+}  // namespace
+
 /// The cache-line size the machine has, from its caches: the largest any of
 /// them reports (they agree wherever the hardware does), or 0 when none
 /// reports one. A classification by an assumed 64 would be a fabricated fact.
@@ -415,13 +438,6 @@ std::vector<std::uint32_t> allowed_cpus(platform::Syscalls& syscalls,
   return found;
 }
 
-/// The executable and the machine: what every run needs before its first
-/// fork, or the refusal.
-struct Launch {
-  std::string executable;
-  topology::Snapshot machine;
-};
-
 std::optional<Launch> prepare_launch(platform::Syscalls& syscalls, const std::string& self_link,
                                      std::string_view sysfs_root, std::ostream& err) {
   platform::ExecutablePath self(syscalls);
@@ -445,6 +461,8 @@ std::optional<Launch> prepare_launch(platform::Syscalls& syscalls, const std::st
   return std::optional<Launch>{std::in_place, std::move(executable).value(),
                                std::move(machine).value()};
 }
+
+namespace {
 
 /// What `stress --test` is given beside its own options.
 const StressOptions kDefaultOptions{};
@@ -1067,6 +1085,10 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
     }
     return stress(parsed.value().config_path, "/proc/self/exe", topology::kDefaultSysfsRoot,
                   parsed.value().options, out, err);
+  }
+  if (command == "explore") {
+    return explore_command(args.subspan(1), "/proc/self/exe", topology::kDefaultSysfsRoot,
+                           TrialOptions{}, out, err);
   }
   if (command == "journal") {
     if (args.size() != 2) {

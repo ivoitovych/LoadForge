@@ -50,6 +50,29 @@ inline constexpr std::string_view kVersion = core::kVersion;
 /// `args` excludes argv[0]. Returns the process exit code.
 [[nodiscard]] int run(std::span<const std::string_view> args, std::ostream& out, std::ostream& err);
 
+/// The cache-line size the machine has, from its caches: the largest any of
+/// them reports, or 0 when none reports one.
+[[nodiscard]] std::uint32_t line_bytes_of(const topology::Snapshot& machine);
+
+/// The CPUs a worker may be placed on: those the process is allowed to run on
+/// that the snapshot found, ascending. When the kernel will not say what is
+/// allowed, the snapshot's CPUs.
+[[nodiscard]] std::vector<std::uint32_t> allowed_cpus(platform::Syscalls& syscalls,
+                                                      const topology::Snapshot& machine);
+
+/// The executable and the machine: what every run needs before its first
+/// fork, or the refusal.
+struct Launch {
+  std::string executable;
+  topology::Snapshot machine;
+};
+
+/// Resolves `self_link` for the workers and describes the machine from
+/// `sysfs_root`; on a refusal says so on `err` and answers none.
+[[nodiscard]] std::optional<Launch> prepare_launch(platform::Syscalls& syscalls,
+                                                   const std::string& self_link,
+                                                   std::string_view sysfs_root, std::ostream& err);
+
 /// What the machine's registers say that no file does.
 struct HostFacts {
   std::optional<fpenv::FpState> fp_environment;
