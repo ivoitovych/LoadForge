@@ -191,7 +191,7 @@ TEST(TemperatureSupervision, ASensorThatCrossesTheCeilingMidRunStopsTheRealWorke
   bool told = false;
   for (const std::string& line : reporter.events) {
     told = told ||
-           line.find("temperature ceiling: thermal.package 0 (hwmon:coretemp) read 95.0 C") == 0;
+           line.starts_with("temperature ceiling: thermal.package 0 (hwmon:coretemp) read 95.0 C");
   }
   EXPECT_TRUE(told);
   ASSERT_EQ(reporter.limits.size(), 2U);

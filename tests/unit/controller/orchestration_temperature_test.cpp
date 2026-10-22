@@ -75,7 +75,7 @@ class Plant final : public Reporter {
   void run_finished(const RunReport& report) override { reports.push_back(report); }
   void isolation_finished(const RunReport& /*report*/) override {}
 
-  void leave() {
+  void leave() const {
     for (const int fd : {kRecordWrite0, kControlRead0, kRecordWrite1, kControlRead1}) {
       syscalls->worker_releases_end(fd);
     }
@@ -117,9 +117,9 @@ telemetry::Reading gone() {
 }
 
 /// `count` rounds of the same readings, as a script.
-std::vector<std::vector<telemetry::Reading>> repeated(std::size_t count,
-                                                      std::vector<telemetry::Reading> round) {
-  return std::vector<std::vector<telemetry::Reading>>(count, std::move(round));
+std::vector<std::vector<telemetry::Reading>> repeated(
+    std::size_t count, const std::vector<telemetry::Reading>& round) {
+  return std::vector<std::vector<telemetry::Reading>>(count, round);
 }
 
 std::vector<std::vector<telemetry::Reading>> then(

@@ -42,7 +42,7 @@ telemetry::Reading gone(std::string detail) {
 /// A timeline with the given series, to which a round is added by reading.
 class Board {
  public:
-  explicit Board(std::vector<telemetry::Metric> metrics) {
+  explicit Board(const std::vector<telemetry::Metric>& metrics) {
     for (const telemetry::Metric& metric : metrics) {
       ids.push_back(timeline.add_series(metric).value());
     }
@@ -122,7 +122,7 @@ TEST(TemperatureWatchTest, AReadingBelowAtAndAboveTheCeilingIsToldApart) {
   TemperatureWatch watch(board.timeline, 85, 10 * kS, 1);
 
   board.round(2, {telemetry::Gauge{84.9}});
-  Observation below = watch.observe(2, 2 * kS);
+  const Observation below = watch.observe(2, 2 * kS);
   EXPECT_FALSE(below.stop.has_value());
   EXPECT_TRUE(below.notes.empty());
 
@@ -194,7 +194,7 @@ TEST(TemperatureWatchTest, ASensorThatStopsAnsweringIsToldOnceAndTheOthersAreSti
   EXPECT_EQ(watch.readable(), 2U);
 
   board.round(2, {gone("the sensor disappeared"), telemetry::Gauge{50}});
-  Observation lost = watch.observe(2, kS);
+  const Observation lost = watch.observe(2, kS);
   EXPECT_FALSE(lost.stop.has_value());
   ASSERT_EQ(lost.notes.size(), 1U);
   EXPECT_EQ(lost.notes[0],
@@ -233,7 +233,7 @@ TEST(TemperatureWatchTest, NoSensorReadForLongerThanTheAllowanceMeansTheCeilingI
   TemperatureWatch watch(board.timeline, 90, 5 * kS, 10 * kS);
 
   board.round(12 * kS, {gone("driver unloaded")});
-  Observation lost = watch.observe(12 * kS, 2 * kS);
+  const Observation lost = watch.observe(12 * kS, 2 * kS);
   EXPECT_FALSE(lost.stop.has_value()) << "2 s of 5 s";
   EXPECT_EQ(lost.notes.size(), 1U);
 
@@ -275,8 +275,8 @@ TEST(TemperatureWatchTest, ASeriesThatMissedTheRoundHasNoReadingInIt) {
   EXPECT_EQ(missed.notes[0],
             "thermal.package 0 (hwmon:mock) can no longer be read: no reading was taken");
   // A series with no point at all is the same.
-  Board empty({celsius("thermal.package", telemetry::Scope::kPackage, 0)});
-  TemperatureWatch never(empty.timeline, 90, 1 * kS, 1);
+  const Board empty({celsius("thermal.package", telemetry::Scope::kPackage, 0)});
+  const TemperatureWatch never(empty.timeline, 90, 1 * kS, 1);
   EXPECT_EQ(never.readable(), 0U);
 }
 

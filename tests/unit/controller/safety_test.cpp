@@ -210,7 +210,7 @@ TEST(TemperatureCeilingTest, ACeilingWithNoWatchOrNoSensorBeforeTheRunIsRefusedW
             std::string::npos)
       << reasoned.error();
 
-  mocks::MockTimeline nothing;
+  const mocks::MockTimeline nothing;
   const TemperatureWatch empty(nothing, 90, 1, 0);
   auto no_sensor = check_temperature(config, &empty, "this machine exposes no sensor");
   ASSERT_FALSE(no_sensor.has_value());
