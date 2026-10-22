@@ -196,34 +196,30 @@ std::string_view record_word(std::uint16_t type) {
   return "unknown record";
 }
 
-/// Everything the controller holds about one worker while it runs.
+/// Everything the controller holds about one worker while it runs. The members
+/// are in the order that wastes the least padding, largest alignment first.
 struct Tracked {
   std::size_t slot = 0;
-  pid_t pid = 0;
-  platform::PipeEnds records;  ///< The controller reads; the worker writes.
-  platform::PipeEnds control;  ///< The controller writes; the worker reads.
   std::unique_ptr<ipc::RecordSource> source;
-  bool channel_open = false;
-  StopStep step = StopStep::kNone;
   std::int64_t step_since_ns = 0;
-  Evidence evidence;
-  bool reaped = false;
   std::uint64_t progress = 0;
   std::int64_t progress_changed_ns = 0;
   std::int64_t launched_ns = 0;   ///< The controller's clock when this worker was forked.
   std::int64_t last_read_ns = 0;  ///< When its slot last gave a consistent sample.
-  std::vector<std::string> notes;
-  WorkerPlan plan;  ///< What it was told to run (null workload: no args).
-  verification::Tally tally;
-  bool tally_seen = false;
-  std::optional<verification::MemoryLock> memory;
-  std::vector<FindingReport> findings;
   std::uint64_t wrong_results = 0;
   std::uint64_t not_performed = 0;
   std::uint64_t findings_dropped = 0;
+  /// The idle part of the duty cycle it was told to keep, which it may spend
+  /// without progress and still be well.
+  std::int64_t idle_allowance_ns = 0;
+  std::vector<std::string> notes;
+  std::vector<FindingReport> findings;
   /// The workloads the worker was told to run: the one it started with, and
   /// every one a Switch named. A record about any other is garbage.
   std::vector<std::string> told;
+  CommandReport commands;
+  std::optional<verification::MemoryLock> memory;
+  verification::Tally tally;
   /// A message sent and not yet answered; the worker answers in the order it
   /// was sent, so the front is the one the next acknowledgement is for.
   struct Unanswered {
@@ -231,14 +227,19 @@ struct Tracked {
     worker::Command command;
   };
   std::deque<Unanswered> unanswered;
+  WorkerPlan plan;  ///< What it was told to run (null workload: no args).
+  pid_t pid = 0;
   std::uint32_t next_sequence = 1;
-  CommandReport commands;
+  platform::PipeEnds records;  ///< The controller reads; the worker writes.
+  platform::PipeEnds control;  ///< The controller writes; the worker reads.
+  Evidence evidence;
+  bool channel_open = false;
+  StopStep step = StopStep::kNone;
+  bool reaped = false;
+  bool tally_seen = false;
   /// Paused by the controller (a Pause answered kDone and no Resume since): a
   /// paused worker is not judged by its progress.
   bool paused = false;
-  /// The idle part of the duty cycle it was told to keep, which it may spend
-  /// without progress and still be well.
-  std::int64_t idle_allowance_ns = 0;
   bool stale_now = false;  ///< Its beat is stale at this tick, for the journal.
 };
 
@@ -267,6 +268,8 @@ class Run {
 
  private:
   [[nodiscard]] core::Result<core::Ok, ControllerError> prepare();
+  /// A worker for each enabled workload, planned, or why one could not be.
+  [[nodiscard]] core::Result<core::Ok, ControllerError> plan_workers();
   void begin_labels();
   [[nodiscard]] core::Result<std::optional<int>, ControllerError> spawn();
   [[nodiscard]] core::Result<core::Ok, ControllerError> tick();
@@ -356,6 +359,27 @@ class Run {
   std::int64_t last_journal_ns_ = 0;
 };
 
+core::Result<core::Ok, ControllerError> Run::plan_workers() {
+  for (const config::Workload& workload : config_->workloads) {
+    if (!workload.enabled) {
+      continue;
+    }
+    Tracked& worker = workers_.emplace_back();
+    worker.slot = workers_.size() - 1;
+    auto planned = plan_worker(workload, worker.slot, options_->budget, options_->verification,
+                               options_->topology);
+    if (!planned.has_value()) {
+      return error_at("workload", planned.error());
+    }
+    worker.plan = std::move(planned).value();
+    const std::optional<worker::WorkloadArgs>& args = worker.plan.args;
+    if (args.has_value()) {
+      worker.told.push_back(args->workload);
+    }
+  }
+  return core::Ok{};
+}
+
 core::Result<core::Ok, ControllerError> Run::prepare() {
   // The controller writes to pipes whose readers can die at any moment: a
   // worker that exits between one tick's reap and the next tick's stop byte
@@ -382,20 +406,8 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
     }
     environment_ = "floating point (asserted at startup): " + describe_state(control.read());
   }
-  for (const config::Workload& workload : config_->workloads) {
-    if (workload.enabled) {
-      workers_.emplace_back();
-      workers_.back().slot = workers_.size() - 1;
-      auto planned = plan_worker(workload, workers_.back().slot, options_->budget,
-                                 options_->verification, options_->topology);
-      if (!planned.has_value()) {
-        return error_at("workload", planned.error());
-      }
-      workers_.back().plan = std::move(planned).value();
-      if (workers_.back().plan.args.has_value()) {
-        workers_.back().told.push_back(workers_.back().plan.args->workload);
-      }
-    }
+  if (auto planned = plan_workers(); !planned.has_value()) {
+    return planned.error();
   }
   if (workers_.empty()) {
     return error_at("config", "no workload is enabled");
@@ -662,6 +674,8 @@ core::Result<core::Ok, ControllerError> Run::command(Tracked& worker, const work
   return core::Ok{};
 }
 
+// Two times on two clocks, named for what they are; a struct for the pair would be one more type.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 core::Result<core::Ok, ControllerError> Run::run_schedule(std::int64_t elapsed_ns,
                                                           std::int64_t now_ns) {
   if (options_->schedule == nullptr || stop_requested_) {

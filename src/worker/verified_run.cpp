@@ -214,21 +214,20 @@ enum class Step : std::uint8_t { kContinue, kEnd, kLeave };
 class Ticker {
  public:
   Ticker(platform::Syscalls& syscalls, ipc::RecordWriter& records, const Session& session,
-         const WorkloadArgs& args, const std::vector<std::uint32_t>& cpus, const Services& services,
+         const WorkloadArgs& args, std::vector<std::uint32_t> cpus, const Services& services,
          Prepared prepared)
       : syscalls_(&syscalls),
         records_(&records),
         session_(&session),
         services_(&services),
         args_(args),
-        cpus_(cpus),
+        cpus_(std::move(cpus)),
         prepared_(std::move(prepared)),
         clock_(syscalls),
         channel_(syscalls, session.control_fd, records),
         pid_(static_cast<std::uint32_t>(syscalls.process_id())),
         interval_ms_(static_cast<int>(session.pacing.interval_ns / kNanosecondsPerMillisecond)),
-        target_ns_(std::max(session.pacing.interval_ns / kTargetDivisor, kMinTargetNs)),
-        next_index_(0) {}
+        target_ns_(std::max(session.pacing.interval_ns / kTargetDivisor, kMinTargetNs)) {}
 
   /// Reads the clock for the first time and arms the watch on the controller.
   [[nodiscard]] std::optional<WorkerError> start() {
@@ -237,7 +236,7 @@ class Ticker {
       return error_at("clock", describe(started.error()));
     }
     started_ = started.value();
-    watch_ = std::make_unique<ControllerWatch>(*syscalls_, *session_, started_.running_ns);
+    watch_ = std::make_unique<ControllerWatch>(*session_, started_.running_ns);
     return std::nullopt;
   }
 
@@ -289,8 +288,9 @@ class Ticker {
         return handled;
       }
     }
-    if (looked.value().lost.has_value()) {
-      return leave(*looked.value().lost);
+    const std::optional<StopReason> lost = looked.value().lost;
+    if (lost.has_value()) {
+      return leave(*lost);
     }
     if (!looked.value().messages.empty() || idle) {
       return Step::kContinue;
@@ -357,7 +357,8 @@ class Ticker {
 
   core::Result<Step, WorkerError> handle(const ControlMessage& message,
                                          const platform::TimePoint& now) {
-    return std::visit([&](const auto& command) { return apply(message.sequence, command, now); },
+    return std::visit([this, &message,
+                       &now](const auto& command) { return apply(message.sequence, command, now); },
                       message.command);
   }
 
@@ -547,7 +548,7 @@ class Ticker {
   platform::TimePoint started_;
   std::unique_ptr<ControllerWatch> watch_;
   std::uint64_t units_ = 1;
-  std::uint64_t next_index_;
+  std::uint64_t next_index_ = 0;
   bool paused_ = false;
   DutyClock duty_;
   verification::Tally carried_;

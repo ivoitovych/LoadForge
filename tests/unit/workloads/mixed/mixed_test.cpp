@@ -50,7 +50,7 @@ Schedule schedule_of(const std::vector<RosterEntry>& roster, const MixedOptions&
 }
 
 const worker::Switch& switch_of(const Step& step, std::size_t slot) {
-  const auto* change = std::get_if<worker::Switch>(&step.workers[slot].commands[0]);
+  const auto* change = std::get_if<worker::Switch>(step.workers[slot].commands.data());
   EXPECT_NE(change, nullptr) << step.phase << " worker " << slot;
   static const worker::Switch kNone;
   return change != nullptr ? *change : kNone;
@@ -150,6 +150,7 @@ TEST(MixedSchedule, ThePhasesFollowTheirOrderAndNameWhatTheMachineIsDoing) {
   const Schedule schedule = schedule_of(every_workload(), options);
   EXPECT_EQ(schedule.phase, "r0 mixed");
   std::vector<std::string> phases;
+  phases.reserve(schedule.steps.size());
   for (const Step& step : schedule.steps) {
     phases.push_back(step.phase);
   }

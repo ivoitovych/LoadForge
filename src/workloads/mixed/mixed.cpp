@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -42,7 +43,7 @@ enum class Kind : std::uint8_t { kCompute, kMemory, kBalanced, kMixed, kJoin, kM
 constexpr std::array<std::string_view, 6> kNames{"compute-heavy", "memory-heavy", "balanced",
                                                  "mixed",         "all-join",     "move"};
 
-std::string_view name_of(Kind kind) { return kNames[static_cast<std::size_t>(kind)]; }
+std::string_view name_of(Kind kind) { return kNames.at(static_cast<std::size_t>(kind)); }
 
 /// The order phases come in; a move replaces every third.
 constexpr std::array<Kind, 5> kPlan{Kind::kMixed, Kind::kCompute, Kind::kMemory, Kind::kBalanced,
@@ -63,6 +64,9 @@ Pool pool_of(const Pool& usable, Intensity wanted) {
 }
 
 /// The workload `slot` runs in rotation `rotation` of a phase of `kind`.
+// The seed and the rotation are numbers of one kind that mean different things; the call sites
+// name both.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 const RosterEntry& pick(Kind kind, const Pool& usable, std::uint64_t seed, std::uint64_t rotation,
                         std::size_t slot) {
   Pool pool = usable;
@@ -97,6 +101,7 @@ worker::Switch assignment(const RosterEntry& entry, const MixedOptions& options,
 /// The distinct names, sorted, joined by '+', in a label.
 std::string label_of(const std::vector<worker::Switch>& changes) {
   std::vector<std::string> names;
+  names.reserve(changes.size());
   for (const worker::Switch& change : changes) {
     names.push_back(change.workload);
   }
@@ -116,6 +121,73 @@ std::string phase_of(std::uint64_t rotation, Kind kind) {
   label += ' ';
   label += name_of(kind);
   return bounded(std::move(label));
+}
+
+/// How many rotations after the start a run of these options holds.
+std::uint64_t rotations_of(const MixedOptions& options) {
+  return static_cast<std::uint64_t>((options.duration_ns - 1) / options.rotation_ns);
+}
+
+/// Why the options make no schedule, or nothing.
+std::optional<std::string> refusal_of(const MixedOptions& options) {
+  if (options.workers == 0) {
+    return std::string{"a mixed schedule needs at least one worker"};
+  }
+  if (options.duration_ns <= 0 || options.rotation_ns <= 0) {
+    return std::string{"the duration and the rotation interval must be positive"};
+  }
+  if (options.footprint_bytes == 0) {
+    return std::string{"a mixed schedule needs a footprint"};
+  }
+  const std::uint64_t rotations = rotations_of(options);
+  if (rotations > kMaxSteps) {
+    return "a rotation every " + std::to_string(options.rotation_ns / 1'000'000) + " ms for " +
+           std::to_string(options.duration_ns / 1'000'000) + " ms is more than " +
+           std::to_string(kMaxSteps) + " steps";
+  }
+  if (options.workers > kMaxCommands / (rotations + 1)) {
+    return std::to_string(options.workers) + " worker(s) over " + std::to_string(rotations) +
+           " steps is more than " + std::to_string(kMaxCommands) + " commands";
+  }
+  if (options.placements.size() == 1) {
+    return std::string{"workers move across at least two sets of CPUs, not one"};
+  }
+  for (const std::vector<std::uint32_t>& cpus : options.placements) {
+    if (!worker::is_valid(worker::ControlMessage{0, worker::Rebind{cpus}})) {
+      return std::string{"a set of CPUs to move across is empty, unordered or past CPU 1023"};
+    }
+  }
+  return std::nullopt;
+}
+
+/// Rotation `rotation`: every worker moved to another set of CPUs, or given another workload.
+/// `current` is the label of what the machine is doing, which a move leaves as it was.
+Step step_of(std::uint64_t rotation, const Pool& usable, const MixedOptions& options,
+             std::string& current) {
+  Step step;
+  step.at_ns = static_cast<std::int64_t>(rotation) * options.rotation_ns;
+  const bool moves = !options.placements.empty() && rotation % kMoveEvery == 0;
+  const Kind kind = moves ? Kind::kMove : kPlan.at(rotation % kPlan.size());
+  std::vector<worker::Switch> changes;
+  for (std::size_t slot = 0; slot < options.workers; ++slot) {
+    WorkerCommands commands;
+    commands.slot = slot;
+    if (moves) {
+      const std::size_t where = (slot + rotation / kMoveEvery) % options.placements.size();
+      commands.commands.emplace_back(worker::Rebind{options.placements.at(where)});
+    } else {
+      changes.push_back(
+          assignment(pick(kind, usable, options.seed, rotation, slot), options, rotation, slot));
+      commands.commands.emplace_back(changes.back());
+    }
+    step.workers.push_back(std::move(commands));
+  }
+  if (!moves) {
+    current = label_of(changes);
+  }
+  step.phase = phase_of(rotation, kind);
+  step.workload = current;
+  return step;
 }
 
 }  // namespace
@@ -138,33 +210,8 @@ Intensity classify(const std::string& workload) {
 
 core::Result<Schedule, std::string> make_mixed(const std::vector<RosterEntry>& roster,
                                                const MixedOptions& options) {
-  if (options.workers == 0) {
-    return std::string{"a mixed schedule needs at least one worker"};
-  }
-  if (options.duration_ns <= 0 || options.rotation_ns <= 0) {
-    return std::string{"the duration and the rotation interval must be positive"};
-  }
-  if (options.footprint_bytes == 0) {
-    return std::string{"a mixed schedule needs a footprint"};
-  }
-  const auto rotations =
-      static_cast<std::uint64_t>((options.duration_ns - 1) / options.rotation_ns);
-  if (rotations > kMaxSteps) {
-    return "a rotation every " + std::to_string(options.rotation_ns / 1'000'000) + " ms for " +
-           std::to_string(options.duration_ns / 1'000'000) + " ms is more than " +
-           std::to_string(kMaxSteps) + " steps";
-  }
-  if (options.workers > kMaxCommands / (rotations + 1)) {
-    return std::to_string(options.workers) + " worker(s) over " + std::to_string(rotations) +
-           " steps is more than " + std::to_string(kMaxCommands) + " commands";
-  }
-  if (options.placements.size() == 1) {
-    return std::string{"workers move across at least two sets of CPUs, not one"};
-  }
-  for (const std::vector<std::uint32_t>& cpus : options.placements) {
-    if (!worker::is_valid(worker::ControlMessage{0, worker::Rebind{cpus}})) {
-      return std::string{"a set of CPUs to move across is empty, unordered or past CPU 1023"};
-    }
+  if (const auto refused = refusal_of(options); refused.has_value()) {
+    return *refused;
   }
   Pool usable;
   for (const RosterEntry& entry : roster) {
@@ -183,42 +230,20 @@ core::Result<Schedule, std::string> make_mixed(const std::vector<RosterEntry>& r
   std::vector<worker::Switch> first;
   for (std::size_t slot = 0; slot < options.workers; ++slot) {
     const worker::Switch change =
-        assignment(pick(kPlan[0], usable, options.seed, 0, slot), options, 0, slot);
+        assignment(pick(kPlan.front(), usable, options.seed, 0, slot), options, 0, slot);
     Start start;
     start.workload = change.workload;
     start.footprint_bytes = change.footprint_bytes;
     schedule.start.push_back(std::move(start));
     first.push_back(change);
   }
-  schedule.phase = phase_of(0, kPlan[0]);
+  schedule.phase = phase_of(0, kPlan.front());
   schedule.workload = label_of(first);
 
   std::string current = schedule.workload;
+  const std::uint64_t rotations = rotations_of(options);
   for (std::uint64_t rotation = 1; rotation <= rotations; ++rotation) {
-    Step step;
-    step.at_ns = static_cast<std::int64_t>(rotation) * options.rotation_ns;
-    const bool moves = !options.placements.empty() && rotation % kMoveEvery == 0;
-    const Kind kind = moves ? Kind::kMove : kPlan[rotation % kPlan.size()];
-    std::vector<worker::Switch> changes;
-    for (std::size_t slot = 0; slot < options.workers; ++slot) {
-      WorkerCommands commands;
-      commands.slot = slot;
-      if (moves) {
-        const std::size_t where = (slot + rotation / kMoveEvery) % options.placements.size();
-        commands.commands.emplace_back(worker::Rebind{options.placements[where]});
-      } else {
-        changes.push_back(
-            assignment(pick(kind, usable, options.seed, rotation, slot), options, rotation, slot));
-        commands.commands.emplace_back(changes.back());
-      }
-      step.workers.push_back(std::move(commands));
-    }
-    if (!moves) {
-      current = label_of(changes);
-    }
-    step.phase = phase_of(rotation, kind);
-    step.workload = current;
-    schedule.steps.push_back(std::move(step));
+    schedule.steps.push_back(step_of(rotation, usable, options, current));
   }
   return schedule;
 }

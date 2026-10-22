@@ -50,8 +50,14 @@ std::string first_difference(const std::string& expected, const std::string& act
     const std::string b =
         actual.substr(other, end_other == std::string::npos ? end_other : end_other - other);
     if (a != b) {
-      return "line " + std::to_string(line) + ": the Python says \"" + a + "\", the C++ \"" + b +
-             "\"";
+      std::string text = "line ";
+      text += std::to_string(line);
+      text += ": the Python says \"";
+      text += a;
+      text += "\", the C++ \"";
+      text += b;
+      text += "\"";
+      return text;
     }
     from = end == std::string::npos ? expected.size() : end + 1;
     other = end_other == std::string::npos ? actual.size() : end_other + 1;

@@ -8,13 +8,13 @@
 // verifying, and found nothing wrong; one that was refused is still running.
 
 #include <gtest/gtest.h>
-#include <signal.h>
-#include <stdlib.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <sstream>
 #include <string>

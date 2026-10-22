@@ -49,7 +49,7 @@ struct Rig {
   }
 
   /// The acknowledgements the worker has sent, decoded.
-  std::vector<ControlAck> answers() {
+  std::vector<ControlAck> answers() const {
     return worker_testing::acknowledgements_in(syscalls.pipe_contents(records.write_fd));
   }
 };

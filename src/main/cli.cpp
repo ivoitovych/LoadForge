@@ -775,6 +775,30 @@ int conclude_run(const Ending& ending, std::ostream& out, std::ostream& err) {
   return code;
 }
 
+/// The journal this run was asked to keep, opened, and what the previous one at the
+/// path said; none when the run was not asked to keep one. The operations are the
+/// options' own when a test gave them, else the filesystem's.
+core::Result<std::optional<RunJournal>, std::string> begin_journal(
+    const StressOptions& stress_options, journal::FileOps& real_ops, JournalFiles& real_files,
+    std::ostream& out) {
+  if (stress_options.journal_path.empty()) {
+    return std::optional<RunJournal>{};
+  }
+  journal::FileOps& ops =
+      stress_options.journal_ops != nullptr ? *stress_options.journal_ops : real_ops;
+  JournalFiles& housekeeping =
+      stress_options.journal_files != nullptr ? *stress_options.journal_files : real_files;
+  auto opened = open_run_journal(ops, housekeeping, stress_options.journal_path);
+  if (!opened.has_value()) {
+    return opened.error();
+  }
+  std::optional<RunJournal> journal_open = std::move(opened).value();
+  if (!journal_open->previous.empty()) {
+    out << journal_open->previous << "\n";
+  }
+  return journal_open;
+}
+
 }  // namespace
 
 int run_stress(platform::Syscalls& syscalls, const config::Config& config,
@@ -811,21 +835,13 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   // is refused, not run without the evidence.
   journal::RealFileOps real_ops;
   RealJournalFiles real_files;
-  std::optional<RunJournal> journal_open;
-  if (!stress_options.journal_path.empty()) {
-    journal::FileOps& ops =
-        stress_options.journal_ops != nullptr ? *stress_options.journal_ops : real_ops;
-    JournalFiles& housekeeping =
-        stress_options.journal_files != nullptr ? *stress_options.journal_files : real_files;
-    auto opened = open_run_journal(ops, housekeeping, stress_options.journal_path);
-    if (!opened.has_value()) {
-      err << "loadforge: " << opened.error() << "\n";
-      return kConfigRefused;
-    }
-    journal_open = std::move(opened).value();
-    if (!journal_open->previous.empty()) {
-      out << journal_open->previous << "\n";
-    }
+  auto begun = begin_journal(stress_options, real_ops, real_files, out);
+  if (!begun.has_value()) {
+    err << "loadforge: " << begun.error() << "\n";
+    return kConfigRefused;
+  }
+  std::optional<RunJournal> journal_open = std::move(begun).value();
+  if (journal_open.has_value()) {
     options.journal = journal_open->writer.get();
   }
   options.schedule = stress_options.schedule;
@@ -939,6 +955,9 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
                          reporter, conclude);
 }
 
+// The two streams are the command's standard output and error, in the order every command
+// of this file takes them.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int show_journal(const std::string& path, journal::FileOps& ops, JournalFiles& files,
                  std::ostream& out, std::ostream& err) {
   auto shown = read_journal(ops, files, path);

@@ -96,8 +96,8 @@ TEST(ScheduleDeterminism, TheSameOptionsGiveTheSameScheduleEveryTimeAndOnEveryTh
   }
   std::vector<Schedule> from_threads(4);
   std::vector<std::thread> threads;
-  for (std::size_t each = 0; each < from_threads.size(); ++each) {
-    threads.emplace_back([&from_threads, each] { from_threads[each] = made(the_moving_case()); });
+  for (Schedule& into : from_threads) {
+    threads.emplace_back([&into] { into = made(the_moving_case()); });
   }
   for (std::thread& thread : threads) {
     thread.join();
@@ -117,7 +117,7 @@ TEST(ScheduleDeterminism, WhatWasMadeBeforeDoesNotChangeWhatIsMadeNext) {
 }
 
 TEST(ScheduleDeterminism, ADifferentSeedIsADifferentRunAndTheSameSeedIsTheSameRun) {
-  MixedOptions a = the_moving_case();
+  const MixedOptions a = the_moving_case();
   MixedOptions b = a;
   b.seed = a.seed + 1;
   EXPECT_NE(digest(made(a)), digest(made(b)));

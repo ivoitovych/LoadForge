@@ -23,17 +23,18 @@ TEST(ScheduleDefaults, ARotationIsASixthOfTheRunBetweenASecondAndFiveMinutes) {
   EXPECT_EQ(default_rotation_ms(10'000), 1'666);
   EXPECT_EQ(default_rotation_ms(1'000), 1'000) << "not under a second";
   EXPECT_EQ(default_rotation_ms(0), 1'000);
-  EXPECT_EQ(default_rotation_ms(5 * 3'600'000), 300'000) << "five hours rotate every five minutes";
-  EXPECT_EQ(default_rotation_ms(30 * 60'000), 300'000);
-  EXPECT_EQ(default_rotation_ms(30 * 60'000 - 1), 299'999);
+  EXPECT_EQ(default_rotation_ms(std::int64_t{5} * 3'600'000), 300'000)
+      << "five hours rotate every five minutes";
+  EXPECT_EQ(default_rotation_ms(std::int64_t{30} * 60'000), 300'000);
+  EXPECT_EQ(default_rotation_ms(std::int64_t{30} * 60'000 - 1), 299'999);
 }
 
 TEST(ScheduleDefaults, ALevelIsAnEighthOfTheRunBetweenASecondAndAMinute) {
   EXPECT_EQ(default_dwell_ms(16'000), 2'000);
   EXPECT_EQ(default_dwell_ms(1'000), 1'000);
-  EXPECT_EQ(default_dwell_ms(8 * 3'600'000), 60'000);
-  EXPECT_EQ(default_dwell_ms(8 * 60'000), 60'000);
-  EXPECT_EQ(default_dwell_ms(8 * 60'000 - 8), 59'999);
+  EXPECT_EQ(default_dwell_ms(std::int64_t{8} * 3'600'000), 60'000);
+  EXPECT_EQ(default_dwell_ms(std::int64_t{8} * 60'000), 60'000);
+  EXPECT_EQ(default_dwell_ms(std::int64_t{8} * 60'000 - 8), 59'999);
 }
 
 MixedRequest a_mixed_request(const workloads::Registry& registry) {

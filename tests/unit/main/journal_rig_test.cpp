@@ -326,7 +326,7 @@ telemetry::Point count(std::int64_t at, std::uint64_t raw) {
 TEST(TimelineNotesTest, TheHottestPackageThePowerOfAllTheMeanFrequencyAndTheEccTotals) {
   telemetry::BoundedTimeline timeline(1000);
   const auto add = [&timeline](const telemetry::Metric& each,
-                               std::vector<telemetry::Point> points) {
+                               const std::vector<telemetry::Point>& points) {
     const auto id = timeline.add_series(each);
     EXPECT_TRUE(id.has_value());
     for (const telemetry::Point& point : points) {
@@ -363,7 +363,7 @@ TEST(TimelineNotesTest, WhatIsNotThereOrCannotBeUsedLeavesTheFieldAbsent) {
   // (a reset: the advance across it is unknown); one reading only; and series that are none of
   // the entry's concern.
   const auto add = [&timeline](const telemetry::Metric& each,
-                               std::vector<telemetry::Point> points) {
+                               const std::vector<telemetry::Point>& points) {
     const auto id = timeline.add_series(each);
     EXPECT_TRUE(id.has_value());
     for (const telemetry::Point& point : points) {

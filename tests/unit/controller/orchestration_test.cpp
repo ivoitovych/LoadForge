@@ -2099,7 +2099,7 @@ TEST(ControllerControl, AnAcknowledgementOutOfOrderMakesTheChannelCorrupt) {
 
 TEST(ControllerControl, AWorkerThatDoesNotReadItsPipeIsSentNoMoreThanItCanAnswerButStillItsStop) {
   Rig rig;
-  std::vector<worker::Command> many(70, worker::Pause{});
+  const std::vector<worker::Command> many(70, worker::Pause{});
   const mixed::Schedule schedule = schedule_of({step_of(0, "p0", {tell(0, many)})});
   rig.options.schedule = &schedule;
   Written written;
@@ -2302,7 +2302,7 @@ TEST(ControllerControl, ARefusedCommandChangesNothingAboutHowTheWorkerIsJudged) 
 }
 
 TEST(ControllerControl, ReportValuesOfTheControlComparedFieldByField) {
-  CommandReport a;
+  const CommandReport a;
   CommandReport b = a;
   EXPECT_EQ(a, b);
   b.sent = 1;
@@ -2334,14 +2334,14 @@ TEST(ControllerControl, ReportValuesOfTheControlComparedFieldByField) {
   kept.fault = "x";
   EXPECT_NE(quiet, kept);
 
-  RunReport r;
+  const RunReport r;
   RunReport s = r;
   s.steps_run = 1;
   EXPECT_NE(r, s);
   s = r;
   s.journal.entries = 1;
   EXPECT_NE(r, s);
-  WorkerReport w;
+  const WorkerReport w;
   WorkerReport x = w;
   x.commands.sent = 1;
   EXPECT_NE(w, x);

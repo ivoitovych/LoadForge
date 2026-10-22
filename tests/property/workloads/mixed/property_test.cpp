@@ -124,7 +124,7 @@ TEST(MixedProperties, FiveHoursAtEveryRotationAFleetMightUseFitsAndIsValid) {
     MixedOptions options;
     options.workers = 64;
     options.seed = 5;
-    options.duration_ns = 5 * 3600 * kSecond;
+    options.duration_ns = std::int64_t{5} * 3600 * kSecond;
     options.rotation_ns = rotation_s * kSecond;
     options.footprint_bytes = 4U << 20U;
     auto schedule = make_mixed(roster, options);

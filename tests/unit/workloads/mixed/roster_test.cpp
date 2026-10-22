@@ -38,7 +38,6 @@ INSTANTIATE_TYPED_TEST_SUITE_P(MixedModel, RegistryContract, ::testing::Types<St
 namespace loadforge::mixed {
 namespace {
 
-using mixed_testing::StubEntry;
 using mixed_testing::StubRegistry;
 
 TEST(Roster, EveryWorkloadWithTheLeastFootprintItIsMadeAtInDoublingsFromSixtyFourKiB) {

@@ -91,19 +91,21 @@ core::Result<Schedule, std::string> make_cycling(const CyclingOptions& options) 
     std::size_t working = options.workers;
     std::uint16_t busy_permille = 1000;
     if (options.kind == CycleKind::kLoad) {
-      const LoadLevel& each = kLoadLevels[level % kLoadLevels.size()];
+      const LoadLevel& each = kLoadLevels.at(level % kLoadLevels.size());
       busy_permille = each.busy_permille;
       name = each.name;
     } else {
-      const std::uint16_t share = kCoreLevels[level % kCoreLevels.size()];
+      const std::uint16_t share = kCoreLevels.at(level % kCoreLevels.size());
       working = std::max<std::size_t>(1, options.workers * share / 1000);
       name = std::to_string(working) + " of " + std::to_string(options.workers);
     }
     for (std::size_t slot = 0; slot < options.workers; ++slot) {
       // The cores cycle keeps the first `working` workers at full load and
       // pauses the rest; the load cycle moves every worker alike.
-      const std::uint16_t wanted =
-          options.kind == CycleKind::kCores ? (slot < working ? 1000 : 0) : busy_permille;
+      std::uint16_t wanted = busy_permille;
+      if (options.kind == CycleKind::kCores) {
+        wanted = slot < working ? 1000 : 0;
+      }
       WorkerCommands commands;
       commands.slot = slot;
       commands.commands = towards_load(states[slot], wanted, options.period_ns);

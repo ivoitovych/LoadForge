@@ -62,6 +62,32 @@ std::string nothing_to(const Command& command) {
   return text;
 }
 
+/// The null workload's answer to every message one look found, in order: a Stop is
+/// answered Done and ends the run, anything else is refused, because there is
+/// nothing here to pause, slow down, move or switch. The reason to leave, if the
+/// messages gave one.
+core::Result<std::optional<StopReason>, WorkerError> answer_all(
+    ControlChannel& channel, const std::vector<ControlMessage>& messages) {
+  for (const ControlMessage& message : messages) {
+    const bool stop = std::holds_alternative<Stop>(message.command);
+    std::string reason;
+    if (!stop) {
+      reason = nothing_to(message.command);
+    }
+    const Delivery sent =
+        channel.answer(message.sequence, stop ? AckStatus::kDone : AckStatus::kRefused, reason);
+    if (sent.failure.has_value()) {
+      return *sent.failure;
+    }
+    if (sent.controller_gone) {
+      return std::optional<StopReason>{StopReason::kControllerHungUp};
+    }
+    if (stop) {
+      return std::optional<StopReason>{StopReason::kStopRequested};
+    }
+  }
+  return std::optional<StopReason>{};
+}
 }  // namespace
 
 std::optional<StopReason> ControllerWatch::gone(const platform::TimePoint& now,
@@ -102,7 +128,7 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
   const auto interval_ms =
       static_cast<int>(session_.pacing.interval_ns / kNanosecondsPerMillisecond);
   std::uint64_t progress = 0;
-  ControllerWatch watch(*syscalls_, session_, started.value().running_ns);
+  ControllerWatch watch(session_, started.value().running_ns);
   ControlChannel channel(*syscalls_, session_.control_fd, *session_.records);
 
   while (true) {
@@ -130,28 +156,16 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
     if (!looked.has_value()) {
       return looked.error();
     }
-    for (const ControlMessage& message : looked.value().messages) {
-      const bool stop = std::holds_alternative<Stop>(message.command);
-      // Stop is answered before the worker says anything else; every other
-      // command is one this loop has nothing to do for.
-      std::string reason;
-      if (!stop) {
-        reason = nothing_to(message.command);
-      }
-      const Delivery sent =
-          channel.answer(message.sequence, stop ? AckStatus::kDone : AckStatus::kRefused, reason);
-      if (sent.failure.has_value()) {
-        return *sent.failure;
-      }
-      if (sent.controller_gone) {
-        return Outcome{StopReason::kControllerHungUp, progress, elapsed_ns};
-      }
-      if (stop) {
-        return Outcome{StopReason::kStopRequested, progress, elapsed_ns};
-      }
+    auto answered = answer_all(channel, looked.value().messages);
+    if (!answered.has_value()) {
+      return answered.error();
     }
-    if (looked.value().lost.has_value()) {
-      return Outcome{*looked.value().lost, progress, elapsed_ns};
+    if (answered.value().has_value()) {
+      return Outcome{*answered.value(), progress, elapsed_ns};
+    }
+    const std::optional<StopReason> lost = looked.value().lost;
+    if (lost.has_value()) {
+      return Outcome{*lost, progress, elapsed_ns};
     }
     ++progress;
   }

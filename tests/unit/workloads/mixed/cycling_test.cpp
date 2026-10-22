@@ -116,7 +116,7 @@ TEST(CyclingLoad, ACommandIsSentOnlyWhereItChangesWhatTheWorkerIsDoing) {
 
 TEST(CyclingLoad, FromIdleToModerateResumesAndSetsTheDutyInOneStep) {
   // Moderate straight after idle: the cycle never does it, but the state machine must.
-  CyclingOptions options = load_for(1, 3);
+  const CyclingOptions options = load_for(1, 3);
   const Schedule schedule = made(options);
   // idle (pause), heavy (resume), moderate (duty): a pause then a moderate level is reached by
   // the cores shape below; here the shape of a step that follows a pause is a resume first.
@@ -124,7 +124,7 @@ TEST(CyclingLoad, FromIdleToModerateResumesAndSetsTheDutyInOneStep) {
 }
 
 TEST(CyclingLoad, ALevelThatChangesNothingIsAStepWithNoWorkers) {
-  CyclingOptions options = load_for(1, 20);
+  const CyclingOptions options = load_for(1, 20);
   const Schedule schedule = made(options);
   // Every level of the load cycle changes the state: no step is empty.
   for (const Step& step : schedule.steps) {
@@ -134,7 +134,7 @@ TEST(CyclingLoad, ALevelThatChangesNothingIsAStepWithNoWorkers) {
 
 TEST(CyclingLoad, TheLastLevelIsTheOneBeforeTheEndOfTheRun) {
   CyclingOptions options = load_for(1, 4);
-  options.duration_ns = 4 * 5 * kSecond;
+  options.duration_ns = std::int64_t{4} * 5 * kSecond;
   EXPECT_EQ(made(options).steps.size(), 4U);
   options.duration_ns += 1;
   EXPECT_EQ(made(options).steps.size(), 5U) << "a level that begins before the end is made";
@@ -149,6 +149,7 @@ TEST(CyclingCores, AnEighthHalfAllAQuarterAllOfTheWorkersWork) {
   EXPECT_EQ(schedule.workload, "cycling cores");
   ASSERT_EQ(schedule.steps.size(), 6U);
   std::vector<std::string> phases;
+  phases.reserve(schedule.steps.size());
   for (const Step& step : schedule.steps) {
     phases.push_back(step.phase);
   }

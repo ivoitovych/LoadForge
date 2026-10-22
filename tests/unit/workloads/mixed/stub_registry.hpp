@@ -61,6 +61,7 @@ class StubRegistry final : public workloads::Registry {
 
   [[nodiscard]] std::vector<std::string> names() const override {
     std::vector<std::string> out;
+    out.reserve(entries_.size());
     for (const StubEntry& entry : entries_) {
       out.push_back(entry.name);
     }

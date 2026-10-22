@@ -105,9 +105,8 @@ class ControllerWatch {
   /// that cannot be read is a reason to leave only once it has stayed so for
   /// longer than the allowance, counted from the last consistent sample or,
   /// before any, from here.
-  ControllerWatch(platform::Syscalls& syscalls, const Session& session,
-                  std::int64_t first_read_ns) noexcept
-      : syscalls_(&syscalls), session_(&session), last_read_ns_(first_read_ns) {}
+  ControllerWatch(const Session& session, std::int64_t first_read_ns) noexcept
+      : session_(&session), last_read_ns_(first_read_ns) {}
 
   /// The reason to leave that the controller's slot gives, if any: unreadable,
   /// stale, or never beat past the allowance.
@@ -115,7 +114,6 @@ class ControllerWatch {
                                                std::int64_t elapsed_ns);
 
  private:
-  platform::Syscalls* syscalls_;
   const Session* session_;
   std::int64_t last_read_ns_;
 };

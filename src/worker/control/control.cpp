@@ -21,6 +21,9 @@ constexpr std::size_t kCpuBytes = 4;
 /// Little-endian, whatever the machine: the controller and its workers are one
 /// binary, but a message is kept as bytes by the journal of a bug report and is
 /// read on any architecture.
+// A value and the width it is written in: the two are told apart by their names, and a struct
+// for the pair would be one more type for a function of three lines.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void put(std::vector<std::byte>& out, std::uint64_t value, std::size_t width) {
   for (std::size_t byte = 0; byte < width; ++byte) {
     out.push_back(static_cast<std::byte>(value >> (8 * byte)));

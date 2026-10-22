@@ -70,7 +70,7 @@ std::int64_t status_field(const std::string& name) {
   std::ifstream in("/proc/self/status");
   std::string line;
   while (std::getline(in, line)) {
-    if (line.rfind(name + ":", 0) == 0) {
+    if (line.starts_with(name + ":")) {
       return std::strtoll(line.c_str() + name.size() + 1, nullptr, 10);
     }
   }
@@ -224,8 +224,9 @@ TEST(MixedSoak, ARotatedWorkerGrowsNothingAndLosesNoVerification) {
   // largest of the first by more than the footprint of one more working set.
   if (resident_at_cycle_end.size() >= 6) {
     const std::size_t third = resident_at_cycle_end.size() / 3;
+    const auto cut = static_cast<std::ptrdiff_t>(third);
     const std::int64_t early =
-        *std::max_element(resident_at_cycle_end.begin(), resident_at_cycle_end.begin() + third);
+        *std::max_element(resident_at_cycle_end.begin(), resident_at_cycle_end.begin() + cut);
     const std::int64_t late =
         *std::max_element(resident_at_cycle_end.end() - static_cast<std::ptrdiff_t>(third),
                           resident_at_cycle_end.end());
@@ -240,7 +241,7 @@ TEST(MixedSoak, AFiveHourScheduleIsMadeWholeAndKeepsEveryCountInRange) {
   mixed::MixedOptions options;
   options.workers = 64;
   options.seed = 7;
-  options.duration_ns = 5 * 3600 * kSecond;
+  options.duration_ns = std::int64_t{5} * 3600 * kSecond;
   options.rotation_ns = 10 * kSecond;
   options.footprint_bytes = std::uint64_t{64} << 20U;
   options.placements = {{0}, {1}, {2}, {3}};

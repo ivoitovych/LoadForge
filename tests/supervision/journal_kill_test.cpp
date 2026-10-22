@@ -9,14 +9,15 @@
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
-#include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -27,8 +28,6 @@
 #include "controller/journal/file_ops.hpp"
 #include "controller/journal/journal.hpp"
 #include "main/journal_rig.hpp"
-
-extern char** environ;
 
 namespace loadforge::cli {
 namespace {
@@ -61,11 +60,9 @@ TEST(JournalHardKill, AControllerKilledMidRunLeavesAJournalThatReplaysAndItsWork
   const std::vector<std::string> args = {
       LOADFORGE_BINARY, "stress", "--test",     "mixed", "--duration", "120s", "--workers", "2",
       "--footprint",    "1MiB",   "--rotation", "1s",    "--journal",  journal};
-  std::vector<char*> argv;
-  for (const std::string& each : args) {
-    argv.push_back(const_cast<char*>(each.c_str()));
-  }
-  argv.push_back(nullptr);
+  std::vector<char*> argv(args.size() + 1, nullptr);
+  std::transform(args.begin(), args.end(), argv.begin(),
+                 [](const std::string& each) { return const_cast<char*>(each.c_str()); });
 
   posix_spawn_file_actions_t actions;
   ASSERT_EQ(::posix_spawn_file_actions_init(&actions), 0);
