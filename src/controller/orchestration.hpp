@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/journal/journal.hpp"
 #include "controller/plan.hpp"
 #include "controller/report.hpp"
 #include "controller/safety.hpp"
@@ -19,8 +20,25 @@
 #include "telemetry/source.hpp"
 #include "telemetry/timeline.hpp"
 #include "topology/snapshot.hpp"
+#include "workloads/mixed/schedule.hpp"
 
 namespace loadforge::controller {
+
+/// Where a journal entry gets what the controller does not hold: the latest
+/// temperature, power, frequency and ECC counts, which the timeline has. The
+/// controller fills the entry's time, phase, workload, last verified unit and
+/// the workers' state, then asks this to fill the rest.
+class JournalNotes {
+ public:
+  JournalNotes() = default;
+  JournalNotes(const JournalNotes&) = delete;
+  JournalNotes(JournalNotes&&) = delete;
+  JournalNotes& operator=(const JournalNotes&) = delete;
+  JournalNotes& operator=(JournalNotes&&) = delete;
+  virtual ~JournalNotes() = default;
+
+  virtual void fill(journal::Entry& entry) = 0;
+};
 
 /// What a run needs beyond its configuration.
 struct RunOptions {
@@ -79,9 +97,29 @@ struct RunOptions {
   /// The interval between rounds. A tick comes at least this often (the poll
   /// interval above), so a value below `interval_ns` samples at that rate.
   std::int64_t sample_interval_ns = 100'000'000;
-
-  [[nodiscard]] friend bool operator==(const RunOptions&, const RunOptions&) = default;
+  /// What the workers are told while they run (workloads/mixed/schedule.hpp):
+  /// the flagship mixed workload and thermal and power cycling. Each step is
+  /// carried out on the first tick at or after its time: its commands sent,
+  /// its phase marked on the timeline and written to the journal. A schedule
+  /// that does not fit the run is refused before the first fork. Not owned;
+  /// it must outlive the run. Null: the workers run what they were started as.
+  const mixed::Schedule* schedule = nullptr;
+  /// The crash journal (controller/journal/journal.hpp), already opened by the
+  /// caller on storage that held no journal: an entry is appended and synced
+  /// when the run starts, every `journal_interval_ns`, at every phase of the
+  /// schedule, and at the deadline. An append or a sync the storage refuses
+  /// ends journaling and is reported, never the run. The controller never
+  /// closes it: whether the run ended cleanly is the caller's to say, once it
+  /// has done with the result. Not owned. Null: no journal.
+  journal::Writer* journal = nullptr;
+  std::int64_t journal_interval_ns = 5'000'000'000;
+  /// Fills the readings of an entry; null: those fields are absent.
+  JournalNotes* journal_notes = nullptr;
 };
+
+/// Every member alike (the pointers by identity). Defined in the one translation unit
+/// that holds the controller, so that its lines are counted once.
+[[nodiscard]] bool operator==(const RunOptions& lhs, const RunOptions& rhs);
 
 /// Something the controller itself could not do, and at which step. A worker
 /// misbehaving is never this: that is a WorkerFate in the report.

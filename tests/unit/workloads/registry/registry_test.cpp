@@ -38,7 +38,9 @@ INSTANTIATE_TYPED_TEST_SUITE_P(BuiltinRegistry, RegistryContract, Subjects);
 TEST(BuiltinRegistryTable, ListsTheWorkloadsThisBuildContains) {
   const BuiltinRegistry registry;
   EXPECT_EQ(registry.names(),
-            (std::vector<std::string>{"compression", "dense_linear", "monte_carlo", "sort"}));
+            (std::vector<std::string>{"adaptive_mesh", "compression", "dense_linear", "fft",
+                                      "graph", "monte_carlo", "particles", "raytrace", "sort",
+                                      "sparse", "stencil"}));
 }
 
 TEST(BuiltinRegistryTable, EachWorkloadIsCreatedByItsOwnFactoryAndKeepsItsContract) {
@@ -79,10 +81,10 @@ TEST(BuiltinRegistryTable, AWorkloadsOwnRefusalIsPassedOnUnchanged) {
 
 TEST(BuiltinRegistryTable, AnUnknownNameIsNamedInTheRefusal) {
   const BuiltinRegistry registry;
-  const auto created = registry.create("fft", BuiltinRegistrySubject::config("fft"));
+  const auto created = registry.create("teapot", BuiltinRegistrySubject::config("teapot"));
   ASSERT_FALSE(created.has_value());
   EXPECT_EQ(created.error().fault, WorkloadFault::kUnknownWorkload);
-  EXPECT_NE(created.error().detail.find("'fft'"), std::string::npos);
+  EXPECT_NE(created.error().detail.find("'teapot'"), std::string::npos);
 }
 
 }  // namespace

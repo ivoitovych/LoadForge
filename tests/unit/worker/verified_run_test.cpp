@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,9 +27,11 @@
 #include "primitives/simd/dispatch.hpp"
 #include "support/fake_syscalls.hpp"
 #include "unit/controller/consumer_models.hpp"
+#include "unit/worker/control_frames.hpp"
 #include "unit/worker/model_runner.hpp"
 #include "verification/oracle/registry/registry.hpp"
 #include "verification/record.hpp"
+#include "worker/control.hpp"
 #include "worker/frames.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -144,10 +147,15 @@ class WrappedOracles final : public verification::OracleRegistry {
 class RefusingThreads final : public Threads {
  public:
   [[nodiscard]] int start(pthread_t& handle, Entry entry, void* argument) override {
+    if (refuse_next > 0) {
+      --refuse_next;
+      return EAGAIN;
+    }
     return refuse ? EAGAIN : inner.start(handle, entry, argument);
   }
   void join(pthread_t handle) override { inner.join(handle); }
   bool refuse = false;
+  int refuse_next = 0;  ///< The next this many starts are refused, then they work again.
   PosixThreads inner;
 };
 
@@ -164,6 +172,13 @@ struct Script {
   std::vector<std::uint64_t> asked;
   std::optional<verification::RunnerSetup> setup;
   verification::MemoryLock lock;  ///< What every scripted runner says it did about locking.
+  /// Called as each scripted runner is made, with the setup it was made for, and as each of
+  /// its slices runs, with the slice's number from one: the way a test acts in the middle
+  /// of a run (sends the next message, then) without a clock of its own.
+  std::function<bool(const verification::RunnerSetup&)> refuse_setup;
+  std::function<void(int)> on_slice;
+  std::vector<verification::RunnerSetup> setups;  ///< Every runner made, in order.
+  std::vector<std::uint64_t> slice_starts;        ///< Each slice's first unit, from the setups.
 };
 /// The script the factory's runners follow: a RunnerFactory is a plain function,
 /// so the state it reads cannot be a capture.
@@ -178,6 +193,9 @@ class ScriptedRunner final : public verification::SliceRunner {
       const verification::SliceRequest& request) override {
     current_script()->asked.push_back(request.units);
     ++current_script()->slices_run;
+    if (current_script()->on_slice) {
+      current_script()->on_slice(current_script()->slices_run);
+    }
     if (current_script()->slice_fails) {
       return verification::RunnerError{verification::RunnerFault::kFinished, "scripted halt"};
     }
@@ -208,7 +226,9 @@ class ScriptedRunner final : public verification::SliceRunner {
 core::Result<std::unique_ptr<verification::SliceRunner>, verification::RunnerError> make_scripted(
     const verification::RunnerSetup& setup) {
   current_script()->setup = setup;
-  if (current_script()->factory_fails) {
+  current_script()->setups.push_back(setup);
+  if (current_script()->factory_fails ||
+      (current_script()->refuse_setup && current_script()->refuse_setup(setup))) {
     return verification::RunnerError{verification::RunnerFault::kResources, "scripted refusal"};
   }
   std::unique_ptr<verification::SliceRunner> runner = std::make_unique<ScriptedRunner>();
@@ -245,6 +265,10 @@ struct Rig {
   workloads::BuiltinRegistry workloads;
   RefusingThreads threads;
   controller_testing::ModelProbe probe{simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kAvx2}};
+  /// A machine that can run every path this build compiled, for the tests that must not
+  /// name one.
+  controller_testing::ModelProbe wide_probe{simd::compiled_paths()};
+  bool use_wide_probe = false;
   Script script;
   WorkerArgs worker;
 
@@ -283,13 +307,38 @@ struct Rig {
     services.oracles = &oracles;
     services.fp = &fp;
     services.threads = &threads;
-    services.isa = &probe;
+    services.isa = use_wide_probe ? &wide_probe : &probe;
     services.make_runner = factory;
     return services;
   }
 
   [[nodiscard]] Session session() {
-    return Session{&*region, worker.slot, control.read_fd, worker.pacing};
+    return Session{&*region, worker.slot, control.read_fd, worker.pacing, nullptr};
+  }
+
+  /// A message as the controller frames it, delivered to the worker.
+  void send(const ControlMessage& message) {
+    syscalls.deliver_to_pipe(control.read_fd, worker_testing::control_frame(message));
+  }
+
+  /// The acknowledgements the worker sent, in order.
+  [[nodiscard]] std::vector<ControlAck> answers() const {
+    std::vector<ControlAck> out;
+    for (const ipc::Record& record : received()) {
+      if (record.type == kControlAckFrameType) {
+        out.push_back(decode_ack(record.payload).value());
+      }
+    }
+    return out;
+  }
+
+  /// The types of the frames the worker sent, in order: the shape of what it said.
+  [[nodiscard]] std::vector<std::uint16_t> frame_types() const {
+    std::vector<std::uint16_t> out;
+    for (const ipc::Record& record : received()) {
+      out.push_back(record.type);
+    }
+    return out;
   }
 
   core::Result<VerifiedOutcome, WorkerError> run(RunnerFactory factory = &make_scripted) {
@@ -566,7 +615,7 @@ TEST(VerifiedRunLoop, WhatTheWholeRunDidNotCheckIsSentBeforeTheWorkerIsDone) {
 
 TEST(VerifiedRunLoop, AStopRequestEndsTheRunAfterAFinalReport) {
   Rig rig;
-  rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
+  rig.send({1, Stop{}});
   auto outcome = rig.run();
   ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
   EXPECT_EQ(outcome.value().outcome.reason, StopReason::kStopRequested);
@@ -606,7 +655,7 @@ TEST(VerifiedRunLoop, FailuresNameTheirStage) {
   {
     Rig rig;
     rig.script.finish_fails = true;
-    rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
+    rig.send({1, Stop{}});
     auto outcome = rig.run();
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().stage, "runner");
@@ -727,8 +776,8 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
     verification::SliceReport last;
     last.records.emplace_back(unrun("late"));
     rig.script.final_report = last;
-    rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
-    rig.syscalls.script_writes({{kEverything, 0}, {0, EIO}});
+    rig.send({1, Stop{}});
+    rig.syscalls.script_writes({{kEverything, 0}, {kEverything, 0}, {0, EIO}});
     auto outcome = rig.run();
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().stage, "record channel");
@@ -738,8 +787,8 @@ TEST(VerifiedRunLoop, ARecordPipeWithNoReaderIsTheControllerGoneAnythingElseIsTh
     verification::SliceReport last;
     last.records.emplace_back(unrun("late"));
     rig.script.final_report = last;
-    rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
-    rig.syscalls.script_writes({{kEverything, 0}, {0, EPIPE}});
+    rig.send({1, Stop{}});
+    rig.syscalls.script_writes({{kEverything, 0}, {kEverything, 0}, {0, EPIPE}});
     auto outcome = rig.run();
     ASSERT_TRUE(outcome.has_value());
     EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
@@ -763,13 +812,500 @@ TEST(VerifiedRunLoop, ARealWorkloadThroughTheModelRunnerIsCheckedAndReportsNothi
 TEST(VerifiedRunLoop, ARunThatCheckedNothingSaysSoOnTheWire) {
   Rig rig;
   rig.worker.workload->duty = verification::DutyCycle{0, 0};
-  rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
+  rig.send({1, Stop{}});
   auto outcome = rig.run(&worker_testing::ModelRunner::make);
   ASSERT_TRUE(outcome.has_value());
   const std::vector<verification::ErrorRecord> findings = rig.findings();
   ASSERT_EQ(findings.size(), 2U);
   for (const verification::ErrorRecord& record : findings) {
     EXPECT_FALSE(verification::is_wrong_result(record));
+  }
+}
+
+// --- the control commands (worker/control.hpp) ---------------------------------------
+
+/// The phase and progress of the worker's last beat.
+Heartbeat last_beat(Rig& rig) {
+  auto observed = rig.region->observe(ipc::worker_slot(0));
+  EXPECT_TRUE(observed.has_value() && observed.value().has_value());
+  return observed.has_value() && observed.value().has_value() ? *observed.value() : Heartbeat{};
+}
+
+TEST(VerifiedRunControl, AStopIsAnsweredBeforeTheRunsLastWord) {
+  Rig rig;
+  rig.send({7, Stop{}});
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(outcome.value().outcome.reason, StopReason::kStopRequested);
+  EXPECT_EQ(rig.frame_types(),
+            (std::vector<std::uint16_t>{kMemoryFrameType, kControlAckFrameType, kTallyFrameType}))
+      << "acknowledged before the final tally, which is before the worker's finished record";
+  EXPECT_EQ(rig.answers(), (std::vector<ControlAck>{{7, AckStatus::kDone, ""}}));
+}
+
+TEST(VerifiedRunControl, APausedWorkerRunsNoSliceAndBeatsWithItsProgressWhereItWas) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 2) {
+      rig.send({5, Pause{}});
+    }
+  };
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(outcome.value().outcome.reason, StopReason::kDurationElapsed);
+  EXPECT_EQ(rig.script.slices_run, 2) << "no slice after the pause";
+  EXPECT_EQ(rig.answers(), (std::vector<ControlAck>{{5, AckStatus::kDone, ""}}));
+  const Heartbeat beat = last_beat(rig);
+  EXPECT_EQ(beat.phase, NullWorkload::kPhasePaused);
+  EXPECT_EQ(beat.progress, 2U) << "unchanged since the last slice";
+  // Every tick after the pause waited on the control pipe for the whole interval.
+  const std::vector<int>& waits = rig.syscalls.poll_timeouts();
+  ASSERT_GE(waits.size(), 4U);
+  EXPECT_EQ(waits.back(), 20);
+}
+
+TEST(VerifiedRunControl, AResumeRunsSlicesAgainAndOneWhileRunningIsAcknowledgedDone) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  rig.send({1, Resume{}});  // While running.
+  rig.send({2, Pause{}});
+  rig.send({3, Resume{}});
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_GE(rig.script.slices_run, 2);
+  EXPECT_EQ(rig.answers(),
+            (std::vector<ControlAck>{
+                {1, AckStatus::kDone, ""}, {2, AckStatus::kDone, ""}, {3, AckStatus::kDone, ""}}));
+  EXPECT_EQ(last_beat(rig).phase, NullWorkload::kPhaseRunning);
+}
+
+TEST(VerifiedRunControl, ADutyCycleRunsSlicesInTheBusyPartAndWaitsOutTheIdlePart) {
+  Rig continuous;
+  continuous.worker.pacing = Pacing{600 * kMs, 20 * kMs, 100'000 * kMs};
+  continuous.script.slices = {slice_of(1)};
+  ASSERT_TRUE(continuous.run().has_value());
+
+  Rig duty;
+  duty.worker.pacing = Pacing{600 * kMs, 20 * kMs, 100'000 * kMs};
+  duty.script.slices = {slice_of(1)};
+  duty.send({1, SetDuty{250, 200 * kMs}});
+  auto outcome = duty.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(duty.answers(), (std::vector<ControlAck>{{1, AckStatus::kDone, ""}}));
+  EXPECT_GT(duty.script.slices_run, 0);
+  EXPECT_LT(duty.script.slices_run, continuous.script.slices_run)
+      << "a quarter of every period is busy";
+  // The idle part is waited out on the control pipe, a tick at most one interval; a
+  // worker with work to do only looks (0).
+  int waited = 0;
+  for (const int timeout : duty.syscalls.poll_timeouts()) {
+    EXPECT_LE(timeout, 20);
+    waited += timeout > 0 ? 1 : 0;
+  }
+  EXPECT_GT(waited, 0);
+  for (const int timeout : continuous.syscalls.poll_timeouts()) {
+    EXPECT_EQ(timeout, 0);
+  }
+  EXPECT_EQ(last_beat(duty).phase, NullWorkload::kPhaseRunning)
+      << "idling by the duty cycle is not a pause";
+}
+
+TEST(VerifiedRunControl, AnIdlePartShorterThanAMillisecondIsWaitedAsOne) {
+  Rig rig;
+  rig.worker.pacing = Pacing{100 * kMs, 20 * kMs, 100'000 * kMs};
+  rig.script.slices = {slice_of(1)};
+  // Half of every 1.5 ms: the idle part is 0.75 ms, so the wait that follows a
+  // busy tick is one millisecond, not none (which would spin).
+  rig.send({1, SetDuty{500, 1'500'000}});
+  ASSERT_TRUE(rig.run().has_value());
+  const std::vector<int>& waits = rig.syscalls.poll_timeouts();
+  EXPECT_NE(std::find(waits.begin(), waits.end(), 1), waits.end());
+  EXPECT_EQ(std::count_if(waits.begin(), waits.end(), [](int w) { return w < 0 || w > 20; }), 0);
+}
+
+TEST(VerifiedRunControl, ARebindMakesTheRunnerAgainFromTheNextUnitOnTheNewCpus) {
+  Rig rig;
+  rig.worker.workload->physical_package = 1;
+  rig.worker.workload->physical_core = 2;
+  rig.worker.workload->numa_node = 1;
+  rig.script.slices = {slice_of(1)};
+  verification::SliceReport last;
+  last.next_index = 42;
+  rig.script.final_report = last;
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({4, Rebind{{0}}});
+    }
+  };
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  ASSERT_EQ(rig.script.setups.size(), 2U);
+  EXPECT_EQ(rig.script.setups[0].base.physical_package, 1U);
+  EXPECT_EQ(rig.script.setups[1].first_index, 42U) << "from the next unit, none run twice";
+  EXPECT_EQ(rig.script.setups[1].base.logical_cpu, 0U) << "one CPU named";
+  EXPECT_FALSE(rig.script.setups[1].base.physical_package.has_value())
+      << "a package that was true before the move is not claimed after it";
+  EXPECT_FALSE(rig.script.setups[1].base.physical_core.has_value());
+  EXPECT_FALSE(rig.script.setups[1].base.numa_node.has_value());
+  EXPECT_EQ(rig.script.setups[1].base.workload, "compression");
+  EXPECT_EQ(rig.answers(), (std::vector<ControlAck>{{4, AckStatus::kDone, ""}}));
+  // The lock is told again for the runner that replaced the first.
+  const std::vector<std::uint16_t> types = rig.frame_types();
+  EXPECT_EQ(std::count(types.begin(), types.end(), kMemoryFrameType), 2);
+  // Progress and the tally run on across the replacement: cumulative.
+  const std::vector<verification::Tally> tallies = rig.tallies();
+  for (std::size_t at = 1; at < tallies.size(); ++at) {
+    EXPECT_GE(tallies[at].units_computed, tallies[at - 1].units_computed);
+  }
+  EXPECT_EQ(tallies.back().units_computed, static_cast<std::uint64_t>(rig.script.slices_run));
+  EXPECT_EQ(outcome.value().tally, tallies.back());
+}
+
+TEST(VerifiedRunControl, ARebindTheKernelRefusesIsRefusedAndTheWorkerStaysWhereItWas) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.threads.refuse_next = 1;  // The new executor's thread cannot be placed.
+      rig.send({4, Rebind{{1}}});
+    }
+  };
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(outcome.value().outcome.reason, StopReason::kDurationElapsed);
+  const std::vector<ControlAck> answers = rig.answers();
+  ASSERT_EQ(answers.size(), 1U);
+  EXPECT_EQ(answers[0].status, AckStatus::kRefused);
+  EXPECT_EQ(answers[0].detail.substr(0, 10), "executor: ") << answers[0].detail;
+  ASSERT_EQ(rig.script.setups.size(), 2U) << "the old placement made again";
+  EXPECT_FALSE(rig.script.setups[1].base.logical_cpu.has_value());
+  EXPECT_GT(rig.script.slices_run, 1) << "and the run went on";
+}
+
+/// A worker running dense_linear on a path other than scalar, if this build has one.
+std::optional<simd::IsaPath> vector_path_of(const workloads::BuiltinRegistry& registry) {
+  const simd::IsaSet paths = registry.descriptor("dense_linear").value().paths;
+  for (const simd::IsaPath path : simd::kPreference) {
+    if (path != simd::IsaPath::kScalar && paths.contains(path) &&
+        simd::compiled_paths().contains(path)) {
+      return path;
+    }
+  }
+  return std::nullopt;
+}
+
+TEST(VerifiedRunControl, ASwitchStartsTheNamedWorkloadWithItsSeedFootprintAndDutyCycle) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({6, Switch{"sort", 77, std::uint64_t{8} << 20U, 0, {3, 5}}});
+    }
+  };
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(rig.answers(), (std::vector<ControlAck>{{6, AckStatus::kDone, ""}}));
+  ASSERT_EQ(rig.script.setups.size(), 2U);
+  const verification::RunnerSetup& setup = rig.script.setups[1];
+  EXPECT_EQ(setup.base.workload, "sort");
+  EXPECT_EQ(setup.base.seed, 77U);
+  EXPECT_EQ(setup.base.footprint_bytes, std::uint64_t{8} << 20U);
+  EXPECT_EQ(setup.duty, (verification::DutyCycle{3, 5}));
+  EXPECT_EQ(setup.lock, rig.worker.workload->lock) << "the lock policy is the run's";
+  EXPECT_EQ(setup.line_bytes, rig.worker.workload->line_bytes);
+}
+
+TEST(VerifiedRunControl, ASwitchKeepsThePathTheWorkloadHasAndOtherwiseTakesTheBestBothHave) {
+  Rig rig;
+  const std::optional<simd::IsaPath> vector = vector_path_of(rig.workloads);
+  if (!vector.has_value()) {
+    GTEST_SKIP() << "this build has no vector path for dense_linear";
+  }
+  rig.use_wide_probe = true;
+  rig.worker.workload->workload = "dense_linear";
+  rig.worker.workload->footprint_bytes = std::uint64_t{8} << 20U;
+  rig.worker.workload->isa = *vector;
+  rig.script.slices = {slice_of(1)};
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({1, Switch{"sort", 1, std::uint64_t{8} << 20U, 0, {}}});  // Scalar only.
+    }
+    if (slice == 2) {
+      rig.send({2, Switch{"dense_linear", 1, std::uint64_t{8} << 20U, 0, {}}});
+    }
+  };
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(rig.answers(),
+            (std::vector<ControlAck>{{1, AckStatus::kDone, ""}, {2, AckStatus::kDone, ""}}));
+  ASSERT_EQ(rig.script.setups.size(), 3U);
+  EXPECT_EQ(rig.script.setups[0].base.isa, *vector);
+  EXPECT_EQ(rig.script.setups[1].base.isa, simd::IsaPath::kScalar) << "sort has no such kernel";
+  // From scalar, which dense_linear has, the worker stays: a path is changed only
+  // where it must be, so that what is compared across a rotation is the same code.
+  EXPECT_EQ(rig.script.setups[2].base.isa, simd::IsaPath::kScalar);
+}
+
+TEST(VerifiedRunControl, ASwitchToAWorkloadThatIsNotThereIsRefusedAndTouchesNothing) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({2, Switch{"no_such", 1, 1U << 20U, 0, {}}});
+    }
+  };
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  const std::vector<ControlAck> answers = rig.answers();
+  ASSERT_EQ(answers.size(), 1U);
+  EXPECT_EQ(answers[0].status, AckStatus::kRefused);
+  EXPECT_EQ(answers[0].detail, "unknown workload: no workload named 'no_such'");
+  EXPECT_EQ(rig.script.setups.size(), 1U) << "the runner was not replaced";
+  EXPECT_EQ(rig.script.finishes, 1) << "only at the end";
+}
+
+TEST(VerifiedRunControl, ASwitchThatCannotBeMadeKeepsTheOldWorkloadRunning) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  verification::SliceReport last;
+  last.next_index = 9;
+  rig.script.final_report = last;
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({2, Switch{"sort", 1, 1, 0, {}}});  // A footprint that holds no unit.
+    }
+  };
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  const std::vector<ControlAck> answers = rig.answers();
+  ASSERT_EQ(answers.size(), 1U);
+  EXPECT_EQ(answers[0].status, AckStatus::kRefused);
+  EXPECT_EQ(answers[0].detail.substr(0, 10), "workload: ") << answers[0].detail;
+  ASSERT_EQ(rig.script.setups.size(), 2U);
+  EXPECT_EQ(rig.script.setups[1].base.workload, "compression") << "made again, as it was";
+  EXPECT_EQ(rig.script.setups[1].base.seed, 3U);
+  EXPECT_EQ(rig.script.setups[1].first_index, 9U);
+  EXPECT_GT(rig.script.slices_run, 1);
+}
+
+TEST(VerifiedRunControl, AWorkerThatCannotGoBackToWhatItWasRunningIsAFailureOfItsOwn) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.script.refuse_setup = [](const verification::RunnerSetup&) { return true; };
+      rig.send({2, Switch{"sort", 1, std::uint64_t{8} << 20U, 0, {}}});
+    }
+  };
+  auto outcome = rig.run();
+  ASSERT_FALSE(outcome.has_value());
+  EXPECT_EQ(outcome.error().stage, "restore");
+  EXPECT_NE(outcome.error().detail.find("could not go back to compression after refusing sort"),
+            std::string::npos)
+      << outcome.error().detail;
+  EXPECT_NE(outcome.error().detail.find("scripted refusal"), std::string::npos);
+}
+
+TEST(VerifiedRunControl, AReplacedRunnerFailingToFinishOrToSayItsLastWordEndsTheRunOrTheListening) {
+  {
+    Rig rig;
+    rig.script.slices = {slice_of(1)};
+    rig.script.finish_fails = true;
+    rig.send({2, Rebind{{0}}});
+    auto outcome = rig.run();
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().stage, "runner");
+    EXPECT_EQ(outcome.error().detail, "finish: scripted finish");
+  }
+  {
+    // The memory frame goes, then the controller is gone before the old runner's tally.
+    Rig rig;
+    rig.send({2, Rebind{{0}}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EPIPE}});
+    auto outcome = rig.run();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
+    EXPECT_EQ(rig.script.setups.size(), 1U);
+  }
+  {
+    // The old runner's tally is refused.
+    Rig rig;
+    rig.send({2, Rebind{{0}}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EIO}});
+    auto outcome = rig.run();
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().stage, "record channel");
+  }
+  {
+    // The new runner's memory frame is refused, and then the controller is gone.
+    Rig rig;
+    rig.send({2, Rebind{{0}}});
+    rig.syscalls.script_writes({{kEverything, 0}, {kEverything, 0}, {0, EIO}});
+    auto outcome = rig.run();
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().stage, "record channel");
+  }
+  {
+    Rig rig;
+    rig.send({2, Rebind{{0}}});
+    rig.syscalls.script_writes({{kEverything, 0}, {kEverything, 0}, {0, EPIPE}});
+    auto outcome = rig.run();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
+  }
+  {
+    // The answer is refused.
+    Rig rig;
+    rig.send({2, Rebind{{0}}});
+    rig.syscalls.script_writes({{kEverything, 0}, {kEverything, 0}, {kEverything, 0}, {0, EIO}});
+    auto outcome = rig.run();
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().stage, "record channel");
+  }
+}
+
+TEST(VerifiedRunControl, AnAnswerTheControllerWillNotHearEndsTheListeningOrTheWorker) {
+  {
+    Rig rig;
+    rig.send({1, Stop{}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EPIPE}});
+    auto outcome = rig.run();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
+    EXPECT_EQ(rig.script.finishes, 0);
+  }
+  {
+    Rig rig;
+    rig.send({1, Stop{}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EIO}});
+    auto outcome = rig.run();
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().stage, "record channel");
+  }
+  {
+    Rig rig;
+    rig.send({1, Pause{}});
+    rig.syscalls.script_writes({{kEverything, 0}, {0, EPIPE}});
+    auto outcome = rig.run();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
+  }
+}
+
+TEST(VerifiedRunControl, APipeThatCarriesNothingLikeAMessageEndsTheWorkerAsAControllerLost) {
+  Rig rig;
+  rig.syscalls.deliver_to_pipe(rig.control.read_fd, std::string(24, 'x'));
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value());
+  EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControlChannelBroken);
+  EXPECT_TRUE(controller_lost(outcome.value().outcome.reason));
+  EXPECT_EQ(rig.script.finishes, 0);
+}
+
+TEST(VerifiedRunControl, MessagesSentBeforeTheControllerClosedThePipeAreHandledFirst) {
+  Rig rig;
+  rig.send({1, Pause{}});
+  ASSERT_TRUE(rig.syscalls.close(rig.control.write_fd).has_value());
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value());
+  EXPECT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
+  EXPECT_EQ(rig.answers(), (std::vector<ControlAck>{{1, AckStatus::kDone, ""}}));
+}
+
+// A runner replaced during a run says "the whole run did not check ..." about its own
+// stretch; the worker keeps only the statements that are true of the whole run.
+std::vector<std::string> statements_made(Rig& rig) {
+  std::vector<std::string> out;
+  for (const verification::ErrorRecord& record : rig.findings()) {
+    out.push_back(std::get<verification::VerificationNotPerformed>(record).what);
+  }
+  return out;
+}
+
+verification::SliceReport three_statements() {
+  verification::SliceReport report;
+  report.records.emplace_back(unrun("oracle over compression units"));
+  report.records.emplace_back(unrun("input-integrity bracket over compression units"));
+  report.records.emplace_back(unrun("something else"));
+  return report;
+}
+
+TEST(VerifiedRunControl, ARunnerReplacedMidRunMakesNoStatementOfWhatTheWholeRunDidNotCheck) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};  // Every slice compares one block and brackets one unit.
+  rig.script.final_report = three_statements();
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({1, Rebind{{0}}});
+    }
+  };
+  ASSERT_TRUE(rig.run().has_value());
+  EXPECT_EQ(statements_made(rig), (std::vector<std::string>{"something else", "something else"}))
+      << "one for each runner; the two statements about the whole run are dropped, at the "
+         "replacement because the run is not over and at the end because it checked";
+}
+
+TEST(VerifiedRunControl, AFindingThatIsNoStatementOfAnUnrunCheckPassesEveryReplacementUntouched) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  verification::ExactBitCorruption wrong;
+  wrong.provenance.workload = "compression";
+  wrong.provenance.iteration = 3;
+  wrong.provenance.logical_cpu = 0;
+  wrong.check = "decoded output against input";
+  verification::SliceReport last;
+  last.records.emplace_back(wrong);
+  rig.script.final_report = last;
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({1, Rebind{{0}}});
+    }
+  };
+  ASSERT_TRUE(rig.run().has_value());
+  std::size_t kept = 0;
+  for (const verification::ErrorRecord& record : rig.findings()) {
+    kept += std::holds_alternative<verification::ExactBitCorruption>(record) ? 1U : 0U;
+  }
+  EXPECT_EQ(kept, 2U) << "one from each runner's last report";
+}
+
+TEST(VerifiedRunControl, AWholeRunThatCheckedNothingStatesItAtTheEndAndNotBefore) {
+  Rig rig;
+  rig.script.final_report = three_statements();
+  rig.send({1, Rebind{{0}}});  // Before any slice: the first runner ran nothing.
+  rig.send({2, Pause{}});
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value());
+  EXPECT_EQ(statements_made(rig),
+            (std::vector<std::string>{"something else", "oracle over compression units",
+                                      "input-integrity bracket over compression units",
+                                      "something else"}))
+      << "at the replacement only what is not about the whole run; at the end all three, "
+         "because nothing was compared in the whole run";
+}
+
+TEST(VerifiedRunControl, EachStatementIsKeptOrDroppedByItsOwnFigure) {
+  {
+    Rig rig;  // Blocks compared, nothing bracketed.
+    verification::SliceReport work = slice_of(1);
+    work.tally.integrity_checked = 0;
+    rig.script.slices = {work};
+    rig.script.final_report = three_statements();
+    ASSERT_TRUE(rig.run().has_value());
+    EXPECT_EQ(statements_made(rig),
+              (std::vector<std::string>{"input-integrity bracket over compression units",
+                                        "something else"}));
+  }
+  {
+    Rig rig;  // Units bracketed, no block compared.
+    verification::SliceReport work = slice_of(1);
+    work.tally.oracle_blocks = 0;
+    rig.script.slices = {work};
+    rig.script.final_report = three_statements();
+    ASSERT_TRUE(rig.run().has_value());
+    EXPECT_EQ(statements_made(rig),
+              (std::vector<std::string>{"oracle over compression units", "something else"}));
   }
 }
 

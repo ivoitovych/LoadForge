@@ -7,8 +7,11 @@ classes  = ["P1", "P3"]
 tiers    = ["T1"]
 provides = ["RegistryContract"]
 note     = """
-The registry of every workload in the build, by name (compression, \
-dense_linear, monte_carlo, sort). P1: a sorted table, so names() is sorted and \
+The registry of every workload in the build, by name (all eleven: \
+adaptive_mesh, compression, dense_linear, fft, graph, monte_carlo, particles, \
+raytrace, sort, sparse, stencil; each seven that had none gained a descriptor \
+function its create() uses, so the registry can describe a workload without \
+making one). P1: a sorted table, so names() is sorted and \
 without duplicates by construction, and each name creates the workload whose \
 descriptor carries that name (the contract's suite, run against the real \
 registry). P3: an unknown name, the empty name and a name in the wrong case are \

@@ -73,9 +73,8 @@ void sweep_tile(void* context, std::size_t index, std::size_t /*slot*/) noexcept
 class Stencil final : public Workload {
  public:
   Stencil(const WorkloadConfig& config, std::uint32_t tile_edge, SweepKernel kernel,
-          std::uint64_t units, simd::IsaSet paths)
-      : descriptor_{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
-                    verification::Contract::kBounded, paths},
+          std::uint64_t units)
+      : descriptor_(workload_descriptor()),
         plan_{kInputBytes,
               kOutputBytes,
               kGridBytes,
@@ -135,6 +134,11 @@ class Stencil final : public Workload {
 
 }  // namespace
 
+Descriptor workload_descriptor() {
+  return Descriptor{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
+                    verification::Contract::kBounded, simd::kernel_paths(kernel_table())};
+}
+
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   const std::uint32_t tile_edge =
       config.decomposition == 0 ? kDefaultTileEdge : config.decomposition;
@@ -157,8 +161,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
                              " bytes holds no stencil unit (" +
                              std::to_string(kInputBytes + kOutputBytes) + " bytes each)"};
   }
-  return std::unique_ptr<Workload>(
-      std::make_unique<Stencil>(config, tile_edge, kernel, units, simd::kernel_paths(table)));
+  return std::unique_ptr<Workload>(std::make_unique<Stencil>(config, tile_edge, kernel, units));
 }
 
 }  // namespace loadforge::workloads::stencil

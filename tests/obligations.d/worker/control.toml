@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Ledger fragment (ADR 0004): this file declares src/worker/control and nothing else.
+
+[[module]]
+path     = "src/worker/control"
+classes  = ["P1", "P3", "P4"]
+tiers    = ["T1", "T5"]
+provides = ["ControlCodecContract"]
+note     = """
+The encodings of worker/control.hpp, the bytes both ends of the control pipe \
+link: a message is the version, the command's index plus one and a sequence \
+number, then the command's fields; an acknowledgement is the version, 0x80, \
+the sequence, a status and a text; all little-endian, text as a length and \
+its bytes. P1: the layout, pinned by bytes made with Python's struct from the \
+documented layout (not by the encoder), and the provider's suite for the \
+codec run against it. P3: every boundary of the rules the header states -- a \
+busy share of 0 and 1001, a period of 0 and -1, an empty or unordered or \
+duplicated CPU list, a CPU of 1024, a bad workload name, a footprint of 0 -- \
+refused as invalid and never decoded, each strict prefix of each message \
+refused as truncated, each extra byte as trailing, an unknown version or kind \
+as such, and a count or a text length that promises more than the bytes hold \
+refused before anything is allocated for it. P4: a message whose bytes went \
+wrong is never guessed at: 2000 arbitrary byte strings through the contract's \
+suite, and every single-bit flip of every valid message, each either another \
+message the rules allow or a refusal that names the rule (T5). The \
+behaviour the messages ask for is the worker's (src/worker) and the \
+controller's (src/controller), tested against real workers in \
+tests/supervision."""

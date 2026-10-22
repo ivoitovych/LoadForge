@@ -38,8 +38,8 @@ jobs:
         # to read whole; the failed tests run once more at the end, so their
         # output is the last thing in the log. The step fails either way.
         run: |
-          ctest --preset simd-scalar || {
-            ctest --preset simd-scalar --rerun-failed --output-on-failure
+          ctest --preset simd-scalar --timeout 900 || {
+            ctest --preset simd-scalar --timeout 900 --rerun-failed --output-on-failure
             exit 1
           }
       - name: No x86 intrinsics in portable code

@@ -68,6 +68,10 @@ inline constexpr std::uint64_t kOperationsPerTerm = 8;
 /// Plan::operations: a typical unit's terms and their summation, one add each.
 inline constexpr std::uint64_t kOperations = kTypicalLeaves * kHotspots * (kOperationsPerTerm + 1);
 
+/// What every adaptive mesh workload says about itself, without creating one: the
+/// descriptor of any workload create() returns (Registry::descriptor).
+[[nodiscard]] Descriptor workload_descriptor();
+
 /// The workload for `config`.
 [[nodiscard]] core::Result<std::unique_ptr<Workload>, WorkloadError> create(
     const WorkloadConfig& config);

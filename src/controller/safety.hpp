@@ -52,9 +52,12 @@ struct LimitStatus {
   std::string name;
   bool enforced = false;
   std::string note;
-
-  [[nodiscard]] friend bool operator==(const LimitStatus&, const LimitStatus&) = default;
 };
+
+/// Every member alike. Defined once, in safety.cpp: a comparison defaulted in a
+/// header is emitted by every test that compares what holds one, and the
+/// coverage report cannot join the copies (docs/JOURNAL.md §1.22).
+[[nodiscard]] bool operator==(const LimitStatus& lhs, const LimitStatus& rhs);
 
 /// The limits a run states, each with its enforcement. The duration is always
 /// enforced (it is the controller's deadline); memory is enforced against a

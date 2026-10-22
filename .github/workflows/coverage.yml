@@ -47,8 +47,8 @@ jobs:
         # to read whole; the failed tests run once more at the end, so their
         # output is the last thing in the log. The step fails either way.
         run: |
-          ctest --preset coverage || {
-            ctest --preset coverage --rerun-failed --output-on-failure
+          ctest --preset coverage --timeout 900 || {
+            ctest --preset coverage --timeout 900 --rerun-failed --output-on-failure
             exit 1
           }
       - name: Coverage-gate tooling tests

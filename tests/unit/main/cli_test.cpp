@@ -29,6 +29,7 @@
 #include "topology/snapshot.hpp"
 #include "unit/controller/machine_tree.hpp"
 #include "unit/main/cli_support.hpp"
+#include "worker/control.hpp"
 #include "worker/entry.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
@@ -181,7 +182,9 @@ TEST(Cli, TheWorkerSwitchRunsARealWorkerInThisProcess) {
   auto records = syscalls.create_pipe();
   auto control = syscalls.create_pipe();
   ASSERT_TRUE(records.has_value() && control.has_value());
-  const std::array<std::byte, 1> stop{std::byte{'s'}};
+  const std::vector<std::byte> stop_payload =
+      worker::encode(worker::ControlMessage{1, worker::Stop{}});
+  const std::vector<std::byte> stop = ipc::encode(worker::kControlFrameType, stop_payload).value();
   ASSERT_TRUE(syscalls.write(control.value().write_fd, stop).has_value());
 
   worker::WorkerArgs args;
@@ -207,11 +210,15 @@ TEST(Cli, TheWorkerSwitchRunsARealWorkerInThisProcess) {
     ASSERT_TRUE(drained.has_value()) << describe(drained.error());
     received.insert(received.end(), drained.value().records.begin(), drained.value().records.end());
   }
-  ASSERT_EQ(received.size(), 2U);
+  ASSERT_EQ(received.size(), 3U);
   EXPECT_EQ(received[0].type, static_cast<std::uint16_t>(ipc::RecordType::kStarted));
-  EXPECT_EQ(received[1].type, static_cast<std::uint16_t>(ipc::RecordType::kFinished));
+  EXPECT_EQ(received[1].type, worker::kControlAckFrameType) << "the stop is answered";
+  const auto answered = worker::decode_ack(received[1].payload);
+  ASSERT_TRUE(answered.has_value());
+  EXPECT_EQ(answered.value(), (worker::ControlAck{1, worker::AckStatus::kDone, ""}));
+  EXPECT_EQ(received[2].type, static_cast<std::uint16_t>(ipc::RecordType::kFinished));
   std::string summary;
-  for (const std::byte b : received[1].payload) {
+  for (const std::byte b : received[2].payload) {
     summary.push_back(static_cast<char>(std::to_integer<unsigned char>(b)));
   }
   EXPECT_EQ(summary.substr(0, 31), "the controller asked for a stop");
@@ -454,11 +461,12 @@ TEST(Cli, DiagnosticsGoToStderrNotStdout) {
 // --- stress --test ----------------------------------------------------------------------
 
 TEST(CliStressTest, AnUnknownWorkloadIsAUsageErrorThatListsThoseThisBuildHas) {
-  const Outcome r = invoke({"stress", "--test", "fft"});
+  const Outcome r = invoke({"stress", "--test", "ffts"});
   EXPECT_EQ(r.code, 2);
   EXPECT_EQ(r.err,
-            "loadforge: stress --test: no workload named 'fft'; this build has: compression "
-            "dense_linear monte_carlo sort\n");
+            "loadforge: stress --test: no workload named 'ffts'; this build has: adaptive_mesh "
+            "compression dense_linear fft graph monte_carlo particles raytrace sort sparse "
+            "stencil\n");
   EXPECT_TRUE(r.out.empty());
 }
 

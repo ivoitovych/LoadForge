@@ -1,0 +1,123 @@
+workers 3
+phase r0 mixed
+workload adaptive_mesh+sparse+stencil
+start sparse 8388608
+start stencil 4194304
+start adaptive_mesh 4194304
+step 10000000000 | r1 compute-heavy | fft+monte_carlo+particles
+  worker 0: switch fft 9854927975511011478 8388608 0 1 1
+  worker 1: switch monte_carlo 17624447543238814837 8388608 0 1 1
+  worker 2: switch particles 413692723168896279 4194304 0 1 1
+step 20000000000 | r2 memory-heavy | graph+sort+sparse
+  worker 0: switch graph 1761185654820637924 4194304 0 1 1
+  worker 1: switch sort 17385467389636420995 4194304 0 1 1
+  worker 2: switch sparse 11408112720953427127 4194304 0 1 1
+step 30000000000 | r3 balanced | fft+particles+sort
+  worker 0: switch fft 15719068116733518349 8388608 0 1 1
+  worker 1: switch sort 7695571476520293446 8388608 0 1 1
+  worker 2: switch particles 12448495686427898820 4194304 0 1 1
+step 40000000000 | r4 all-join | fft
+  worker 0: switch fft 9474819604037696116 8388608 0 1 1
+  worker 1: switch fft 8242104094059529860 8388608 0 1 1
+  worker 2: switch fft 11275576399276434784 4194304 0 1 1
+step 50000000000 | r5 mixed | raytrace+sort+sparse
+  worker 0: switch raytrace 2493164125877801790 8388608 0 1 1
+  worker 1: switch sort 11241863595996380363 8388608 0 1 1
+  worker 2: switch sparse 15383235994944425874 4194304 0 1 1
+step 60000000000 | r6 compute-heavy | monte_carlo+particles+raytrace
+  worker 0: switch monte_carlo 17364350925989088320 4194304 0 1 1
+  worker 1: switch particles 3645727928653046484 8388608 0 1 1
+  worker 2: switch raytrace 10159583671098731144 4194304 0 1 1
+step 70000000000 | r7 memory-heavy | graph+sort+sparse
+  worker 0: switch graph 17427177189454211407 8388608 0 1 1
+  worker 1: switch sort 3992242644002338546 8388608 0 1 1
+  worker 2: switch sparse 3025201402914384313 4194304 0 1 1
+step 80000000000 | r8 balanced | dense_linear+particles+stencil
+  worker 0: switch particles 689726702693459060 8388608 0 1 1
+  worker 1: switch stencil 3054503974997737091 4194304 0 1 1
+  worker 2: switch dense_linear 6224355405173376952 4194304 0 1 1
+step 90000000000 | r9 all-join | monte_carlo
+  worker 0: switch monte_carlo 18429199387789070714 8388608 0 1 1
+  worker 1: switch monte_carlo 5366753725181089609 8388608 0 1 1
+  worker 2: switch monte_carlo 13927256911453411706 4194304 0 1 1
+step 100000000000 | r10 mixed | monte_carlo+particles+raytrace
+  worker 0: switch monte_carlo 6644257618832417958 4194304 0 1 1
+  worker 1: switch particles 17350191049529361905 8388608 0 1 1
+  worker 2: switch raytrace 11411696860690454711 4194304 0 1 1
+step 110000000000 | r11 compute-heavy | dense_linear+fft+raytrace
+  worker 0: switch raytrace 6081523211804456990 4194304 0 1 1
+  worker 1: switch dense_linear 18350025841634170178 8388608 0 1 1
+  worker 2: switch fft 702225648002821267 8388608 0 1 1
+step 120000000000 | r12 memory-heavy | sort+sparse+stencil
+  worker 0: switch sort 1861276225333296338 8388608 0 1 1
+  worker 1: switch sparse 15190667113129088467 8388608 0 1 1
+  worker 2: switch stencil 6883207756229528636 8388608 0 1 1
+step 130000000000 | r13 balanced | dense_linear+particles+stencil
+  worker 0: switch particles 15273145749947910189 4194304 0 1 1
+  worker 1: switch stencil 3401848208160761554 8388608 0 1 1
+  worker 2: switch dense_linear 3143100222576475988 4194304 0 1 1
+step 140000000000 | r14 all-join | dense_linear
+  worker 0: switch dense_linear 5444601058109002996 8388608 0 1 1
+  worker 1: switch dense_linear 9212525862636689655 4194304 0 1 1
+  worker 2: switch dense_linear 9064815629897147751 4194304 0 1 1
+step 150000000000 | r15 mixed | particles+raytrace+sort
+  worker 0: switch particles 12719450250304381366 4194304 0 1 1
+  worker 1: switch raytrace 16802900913353993029 4194304 0 1 1
+  worker 2: switch sort 8274738106395598886 8388608 0 1 1
+step 160000000000 | r16 compute-heavy | dense_linear+fft+raytrace
+  worker 0: switch raytrace 1261604117074006198 4194304 0 1 1
+  worker 1: switch dense_linear 8728782434741016282 8388608 0 1 1
+  worker 2: switch fft 14788177803231073857 4194304 0 1 1
+step 170000000000 | r17 memory-heavy | graph+sort+sparse
+  worker 0: switch graph 664796015041091408 4194304 0 1 1
+  worker 1: switch sort 5412351395203879243 8388608 0 1 1
+  worker 2: switch sparse 4277368230563838977 4194304 0 1 1
+step 180000000000 | r18 balanced | dense_linear+particles+stencil
+  worker 0: switch particles 12696804190375333609 8388608 0 1 1
+  worker 1: switch stencil 13018349698565226846 4194304 0 1 1
+  worker 2: switch dense_linear 8834753890903537789 8388608 0 1 1
+step 190000000000 | r19 all-join | dense_linear
+  worker 0: switch dense_linear 745910596927844227 4194304 0 1 1
+  worker 1: switch dense_linear 966535691533904012 8388608 0 1 1
+  worker 2: switch dense_linear 11476194635470570522 4194304 0 1 1
+step 200000000000 | r20 mixed | raytrace+sort+sparse
+  worker 0: switch raytrace 3781242939002621826 4194304 0 1 1
+  worker 1: switch sort 10360340572417841057 4194304 0 1 1
+  worker 2: switch sparse 15195724821814603995 4194304 0 1 1
+step 210000000000 | r21 compute-heavy | dense_linear+fft+raytrace
+  worker 0: switch raytrace 7137339821024421887 8388608 0 1 1
+  worker 1: switch dense_linear 3146460146162883453 8388608 0 1 1
+  worker 2: switch fft 3653141799313380488 4194304 0 1 1
+step 220000000000 | r22 memory-heavy | graph+sort+sparse
+  worker 0: switch graph 13808937585287997310 4194304 0 1 1
+  worker 1: switch sort 7723670269570636101 8388608 0 1 1
+  worker 2: switch sparse 5291926903988110895 8388608 0 1 1
+step 230000000000 | r23 balanced | monte_carlo+raytrace+sparse
+  worker 0: switch monte_carlo 6651507898213621736 4194304 0 1 1
+  worker 1: switch sparse 5945067557552828806 8388608 0 1 1
+  worker 2: switch raytrace 3678110272113922362 4194304 0 1 1
+step 240000000000 | r24 all-join | graph
+  worker 0: switch graph 17878333261827950368 4194304 0 1 1
+  worker 1: switch graph 7234731228703352168 4194304 0 1 1
+  worker 2: switch graph 15263159786754572519 8388608 0 1 1
+step 250000000000 | r25 mixed | dense_linear+fft+graph
+  worker 0: switch dense_linear 16868302191608450270 8388608 0 1 1
+  worker 1: switch fft 13521436267457241119 8388608 0 1 1
+  worker 2: switch graph 10334943602631087775 4194304 0 1 1
+step 260000000000 | r26 compute-heavy | monte_carlo+particles+raytrace
+  worker 0: switch monte_carlo 13600131658357049982 4194304 0 1 1
+  worker 1: switch particles 14221418362697958464 8388608 0 1 1
+  worker 2: switch raytrace 257625603772210363 8388608 0 1 1
+step 270000000000 | r27 memory-heavy | graph+sort+sparse
+  worker 0: switch graph 2693997129347898375 4194304 0 1 1
+  worker 1: switch sort 12883845040088987959 4194304 0 1 1
+  worker 2: switch sparse 740029219246985202 4194304 0 1 1
+step 280000000000 | r28 balanced | fft+particles+sort
+  worker 0: switch fft 10168630350246265540 8388608 0 1 1
+  worker 1: switch sort 2302928617605357655 8388608 0 1 1
+  worker 2: switch particles 10121974273954287436 8388608 0 1 1
+step 290000000000 | r29 all-join | particles
+  worker 0: switch particles 5386298850708085170 8388608 0 1 1
+  worker 1: switch particles 11033622429021231052 4194304 0 1 1
+  worker 2: switch particles 2349871853679559044 8388608 0 1 1
+digest c47ab111

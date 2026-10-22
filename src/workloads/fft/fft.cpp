@@ -30,10 +30,8 @@ constexpr std::uint64_t kOperations = 5 * kPoints * 12;
 
 class FftWorkload final : public Workload {
  public:
-  FftWorkload(Plan plan, std::uint32_t radix, StageKernel kernel, std::uint64_t seed,
-              simd::IsaSet paths)
-      : descriptor_{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
-                    verification::Contract::kBounded, paths},
+  FftWorkload(Plan plan, std::uint32_t radix, StageKernel kernel, std::uint64_t seed)
+      : descriptor_(workload_descriptor()),
         plan_(plan),
         radix_(radix),
         kernel_(kernel),
@@ -64,6 +62,14 @@ class FftWorkload final : public Workload {
 
 }  // namespace
 
+Descriptor workload_descriptor() {
+  // Both radices have the paths the machine has: a path belongs to the build,
+  // not to the stage.
+  return Descriptor{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
+                    verification::Contract::kBounded,
+                    simd::kernel_paths(stage_kernels(kDefaultRadix))};
+}
+
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   const std::uint32_t radix = config.decomposition == 0 ? kDefaultRadix : config.decomposition;
   if (!is_radix(radix)) {
@@ -89,8 +95,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
                   kOperations};
   // The descriptor is built inside the constructor, so no temporary with a
   // destructor is alive across the allocation (journal 1.13).
-  return std::unique_ptr<Workload>(
-      std::make_unique<FftWorkload>(plan, radix, kernel, config.seed, simd::kernel_paths(kernels)));
+  return std::unique_ptr<Workload>(std::make_unique<FftWorkload>(plan, radix, kernel, config.seed));
 }
 
 }  // namespace loadforge::workloads::fft

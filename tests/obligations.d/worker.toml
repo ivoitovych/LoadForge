@@ -4,7 +4,7 @@
 [[module]]
 path    = "src/worker"
 classes = ["P1", "P2", "P3", "P4", "P6"]
-tiers   = ["T1", "T2", "T8"]
+tiers   = ["T1", "T2", "T7", "T8"]
 consumes = ["SliceRunnerContract", "RecordCodecContract"]
 note    = """
 From M2a a worker runs a real workload: the null workload's loop with the work \
@@ -45,4 +45,21 @@ call. T8: the real binary refuses a misused switch with the bad-arguments code \
 and names the argument; and the CLI tests run a real worker in-process, over \
 the real seam, against a memfd region and two pipes the test holds as the \
 controller. The worker under a real controller is the supervision tier's \
-(T7), which lands with the controller."""
+(T7), which lands with the controller. \
+\
+Since M5 the worker also obeys worker/control.hpp: the control pipe carries \
+framed messages (type 32) and the worker answers each on the record pipe \
+(type 33). P4: a frame torn at the end of the pipe is a hang-up, any other \
+malformed frame or an undecodable payload leaves the worker unable to be told \
+anything, and it leaves as it would from a controller that is gone \
+(kControlChannelBroken). P6: a tick that handled a message runs no slice; a \
+paused worker beats with its progress unchanged and waits on the pipe; a duty \
+cycle is busy for a share of its period and waits the rest; a Rebind or a \
+Switch closes the runner (its records and tally sent), releases it in reverse \
+order of construction, and prepares the next from the next unit index; if \
+that is refused the old one is prepared again and the command is answered \
+refused with the reason, and only if that also fails is it the worker's own \
+failure (stage "restore"). The tally is cumulative across replacements, and a \
+check that could not be made is stated once for the whole run, by the last \
+runner, never as clean. T7: every message against real worker processes, \
+N = 2 (tests/supervision/control_test.cpp)."""

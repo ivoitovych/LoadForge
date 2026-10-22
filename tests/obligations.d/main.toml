@@ -70,4 +70,16 @@ expected to fail, each place two components read one contract differently. \
 \
 The six contracts consumed are run against this module's own mocks \
 (tests/unit/main/contract_mocks_test.cpp): the sampler, the timeline, the \
-source, the summarizer, the verdict and the result writer."""
+source, the summarizer, the verdict and the result writer. \
+\
+Since M5: `stress --test mixed` and `--test cycling` (with --rotation, \
+--cycle, --dwell, --workload), `--journal FILE` on both stress forms, and \
+`loadforge journal FILE`. P1: each option refused by name when misused, the \
+defaults derived from the duration. P2: every file operation around a journal \
+(exists, rename, remove, open, read) forced to fail through the seam \
+(journal_rig_test.cpp). P3: a rotation or dwell that would make more than \
+100000 steps is refused before any worker is started. P6: a journal a \
+previous run left abnormally (killed, torn, corrupt) is kept as FILE.N and \
+reported, never overwritten, a clean one is removed, and the forked child of \
+a failed exec never closes the journal it shares with its parent. T8: the \
+shipped binary (tests/integration/m5)."""

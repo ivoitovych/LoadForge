@@ -22,6 +22,8 @@
 #include "platform/process.hpp"
 #include "platform/syscalls.hpp"
 #include "support/fake_syscalls.hpp"
+#include "unit/worker/control_frames.hpp"
+#include "worker/control.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
 #include "worker/scheduler.hpp"
@@ -435,7 +437,8 @@ TEST(WorkerRunTest, AControllerThatIsGoneIsItsOwnExitCodeNotACompletion) {
 
 TEST(WorkerRunTest, AStopRequestIsACompletion) {
   Rig rig;
-  rig.syscalls.deliver_to_pipe(rig.control.read_fd, "x");
+  rig.syscalls.deliver_to_pipe(rig.control.read_fd,
+                               worker_testing::control_frame(ControlMessage{1, Stop{}}));
   EXPECT_EQ(rig.run(rig.args()), static_cast<int>(WorkerExit::kCompleted));
   EXPECT_EQ(rig.received().back(),
             (std::pair<std::uint16_t, std::string>{

@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "worker/scheduler.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "core/result.hpp"
 #include "platform/clock.hpp"
 #include "platform/syscall_error.hpp"
 #include "platform/syscalls.hpp"
+#include "worker/control.hpp"
+#include "worker/control_channel.hpp"
 #include "worker/ipc/heartbeat.hpp"
 
 namespace loadforge::worker {
@@ -30,6 +32,8 @@ std::string_view describe(StopReason reason) noexcept {
       return "the controller's heartbeat went stale";
     case StopReason::kControllerUnreadable:
       return "the controller's heartbeat could not be read";
+    case StopReason::kControlChannelBroken:
+      return "the controller's control pipe carried something that is not a message";
     case StopReason::kRunnerStopped:
       return "the verification runner stopped the run";
   }
@@ -38,7 +42,7 @@ std::string_view describe(StopReason reason) noexcept {
 
 bool controller_lost(StopReason reason) noexcept {
   return reason == StopReason::kControllerHungUp || reason == StopReason::kControllerStale ||
-         reason == StopReason::kControllerUnreadable;
+         reason == StopReason::kControllerUnreadable || reason == StopReason::kControlChannelBroken;
 }
 
 std::string describe(const WorkerError& error) { return error.stage + ": " + error.detail; }
@@ -51,6 +55,39 @@ WorkerError error_at(std::string_view stage, std::string detail) {
   return WorkerError{std::string{stage}, std::move(detail)};
 }
 
+/// Why the null workload refuses a command: it runs no slices.
+std::string nothing_to(const Command& command) {
+  std::string text = "the null workload runs no slices: ";
+  text += command_name(command);
+  return text;
+}
+
+/// The null workload's answer to every message one look found, in order: a Stop is
+/// answered Done and ends the run, anything else is refused, because there is
+/// nothing here to pause, slow down, move or switch. The reason to leave, if the
+/// messages gave one.
+core::Result<std::optional<StopReason>, WorkerError> answer_all(
+    ControlChannel& channel, const std::vector<ControlMessage>& messages) {
+  for (const ControlMessage& message : messages) {
+    const bool stop = std::holds_alternative<Stop>(message.command);
+    std::string reason;
+    if (!stop) {
+      reason = nothing_to(message.command);
+    }
+    const Delivery sent =
+        channel.answer(message.sequence, stop ? AckStatus::kDone : AckStatus::kRefused, reason);
+    if (sent.failure.has_value()) {
+      return *sent.failure;
+    }
+    if (sent.controller_gone) {
+      return std::optional<StopReason>{StopReason::kControllerHungUp};
+    }
+    if (stop) {
+      return std::optional<StopReason>{StopReason::kStopRequested};
+    }
+  }
+  return std::optional<StopReason>{};
+}
 }  // namespace
 
 std::optional<StopReason> ControllerWatch::gone(const platform::TimePoint& now,
@@ -80,32 +117,6 @@ std::optional<StopReason> ControllerWatch::gone(const platform::TimePoint& now,
   return std::nullopt;
 }
 
-core::Result<std::optional<StopReason>, WorkerError> ControllerWatch::wait(int interval_ms) {
-  const std::vector<int> watched{session_->control_fd};
-  auto ready = syscalls_->poll_readable(watched, interval_ms);
-  if (!ready.has_value()) {
-    return error_at("control pipe", describe(ready.error()));
-  }
-  const platform::Readiness& control = ready.value().front();
-  if (control.hung_up || control.error || control.invalid) {
-    return std::optional<StopReason>{StopReason::kControllerHungUp};
-  }
-  if (!control.readable) {
-    return std::optional<StopReason>{};  // The interval passed.
-  }
-  // A byte is a stop request; end of file is the writer gone, which poll
-  // reports as readable on some kernels before it reports the hang-up.
-  std::array<char, 1> byte{};
-  auto count = syscalls_->read(session_->control_fd, byte.data(), byte.size());
-  if (!count.has_value()) {
-    return error_at("control pipe", describe(count.error()));
-  }
-  if (count.value() == 0) {
-    return std::optional<StopReason>{StopReason::kControllerHungUp};
-  }
-  return std::optional<StopReason>{StopReason::kStopRequested};
-}
-
 core::Result<Outcome, WorkerError> NullWorkload::run() {
   platform::Clock clock(*syscalls_);
   auto started = clock.now();
@@ -117,7 +128,8 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
   const auto interval_ms =
       static_cast<int>(session_.pacing.interval_ns / kNanosecondsPerMillisecond);
   std::uint64_t progress = 0;
-  ControllerWatch watch(*syscalls_, session_, started.value().running_ns);
+  ControllerWatch watch(session_, started.value().running_ns);
+  ControlChannel channel(*syscalls_, session_.control_fd, *session_.records);
 
   while (true) {
     auto now = clock.now();
@@ -140,13 +152,21 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
     if (const auto gone = watch.gone(now.value(), elapsed_ns); gone.has_value()) {
       return Outcome{*gone, progress, elapsed_ns};
     }
-    auto waited = watch.wait(interval_ms);
-    if (!waited.has_value()) {
-      return waited.error();
+    auto looked = channel.look(interval_ms);
+    if (!looked.has_value()) {
+      return looked.error();
     }
-    const std::optional<StopReason> stopped = waited.value();
-    if (stopped.has_value()) {
-      return Outcome{*stopped, progress, elapsed_ns};
+    auto answered = answer_all(channel, looked.value().messages);
+    if (!answered.has_value()) {
+      return answered.error();
+    }
+    const std::optional<StopReason> leaving = answered.value();
+    if (leaving.has_value()) {
+      return Outcome{*leaving, progress, elapsed_ns};
+    }
+    const std::optional<StopReason> lost = looked.value().lost;
+    if (lost.has_value()) {
+      return Outcome{*lost, progress, elapsed_ns};
     }
     ++progress;
   }

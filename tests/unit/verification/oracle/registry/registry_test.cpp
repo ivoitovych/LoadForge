@@ -75,10 +75,10 @@ TEST(BuiltinOracleRegistryTable, AnOraclesOwnRefusalIsPassedOnUnchanged) {
 
 TEST(BuiltinOracleRegistryTable, AnUnknownNameIsNamedInTheRefusal) {
   const BuiltinOracleRegistry oracles;
-  const auto created = oracles.create("fft", WorkloadConfig{}, workloads::Plan{});
+  const auto created = oracles.create("teapot", WorkloadConfig{}, workloads::Plan{});
   ASSERT_FALSE(created.has_value());
   EXPECT_EQ(created.error().fault, OracleFault::kUnknownWorkload);
-  EXPECT_NE(created.error().detail.find("'fft'"), std::string::npos);
+  EXPECT_NE(created.error().detail.find("'teapot'"), std::string::npos);
 }
 
 }  // namespace

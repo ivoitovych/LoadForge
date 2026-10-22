@@ -115,6 +115,11 @@ class ParticlesWorkload final : public Workload {
 
 }  // namespace
 
+Descriptor workload_descriptor() {
+  return Descriptor{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
+                    verification::Contract::kBounded, simd::kernel_paths(cell_kernels())};
+}
+
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   const std::uint32_t cells =
       config.decomposition == 0 ? kDefaultCellsPerCutoff : config.decomposition;
@@ -154,8 +159,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
   // Candidate pairs: each particle meets the particles of the cells it looks
   // at, kParticles / grid.cells of them in a cell on average.
   plan.operations = kParticles * kParticles * visited_cells / grid.cells * kOperationsPerPair;
-  Descriptor descriptor{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
-                        verification::Contract::kBounded, simd::kernel_paths(table)};
+  Descriptor descriptor = workload_descriptor();
   return std::unique_ptr<Workload>(
       std::make_unique<ParticlesWorkload>(config, grid, kernel, plan, std::move(descriptor)));
 }

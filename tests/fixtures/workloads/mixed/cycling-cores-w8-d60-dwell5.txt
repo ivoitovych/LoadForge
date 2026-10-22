@@ -1,0 +1,78 @@
+workers 8
+phase run
+workload cycling cores
+step 0 | c0 1 of 8 | cycling cores
+  worker 1: pause
+  worker 2: pause
+  worker 3: pause
+  worker 4: pause
+  worker 5: pause
+  worker 6: pause
+  worker 7: pause
+step 5000000000 | c1 4 of 8 | cycling cores
+  worker 1: resume
+  worker 2: resume
+  worker 3: resume
+step 10000000000 | c2 8 of 8 | cycling cores
+  worker 4: resume
+  worker 5: resume
+  worker 6: resume
+  worker 7: resume
+step 15000000000 | c3 2 of 8 | cycling cores
+  worker 2: pause
+  worker 3: pause
+  worker 4: pause
+  worker 5: pause
+  worker 6: pause
+  worker 7: pause
+step 20000000000 | c4 8 of 8 | cycling cores
+  worker 2: resume
+  worker 3: resume
+  worker 4: resume
+  worker 5: resume
+  worker 6: resume
+  worker 7: resume
+step 25000000000 | c5 1 of 8 | cycling cores
+  worker 1: pause
+  worker 2: pause
+  worker 3: pause
+  worker 4: pause
+  worker 5: pause
+  worker 6: pause
+  worker 7: pause
+step 30000000000 | c6 4 of 8 | cycling cores
+  worker 1: resume
+  worker 2: resume
+  worker 3: resume
+step 35000000000 | c7 8 of 8 | cycling cores
+  worker 4: resume
+  worker 5: resume
+  worker 6: resume
+  worker 7: resume
+step 40000000000 | c8 2 of 8 | cycling cores
+  worker 2: pause
+  worker 3: pause
+  worker 4: pause
+  worker 5: pause
+  worker 6: pause
+  worker 7: pause
+step 45000000000 | c9 8 of 8 | cycling cores
+  worker 2: resume
+  worker 3: resume
+  worker 4: resume
+  worker 5: resume
+  worker 6: resume
+  worker 7: resume
+step 50000000000 | c10 1 of 8 | cycling cores
+  worker 1: pause
+  worker 2: pause
+  worker 3: pause
+  worker 4: pause
+  worker 5: pause
+  worker 6: pause
+  worker 7: pause
+step 55000000000 | c11 4 of 8 | cycling cores
+  worker 1: resume
+  worker 2: resume
+  worker 3: resume
+digest 1fecdc26

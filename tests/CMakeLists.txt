@@ -15,8 +15,12 @@ add_executable(loadforge_unit_tests
   unit/main/telemetry_rig_test.cpp
   unit/main/cli_telemetry_test.cpp
   unit/main/run_result_test.cpp
+  unit/main/journal_rig_test.cpp
+  unit/main/schedules_test.cpp
+  unit/main/cli_schedule_test.cpp
   unit/main/contract_mocks_test.cpp
   unit/controller/contract_mocks_test.cpp
+  unit/controller/journal_model_test.cpp
   unit/controller/orchestration_telemetry_test.cpp
   unit/config/config_test.cpp
   unit/platform/syscall_error_test.cpp
@@ -37,6 +41,8 @@ add_executable(loadforge_unit_tests
   unit/worker/ipc/heartbeat_test.cpp
   unit/worker/ipc/record_test.cpp
   unit/worker/scheduler_test.cpp
+  unit/worker/duty_test.cpp
+  unit/worker/control_channel_test.cpp
   unit/worker/entry_test.cpp
   unit/worker/model_runner_test.cpp
   unit/worker/verified_run_test.cpp

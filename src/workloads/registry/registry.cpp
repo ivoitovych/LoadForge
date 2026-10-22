@@ -9,12 +9,26 @@
 #include <vector>
 
 #include "core/result.hpp"
+#include "workloads/adaptive_mesh/adaptive_mesh.hpp"
+#include "workloads/adaptive_mesh/spec.hpp"
 #include "workloads/compression/compression.hpp"
 #include "workloads/dense_linear/dense_linear.hpp"
+#include "workloads/fft/fft.hpp"
+#include "workloads/fft/spec.hpp"
+#include "workloads/graph/graph.hpp"
+#include "workloads/graph/spec.hpp"
 #include "workloads/monte_carlo/monte_carlo.hpp"
 #include "workloads/monte_carlo/spec.hpp"
+#include "workloads/particles/particles.hpp"
+#include "workloads/particles/spec.hpp"
+#include "workloads/raytrace/raytrace.hpp"
+#include "workloads/raytrace/spec.hpp"
 #include "workloads/sort/sort.hpp"
 #include "workloads/sort/spec.hpp"
+#include "workloads/sparse/sparse.hpp"
+#include "workloads/sparse/spec.hpp"
+#include "workloads/stencil/spec.hpp"
+#include "workloads/stencil/stencil.hpp"
 #include "workloads/workload.hpp"
 
 namespace loadforge::workloads {
@@ -33,11 +47,18 @@ struct Entry {
 // Sorted by name: names() is sorted by the contract, and a table that is
 // sorted already needs no sort whose result a test would have to take on
 // faith. The tests check the order.
-constexpr std::array<Entry, 4> kEntries{{
+constexpr std::array<Entry, 11> kEntries{{
+    {adaptive_mesh::kName, &adaptive_mesh::create, &adaptive_mesh::workload_descriptor},
     {compression::kName, &compression::create, &compression::workload_descriptor},
     {dense_linear::kName, &dense_linear::create, &dense_linear::workload_descriptor},
+    {fft::kName, &fft::create, &fft::workload_descriptor},
+    {graph::kName, &graph::create, &graph::workload_descriptor},
     {monte_carlo::kName, &monte_carlo::create, &monte_carlo::workload_descriptor},
+    {particles::kName, &particles::create, &particles::workload_descriptor},
+    {raytrace::kName, &raytrace::create, &raytrace::workload_descriptor},
     {sort::kName, &sort::create, &sort::workload_descriptor},
+    {sparse::kName, &sparse::create, &sparse::workload_descriptor},
+    {stencil::kName, &stencil::create, &stencil::workload_descriptor},
 }};
 
 WorkloadError unknown_workload(std::string_view name) {

@@ -20,7 +20,10 @@
 
 #include "platform/syscalls.hpp"
 #include "support/fake_syscalls.hpp"
+#include "unit/worker/control_frames.hpp"
+#include "worker/control.hpp"
 #include "worker/ipc/heartbeat.hpp"
+#include "worker/ipc/record.hpp"
 
 namespace loadforge::worker {
 namespace {
@@ -41,6 +44,8 @@ struct Rig {
   FakeSyscalls syscalls;
   std::optional<HeartbeatRegion> region;
   PipeEnds control;
+  PipeEnds records;
+  std::optional<ipc::RecordWriter> writer;
 
   Rig() {
     auto created = HeartbeatRegion::create(syscalls, 2);
@@ -49,7 +54,19 @@ struct Rig {
     auto pipe = syscalls.create_pipe();
     EXPECT_TRUE(pipe.has_value());
     control = pipe.value();
+    records = syscalls.create_pipe().value();
+    writer.emplace(syscalls, records.write_fd);
     syscalls.advance_clocks_per_read(10 * kMs);
+  }
+
+  /// A message as the controller frames it, delivered to the worker.
+  void send(const ControlMessage& message) {
+    syscalls.deliver_to_pipe(control.read_fd, worker_testing::control_frame(message));
+  }
+
+  /// The acknowledgements the worker has sent.
+  [[nodiscard]] std::vector<ControlAck> answers() const {
+    return worker_testing::acknowledgements_in(syscalls.pipe_contents(records.write_fd));
   }
 
   void controller_beats(std::int64_t timestamp_ns) {
@@ -57,7 +74,7 @@ struct Rig {
         region->publish(ipc::kControllerSlot, Heartbeat{timestamp_ns, 1, 1, 1}).has_value());
   }
 
-  Session session(Pacing pacing) { return Session{&*region, 0, control.read_fd, pacing}; }
+  Session session(Pacing pacing) { return Session{&*region, 0, control.read_fd, pacing, &*writer}; }
 
   core::Result<Outcome, WorkerError> run(Pacing pacing) {
     NullWorkload workload(syscalls, session(pacing));
@@ -78,6 +95,8 @@ TEST(SchedulerWordsTest, EveryReasonHasWordsAndTheLostTableIsExact) {
   EXPECT_EQ(describe(StopReason::kControllerStale), "the controller's heartbeat went stale");
   EXPECT_EQ(describe(StopReason::kControllerUnreadable),
             "the controller's heartbeat could not be read");
+  EXPECT_EQ(describe(StopReason::kControlChannelBroken),
+            "the controller's control pipe carried something that is not a message");
   EXPECT_EQ(describe(StopReason::kRunnerStopped), "the verification runner stopped the run");
   EXPECT_EQ(describe(static_cast<StopReason>(200)), "unrecognised stop reason");
 
@@ -87,6 +106,8 @@ TEST(SchedulerWordsTest, EveryReasonHasWordsAndTheLostTableIsExact) {
   EXPECT_TRUE(controller_lost(StopReason::kControllerHungUp));
   EXPECT_TRUE(controller_lost(StopReason::kControllerStale));
   EXPECT_TRUE(controller_lost(StopReason::kControllerUnreadable));
+  EXPECT_TRUE(controller_lost(StopReason::kControlChannelBroken))
+      << "a worker that can no longer be stopped leaves as from a lost controller";
 
   EXPECT_EQ(describe(WorkerError{"clock", "went backwards"}), "clock: went backwards");
 }
@@ -126,15 +147,81 @@ TEST(NullWorkloadTest, BeatsEveryTickAndCompletesWhenTheDurationElapses) {
   EXPECT_EQ(rig.syscalls.read_count(), 0);
 }
 
-TEST(NullWorkloadTest, StopsCleanlyWhenTheControllerWritesOnTheControlPipe) {
+TEST(NullWorkloadTest, StopsCleanlyWhenTheControllerSendsAStopAndAnswersIt) {
   Rig rig;
   rig.controller_beats(0);
-  rig.syscalls.deliver_to_pipe(rig.control.read_fd, "s");
+  rig.send({41, Stop{}});
   auto outcome = rig.run(Pacing{1000 * kMs, 10 * kMs, 100 * kMs});
   ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
   EXPECT_EQ(outcome.value(), (Outcome{StopReason::kStopRequested, 0, 10 * kMs}));
-  EXPECT_EQ(rig.syscalls.read_count(), 1) << "the byte was consumed";
+  EXPECT_EQ(rig.syscalls.read_count(), 1) << "the frame was consumed";
   EXPECT_TRUE(rig.worker_beat().has_value()) << "a beat went out before the stop";
+  EXPECT_EQ(rig.answers(), (std::vector<ControlAck>{{41, AckStatus::kDone, ""}}));
+}
+
+TEST(NullWorkloadTest, EveryOtherCommandIsRefusedInWordsAndTheLoopGoesOn) {
+  Rig rig;
+  rig.controller_beats(0);
+  rig.send({1, Pause{}});
+  rig.send({2, Resume{}});
+  rig.send({3, SetDuty{500, 1'000'000'000}});
+  rig.send({4, Rebind{{0}}});
+  rig.send({5, Switch{"compression", 1, 1U << 20U, 0, {}}});
+  auto outcome = rig.run(Pacing{50 * kMs, 10 * kMs, 100 * kMs});
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(outcome.value().reason, StopReason::kDurationElapsed) << "none of them was a Stop";
+  const std::vector<ControlAck> answers = rig.answers();
+  ASSERT_EQ(answers.size(), 5U);
+  const char* const names[] = {"pause", "resume", "set duty", "rebind", "switch"};
+  for (std::size_t at = 0; at < answers.size(); ++at) {
+    EXPECT_EQ(answers[at].sequence, at + 1) << "in the order sent, each once";
+    EXPECT_EQ(answers[at].status, AckStatus::kRefused);
+    EXPECT_EQ(answers[at].detail, std::string{"the null workload runs no slices: "} + names[at]);
+  }
+}
+
+TEST(NullWorkloadTest, MessagesAfterAStopAreNotHandled) {
+  Rig rig;
+  rig.controller_beats(0);
+  rig.send({1, Pause{}});
+  rig.send({2, Stop{}});
+  rig.send({3, Resume{}});
+  auto outcome = rig.run(Pacing{1000 * kMs, 10 * kMs, 100 * kMs});
+  ASSERT_TRUE(outcome.has_value());
+  EXPECT_EQ(outcome.value().reason, StopReason::kStopRequested);
+  const std::vector<ControlAck> answers = rig.answers();
+  ASSERT_EQ(answers.size(), 2U) << "the Resume after the Stop is left unanswered";
+  EXPECT_EQ(answers[1], (ControlAck{2, AckStatus::kDone, ""}));
+}
+
+TEST(NullWorkloadTest, APipeThatCarriesNothingLikeAMessageIsAControllerBroken) {
+  Rig rig;
+  rig.controller_beats(0);
+  rig.syscalls.deliver_to_pipe(rig.control.read_fd, std::string(20, 's'));
+  auto outcome = rig.run(Pacing{1000 * kMs, 10 * kMs, 100 * kMs});
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  EXPECT_EQ(outcome.value(), (Outcome{StopReason::kControlChannelBroken, 0, 10 * kMs}));
+}
+
+TEST(NullWorkloadTest, AnAnswerThatCannotBeSentIsTheControllerGoneOrTheWorkersFailure) {
+  {
+    Rig rig;
+    rig.controller_beats(0);
+    rig.send({1, Stop{}});
+    ASSERT_TRUE(rig.syscalls.close(rig.records.read_fd).has_value());
+    auto outcome = rig.run(Pacing{1000 * kMs, 10 * kMs, 100 * kMs});
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_EQ(outcome.value().reason, StopReason::kControllerHungUp);
+  }
+  {
+    Rig rig;
+    rig.controller_beats(0);
+    rig.send({1, Pause{}});
+    rig.syscalls.always_fail_write(EIO);
+    auto outcome = rig.run(Pacing{1000 * kMs, 10 * kMs, 100 * kMs});
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().stage, "record channel");
+  }
 }
 
 TEST(NullWorkloadTest, LeavesWhenTheControlPipeHangsUpHoweverPollSaysSo) {

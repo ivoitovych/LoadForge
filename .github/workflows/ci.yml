@@ -42,10 +42,12 @@ jobs:
         # unlocked, and the sweep and every test pass under the 8 MiB default.
         # A failing test's output is printed where it ran, far up a log too long
         # to read whole; the failed tests run once more at the end, so their
-        # output is the last thing in the log. The step fails either way.
+        # output is the last thing in the log. The step fails either way. A test
+        # that hangs is stopped after fifteen minutes and reported like any
+        # other failure, instead of holding the runner until the job's limit.
         run: |
-          ctest --preset debug || {
-            ctest --preset debug --rerun-failed --output-on-failure
+          ctest --preset debug --timeout 900 || {
+            ctest --preset debug --timeout 900 --rerun-failed --output-on-failure
             exit 1
           }
       - name: The OOM row of the misbehaviour catalogue, as root

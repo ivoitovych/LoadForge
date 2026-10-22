@@ -120,6 +120,7 @@ add_library(loadforge_controller STATIC
   src/reporters/console.cpp
 )
 target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config loadforge_resources
+  loadforge_workloads_mixed
   loadforge_verification_record loadforge_verification_isolation loadforge_telemetry_capability
   loadforge_primitives_simd loadforge_platform_fpenv)
 loadforge_set_warnings(loadforge_controller)
@@ -139,6 +140,8 @@ add_library(loadforge_cli STATIC
   src/main/telemetry_rig.cpp
   src/main/run_result.cpp
   src/main/result_files.cpp
+  src/main/journal_rig.cpp
+  src/main/schedules.cpp
 )
 target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller loadforge_resources
   loadforge_telemetry_sources_thermal loadforge_telemetry_sources_fan loadforge_telemetry_sources_frequency
@@ -146,7 +149,8 @@ target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadf
   loadforge_telemetry_sources_edac loadforge_telemetry_sampler loadforge_telemetry_timeline
   loadforge_telemetry_capability loadforge_statistics loadforge_controller_results
   loadforge_reporters_json loadforge_reporters_csv loadforge_platform_fpenv loadforge_platform_isa
-  loadforge_primitives_simd loadforge_workloads_registry)
+  loadforge_primitives_simd loadforge_workloads_registry loadforge_workloads_mixed
+  loadforge_controller_journal)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)
@@ -174,6 +178,8 @@ loadforge_enable_coverage(loadforge_ipc)
 
 add_library(loadforge_worker STATIC
   src/worker/scheduler.cpp
+  src/worker/control_channel.cpp
+  src/worker/duty.cpp
   src/worker/frames.cpp
   src/worker/verified_run.cpp
   src/worker/services.cpp
@@ -183,7 +189,7 @@ add_library(loadforge_worker STATIC
 # workloads and their oracles, the input-integrity runner, the executor, the
 # floating-point registers and the ISA probe, and the codec of the records it
 # sends. It links no workload by name; the registries do.
-target_link_libraries(loadforge_worker PUBLIC loadforge_ipc
+target_link_libraries(loadforge_worker PUBLIC loadforge_ipc loadforge_worker_control
   loadforge_workloads_registry loadforge_verification_oracle_registry
   loadforge_verification_integrity loadforge_worker_executor
   loadforge_platform_fpenv loadforge_platform_isa loadforge_primitives_simd

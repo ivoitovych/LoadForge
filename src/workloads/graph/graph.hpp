@@ -21,6 +21,10 @@ namespace loadforge::workloads::graph {
 [[nodiscard]] core::Result<std::unique_ptr<Workload>, WorkloadError> create(
     const WorkloadConfig& config);
 
+/// What every graph workload says about itself, without creating one: the
+/// descriptor of any workload create() returns (Registry::descriptor).
+[[nodiscard]] Descriptor workload_descriptor();
+
 }  // namespace loadforge::workloads::graph
 
 #endif

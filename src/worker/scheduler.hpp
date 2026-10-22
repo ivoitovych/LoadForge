@@ -12,6 +12,7 @@
 #include "platform/clock.hpp"
 #include "platform/syscalls.hpp"
 #include "worker/ipc/heartbeat.hpp"
+#include "worker/ipc/record.hpp"
 
 namespace loadforge::worker {
 
@@ -28,8 +29,9 @@ struct Pacing {
 /// Why the loop stopped.
 ///
 ///   kDurationElapsed      the work is done.
-///   kStopRequested        the controller wrote on the control pipe: stop now,
-///                         cleanly. How a run ends early on request.
+///   kStopRequested        the controller sent a Stop on the control pipe
+///                         (worker/control.hpp): finish, cleanly, now. How a
+///                         run ends early on request.
 ///   kControllerHungUp     the control pipe's writer is gone: the controller
 ///                         exited, crashed or was killed. The worker must not
 ///                         outlive it (docs/PLAN.md F9).
@@ -39,6 +41,10 @@ struct Pacing {
 ///                         the only way to see it.
 ///   kControllerUnreadable the controller's slot could not be read: it died
 ///                         inside a publish.
+///   kControlChannelBroken the control pipe carried something that is not a
+///                         message (control_channel.hpp): the worker can no
+///                         longer be told to stop, so it leaves as it would
+///                         from a controller that is gone.
 ///   kRunnerStopped        the verifying runner ended the run itself: its
 ///                         control state could not be trusted, and a run that
 ///                         goes on without it would not be the run that was
@@ -50,6 +56,7 @@ enum class StopReason : std::uint8_t {
   kControllerHungUp,
   kControllerStale,
   kControllerUnreadable,
+  kControlChannelBroken,
   kRunnerStopped,
 };
 
@@ -82,35 +89,31 @@ struct Session {
   std::size_t slot = 0;  ///< This worker's index; it beats in worker_slot(slot).
   int control_fd = -1;   ///< Read end of the controller's control pipe.
   Pacing pacing;
+  /// Where the worker answers the controller's messages: its record pipe.
+  ipc::RecordWriter* records = nullptr;
 };
 
-/// Watching the controller from a worker's loop: the two questions every
-/// worker loop asks each tick, whatever work it does between them -- is the
-/// controller still there, and has it asked me to stop. Shared by the null
-/// workload and the verifying one so that "the worker must not outlive its
-/// controller" (docs/PLAN.md F9) is written once.
+/// Watching the controller from a worker's loop: the question every worker
+/// loop asks each tick, whatever work it does -- is the controller still
+/// there. (What it has asked the worker to do is the control channel's:
+/// control_channel.hpp.) Shared by the null workload and the verifying one so
+/// that "the worker must not outlive its controller" (docs/PLAN.md F9) is
+/// written once.
 class ControllerWatch {
  public:
   /// `first_read_ns` is the running-clock reading the loop began at: a slot
   /// that cannot be read is a reason to leave only once it has stayed so for
   /// longer than the allowance, counted from the last consistent sample or,
   /// before any, from here.
-  ControllerWatch(platform::Syscalls& syscalls, const Session& session,
-                  std::int64_t first_read_ns) noexcept
-      : syscalls_(&syscalls), session_(&session), last_read_ns_(first_read_ns) {}
+  ControllerWatch(const Session& session, std::int64_t first_read_ns) noexcept
+      : session_(&session), last_read_ns_(first_read_ns) {}
 
   /// The reason to leave that the controller's slot gives, if any: unreadable,
   /// stale, or never beat past the allowance.
   [[nodiscard]] std::optional<StopReason> gone(const platform::TimePoint& now,
                                                std::int64_t elapsed_ns);
 
-  /// One look at the control pipe, waiting at most `interval_ms` for it (0
-  /// looks and returns): a reason to stop, nothing (the interval passed), or a
-  /// failure of the pipe itself.
-  [[nodiscard]] core::Result<std::optional<StopReason>, WorkerError> wait(int interval_ms);
-
  private:
-  platform::Syscalls* syscalls_;
   const Session* session_;
   std::int64_t last_read_ns_;
 };
@@ -126,11 +129,16 @@ class ControllerWatch {
 /// duration check so that a worker which is about to complete has still
 /// reported itself alive, and before the controller check so that a worker
 /// which is about to leave has left a last beat with its final progress. Then
-/// one poll on the control pipe is the tick's wait: a byte on it is a stop
+/// one poll on the control pipe is the tick's wait: a Stop on it is a stop
 /// request, a hang-up is the controller gone, and the timeout is the interval.
+/// Any other message is refused, in words: there is nothing here to pause,
+/// slow down, move or switch.
 class NullWorkload {
  public:
   static constexpr std::uint32_t kPhaseRunning = 1;
+  /// A verifying worker that has been paused beats with this phase and its
+  /// progress unchanged (worker/control.hpp, Pause).
+  static constexpr std::uint32_t kPhasePaused = 2;
 
   NullWorkload(platform::Syscalls& syscalls, Session session) noexcept
       : syscalls_(&syscalls), session_(session) {}

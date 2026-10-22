@@ -9,6 +9,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,6 +20,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/journal/journal.hpp"
 #include "controller/plan.hpp"
 #include "controller/report.hpp"
 #include "controller/safety.hpp"
@@ -36,11 +38,14 @@
 #include "telemetry/timeline.hpp"
 #include "topology/snapshot.hpp"
 #include "verification/record.hpp"
+#include "worker/control.hpp"
+#include "worker/duty.hpp"
 #include "worker/entry.hpp"
 #include "worker/frames.hpp"
 #include "worker/ipc/heartbeat.hpp"
 #include "worker/ipc/record.hpp"
 #include "worker/scheduler.hpp"
+#include "workloads/mixed/schedule.hpp"
 
 namespace loadforge::controller {
 
@@ -89,7 +94,30 @@ bool operator==(const FindingReport& lhs, const FindingReport& rhs) {
          std::tie(rhs.record, rhs.isolation, rhs.not_isolated);
 }
 
+bool operator==(const RunOptions& lhs, const RunOptions& rhs) {
+  return lhs.executable == rhs.executable && lhs.interval_ns == rhs.interval_ns &&
+         lhs.stale_after_ns == rhs.stale_after_ns && lhs.grace == rhs.grace &&
+         lhs.budget == rhs.budget && lhs.budget_unread == rhs.budget_unread &&
+         lhs.oom_record == rhs.oom_record && lhs.topology == rhs.topology &&
+         lhs.verification == rhs.verification && lhs.fp == rhs.fp &&
+         lhs.capabilities == rhs.capabilities && lhs.sampler == rhs.sampler &&
+         lhs.timeline == rhs.timeline && lhs.sample_interval_ns == rhs.sample_interval_ns &&
+         lhs.schedule == rhs.schedule && lhs.journal == rhs.journal &&
+         lhs.journal_interval_ns == rhs.journal_interval_ns &&
+         lhs.journal_notes == rhs.journal_notes;
+}
+
 std::string describe(const ControllerError& error) { return error.stage + ": " + error.detail; }
+
+std::string describe(const CommandReport& commands) {
+  std::string text = "control: ";
+  text += std::to_string(commands.sent) + " message(s) sent, ";
+  text += std::to_string(commands.done) + " done, ";
+  text += std::to_string(commands.refused) + " refused, ";
+  text += std::to_string(commands.unacknowledged) + " unanswered, ";
+  text += std::to_string(commands.dropped) + " not sent";
+  return text;
+}
 
 bool operator==(const Reap& lhs, const Reap& rhs) noexcept {
   return std::tie(lhs.slot, lhs.at_ns) == std::tie(rhs.slot, rhs.at_ns);
@@ -102,10 +130,21 @@ bool operator==(const SamplingReport& lhs, const SamplingReport& rhs) noexcept {
                   rhs.first_round_ns, rhs.last_round_ns, rhs.reaps, rhs.fault);
 }
 
+bool operator==(const JournalReport& lhs, const JournalReport& rhs) noexcept {
+  return std::tie(lhs.enabled, lhs.entries, lhs.fault) ==
+         std::tie(rhs.enabled, rhs.entries, rhs.fault);
+}
+
 namespace {
 
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
 constexpr std::uint32_t kControllerPhase = 1;
+/// How many messages a worker may have unanswered before the schedule sends it
+/// no more: a worker that reads its pipe answers within a slice, so a count
+/// this high is a worker that does not, and the pipe (64 KiB) must never fill
+/// under a controller that would block writing to it. A Stop is sent whatever
+/// the count, and 64 messages are a few kilobytes.
+constexpr std::size_t kMaxUnanswered = 64;
 /// How many reads one tick gives a channel that keeps having more: a worker
 /// with a persistent fault makes a record a unit, and one read a tick would
 /// let its pipe fill, block it in write, and have it judged a hang by the very
@@ -157,31 +196,51 @@ std::string_view record_word(std::uint16_t type) {
   return "unknown record";
 }
 
-/// Everything the controller holds about one worker while it runs.
+/// Everything the controller holds about one worker while it runs. The members
+/// are in the order that wastes the least padding, largest alignment first.
 struct Tracked {
   std::size_t slot = 0;
-  pid_t pid = 0;
-  platform::PipeEnds records;  ///< The controller reads; the worker writes.
-  platform::PipeEnds control;  ///< The controller writes; the worker reads.
   std::unique_ptr<ipc::RecordSource> source;
-  bool channel_open = false;
-  StopStep step = StopStep::kNone;
   std::int64_t step_since_ns = 0;
-  Evidence evidence;
-  bool reaped = false;
   std::uint64_t progress = 0;
   std::int64_t progress_changed_ns = 0;
   std::int64_t launched_ns = 0;   ///< The controller's clock when this worker was forked.
   std::int64_t last_read_ns = 0;  ///< When its slot last gave a consistent sample.
-  std::vector<std::string> notes;
-  WorkerPlan plan;  ///< What it was told to run (null workload: no args).
-  verification::Tally tally;
-  bool tally_seen = false;
-  std::optional<verification::MemoryLock> memory;
-  std::vector<FindingReport> findings;
   std::uint64_t wrong_results = 0;
   std::uint64_t not_performed = 0;
   std::uint64_t findings_dropped = 0;
+  /// The idle part of the duty cycle it was told to keep, which it may spend
+  /// without progress and still be well.
+  std::int64_t idle_allowance_ns = 0;
+  std::vector<std::string> notes;
+  std::vector<FindingReport> findings;
+  /// The workloads the worker was told to run: the one it started with, and
+  /// every one a Switch named. A record about any other is garbage.
+  std::vector<std::string> told;
+  CommandReport commands;
+  std::optional<verification::MemoryLock> memory;
+  verification::Tally tally;
+  /// A message sent and not yet answered; the worker answers in the order it
+  /// was sent, so the front is the one the next acknowledgement is for.
+  struct Unanswered {
+    std::uint32_t sequence = 0;
+    worker::Command command;
+  };
+  std::deque<Unanswered> unanswered;
+  WorkerPlan plan;  ///< What it was told to run (null workload: no args).
+  pid_t pid = 0;
+  std::uint32_t next_sequence = 1;
+  platform::PipeEnds records;  ///< The controller reads; the worker writes.
+  platform::PipeEnds control;  ///< The controller writes; the worker reads.
+  Evidence evidence;
+  bool channel_open = false;
+  StopStep step = StopStep::kNone;
+  bool reaped = false;
+  bool tally_seen = false;
+  /// Paused by the controller (a Pause answered kDone and no Resume since): a
+  /// paused worker is not judged by its progress.
+  bool paused = false;
+  bool stale_now = false;  ///< Its beat is stale at this tick, for the journal.
 };
 
 /// One run, from the first beat to the report. Holds what must be released
@@ -209,10 +268,24 @@ class Run {
 
  private:
   [[nodiscard]] core::Result<core::Ok, ControllerError> prepare();
+  /// A worker for each enabled workload, planned, or why one could not be.
+  [[nodiscard]] core::Result<core::Ok, ControllerError> plan_workers();
+  void begin_labels();
   [[nodiscard]] core::Result<std::optional<int>, ControllerError> spawn();
   [[nodiscard]] core::Result<core::Ok, ControllerError> tick();
   void beat(const platform::TimePoint& now);
   [[nodiscard]] core::Result<core::Ok, ControllerError> request_stop(std::int64_t now_ns);
+  /// Sends one message to a worker (worker/control.hpp). A worker already
+  /// reaped, or whose pipe has no reader any more (EPIPE), is not an error:
+  /// its death is reported like any other.
+  [[nodiscard]] core::Result<core::Ok, ControllerError> command(Tracked& worker,
+                                                                const worker::Command& what);
+  /// Carries out the steps of the schedule that are due.
+  [[nodiscard]] core::Result<core::Ok, ControllerError> run_schedule(std::int64_t elapsed_ns,
+                                                                     std::int64_t now_ns);
+  void write_journal(std::int64_t elapsed_ns, bool force);
+  [[nodiscard]] journal::Entry journal_entry(std::int64_t elapsed_ns) const;
+  void journal_fault(const std::string& text, std::int64_t elapsed_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> watch(Tracked& worker,
                                                               const platform::TimePoint& now);
   [[nodiscard]] core::Result<core::Ok, ControllerError> send(Tracked& worker, int signal,
@@ -230,6 +303,8 @@ class Run {
                                                              const ipc::Record& record);
   [[nodiscard]] static std::optional<std::string> take_memory(Tracked& worker,
                                                               const ipc::Record& record);
+  [[nodiscard]] static std::optional<std::string> take_ack(Tracked& worker,
+                                                           const ipc::Record& record);
   [[nodiscard]] core::Result<core::Ok, ControllerError> reap(std::int64_t elapsed_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
   void attribute_oom_kills();
@@ -271,7 +346,39 @@ class Run {
   /// sampling and the reaping use the reading the tick already took and add no
   /// read of their own.
   std::int64_t clock_running_ns_ = 0;
+  /// The schedule's next step, how many have been carried out, and what the
+  /// machine is doing now, in the words the journal and the timeline carry.
+  std::size_t next_step_ = 0;
+  std::uint64_t steps_run_ = 0;
+  std::string phase_ = "run";
+  std::string workload_label_;
+  /// What the journal has done; `journal_live_` is false without a writer and
+  /// after an append or sync it refused.
+  JournalReport journal_report_;
+  bool journal_live_ = false;
+  std::int64_t last_journal_ns_ = 0;
 };
+
+core::Result<core::Ok, ControllerError> Run::plan_workers() {
+  for (const config::Workload& workload : config_->workloads) {
+    if (!workload.enabled) {
+      continue;
+    }
+    Tracked& worker = workers_.emplace_back();
+    worker.slot = workers_.size() - 1;
+    auto planned = plan_worker(workload, worker.slot, options_->budget, options_->verification,
+                               options_->topology);
+    if (!planned.has_value()) {
+      return error_at("workload", planned.error());
+    }
+    worker.plan = std::move(planned).value();
+    const std::optional<worker::WorkloadArgs>& args = worker.plan.args;
+    if (args.has_value()) {
+      worker.told.push_back(args->workload);
+    }
+  }
+  return core::Ok{};
+}
 
 core::Result<core::Ok, ControllerError> Run::prepare() {
   // The controller writes to pipes whose readers can die at any moment: a
@@ -299,21 +406,20 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
     }
     environment_ = "floating point (asserted at startup): " + describe_state(control.read());
   }
-  for (const config::Workload& workload : config_->workloads) {
-    if (workload.enabled) {
-      workers_.emplace_back();
-      workers_.back().slot = workers_.size() - 1;
-      auto planned = plan_worker(workload, workers_.back().slot, options_->budget,
-                                 options_->verification, options_->topology);
-      if (!planned.has_value()) {
-        return error_at("workload", planned.error());
-      }
-      workers_.back().plan = std::move(planned).value();
-    }
+  if (auto planned = plan_workers(); !planned.has_value()) {
+    return planned.error();
   }
   if (workers_.empty()) {
     return error_at("config", "no workload is enabled");
   }
+  if (options_->schedule != nullptr) {
+    if (const auto bad = mixed::problem(*options_->schedule, workers_.size()); bad.has_value()) {
+      return error_at("schedule", *bad);
+    }
+  }
+  begin_labels();
+  journal_live_ = options_->journal != nullptr;
+  journal_report_.enabled = journal_live_;
   // Before the first fork, so that every kill of a worker comes after it. A
   // count that cannot be read is not a reason to refuse the run: it is kept,
   // and said, if a worker's death ever needs it.
@@ -350,6 +456,33 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
     worker.control = control.value();
   }
   return core::Ok{};
+}
+
+void Run::begin_labels() {
+  // The distinct workloads the plans name, sorted, joined; a schedule says its
+  // own words for both.
+  std::vector<std::string> names;
+  for (const Tracked& worker : workers_) {
+    std::string name = "null";
+    if (worker.plan.args.has_value()) {
+      name = worker.plan.args->workload;
+    }
+    names.push_back(std::move(name));
+  }
+  std::ranges::sort(names);
+  names.erase(std::ranges::unique(names).begin(), names.end());
+  std::string joined;
+  for (const std::string& name : names) {
+    if (!joined.empty()) {
+      joined += '+';
+    }
+    joined += name;
+  }
+  workload_label_ = mixed::bounded(std::move(joined));
+  if (options_->schedule != nullptr) {
+    phase_ = options_->schedule->phase;
+    workload_label_ = options_->schedule->workload;
+  }
 }
 
 void Run::beat(const platform::TimePoint& now) {
@@ -479,8 +612,14 @@ core::Result<core::Ok, ControllerError> Run::tick() {
       return requested;
     }
     reporter_->event(elapsed_ns, "deadline reached: stop requested");
+    phase_ = "stop";
+    write_journal(elapsed_ns, true);
   }
   take_round(now.value().running_ns, false);
+  if (auto scheduled = run_schedule(elapsed_ns, now.value().running_ns); !scheduled.has_value()) {
+    return scheduled;
+  }
+  write_journal(elapsed_ns, false);
   for (Tracked& worker : workers_) {
     if (!worker.reaped) {
       if (auto watched = watch(worker, now.value()); !watched.has_value()) {
@@ -497,21 +636,136 @@ core::Result<core::Ok, ControllerError> Run::tick() {
 
 core::Result<core::Ok, ControllerError> Run::request_stop(std::int64_t now_ns) {
   stop_requested_ = true;
-  const std::array<std::byte, 1> stop{std::byte{'s'}};
   for (Tracked& worker : workers_) {
     if (worker.reaped || worker.step != StopStep::kNone) {
       continue;
     }
-    // EPIPE means the worker is already gone and about to be reaped; any
-    // other refusal is the controller's own pipe failing.
-    auto written = syscalls_->write(worker.control.write_fd, stop);
-    if (!written.has_value() && written.error().number != EPIPE) {
-      return error_at("control pipe", describe(written.error()));
+    // A Stop is sent whatever the worker has left unanswered.
+    if (auto sent = command(worker, worker::Stop{}); !sent.has_value()) {
+      return sent;
     }
     worker.step = StopStep::kRequested;
     worker.step_since_ns = now_ns;
   }
   return core::Ok{};
+}
+
+core::Result<core::Ok, ControllerError> Run::command(Tracked& worker, const worker::Command& what) {
+  if (worker.reaped) {
+    return core::Ok{};
+  }
+  const worker::ControlMessage message{worker.next_sequence, what};
+  ipc::RecordWriter writer(*syscalls_, worker.control.write_fd);
+  auto written = writer.send(worker::kControlFrameType, worker::encode(message));
+  if (!written.has_value()) {
+    // EPIPE means the worker is already gone and about to be reaped; any
+    // other refusal is the controller's own pipe failing.
+    if (written.error().cause.number != EPIPE) {
+      return error_at("control pipe", ipc::describe(written.error()));
+    }
+    return core::Ok{};
+  }
+  ++worker.next_sequence;
+  ++worker.commands.sent;
+  worker.unanswered.push_back(Tracked::Unanswered{message.sequence, what});
+  if (const auto* change = std::get_if<worker::Switch>(&what)) {
+    worker.told.push_back(change->workload);
+  }
+  return core::Ok{};
+}
+
+// Two times on two clocks, named for what they are; a struct for the pair would be one more type.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+core::Result<core::Ok, ControllerError> Run::run_schedule(std::int64_t elapsed_ns,
+                                                          std::int64_t now_ns) {
+  if (options_->schedule == nullptr || stop_requested_) {
+    return core::Ok{};
+  }
+  const std::vector<mixed::Step>& steps = options_->schedule->steps;
+  while (next_step_ < steps.size() && steps[next_step_].at_ns <= elapsed_ns) {
+    const mixed::Step& step = steps[next_step_++];
+    ++steps_run_;
+    phase_ = step.phase;
+    workload_label_ = step.workload;
+    mark_phase(step.phase, now_ns);
+    std::string line = "phase ";
+    line += step.phase;
+    line += ": ";
+    line += step.workload;
+    reporter_->event(elapsed_ns, line);
+    for (const mixed::WorkerCommands& each : step.workers) {
+      Tracked& worker = workers_[each.slot];
+      for (const worker::Command& what : each.commands) {
+        if (worker.unanswered.size() >= kMaxUnanswered) {
+          ++worker.commands.dropped;
+          continue;
+        }
+        if (auto sent = command(worker, what); !sent.has_value()) {
+          return sent;
+        }
+      }
+    }
+    write_journal(elapsed_ns, true);
+  }
+  return core::Ok{};
+}
+
+journal::Entry Run::journal_entry(std::int64_t elapsed_ns) const {
+  journal::Entry entry;
+  entry.elapsed_ns = elapsed_ns;
+  entry.phase = phase_;
+  entry.workload = workload_label_;
+  for (const Tracked& worker : workers_) {
+    if (worker.tally_seen) {
+      // The most units any worker has computed and checked: the units are
+      // numbered from zero in each worker, so this is how far the furthest got.
+      entry.last_verified_unit =
+          std::max(entry.last_verified_unit.value_or(0), worker.tally.units_computed);
+    }
+    entry.workers_alive += worker.reaped ? 0U : 1U;
+    entry.workers_stale += (!worker.reaped && worker.stale_now) ? 1U : 0U;
+  }
+  if (options_->journal_notes != nullptr) {
+    options_->journal_notes->fill(entry);
+  }
+  return entry;
+}
+
+void Run::journal_fault(const std::string& text, std::int64_t elapsed_ns) {
+  // Journaling ends at the first fault, so there is never a second to keep.
+  journal_report_.fault = text;
+  journal_live_ = false;
+  reporter_->event(elapsed_ns, "journal: " + text);
+}
+
+void Run::write_journal(std::int64_t elapsed_ns, bool force) {
+  if (!journal_live_) {
+    return;
+  }
+  const bool due = elapsed_ns - last_journal_ns_ >= options_->journal_interval_ns;
+  if (!force && journal_report_.entries > 0 && !due) {
+    return;
+  }
+  auto appended = options_->journal->append(journal_entry(elapsed_ns));
+  if (!appended.has_value()) {
+    std::string text{"append: "};
+    text += journal::describe(appended.error().fault);
+    text += ": ";
+    text += appended.error().detail;
+    journal_fault(text, elapsed_ns);
+    return;
+  }
+  auto synced = options_->journal->sync();
+  if (!synced.has_value()) {
+    std::string text{"sync: "};
+    text += journal::describe(synced.error().fault);
+    text += ": ";
+    text += synced.error().detail;
+    journal_fault(text, elapsed_ns);
+    return;
+  }
+  ++journal_report_.entries;
+  last_journal_ns_ = elapsed_ns;
 }
 
 core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker,
@@ -539,7 +793,14 @@ core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker,
       worker.progress = beat->progress;
       worker.progress_changed_ns = now.running_ns;
     }
-    const bool stalled = now.running_ns - worker.progress_changed_ns > options_->stale_after_ns;
+    // A worker the controller paused makes no progress and is not judged by
+    // it; one told to idle part of every period may spend that part without
+    // progress and be well.
+    if (worker.paused) {
+      worker.progress_changed_ns = now.running_ns;
+    }
+    const bool stalled = now.running_ns - worker.progress_changed_ns >
+                         options_->stale_after_ns + worker.idle_allowance_ns;
     if (liveness == ipc::Liveness::kStale) {
       stale = true;
     } else if (liveness == ipc::Liveness::kNeverBeat) {
@@ -548,6 +809,7 @@ core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker,
       stale = stalled;
     }
   }
+  worker.stale_now = stale;
   if (stale && (worker.step == StopStep::kNone || worker.step == StopStep::kRequested)) {
     return send(worker, SIGTERM, now.running_ns, true);
   }
@@ -687,6 +949,9 @@ std::optional<std::string> Run::ingest(Tracked& worker, const ipc::Record& recor
   if (record.type == worker::kMemoryFrameType) {
     return take_memory(worker, record);
   }
+  if (record.type == worker::kControlAckFrameType) {
+    return take_ack(worker, record);
+  }
   if (record.type == static_cast<std::uint16_t>(ipc::RecordType::kFinished)) {
     worker.evidence.finished_seen = true;
   }
@@ -712,9 +977,9 @@ std::optional<std::string> Run::take_error_record(Tracked& worker, const ipc::Re
   // an unchecked get_if, which -Wnull-dereference refuses at -O3 (journal 11).
   const std::optional<std::string> reported =
       std::visit([](const auto& each) { return each.provenance.workload; }, found);
-  if (reported.has_value() && *reported != worker.plan.args->workload) {
-    return "an error record about workload '" + *reported + "' from a worker that runs '" +
-           worker.plan.args->workload + "'";
+  if (reported.has_value() && std::ranges::find(worker.told, *reported) == worker.told.end()) {
+    return "an error record about workload '" + *reported +
+           "' from a worker that was never told to run it";
   }
   if (verification::is_wrong_result(found)) {
     ++worker.wrong_results;
@@ -736,11 +1001,13 @@ std::optional<std::string> Run::take_memory(Tracked& worker, const ipc::Record& 
   if (!decoded.has_value()) {
     return decoded.error();
   }
-  // Told once, before the first slice: a second is not a worker that works.
-  if (worker.memory.has_value()) {
-    return "a second memory frame";
-  }
+  // Told before the first slice, and again whenever the worker replaced its
+  // runner (a Switch, a Rebind): what is kept is the least a run did, and the
+  // report says the lock outcome of the weakest runner it had.
   const verification::MemoryLock& lock = decoded.value();
+  if (worker.memory.has_value() && lock.outcome <= worker.memory->outcome) {
+    return std::nullopt;
+  }
   std::string line = "working set: " + std::string{verification::describe(lock.outcome)} +
                      " (lock policy " + std::string{verification::describe(lock.policy)} + ")";
   if (!lock.detail.empty()) {
@@ -748,6 +1015,42 @@ std::optional<std::string> Run::take_memory(Tracked& worker, const ipc::Record& 
   }
   worker.notes.push_back(std::move(line));
   worker.memory = std::move(decoded).value();
+  return std::nullopt;
+}
+
+std::optional<std::string> Run::take_ack(Tracked& worker, const ipc::Record& record) {
+  auto decoded = worker::decode_ack(record.payload);
+  if (!decoded.has_value()) {
+    return "an acknowledgement that does not decode: " + decoded.error().detail;
+  }
+  const worker::ControlAck& ack = decoded.value();
+  if (worker.unanswered.empty()) {
+    return "an acknowledgement of message " + std::to_string(ack.sequence) +
+           " when none is unanswered";
+  }
+  if (const std::uint32_t next = worker.unanswered.front().sequence; ack.sequence != next) {
+    return "an acknowledgement of message " + std::to_string(ack.sequence) + " when " +
+           std::to_string(next) + " is the next to be answered";
+  }
+  const worker::Command asked = worker.unanswered.front().command;
+  worker.unanswered.pop_front();
+  if (ack.status == worker::AckStatus::kRefused) {
+    ++worker.commands.refused;
+    std::string line = "refused ";
+    line += worker::command_name(asked);
+    line += ": ";
+    line += ack.detail;
+    worker.notes.push_back(std::move(line));
+    return std::nullopt;
+  }
+  ++worker.commands.done;
+  if (std::holds_alternative<worker::Pause>(asked)) {
+    worker.paused = true;
+  } else if (std::holds_alternative<worker::Resume>(asked)) {
+    worker.paused = false;
+  } else if (const auto* duty = std::get_if<worker::SetDuty>(&asked)) {
+    worker.idle_allowance_ns = worker::idle_ns(*duty);
+  }
   return std::nullopt;
 }
 
@@ -990,8 +1293,24 @@ core::Result<RunReport, ControllerError> Run::finish() {
     entry.wrong_results = worker.wrong_results;
     entry.not_performed = worker.not_performed;
     entry.findings_dropped = worker.findings_dropped;
+    entry.commands = worker.commands;
+    // A Stop the worker never read is not a message it failed to answer: a
+    // worker paces itself by the same duration and usually leaves on its own
+    // before the controller's Stop is read, and its exit is the answer.
+    entry.commands.unacknowledged = static_cast<std::uint64_t>(
+        std::ranges::count_if(worker.unanswered, [](const Tracked::Unanswered& each) {
+          return !std::holds_alternative<worker::Stop>(each.command);
+        }));
+    if (options_->schedule != nullptr) {
+      entry.records.push_back(describe(entry.commands));
+    }
     report.workers.push_back(std::move(entry));
   }
+  report.steps_run = steps_run_;
+  // The last word of the journal: every worker is gone.
+  phase_ = "done";
+  write_journal(report.elapsed_ns, true);
+  report.journal = journal_report_;
   // After the last reap: every counter now holds what the workers did, and
   // what they left behind when they died.
   take_round(clock_running_ns_, true);
