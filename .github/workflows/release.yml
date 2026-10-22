@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: release
+on:
+  # A version tag builds both artifacts for both architectures and drafts a
+  # release. The tag is the version: v1.0.0 must be what the binary says.
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+  # A rehearsal: builds and checks everything, publishes nothing.
+  workflow_dispatch:
+  # The packaging is built, installed and removed on every change to it, so it
+  # cannot rot between releases. Publishing never happens on a pull request.
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - '.github/workflows/release.yml'
+      - 'tools/check-no-test-hooks.sh'
+      - 'tools/check-runtime-deps.sh'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # packaging/build-release.sh is the whole of the build, and it is the same
+    # script the owner runs by hand (packaging/README.md): configure, build,
+    # read the binary back with the gates the project has, make the tarballs
+    # and the package, run each unpacked copy for two seconds, write checksums.
+    name: artifacts / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* && sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build g++-13 dpkg-dev binutils file
+      - name: Build and check both artifacts
+        env: { CC: gcc-13, CXX: g++-13 }
+        run: packaging/build-release.sh --out "$RUNNER_TEMP/artifacts"
+      - name: The tag is the version the binary reports
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          reported="$(build/static/loadforge --version)"
+          if [ "v$reported" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME, but the binary reports $reported" >&2
+            echo "  the release commit sets project(VERSION) and LOADFORGE_MILESTONE in CMakeLists.txt" >&2
+            exit 1
+          fi
+      - name: Install the package, run it, remove it
+        # On the runner this is a normal Ubuntu 24.04: the declared minimum
+        # for the dynamic artifact (docs/IMPLEMENTATION.md Q11).
+        run: sudo packaging/test-deb.sh "$RUNNER_TEMP"/artifacts/loadforge_*.deb
+      - name: The checksums hold
+        run: cd "$RUNNER_TEMP/artifacts" && sha256sum -c ./*.SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.runner }}
+          path: ${{ runner.temp }}/artifacts/*
+          if-no-files-found: error
+
+  publish:
+    # Only for a tag, and only as a draft: M7 asks for validation on real
+    # hardware before a release is public (docs/hardware-validation.md), so the
+    # owner publishes it by hand once that is done.
+    name: draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: artifacts
+      - name: One checksum file for the release, and it holds
+        working-directory: artifacts
+        run: |
+          cat ./*.SHA256SUMS | sort -k2 > SHA256SUMS
+          rm ./*-linux-*.SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Static and dynamic builds for x86-64 and ARM64, with checksums.
+
+          - `*-static.tar.gz`: statically linked; for live and rescue media and for any
+            Linux older than Ubuntu 24.04.
+          - `*-dynamic.tar.gz` and the `.deb`: dynamically linked; Ubuntu 24.04 or later.
+          - `SHA256SUMS`: check on the machine where you run it: `sha256sum -c SHA256SUMS --ignore-missing`.
+
+          This is a draft. It is published after the hardware validation of
+          `docs/hardware-validation.md` is recorded in `tests/hardware/`.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "LoadForge ${GITHUB_REF_NAME#v}" --notes-file notes.md artifacts/*
