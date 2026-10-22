@@ -1099,6 +1099,109 @@ asserted outside the sanitizers and "unchanged across a million runs" everywhere
 thousand runs took 7.7 s debug, 9 s TSan, 8 s ASan: the guess that sanitizers would be much
 slower, which had cut the soak to a tenth, was wrong (§4.21).
 
+### 1.51 Every control message is answered by every worker, and a refusal leaves the worker working
+
+*Established 2026-10-21 22:47 UTC, M5 integration (stream 29, `docs/journal/29-integration-m5.md`;
+`tests/supervision/control_test.cpp`, the shipped binary, two real workers).* A worker told to pause
+for a fifth of a 1.9 s run computes fewer units than its neighbour; one given a duty cycle of 150
+per mille over a 100 ms period does too. A Rebind to the last CPU and back, and a Switch from sort
+to compression, are Done and the run stays clean. A Rebind to CPU 1000 and a Switch to a name no
+registry holds are refused with the reason in the worker's story, and the worker goes on computing.
+
+### 1.52 A killed controller leaves a journal that replays, and no worker outlives it
+
+*Established 2026-10-21, stream 29 (`tests/supervision/journal_kill_test.cpp`).* The shipped binary
+runs `stress --test mixed --rotation 1s --journal FILE` and gets SIGKILL 4.5 s in. The file replays
+as `Unterminated` (or `TornTail`) with at least three entries, in order, the first with both
+workers alive and the last with verified units; `loadforge journal FILE` says "abnormally"; the
+process group is empty within ten seconds.
+
+### 1.53 A rotated worker grows nothing, and the schedule agrees with a second implementation
+
+*Established 2026-10-21, stream 29 (`tests/soak/workloads/mixed`;
+`tests/fixtures/workloads/mixed/generate.py`).* The real worker loop, in a thread and rotated every
+250 ms for 20 s (the nightly job sets two hours), acknowledges everything Done, never runs its tally
+backwards, makes no finding, and ends with the resident set, descriptors and threads where it began.
+A five-hour schedule of 64 workers and four placements is made in under two seconds (1799 steps at a
+rotation of ten seconds, all phase labels different, the same digest twice). The Python generator
+was written from the header's rules and not from the C++; six committed listings and digests were
+reproduced by the C++ on its first run.
+
+### 1.54 A rotation faster than the timeline's clock cannot be marked
+
+*Established 2026-10-21, stream 29.* `stress --test mixed --rotation 1ms` for seven seconds runs, and
+the timeline refuses some phase marks ("phase r2 memory-heavy refused: out of order"): several steps
+fall in one millisecond and the timeline wants strictly later marks. The run is unaffected; no test
+of its own found it. `kMaxSteps` (100000) bounds a rotation that is too short. A limit of
+`TimelineSink::mark_phase`, recorded as an open question (§6).
+
+### 1.55 A worker usually leaves on its own duration before it reads the controller's Stop
+
+*Established 2026-10-22 11:40 UTC, stream 29.* The worker's clock starts after exec and the
+controller's deadline is measured from before the fork, so the Stop is usually written first; but a
+worker busy in a slice reads it only at the next tick, and one that has counted its duration out
+leaves without reading it. Both are clean, so a Stop is excluded from "unanswered" and counted in
+"sent" when written. It is not always written: `request_stop` sends nothing to a reaped worker, and
+with six CPU hogs beside it the pause test lost the Stop from both workers' `sent` in 2 runs of 12.
+The tests now admit the Stop or its absence (§4.23 has the failure as it reached CI).
+
+### 1.56 A worker whose records nobody reads blocks in `write()` and never ends
+
+*Established 2026-10-22 14:53 UTC, from a CI test stopped after 900 s (#96, stream 29).* The mixed soak
+and `RotationFaults.ACheckThatCannotBeMadeAfterASwitchIsNotPerformedNeverClean` ran the worker loop in
+a thread and read the records pipe only after joining it. A pipe holds 64 KiB; a machine that runs
+units fast enough writes more, the worker blocks, and the join never returns. A soak of 60 s hung
+locally (worker thread in `anon_pipe_write`, test thread in the join) where 20 s passed, and the
+nightly one runs two hours. Both tests now read the records in a second thread while the worker runs;
+with the fault test's pipe cut to 4 KiB both pass, and the 60 s soak passes in 60 s. (The other
+failures of that day's CI are §4.23 and §5.13.)
+
+### 1.57 A run that must reach its deadline cannot be built over the fake of the system calls
+
+*Established 2026-10-22, M6 integration (stream 33, `docs/journal/33-explore-integration.md`).* The first
+deadline test started two workers on the fake and scripted no reap. The controller asked them to
+stop, escalated, and waited for children the fake never reaped: the test did not end (killed at
+three minutes, 98% of a core). The orchestration tests reach a deadline by releasing the workers'
+pipe ends and scripting reaps from inside the reporter's `event` callback; the trial runner owns its
+reporter, so a run with a `stop` mark is reached by real processes only (`tests/integration/m6`).
+The unit tests drive the other ending, workers that exit at once, windowed by the last round.
+
+### 1.58 `poll(2)` with no descriptors is the settle phase's sleep, and it sleeps
+
+*Established 2026-10-22, stream 33.* `Syscalls::poll_readable({}, ms)` is a pure wait on the real
+kernel. The integration test settles on `memory.available` with a one-second window and reads
+`settle_ns` back between 1.0 s and the 20 s maximum: the phase cannot be satisfied before its window
+is full. The fake's poll does not advance the clock, so the unit tests move time by reading it (10 ms
+a read) and check the wait asked for (at least 1 ms, a quarter of the window, never longer than the
+sample interval or the time left).
+
+### 1.59 This machine's free memory is too noisy to rank one worker against three
+
+*Established 2026-10-22, stream 33.* The first search tests expected `three:sort:3` (64 MiB each,
+128 MiB more than `one`) to leave less memory available than `one:sort:1`. Over 30 repetitions of the
+file two failed, naming `one`, with replicate standard deviations of 250 MB for `memory.available`
+(the first search of the day, on a quiet machine, gave 12 MB). The free memory of this VM moves by
+hundreds of megabytes between trials; the cause is not established. The tests assert what holds under
+any load (the report is complete: worst case with `+/-` and `n=3`, every replicate, the reference's
+readings, 8 trials in one round; and a search on `memory.total`, which no candidate changes, ranks
+nothing, sd 0). Which candidate wins a noisy objective is measured, not asserted (§1.60).
+
+### 1.60 Repeated worst-case searches on a VM name the same worst case, with overlapping intervals
+
+*Established 2026-10-22 15:32 UTC, stream 33 (commit `283de7c` plus the journal; four vCPUs of a
+Xeon @ 2.80GHz, 16 GiB, Linux 6.18.44, debug build, no hwmon, thermal zone, cpufreq, RAPL or PMU: 10
+of 24 metrics present; neighbours share the host).* Two objectives, each searched five times with the
+same arguments over `one:sort:1`, `two:sort:2`, `four:sort:4` (4 s of load per trial, 250 ms
+sampling, replicates 1 base, 4 final, 3 for the reference interleaved every 2 trials; 14 trials in 2
+rounds, about 50 s). All ten searches name `four`. Busy ticks (rate, higher is worse): 399.6 to
+404.1 over the five, half-widths 2.2 to 17, ranking "separated"; four workers on four vCPUs read the
+machine's 400 ticks a second, and one and two read 108 and 207 (the instrument reads the load).
+`memory.available` (min, lower is worse): 1.5874e10 to 1.5898e10 bytes, half-widths 3.9e7 to 5.7e7,
+"not distinguishable", which is honest: the best rival in a halving round has one or two replicates
+(two's mean 1.598e10 with a half-width of 2.9e8). The reference moved under 1% over a search. The
+files are the machine's and are not committed. This is the half of T11 a VM can show (§5.14); it says
+nothing of temperature.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -2768,6 +2871,136 @@ from its present metrics makes each of its series `kMalformed`, naming the sourc
 The order of refusal is unknown series, out of order, kind mismatch, capacity, last, because every
 other refusal is the caller's mistake and should be reported even on a full timeline.
 
+### 2.49 Control is frames on the existing pipe, acks are frames on the record pipe, the stop byte is gone
+
+*M5 integration (stream 29, `29-integration-m5.md`).* Options: a new pipe for acks; the old stop byte
+beside the new messages; framed messages both ways. Chosen: the control pipe carries `ipc` frames of
+type 32 (`kControlFrameType`) and acks return on the record pipe as type 33, so no descriptor is added
+and the control channel gets the record reader's checks (length, checksum). A truncated frame at end
+of file is the controller hanging up; any other malformed frame, a frame of another type or an
+undecodable payload is `kControlChannelBroken`, counted with the controller lost (exit 124), because
+a worker that cannot be told to stop must leave as one whose controller is gone. The null workload
+answers a Stop Done and ends; it refuses every other command with a reason.
+
+### 2.50 A worker's tick, a replacement, and what the last runner says
+
+*Stream 29.* The tick: beat, duration, controller, the control pipe (no waiting when there is work, up
+to a heartbeat interval when paused or idle in a duty cycle), every message in order, then a slice only
+if none was handled. A Stop is answered before anything else the worker says and later messages are
+not handled. Rebind and Switch share one routine: close the runner (records and tally are sent),
+release it in reverse of construction, prepare the next from the next unit index; if the new is
+refused, prepare the old again and answer refused with the reason, and only a failure of that is the
+worker's failure (stage "restore"). A Switch to an unknown name is refused before the runner is
+touched. The ISA path is kept if the new workload offers it, else `select_path` chooses. A Rebind
+clears the package, core and NUMA facts of the old placement. The memory frame is sent again after
+each replacement and the controller keeps the weakest. A runner's final report says what the whole run
+did not check, so at a replacement its two "over ..." statements are dropped and at the end they are
+kept only if the cumulative tally says nothing was checked; the fault test with an oracle that declines
+to judge finds exactly one such statement for a rotated run, about the last workload.
+
+### 2.51 The controller bounds unanswered messages, and widens the stall allowance for a duty cycle
+
+*Stream 29.* At most 64 unanswered messages per worker; a schedule command past that is dropped and
+counted (`dropped`), a Stop is always sent. Acknowledgements must arrive in order, and one of anything
+but the oldest unanswered is a corrupt channel. An effect (paused, the idle allowance) is taken only
+from a Done. A worker told to be busy a share of a period is silent between slices by design, so once
+its SetDuty is Done its stall allowance is `stale_after + idle`, and a paused worker's stall clock is
+refreshed, so neither is judged hung.
+
+### 2.52 The mixed schedule is data made before the run
+
+*Stream 29.* `mixed::Schedule` is a value with no process or clock behind it. `problem()` refuses a
+schedule that does not fit the run before the first fork; `digest()` is a CRC-32 over a canonical text,
+equal on every architecture. Mixed: five phases in fixed order (mixed, compute-heavy, memory-heavy,
+balanced, all-join) indexed by rotation modulo five, every third rotation a "move" when placements are
+given, a footprint of the whole or half the ceiling, seeds unique per (rotation, slot). The intensity
+classes are a hypothesis (compute: dense_linear, fft, monte_carlo, particles, raytrace; memory:
+adaptive_mesh, graph, sort, sparse, stencil; compression and anything unknown: balanced), kept in one
+function to change when a measurement says otherwise. Cycling: load (idle, heavy, moderate, heavy at
+0, 1000, 500, 1000 per mille) or cores (shares 125, 500, 1000, 250, 1000 of the workers, at least one),
+with only the commands that change a worker's state. Q10 (worker granularity under a mixed workload)
+is confirmed: `docs/adr/proposed/29-q10-worker-granularity-under-a-mixed-workload.md`.
+
+### 2.53 The journal in the controller, the command line of M5, and the registries
+
+*Stream 29.* An entry at the start, every `journal_interval_ns` (5 s), at every phase (forced), "stop" at
+the deadline and "done" after the last reap, appended then synced. A fault in journaling ends
+journaling and is reported, never the run. The controller never closes the writer; the caller does,
+in the parent only, so a forked child whose exec failed never closes a journal it shares.
+`last_verified_unit` is the largest `units_computed` over the workers' tallies. An existing journal is
+replayed first: a clean one is removed, an abnormal, torn or corrupt one is kept as FILE.N (never
+overwritten, up to 1000) and its last entry printed. Command line: `stress --test mixed [--rotation
+D]`, `stress --test cycling [--workload NAME] [--cycle load|cores] [--dwell D]`, `--journal FILE` on
+`--test` and `--config`, `loadforge journal FILE`; rotation defaults to duration/6 clamped to 1 s to
+5 min, dwell to duration/8 clamped to 1 s to 60 s, the cycling workload to dense_linear; the mixed
+footprint must be an absolute size (a rotation cannot halve a share of memory). Seven workloads gained
+a `workload_descriptor()` their own `create()` uses, so the registries (now all eleven) answer
+`descriptor(name)` without making one; the registry tests that used "fft" as the unknown name use
+"teapot".
+
+### 2.54 The trial runner: one `Controller::run` and one rig per trial; the settle phase is measured
+
+*M6 integration (stream 33, `33-explore-integration.md`).* Each trial makes its own telemetry rig
+(sources, sampler, bounded timeline), runs the controller, summarises the load window, and drops the
+rig. *Rejected:* one long-lived rig for the search (the timeline grows by every trial of a search of
+hours and can only refuse at capacity, and a window must then be found among all the trials').
+Re-probing costs a few file reads against a load of seconds. `capabilities()` is probed once by
+`create()` and returned unchanged, as the contract asks; a later rig that sees a different machine
+lacks a series, which explore reports as `kNoReading`. `Settle` is the only way a candidate asks for
+a controlled starting state, so explore sets it on every candidate of a search (PLAN §4.4 requires
+cool-down between trials) and the command does for all when `--settle` is given. The phase takes
+rounds every `clamp(window/4, 1 ms, sample interval)` and stops when the least-squares slope over the
+last `window_ns` is within the bound **and the window is full**, or at `max_ns`. A slope is never
+judged from a window not filled (two readings a millisecond apart give a slope of anything). Unsettled
+reports `settled = false` and `settle_ns = max_ns`, not an error; a sensor that drops out reads
+Unavailable, which cannot be settled on, so the phase runs out its time.
+
+### 2.55 What a candidate means: CPUs, threads, seed, and the load window
+
+*Stream 33.* `Candidate::cpus` becomes `VerificationOptions::cpus` (sorted, de-duplicated); slot `i` is
+placed on `cpus[i mod n]`, and empty means the CPUs the process may use. A CPU the process may not use
+refuses the candidate (`kCandidate`) before anything starts. Threads are worker processes and
+workloads are dealt in turn (`{a, b}` with 5 threads is `a b a b a`); fewer threads than workloads is
+refused (the candidate would not be what it says), as is more than 1024 workers or a duration above
+30 days (so sums of lengths cannot overflow); these and "a settle phase that is not well formed" are
+additions to the contract's list of `kCandidate`. The seed is the same on every trial, so replicates
+run the same units and what differs is the machine, which is the variance explore measures; a varying
+seed would add the workload's own variance. The load window is exactly `duration_ns` wide and ends one
+nanosecond past the `stop` mark (the controller takes a round at the deadline and marks `stop` at the
+same instant; a statistics window closing on a reading closes `statistics::kClosingMargin` past it),
+so it is `[stop + 1 - duration_ns, stop + 1)`. The duration is whole milliseconds, so a part of a
+millisecond makes the controller run up to a millisecond longer than the window. A run that ended
+before its deadline has no `stop` mark, is windowed by its last round, and says it did not finish.
+
+### 2.56 No isolation ladder per trial; a trial that loses its telemetry has failed; exit codes of `explore`
+
+*Stream 33.* `stress` repeats a wrong result in processes of its own to say whether it is CPU, memory or
+code. A trial's verdict is `derive_verdict`'s whether or not isolated; a search that finds a wrong
+result reports the candidate and stops scoring it, and isolating it is `loadforge stress`'s job.
+*Rejected:* a ladder inside the search, which adds minutes to a trial the search schedules by the
+second. If the sampler stopped mid-trial (a round the timeline refused) the trial answers `kRun` with
+the controller's words. *Rejected:* returning a signature whose objective reads as "no sample", which
+would end the search with a less useful error. A worker whose exec failed returns in the forked child
+(orchestration.hpp): the trial answers `kRun` with `worker_exit_code()`, and the command checks that
+before printing and ends the process with it, as `stress` does, so a child never prints a report.
+Exit codes keep `stress`'s vocabulary: 0 every candidate scored; 1 refused before the first trial
+(objective, search or machine; an objective on an unavailable metric carries the source's reason and
+remedy); 2 usage; 3 a trial could not run or the reference was unusable; 5 a trial found a fault (a
+finding, never a score); 6 a trial did not finish or held no reading of the objective; 5 when both
+apply.
+
+### 2.57 `loadforge explore` takes flags, not a configuration file; the report prints what it computed from
+
+*Stream 33.* `config::Mode::kExplore` parses but "lands with a later milestone", and `src/config` is not
+this stream's; the search space is a curated list that reads best on a command line:
+`--objective METRIC[@INDEX]:STATISTIC:higher|lower`, `--candidate ID:WORKLOAD[+WORKLOAD...]:THREADS[:CPUS]`
+(repeatable), an optional `--reference` of the same form (default: the first candidate's workloads, one
+worker, anywhere, id `reference`), the settle phase and the search parameters. All candidates and the
+reference share the duration, settle phase and default duty cycle, so F17 holds by construction. The
+report lists the worst case with its replicate count, standard deviation and 95% interval, the ranking
+against the best rival, every candidate's replicates in order (raw and drift-corrected) and every
+reference reading with its time; a bare number is not printable.
+
 ---
 
 ## 3. The verification doctrine, and how it was learned
@@ -3266,6 +3499,31 @@ What worked: get the failing output first (CI's rerun step, or a local run with
 six times), and read which assertion fails before changing anything. A wider margin is a
 fix only when the output shows that the margin is the cause.
 
+### 4.24 Three coverage traps met again, now in the explore command and the trial runner
+
+*M6 integration (stream 33).* §1.9, §1.13 and §1.22 had each been recorded and each recurred, because a
+journal entry is not a check (§4.17).
+- `explore_command(..., TrialOptions{}, ...)` left eight branches no test can take in `cli.cpp`: the
+  temporary's `std::string` members are destroyed in a cleanup block that runs only if a later
+  argument throws. A named `const TrialOptions kDefaultTrialOptions{}` beside `kDefaultOptions`
+  removes them, as it did for stress.
+- `inputs.timeline = &rig->timeline();` carries a null test: `BoundedTimeline` derives from both
+  `TimelineSink` and `TimelineView`, the conversion to the second base keeps null as null, and the
+  arm for null is never taken. Binding a reference first leaves nothing to test.
+- A call spread over several lines (`make_rig(..., timeline_capacity(RunShape{...}), ...)`) left its
+  middle line "executable and never executed": the inlined `noexcept` call is attributed to the next
+  line. Splitting it into statements removed the phantom line.
+- `return refused(key, "expected ... '" + std::string{text} + "'")` left one branch (the temporaries'
+  cleanup): build the message in a named string first, as §1.13 says.
+
+### 4.25 A test that ranks two values the machine moves
+
+*M6 integration (stream 33), 2026-10-22.* The search tests asserted which of two candidates leaves less
+free memory, a quantity the VM moves by hundreds of megabytes (§1.59). The test passed on its first runs
+and failed 2 in 30. Assert what holds on any machine under any load (the report is complete; a quantity
+no candidate changes ranks nothing) and measure the rest, with the evidence written down (§1.60).
+Repeating the file thirty times is what exposed it; one green run did not.
+
 ---
 
 ## 5. Process knowledge
@@ -3427,6 +3685,19 @@ comes with the runner image and nothing here installs from it. Since a job canno
 from here (§5.11), the workflows now delete `/etc/apt/sources.list.d/microsoft-prod.*` before
 every `apt-get update` (#95). An outside service that can fail a job is either removed from
 the job's path or made unable to fail it; waiting for it to recover costs a push either way.
+
+### 5.14 An exit criterion that needs hardware is split, and the unmet half is written down with its protocol
+
+*M6 integration (stream 33), 2026-10-22.* T11 ("repeatable worst-case discovery on real hardware, with
+variance reported and replicates recorded; an objective whose metric is unavailable fails loudly")
+has a half a VM can meet and a half it cannot. The first is closed by tests and a captured console
+(`loadforge explore --objective thermal.package:max:higher ...` exits 1 with the source's own reason and
+no worker started, in under five seconds: `tests/integration/m6/binary_test.cpp`); the mechanism was
+run ten times on the VM and recorded (§1.60). The second is not claimed: the fragment says what the
+measurement does not show (a temperature, drift from a warming machine, a settle phase on a real
+sensor) and gives the protocol, so the criterion is marked met by a person with the machine and not by
+the next reader's optimism. The report names the machine, so a VM cannot be mistaken for the hardware
+(§1.42). The same shape applies to stream 34's validation.
 
 ---
 
@@ -3596,6 +3867,34 @@ Kept short and current; move an item to the relevant document once it is settled
     (`atomic_thread_fence`, streams 16 and 20); Clang's runtime does install and run
     (stream 21).
 
+- **Contract questions from the M5 and M6 integrations, folded 2026-10-22 21:45 UTC.** None was answered
+  by a contract change; the tree holds no decision file for them. *Stream 29 (M5):* `result.hpp` names
+  one workload per worker (`WorkerWork`), so a worker rotated by Switch is reported as what it started as
+  (reading taken: the initial workload, with the count of Switch commands done in the story; a field
+  for the workloads run, in order, is wanted); `control.hpp` is silent on how often a worker states its
+  working set (frame 18; a Switch changes it, so it is sent again and the controller keeps the weakest;
+  if it is meant to be sent once, say so); `TimelineSink::mark_phase` refuses marks in the same
+  millisecond (§1.54). No disagreement was found against `ControlCodecContract`, `JournalContract` or
+  `RegistryContract`. *Stream 33 (M6):* `trial.hpp` should say that the load window is anchored on
+  the `stop` mark, extending `duration_ns` back, plus the one-nanosecond closing margin, so its start
+  is the last launch only to within a controller tick (§2.55); that a candidate without `settle` is not
+  entitled to a cool-down (explore puts one on each); what `settle_ns` is for an unsettled phase
+  (read as `max_ns`, with `settled = false` the signal); that `ASettlePhaseIsMeasuredAndBounded`'s 1 ms
+  window can never settle for a runner that fills the window before judging a slope, so the example
+  ends unsettled (the assertions 0 <= settle_ns <= max_ns hold; a stronger one would be unsound);
+  that trial windows are on the monotonic clock and each later than the last (this answers stream
+  28's question about window order); and the list of `TrialFault::kCandidate` causes (§2.55). Still
+  open from stream 28: a trial with verdict `kCorrectedErrors` reaches explore as a score, and the
+  report does not flag it.
+- **T11, the thermal half (M6 exit criterion 1).** Unmet. It needs a machine with a readable package
+  temperature (coretemp, k10temp or a thermal zone) that is otherwise idle; the same command with
+  `--objective thermal.package:max:higher --settle thermal.package` over a curated set (for instance
+  dense-linear and sort at one thread and at all cores, with and without pinning to one core); at
+  least five repetitions of the whole search, each report kept whole; the machine described (CPU model,
+  cooling, ambient); and the claim made only if the five searches name the same worst case with
+  overlapping intervals. It is a `tests/hardware` occurrence, one file per occurrence
+  (`tests/hardware/m2b-thermal-2026-10-20-2212-UTC.md` is the existing one). The VM half is §1.60.
+
 ---
 
 ## 7. Stream journals
@@ -3615,6 +3914,13 @@ wrote the contracts.
 **Folded 2026-10-21 18:20 UTC.** The fragments of waves 1 to 4 (00 to 10, 12 to 20, 22 to 28 and
 30 to 32), the two integrations (11 and 21) and the two decision files beside them were folded
 into the sections above: §1.33 to §1.50, §2.34 to §2.48, §4.18 to §4.22, and the state of every
-contract question in §6. Streams 29, 33 and 34 have no fragment yet. Each file is kept unchanged
+contract question in §6. Stream 34 has no fragment yet. Each file is kept unchanged
 as the record of which stream learned what. The next fold is at the end of the next wave; the
-numbering continues from §1.50, §2.48 and §4.22.
+numbering continues from §1.60, §2.57, §4.25 and §5.14.
+
+**Folded 2026-10-22 21:45 UTC.** The fragments of the M5 and M6 integrations were folded: stream 29,
+`docs/journal/29-integration-m5.md` (the mixed workload, worker control, the crash journal): §1.51 to
+§1.56, §2.49 to §2.53; stream 33, `docs/journal/33-explore-integration.md` (the trial runner and
+`loadforge explore`): §1.57 to §1.60, §2.54 to §2.57, §4.24, §4.25 and §5.14; their contract
+questions and the thermal half of T11 are in §6. Today's CI failures are §4.23 and §5.13 and are not
+repeated here.
