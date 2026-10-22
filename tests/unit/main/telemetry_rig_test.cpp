@@ -8,10 +8,14 @@
 #include <gtest/gtest.h>
 
 #include <limits>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "platform/fs.hpp"
+#include "telemetry/source.hpp"
+#include "topology/source.hpp"
 #include "support/fake_syscalls.hpp"
 
 namespace loadforge::cli {
@@ -81,6 +85,58 @@ TEST(TelemetryRigTest, TheRigHoldsATimelineOfTheCapacityAskedAndTheSeriesTheProb
   EXPECT_EQ(rig.value()->timeline().capacity(), 777U);
   EXPECT_GE(rig.value()->timeline().series_count(), 1U);
   EXPECT_EQ(rig.value()->capabilities().sources.size(), 7U);
+}
+
+telemetry::MetricStatus status_of(std::string name, telemetry::Unit unit, telemetry::Kind kind,
+                                  std::optional<telemetry::Unavailable> why = std::nullopt) {
+  telemetry::MetricStatus status;
+  status.metric = telemetry::Metric{std::move(name), unit, kind, telemetry::Scope::kPackage, 0,
+                                    std::nullopt,    "mock"};
+  status.unavailable = std::move(why);
+  return status;
+}
+
+telemetry::Unavailable absent(std::string detail) {
+  return telemetry::Unavailable{topology::Availability::kAbsent, "/sys", std::move(detail),
+                                "nothing can be done"};
+}
+
+TEST(TelemetryRigTest, ATemperatureIsAPresentGaugeInDegreesCelsiusFromAnySource) {
+  telemetry::CapabilityReport report;
+  EXPECT_FALSE(has_temperature(report));
+  report.sources.push_back(
+      {"thermal",
+       {status_of("thermal.package", telemetry::Unit::kCelsius, telemetry::Kind::kGauge,
+                  absent("no chip"))}});
+  EXPECT_FALSE(has_temperature(report)) << "an absent sensor is not a temperature";
+  report.sources.push_back(
+      {"power", {status_of("power.package", telemetry::Unit::kWatts, telemetry::Kind::kGauge)}});
+  EXPECT_FALSE(has_temperature(report)) << "a present gauge of watts is not";
+  report.sources.push_back(
+      {"odd", {status_of("odd.count", telemetry::Unit::kCelsius, telemetry::Kind::kCounter)}});
+  EXPECT_FALSE(has_temperature(report)) << "nor a counter";
+  report.sources.push_back(
+      {"thermal", {status_of("thermal.core", telemetry::Unit::kCelsius, telemetry::Kind::kGauge)}});
+  EXPECT_TRUE(has_temperature(report));
+}
+
+TEST(TelemetryRigTest, WhyNoTemperatureIsOfferedIsTheThermalSourcesOwnWordsAndNobodyElses) {
+  telemetry::CapabilityReport report;
+  EXPECT_EQ(unread_temperature(report), "");
+  report.sources.push_back(
+      {"fan", {status_of("fan.speed", telemetry::Unit::kRpm, telemetry::Kind::kGauge,
+                         absent("no fan"))}});
+  EXPECT_EQ(unread_temperature(report), "") << "another source's absence is not the reason";
+  report.sources.push_back(
+      {"thermal",
+       {status_of("thermal.package", telemetry::Unit::kCelsius, telemetry::Kind::kGauge,
+                  absent("no hwmon chip")),
+        status_of("thermal.core", telemetry::Unit::kCelsius, telemetry::Kind::kGauge),
+        status_of("thermal.zone", telemetry::Unit::kCelsius, telemetry::Kind::kGauge,
+                  absent("no zone"))}});
+  EXPECT_EQ(unread_temperature(report),
+            "thermal.package: no hwmon chip; nothing can be done | thermal.zone: no zone; "
+            "nothing can be done");
 }
 
 TEST(TelemetryRigTest, ASeriesBoundGrowsWithTheCpus) {

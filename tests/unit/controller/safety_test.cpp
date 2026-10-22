@@ -197,9 +197,9 @@ TEST(TemperatureCeilingTest, ACeilingWithNoWatchOrNoSensorBeforeTheRunIsRefusedW
   auto none = check_temperature(config, nullptr, "");
   ASSERT_FALSE(none.has_value());
   EXPECT_EQ(none.error(),
-            "limits.max_temperature_c is 90 C and no temperature can be read, so the ceiling "
-            "could not be enforced: no temperature sensor was offered; remove the limit to run "
-            "without a ceiling");
+            "the temperature ceiling is 90 C and no temperature can be read, so it "
+            "could not be enforced: no temperature sensor was offered; remove the ceiling to run "
+            "without one");
   auto reasoned = check_temperature(config, nullptr, "thermal.package: no hwmon chip");
   ASSERT_FALSE(reasoned.has_value());
   EXPECT_NE(reasoned.error().find("could not be enforced: thermal.package: no hwmon chip; remove"),

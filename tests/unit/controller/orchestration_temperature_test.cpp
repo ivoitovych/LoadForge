@@ -330,9 +330,9 @@ TEST(OrchestrationTemperatureTest, ACeilingWithNoSensorAtAllRefusesTheRunBeforeA
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().stage, "temperature");
   EXPECT_EQ(result.error().detail,
-            "limits.max_temperature_c is 85 C and no temperature can be read, so the ceiling "
+            "the temperature ceiling is 85 C and no temperature can be read, so it "
             "could not be enforced: thermal.package: no hwmon chip; nothing can be done; remove "
-            "the limit to run without a ceiling");
+            "the ceiling to run without one");
   EXPECT_EQ(run.syscalls.fork_count(), 0);
   EXPECT_TRUE(run.reporter.plans.empty()) << "refused before the banner";
   EXPECT_TRUE(run.syscalls.all_descriptors_closed());

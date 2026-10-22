@@ -112,9 +112,9 @@ core::Result<core::Ok, std::string> check_temperature(const config::Config& conf
     return core::Ok{};
   }
   if (watch == nullptr || watch->readable() == 0) {
-    std::string refusal = "limits.max_temperature_c is ";
+    std::string refusal = "the temperature ceiling is ";
     refusal += std::to_string(*config.limits.max_temperature_c);
-    refusal += " C and no temperature can be read, so the ceiling could not be enforced: ";
+    refusal += " C and no temperature can be read, so it could not be enforced: ";
     if (watch != nullptr && !watch->sensors().empty()) {
       // Sensors were found and none answered the baseline round.
       refusal += "none of the ";
@@ -124,7 +124,7 @@ core::Result<core::Ok, std::string> check_temperature(const config::Config& conf
     } else {
       refusal += unread.empty() ? "no temperature sensor was offered" : unread;
     }
-    refusal += "; remove the limit to run without a ceiling";
+    refusal += "; remove the ceiling to run without one";
     return refusal;
   }
   if (watch->hot_at_start().has_value()) {
