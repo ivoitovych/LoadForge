@@ -66,6 +66,18 @@ machine the controller's tick can come after the worker has left and been reaped
 lost the Stop from both workers' `sent` in 2 runs of 12 (2026-10-22 11:40 UTC); the tests
 now admit the Stop or its absence in `sent`, as they already did in `done`.
 
+### A worker whose records nobody reads blocks in write() and never ends
+
+Found on CI 2026-10-22 14:53 UTC, once a hung test was stopped after 900 s (#96): the
+mixed soak and `RotationFaults.ACheckThatCannotBeMadeAfterASwitchIsNotPerformedNeverClean`
+ran the worker loop in a thread and read its records pipe only after joining it. A pipe
+holds 64 KiB; a machine that runs units fast enough writes more than that, the worker
+blocks in `write()`, and the join never returns. Here, a soak of 60 s hung (its worker
+thread in `anon_pipe_write`, the test thread in the join) where 20 s passed, and the
+nightly soak runs for two hours. Both tests now read the records in a second thread
+while the worker runs (the soak counts them as they come and keeps none); with the
+fault test's pipe cut to 4 KiB both of its tests pass, and the 60 s soak passes in 60 s.
+
 ## Decisions
 
 ### The control pipe carries frames, the acks come back as frames, the stop byte is gone
