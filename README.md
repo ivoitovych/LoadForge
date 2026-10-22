@@ -11,45 +11,37 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 
 ## Project status
 
-> **Pre-alpha — M0 complete, M1 in progress. No workloads yet.**
+> **1.0 candidate. M0 to M6 are merged; M7, hardware validation, waits for real machines.**
 
 | | |
 |---|---|
-| **Phase** | M0 done; M1 nearly done — everything through the controller has landed; the queue to 1.0 is [`docs/ROADMAP.md`](docs/ROADMAP.md) |
-| **Code** | Build system, CI, the syscall seam with every `errno` path injectable, exit-status classification, the worker launcher and pool, clocks, affinity, memory mapping, CPU/cache/NUMA topology, TOML configuration (`loadforge --check-config FILE`), the heartbeat region and record channel, the worker process behind an internal `--worker` switch, and `loadforge stress`, which runs the null workload in supervised worker processes |
-| **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI; a per-module test-obligation ledger, also gated |
-| **Public API** | Not defined |
-| **Usable** | Not yet — no workloads until M2a. `loadforge stress` runs and supervises the null workload; while it runs, `ps` shows one `loadforge --worker` process per enabled workload |
-
-What exists is the foundation and most of M1: CMake with seven presets, eight CI
-workflows across {x86-64, ARM64} × {GCC 13, Clang 18}, the 100% coverage gate, a
-substitutable syscall seam that makes every `errno` path testable, a classifier for how a
-worker died rather than merely whether it returned zero, the launcher that creates workers
-by `fork` and `exec` and the pool that supervises them, topology discovery with its
-cross-checks, a configuration reader that refuses a typo by name, and the two IPC channels
-a worker and its controller share — a lock-free heartbeat region and a checksummed record
-pipe — and the controller that supervises workers through both. The workloads themselves
-begin at M2a. See [`docs/PLAN.md`](docs/PLAN.md) for the
-milestone sequence, [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) §10 for what is on
-`main` today, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the ordered work from here.
+| **Phase** | Everything through M6 is on `main`. M7 (this document set, packaging, the release workflow and the hardware-validation checklist) is built; its exit criterion, validation on real x86-64 and ARM64 machines and on live media, needs the owner's hardware and is not yet met. The queue is [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| **Version** | The binary reports `0.0.0-m2` until the release commit sets the version; a release tag must equal what `loadforge --version` prints |
+| **Commands** | `stress` (eleven verified workloads and two scheduled runs), `explore` (worst-case search), `journal`, `--check-config`, `--version`, `--help`, `--selftest-digest` |
+| **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI; a per-module test-obligation ledger, also gated; mutation testing, weekly |
+| **Known gaps** | No temperature limit is enforced ([`docs/safety.md`](docs/safety.md) §1). No `benchmark` mode and no `selftest` command. No graceful stop on Ctrl-C. No outside reviewer has seen the whole tree |
 
 | Document | What it is |
 |---|---|
+| [`docs/architecture.md`](docs/architecture.md) | How it is put together: controller and workers, a run in order, verification, results |
+| [`docs/telemetry-sources.md`](docs/telemetry-sources.md) | What is read from the machine, from where, and what makes it absent |
+| [`docs/safety.md`](docs/safety.md) | What the tool protects, what it does not, and what to do before a run |
+| [`docs/hardware-validation.md`](docs/hardware-validation.md) | The checklist for validating a release on real machines and live media |
+| [`packaging/README.md`](packaging/README.md) | Building the release artifacts and the Debian package |
 | [`docs/PLAN.md`](docs/PLAN.md) | The development plan and design of record: a critical review of the draft, the architecture, the directory layout, the testing strategy, milestones and risks |
 | [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) | The build order to 1.0: what each milestone delivers, the module ledger, and the doctrine that makes "every execution path is tested" decidable rather than aspirational |
 | [`docs/JOURNAL.md`](docs/JOURNAL.md) | The engineering journal: facts established by experiment (several contradict the obvious reading of the manual pages), decisions and the alternatives rejected, and the mistakes that earned a structural fix |
-| [`docs/DESIGN-DRAFT.md`](docs/DESIGN-DRAFT.md) | The original project description — a **working draft**, preserved verbatim; parts are superseded by the plan |
-| [`docs/determinism.md`](docs/determinism.md) | The determinism contract — normative, required reading before touching numerical code |
-| [`docs/verification.md`](docs/verification.md) | The verification doctrine — oracles vs golden vectors, fault injection, fault isolation |
+| [`docs/result-schema.md`](docs/result-schema.md) | What `run.json` and `run.csv` hold |
+| [`docs/determinism.md`](docs/determinism.md) | The determinism contract: normative, required reading before touching numerical code |
+| [`docs/verification.md`](docs/verification.md) | The verification doctrine: oracles vs golden vectors, fault injection, fault isolation |
 | [`docs/platforms.md`](docs/platforms.md) | Supported components, the platform audit, and what may be adapted later versus what must be right now |
+| [`docs/DESIGN-DRAFT.md`](docs/DESIGN-DRAFT.md) | The original project description: a **working draft**, preserved verbatim; parts are superseded by the plan |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute, and the three rules that are not obvious |
 | [`LICENSE`](LICENSE) | GPL-3.0-or-later |
 
-Start with `docs/PLAN.md` for where the project is going and why, and
-`docs/IMPLEMENTATION.md` for what gets built next and what tests it owes. Read
-`docs/JOURNAL.md` before writing code that touches the kernel, the toolchain, or a CI
-gate — it is short, and it records the things that were wrong until an experiment
-corrected them.
+Read `docs/safety.md` before your first run. Read `docs/JOURNAL.md` before writing code
+that touches the kernel, the toolchain, or a CI gate; it records the things that were
+wrong until an experiment corrected them.
 
 ---
 
@@ -108,43 +100,127 @@ no heavyweight numerical framework, no large dependency graph.
 
 ---
 
-## Planned test suite
+## The workloads
 
-Twelve integrated reliability workloads:
+Twelve integrated reliability runs. Eleven are workloads; the twelfth is made of the others.
 
-| # | Workload | Dominant character |
+| # | `--test` name | Dominant character |
 |---:|---|---|
-| 1 | Dense linear algebra | FP / SIMD / FMA, compute-bound |
-| 2 | Sparse solver | Memory latency, irregular access |
-| 3 | FFT / spectral transform | Shifting locality, transposes |
-| 4 | Finite-difference / PDE stencil | Sustained RAM bandwidth |
-| 5 | Particle / N-body | Mixed FP, irregular, dynamic |
-| 6 | CPU ray tracing | Branch-heavy, unpredictable control flow |
-| 7 | Sorting / merge / database-style | Integer, writes, TLB pressure |
-| 8 | Compression / integrity pipeline | Integer, bit manipulation, exact round-trip |
-| 9 | Graph / network analysis | Coherence traffic, pointer chasing |
-| 10 | Monte-Carlo simulation | Parallel bursts + synchronized reductions |
-| 11 | Adaptive mesh / dynamic structures | Continuously changing workload shape |
-| 12 | **Dynamic mixed-system test** | Different workloads on different cores, rotating |
+| 1 | `dense_linear` | Dense linear algebra: FP / SIMD / FMA, compute-bound |
+| 2 | `sparse` | Sparse solver: memory latency, irregular access |
+| 3 | `fft` | FFT / spectral transform: shifting locality, transposes |
+| 4 | `stencil` | Finite-difference / PDE stencil: sustained RAM bandwidth |
+| 5 | `particles` | Particle / N-body: mixed FP, irregular, dynamic |
+| 6 | `raytrace` | CPU ray tracing: branch-heavy, unpredictable control flow |
+| 7 | `sort` | Sorting / merge / database-style: integer, writes, TLB pressure |
+| 8 | `compression` | Compression / integrity pipeline: integer, bit manipulation, exact round-trip |
+| 9 | `graph` | Graph / network analysis: coherence traffic, pointer chasing |
+| 10 | `monte_carlo` | Monte-Carlo simulation: parallel bursts + synchronized reductions |
+| 11 | `adaptive_mesh` | Adaptive mesh / dynamic structures: continuously changing workload shape |
+| 12 | `mixed` | **The dynamic mixed-system run**: workloads rotate across the workers and the workers across the CPUs, every unit still verified |
 
-Beneath these sits a layer of small primitive kernels (integer, FP, SIMD, cache,
-memory, branch, atomic) used for calibration, diagnosis, and automatic workload
-construction — not as the user-facing reliability tests.
+`cycling` is a thirteenth name, not a workload: thermal and power cycling of one workload
+by level of duty or by number of working cores.
 
-That table is the target suite, not the build order. **Compression is built first**,
-because its exact byte-for-byte round-trip (`decompress(compress(x)) == x`) proves the
-verification machinery against the simplest possible contract before any floating-point
-subtlety enters. Dense linear algebra follows, and proves the bounded-tolerance contract.
+Every workload has an independent reference oracle, a declared determinism class, and
+fault-injection tests. Beneath them sits a layer of small primitive kernels (integer,
+floating point, SIMD, cache, memory, branch, atomic) used by the workloads.
 
 ---
 
-## Planned operating modes
+## Build, test, install, run
 
 ```bash
-loadforge benchmark                        # short controlled characterization
-loadforge stress --hours 5                 # long reliability verification
-loadforge explore --objective temperature  # search for the worst-case workload
+cmake --preset debug && cmake --build --preset debug -j"$(nproc)"
+ctest --preset debug -j"$(nproc)"
+build/debug/loadforge --version
 ```
+
+Presets: `debug`, `release`, `asan`, `tsan`, `coverage`, `simd-scalar`, `static`.
+
+**Install.** Release artifacts are built by `packaging/build-release.sh` (and, for a tag,
+by the `release` workflow) and come in two forms, with checksums, for x86-64 and ARM64:
+
+- the **static** build, a single file that needs nothing from the system, for live and
+  rescue media and for any Linux older than Ubuntu 24.04;
+- the **dynamic** build, as a tarball and as a Debian package, for **Ubuntu 24.04 or later**.
+
+```bash
+sudo apt install ./loadforge_VERSION_ARCH.deb          # dynamic, Ubuntu 24.04+
+tar -xzf loadforge-VERSION-linux-ARCH-static.tar.gz    # static, anywhere
+```
+
+See [`packaging/README.md`](packaging/README.md).
+
+**Run.**
+
+```bash
+loadforge stress --test sort --duration 2s             # one verified workload, a worker per CPU
+loadforge stress --test mixed --duration 1h --journal run.journal --output json --output-dir out
+loadforge stress --config run.toml                     # a run from a configuration file (below)
+loadforge --check-config config/quick.toml             # check a configuration without running it
+loadforge explore --objective frequency.busy_ticks:rate:higher \
+    --candidate one:sort:1 --candidate two:sort:2 --duration 4s \
+    --replicates 1 --final-replicates 2 --reference-replicates 1
+loadforge journal run.journal                          # how a previous run ended
+```
+
+A run prints, first, which telemetry this machine offers and why anything is absent; then
+a banner of what each worker will do; then the supervision of the run; then the verdict:
+
+```text
+loadforge 0.0.0-m2: stress for 2s with 4 worker(s)
+  workload sort: 1 thread(s) on cpu 0, footprint 32MiB, 12 unit(s) resident, scalar path
+  ...
+[2.017 s] deadline reached: stop requested
+run ended after 2.238 s: 4 of 4 worker(s) completed
+  worker 0 (pid 7452): completed; exited with code 0; progress 5; stop requested
+    verification: 5 unit(s) computed; the oracle checked 5 of them over 655360 sampled block(s) and found 0 wrong, 0 not checked; the input bracket covered 5 unit(s) and found 0 wrong
+    findings: 0 wrong result(s), 0 check(s) not performed
+verdict: clean
+```
+
+A configuration file names the mode, the duration, optional limits and the workloads:
+
+```toml
+schema_version = 1
+
+[run]
+mode     = "stress"
+duration = "30s"
+
+[limits]
+memory = "512MiB"
+
+[[workload]]
+name    = "sort"
+threads = 2
+memory  = "64MiB"
+```
+
+`config/quick.toml` names the `null` workload, which exercises the supervision and
+verifies nothing: it exits 0 with the verdict `incomplete`. Name a real workload to verify.
+An unknown key is refused by name. `max_temperature_c` is accepted and not enforced
+(`docs/safety.md`).
+
+**Exit codes** (`loadforge --help` has the same list):
+
+| Code | Meaning |
+|---:|---|
+| 0 | clean: everything was checked and nothing was wrong |
+| 1 | refused: the configuration was refused, or the run could not start |
+| 2 | usage: the command line is wrong |
+| 3 | the run ended with a worker that did not complete |
+| 4 | a result file could not be written |
+| 5 | a fault: a wrong result, or an error the hardware reported, corrected or not |
+| 6 | a check was not performed: a run that checked nothing is not clean |
+
+When several apply, the first of 5, 4, 3, 6 is the code. `explore` uses 0, 1, 2, 3, 5 and 6
+for the same things, per candidate. The verdict is one of `clean`, `corrected errors`,
+`incomplete`, `findings`.
+
+`--selftest-digest` prints a hash over a fixed corpus; for one version it must be the same
+on x86-64 and ARM64 (`docs/determinism.md`).
 
 ---
 
@@ -193,12 +269,14 @@ The full strategy, including coverage targets and the test tier model, is in
 
 ## Requirements
 
-**Reference platform: Ubuntu 24.04 LTS.**
+**Reference platform: Ubuntu 24.04 LTS.** Ubuntu 24.04 is the declared minimum for the
+dynamically linked build and the Debian package; the static build runs on older systems
+and on live media.
 
 - **Linux on x86-64 and ARM64** — both first-class. Individual telemetry sources are
   probed at startup and degrade gracefully when unavailable.
-- **GCC 13.3 or Clang 18.1** (C++20). Both first-class — CI builds with each.
-- **CMake 3.28+**, Ninja.
+- **To build:** GCC 13.3 or Clang 18.1 (C++20), both first-class and CI builds with each;
+  CMake 3.28+; Ninja. To run a release artifact you need none of these.
 - **No third-party runtime dependencies.** The small amount of third-party code used is
   vendored and header-only; test-only dependencies are pinned and never linked into the
   shipped binary.
@@ -215,13 +293,21 @@ tool claims to have found.
 
 ## Safety notice
 
-LoadForge is designed to drive hardware to sustained maximum power and thermal load.
-On a system with inadequate cooling, a failing fan, degraded thermal paste, or an
-unstable overclock, that is exactly the condition most likely to expose the problem —
-which is the point, but it carries real risk. The suite will include configurable
-temperature ceilings, memory limits, watchdogs, and emergency stop, and it will never
-intentionally rely on undefined behaviour or unsafe hardware register manipulation.
-Use it deliberately.
+LoadForge drives hardware to sustained maximum power and thermal load. On a system with
+inadequate cooling, a failing fan, degraded thermal paste, or an unstable overclock, that
+is exactly the condition most likely to expose the problem, which is the point, but it
+carries real risk.
+
+What it does: a hard deadline for every run; a memory check before the workers start; a
+heartbeat watchdog that stops a hung worker; workers that die with the controller; a crash
+journal that survives a power cut; and no writes to the machine's configuration (it reads
+`/proc` and `/sys`, and writes only the files you ask for).
+
+What it does **not** do: **it does not stop a run because the machine is too hot.** A
+configured `max_temperature_c` is read and reported as not enforced. Ctrl-C ends the run
+at once and writes no report. Watch the temperature yourself, start short, and do not run
+it unattended on a machine whose cooling you have not seen work. The full account is
+[`docs/safety.md`](docs/safety.md).
 
 ---
 

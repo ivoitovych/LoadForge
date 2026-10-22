@@ -2,10 +2,16 @@
 
 Contributions are welcome — issues, forks and pull requests alike.
 
-**Current status: M0 is complete and M1 is nearly done.** The platform layer, topology
-discovery, configuration, the worker process and its IPC, and the controller that runs the
-null workload under supervision are on `main`; workloads begin at M2a. What comes next, in
-order, is [`docs/ROADMAP.md`](docs/ROADMAP.md). The rules below apply to code now.
+**Current status: a 1.0 candidate.** M0 to M6 are on `main`: the platform layer, topology,
+configuration, the controller and worker processes, eleven verified workloads and the two
+scheduled runs, the telemetry sources, results and the crash journal, and `explore`. M7 is
+the release: the documents, the packaging and the hardware-validation checklist are built;
+validating them on real machines is the owner's to do
+([`docs/hardware-validation.md`](docs/hardware-validation.md)). What comes next, in order,
+is [`docs/ROADMAP.md`](docs/ROADMAP.md). The rules below apply to all code.
+
+Start with [`docs/architecture.md`](docs/architecture.md) for how the tree fits together,
+and [`docs/safety.md`](docs/safety.md) before you run anything heavy.
 
 Review of [`docs/PLAN.md`](docs/PLAN.md) is still valuable, particularly the open
 questions at the end.
@@ -251,10 +257,15 @@ If LoadForge says your machine computed something wrong, that is exactly the rep
 project wants — but it is only actionable with provenance. Please use the
 **hardware failure** issue template, and note the first question it asks:
 
-> **Did `loadforge selftest` pass?**
+> **Did the self-test pass?**
 
-That single answer separates a broken build or an unsupported machine from a genuine
-hardware finding, and it is the first thing triage looks at.
+There is no `loadforge selftest` command yet. The answer comes from two things you can
+run: `loadforge --selftest-digest` (a hash over a fixed corpus; for one version it must be
+the same on x86-64 and ARM64), and
+`validate-machine.sh` from the release tarball
+([`docs/hardware-validation.md`](docs/hardware-validation.md) §4), whose results file is
+the best report you can attach. That separates a broken build or an unsupported machine
+from a genuine hardware finding, and it is the first thing triage looks at.
 
 ## Reporting missing or wrong telemetry
 
@@ -275,13 +286,55 @@ nothing about the order of two things that happened on the same day.
 ## Building
 
 ```bash
-cmake --preset debug        # or: release, asan, tsan, coverage, simd-scalar
-cmake --build --preset debug
-ctest --preset debug
+cmake --preset debug        # or: release, asan, tsan, coverage, simd-scalar, static
+cmake --build --preset debug -j"$(nproc)"
+ctest --preset debug -j"$(nproc)"
 ```
 
 Reference platform is **Ubuntu 24.04 LTS** — GCC 13.3, Clang 18.1, CMake 3.28. The full
 supported-components table is in [`docs/platforms.md`](docs/platforms.md).
+
+### What CI runs, and what to run before you push
+
+The workflows under `.github/workflows/` are the definitive list. CI is the gate; push when
+your change builds and its own tests pass, and let CI run the rest in parallel. To run the
+gates locally:
+
+| Gate | Command |
+|---|---|
+| Build and tests | `cmake --preset debug && cmake --build --preset debug -j4 && ctest --preset debug -j4` |
+| Coverage (100% line, branch, function) | `cmake --preset coverage && cmake --build --preset coverage -j4 && ctest --preset coverage && tools/coverage.sh build/coverage` |
+| Test-obligation ledger | `python3 tools/check-test-obligations.py` |
+| Sanitizers | `cmake --preset asan` (or `tsan`), build, `ctest --preset asan` |
+| Scalar-only build | `cmake --preset simd-scalar`, build, `ctest --preset simd-scalar` |
+| Static build | `cmake --preset static && cmake --build --preset static` |
+| Tooling tests | `tests/tools/test_tooling.sh` |
+| Shell and Python | `shellcheck --severity=warning tools/*.sh tools/lib/*.sh tests/tools/*.sh packaging/*.sh`; `ruff check tools/` and `ruff format --diff tools/` (ruff 0.15.8, the version `ci.yml` pins) |
+| Format and tidy | `clang-format-18 --dry-run --Werror` over `src` and `tests`; `clang-tidy` over `src` |
+
+Build trees are 1 to 2 GB each: delete the ones you are done with.
+
+### Installing and packaging
+
+`packaging/build-release.sh` builds both release artifacts (static and dynamic) for the
+machine it runs on, checks them, and writes the tarballs, the Debian package and the
+checksums; the `release` workflow runs the same script for a version tag. See
+[`packaging/README.md`](packaging/README.md). A change to anything under `packaging/`
+builds, installs and removes the package in CI.
+
+### Releasing
+
+A release is a tag `vX.Y.Z` on a commit whose `project(VERSION)` and
+`LOADFORGE_MILESTONE` in `CMakeLists.txt` make `loadforge --version` print exactly
+`X.Y.Z` (the workflow refuses a tag that disagrees with the binary). The workflow
+drafts the release; it is published by hand after the hardware validation is recorded in
+`tests/hardware/`.
+
+### Hardware results
+
+A result from a real machine is a contribution of its own: `validate-machine.sh` writes it
+and [`docs/hardware-validation.md`](docs/hardware-validation.md) says where it goes. One
+file per machine per run, named `m7-LABEL-FLAVOUR-YYYY-MM-DD-HHMM-UTC.md`, never overwritten.
 
 ## Conduct
 
