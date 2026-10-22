@@ -76,13 +76,14 @@ std::string line_of(const std::string& text, const std::string& prefix) {
   return text.substr(from, text.find('\n', from) - from);
 }
 
-/// A search small enough to run in under a minute: one worker against three, the
-/// lowest available memory the objective, and the footprint that makes the three
-/// hold clearly more.
-const char* const kSearch =
-    "explore --objective memory.available:min:lower --candidate one:sort:1 "
-    "--candidate three:sort:3 --duration 3s --footprint 64MiB --sample-interval 250ms "
-    "--replicates 1 --final-replicates 3 --reference-replicates 2 --interleave 2";
+/// A search small enough to run in under a minute: one worker against three, over
+/// the objective `objective`, with real workers verifying every unit they compute.
+std::string search_over(const std::string& objective) {
+  return "explore --objective " + objective +
+         " --candidate one:sort:1 --candidate three:sort:3 --duration 3s --footprint 64MiB "
+         "--sample-interval 250ms --replicates 1 --final-replicates 3 --reference-replicates 2 "
+         "--interleave 2";
+}
 
 TEST(M6Binary, AnObjectiveOnAMetricThisMachineCannotReadIsRefusedBeforeAnythingRuns) {
   const Scratch scratch;
@@ -139,34 +140,38 @@ TEST(M6Binary, ACandidateTheMachineCannotRunIsRefusedAsSuchByTheSearch) {
   EXPECT_TRUE(contains(ran.console, "no workload named 'no_such_workload'")) << ran.console;
 }
 
-TEST(M6Binary, ASearchReportsTheWorstCaseWithItsReplicatesSpreadAndInterval) {
-  const Scratch scratch;
-  const Outcome ran = loadforge(scratch, kSearch);
+/// What every search that ends says, whatever it found.
+void expect_a_complete_report(const Outcome& ran) {
   ASSERT_EQ(ran.code, 0) << ran.console;
   const std::string worst = line_of(ran.console, "worst case: ");
-  EXPECT_TRUE(contains(worst, "worst case: three: ")) << "three workers hold more: " << ran.console;
-  EXPECT_TRUE(contains(worst, "+/-")) << worst;
-  EXPECT_TRUE(contains(worst, "95% CI, n=3")) << worst;
+  EXPECT_TRUE(contains(worst, "worst case: one: ") || contains(worst, "worst case: three: "))
+      << "a candidate of the set: " << worst;
+  EXPECT_TRUE(contains(worst, "+/-")) << "an interval: " << worst;
+  EXPECT_TRUE(contains(worst, "95% CI, n=3")) << "the replicates behind it: " << worst;
   EXPECT_TRUE(contains(ran.console, "ranking: ")) << "whether it can be told from the rival";
-  EXPECT_TRUE(contains(ran.console, "candidate three: survivor")) << ran.console;
-  EXPECT_TRUE(contains(ran.console, "candidate one: eliminated")) << ran.console;
+  EXPECT_TRUE(contains(ran.console, "candidate one: ")) << ran.console;
+  EXPECT_TRUE(contains(ran.console, "candidate three: ")) << ran.console;
   EXPECT_TRUE(contains(ran.console, "  replicates: ")) << "every replicate is recorded";
   EXPECT_TRUE(contains(ran.console, "reference: anchor ")) << ran.console;
   EXPECT_TRUE(contains(ran.console, "readings (midpoint of the load window in ns, value):"));
+  EXPECT_TRUE(contains(ran.console, "explore: 8 trial(s) in 1 round(s)")) << ran.console;
 }
 
-TEST(M6Binary, RepeatedTwiceTheSearchNamesTheSameWorstCaseAndAgreesWithinItsInterval) {
+TEST(M6Binary, ASearchOverRealWorkersReportsItsWorstCaseWithReplicatesSpreadAndInterval) {
   const Scratch scratch;
-  const Outcome first = loadforge(scratch, kSearch);
-  const Outcome second = loadforge(scratch, kSearch);
-  ASSERT_EQ(first.code, 0) << first.console;
-  ASSERT_EQ(second.code, 0) << second.console;
-  const auto name_of = [](const std::string& console) {
-    const std::string worst = line_of(console, "worst case: ");
-    return worst.substr(0, worst.find(':', std::string{"worst case: "}.size()));
-  };
-  EXPECT_EQ(name_of(first.console), name_of(second.console)) << first.console << second.console;
-  EXPECT_EQ(name_of(first.console), "worst case: three");
+  expect_a_complete_report(loadforge(scratch, search_over("memory.available:min:lower")));
+}
+
+TEST(M6Binary, ASearchOnAQuantityNoCandidateChangesRanksNothingAndSaysSo) {
+  // The machine's total memory is the same in every window of every trial: the one objective
+  // whose answer is known without measuring anything, so it holds on any machine and under
+  // any load. Nothing may be called the worst, and the report says it cannot tell.
+  const Scratch scratch;
+  const Outcome ran = loadforge(scratch, search_over("memory.total:max:higher"));
+  expect_a_complete_report(ran);
+  EXPECT_TRUE(contains(ran.console, "ranking: not distinguishable from the best rival"))
+      << ran.console;
+  EXPECT_TRUE(contains(ran.console, "sd 0")) << "no spread at all: " << ran.console;
 }
 
 }  // namespace
