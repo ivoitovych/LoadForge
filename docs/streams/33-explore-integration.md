@@ -1,6 +1,6 @@
 # Stream 33 — Integration: explore on the controller
 
-**State:** complete — pending pull request; the T11 half that needs a machine with a temperature sensor is open, see docs/journal/33-explore-integration.md  
+**State:** merged, #99, 2026-10-22 21:45 UTC; the T11 thermal half needs a machine with a package temperature sensor (docs/journal/33-explore-integration.md)  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 5  
 **Tier:** Tier B — concurrency, supervision, verification oracles, or a pattern every later stream copies  
