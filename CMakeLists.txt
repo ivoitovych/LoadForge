@@ -142,6 +142,8 @@ add_library(loadforge_cli STATIC
   src/main/result_files.cpp
   src/main/journal_rig.cpp
   src/main/schedules.cpp
+  src/main/trial_runner.cpp
+  src/main/explore_command.cpp
 )
 target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadforge_worker loadforge_controller loadforge_resources
   loadforge_telemetry_sources_thermal loadforge_telemetry_sources_fan loadforge_telemetry_sources_frequency
@@ -150,7 +152,7 @@ target_link_libraries(loadforge_cli PUBLIC loadforge_core loadforge_config loadf
   loadforge_telemetry_capability loadforge_statistics loadforge_controller_results
   loadforge_reporters_json loadforge_reporters_csv loadforge_platform_fpenv loadforge_platform_isa
   loadforge_primitives_simd loadforge_workloads_registry loadforge_workloads_mixed
-  loadforge_controller_journal)
+  loadforge_controller_journal loadforge_explore)
 loadforge_set_warnings(loadforge_cli)
 loadforge_set_fp_contract(loadforge_cli)
 loadforge_enable_sanitizers(loadforge_cli)

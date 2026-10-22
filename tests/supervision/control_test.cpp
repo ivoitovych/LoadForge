@@ -301,12 +301,17 @@ TEST(ControlOverRealWorkers, AWorkerKilledBetweenTwoRotationsIsReportedAndItsNei
 }
 
 TEST(ControlOverRealWorkers, ACorruptionIsFoundAboutWhicheverWorkloadAWorkerRanWhenItHappened) {
-  // The faulty worker corrupts every fifth unit of whatever it runs.
+  // The faulty worker corrupts every fifth unit of whatever it runs, so the
+  // switch waits for at least five raytrace units after the worker's start. A
+  // unit takes about 34 ms in the coverage build on an idle 4-vCPU machine (88
+  // in 3 s), and the start prepares the resident units first; at 500 ms a
+  // loaded coverage runner found nothing about raytrace, and 1500 ms leaves
+  // about seven times what an idle machine needs.
   ASSERT_EQ(::setenv("LOADFORGE_FAULT", "all", 1), 0);
   const auto report =
-      run(schedule_of({step(500, "to compression", 0,
+      run(schedule_of({step(1500, "to compression", 0,
                             {worker::Switch{"compression", 5, kFootprint, 0, {1, 1}}})}),
-          4200, LOADFORGE_FAULTY_WORKER);
+          5200, LOADFORGE_FAULTY_WORKER);
   ::unsetenv("LOADFORGE_FAULT");
   ASSERT_TRUE(report.has_value());
   ASSERT_EQ(report->workers.size(), 2U);

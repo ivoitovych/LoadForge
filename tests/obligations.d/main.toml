@@ -6,6 +6,7 @@ path             = "src/main"
 classes          = ["P1", "P2", "P3", "P6", "P7"]
 tiers            = ["T1", "T2", "T7", "T8", "T11"]
 fixture_builders = ["tests/integration/m3/machine.hpp"]
+provides         = ["TrialRunnerContract"]
 consumes         = ["SamplerContract", "TimelineContract", "SourceContract", "SummarizerContract", "VerdictContract", "ResultWriterContract"]
 note             = """
 CLI dispatch, the selftest digest, and what a finished run is to the shell. \
@@ -82,4 +83,36 @@ defaults derived from the duration. P2: every file operation around a journal \
 previous run left abnormally (killed, torn, corrupt) is kept as FILE.N and \
 reported, never overwritten, a clean one is removed, and the forked child of \
 a failed exec never closes the journal it shares with its parent. T8: the \
-shipped binary (tests/integration/m5)."""
+shipped binary (tests/integration/m5). \
+\
+Since M6: `loadforge explore` and the provider of explore::TrialRunner over the \
+controller (trial_runner.hpp), benchmark discipline per PLAN §4.4 for each trial. \
+P1: every reason a candidate is not runnable (no workload, an unknown one, no \
+threads, more threads than a mistake allows, fewer than the workloads, a duration \
+outside 0 to 30 days, a CPU the process may not use, a settle phase that is not \
+well formed), each refused by name before anything starts; the settle phase's \
+three endings (the slope within the bound once the window is full, the time spent, \
+a sensor that dropped out); the window of a run that reached its deadline and of \
+one that did not. P2: the clock (at the start of the settle phase and inside its \
+loop), the wait (EINTR is a short wait, any other errno a failed trial), a round \
+the timeline refuses, a rig the timeline refuses, telemetry that stops mid-trial, \
+a fork the kernel refuses, a result and a window the summarizer refuses -- each \
+injected through the fake of the system calls, a source the test scripts, or a \
+summarizer that fails on its Nth call. P3: a duration of part of a millisecond \
+(the window is exact, the controller runs the next whole millisecond), a settle \
+window shorter than the interval floor, a settle that ends before its first full \
+window, a settle maximum shorter than one interval. P6: the trial runs the \
+controller's whole lifecycle, and a worker whose exec failed returns in the forked \
+child, where the trial answers kRun and the command ends the process with that \
+worker's code and says nothing (the same rule as `stress`). P7: the settle metric \
+absent, present but unreadable (with the source's own remedy), a counter where a \
+gauge is needed, and a gauge whose readings drop out. The trial contract is run \
+against the runner over the fake (tests/unit/main/trial_runner_test.cpp) and \
+against real workers (tests/integration/m6/runner_test.cpp). T8: the shipped binary \
+searches with real workers (tests/integration/m6/binary_test.cpp): an objective or \
+a settle metric this machine cannot read is refused before any worker starts, and a \
+search that ends names its worst case with replicates, spread and interval, and names \
+the same one when repeated. T11: repeatable worst-case discovery on real hardware \
+with variance reported is recorded in docs/journal/33-explore-integration.md, which \
+describes the machine it was run on (a virtual machine without a temperature sensor) \
+and says what still needs real hardware."""

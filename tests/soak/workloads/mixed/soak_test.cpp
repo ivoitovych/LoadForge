@@ -77,6 +77,41 @@ std::int64_t status_field(const std::string& name) {
   return -1;
 }
 
+/// The thread count once it holds still. A joined thread is still counted for a
+/// moment after join() returns, because the kernel finishes its exit after waking
+/// the joiner: 135 reads in 10,000 taken right after a join counted it here (13
+/// under AddressSanitizer, which failed this soak's check on CI). Read until two
+/// reads 20 ms apart agree.
+std::int64_t settled_threads() {
+  std::int64_t last = status_field("Threads");
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const std::int64_t now = status_field("Threads");
+    if (now == last) {
+      return now;
+    }
+    last = now;
+  }
+  return last;
+}
+
+// AddressSanitizer parks freed blocks in a quarantine of up to 256 MiB, and
+// ThreadSanitizer's shadow grows with every page touched, so the resident set
+// climbs under them whatever the code does (the ASan job saw 54 MB grow to 73 MB
+// across 20 s of rotations). There the bound is not asserted, as in the journal
+// soak; the plain and coverage builds assert it, and LeakSanitizer checks leaks.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+constexpr bool kQuarantine = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+constexpr bool kQuarantine = true;
+#else
+constexpr bool kQuarantine = false;
+#endif
+#else
+constexpr bool kQuarantine = false;
+#endif
+
 std::int64_t open_descriptors() {
   std::int64_t count = 0;
   for (const auto& entry : fs::directory_iterator("/proc/self/fd")) {
@@ -108,7 +143,7 @@ TEST(MixedSoak, ARotatedWorkerGrowsNothingAndLosesNoVerification) {
   // this process creates, and keeps it: one thread made and joined here puts it
   // in the baseline, so that the count compares the worker's threads alone.
   std::thread([] {}).join();
-  const std::int64_t threads_before = status_field("Threads");
+  const std::int64_t threads_before = settled_threads();
   const std::int64_t descriptors_before = open_descriptors();
 
   platform::RealSyscalls syscalls;
@@ -228,12 +263,12 @@ TEST(MixedSoak, ARotatedWorkerGrowsNothingAndLosesNoVerification) {
   EXPECT_TRUE(syscalls.close(control.read_fd).has_value());
   EXPECT_TRUE(syscalls.close(control.write_fd).has_value());
   EXPECT_TRUE(region.release().has_value());
-  EXPECT_EQ(status_field("Threads"), threads_before) << "a thread outlived the worker";
+  EXPECT_EQ(settled_threads(), threads_before) << "a thread outlived the worker";
   EXPECT_EQ(open_descriptors(), descriptors_before) << "a descriptor outlived the worker";
 
   // The resident set: the largest of the later cycles may not exceed the
   // largest of the first by more than the footprint of one more working set.
-  if (resident_at_cycle_end.size() >= 6) {
+  if (!kQuarantine && resident_at_cycle_end.size() >= 6) {
     const std::size_t third = resident_at_cycle_end.size() / 3;
     const auto cut = static_cast<std::ptrdiff_t>(third);
     const std::int64_t early =

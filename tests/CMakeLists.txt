@@ -18,6 +18,8 @@ add_executable(loadforge_unit_tests
   unit/main/journal_rig_test.cpp
   unit/main/schedules_test.cpp
   unit/main/cli_schedule_test.cpp
+  unit/main/explore_command_test.cpp
+  unit/main/trial_runner_test.cpp
   unit/main/contract_mocks_test.cpp
   unit/controller/contract_mocks_test.cpp
   unit/controller/journal_model_test.cpp
