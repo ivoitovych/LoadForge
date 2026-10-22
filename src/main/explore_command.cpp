@@ -536,9 +536,9 @@ std::string render_report(const explore::SearchReport& report) {
          << ", ranked in " << candidate.rounds << " round(s), " << candidate.samples.size()
          << " replicate(s)\n";
     if (!candidate.samples.empty()) {
-      text << "  corrected for drift: " << estimate_text(candidate.corrected) << "\n"
-           << "  raw: " << estimate_text(candidate.raw) << "\n"
-           << "  replicates:";
+      text << "  corrected for drift: " << estimate_text(candidate.corrected) << "\n";
+      text << "  raw: " << estimate_text(candidate.raw) << "\n";
+      text << "  replicates:";
       for (const double sample : candidate.samples) {
         text << " " << number(sample);
       }
