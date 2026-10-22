@@ -122,6 +122,15 @@ bool has_record(const WorkerReport& worker, std::string_view text) {
   });
 }
 
+/// `asked` commands were sent, and the Stop at the deadline as well when the
+/// worker was still there to be sent it: a worker that left on its own
+/// duration before the controller's tick is reaped and sent nothing more,
+/// which a loaded machine makes common (request_stop in orchestration.cpp).
+void expect_sent(const WorkerReport& worker, std::uint64_t asked) {
+  EXPECT_GE(worker.commands.sent, asked) << "slot " << worker.slot;
+  EXPECT_LE(worker.commands.sent, asked + 1) << "slot " << worker.slot;
+}
+
 /// `asked` commands were done; the Stop at the deadline is one more when the
 /// worker read it before it left on its own duration, and is not otherwise.
 void expect_done(const WorkerReport& worker, std::uint64_t asked) {
@@ -158,9 +167,9 @@ TEST(ControlOverRealWorkers, PauseHoldsOneWorkerStillUntilResumeAndTheOtherDoesN
   expect_whole(*report);
   const WorkerReport& told = report->workers[0];
   const WorkerReport& left = report->workers[1];
-  EXPECT_EQ(told.commands.sent, 3U) << "two commands, and the Stop at the deadline";
+  expect_sent(told, 2);
   expect_done(told, 2);
-  EXPECT_EQ(left.commands.sent, 1U) << "only the Stop";
+  expect_sent(left, 0);
   EXPECT_LT(told.tally.units_computed, left.tally.units_computed)
       << "it worked for a fifth of the run";
 }
@@ -187,7 +196,7 @@ TEST(ControlOverRealWorkers, ARebindMovesAWorkerAndItKeepsVerifyingWhatItWasDoin
   expect_whole(*report);
   expect_done(report->workers[0], 2);
   EXPECT_EQ(report->workers[0].commands.refused, 0U);
-  EXPECT_EQ(report->workers[1].commands.sent, 1U) << "only the Stop at the deadline";
+  expect_sent(report->workers[1], 0);
 }
 
 TEST(ControlOverRealWorkers, ASwitchChangesWhatAWorkerRunsAndTheTallyRunsOnAcrossIt) {
@@ -213,7 +222,7 @@ TEST(ControlOverRealWorkers, ARefusedCommandIsCountedAndNamedAndTheWorkerGoesOnW
   ASSERT_TRUE(report.has_value());
   expect_whole(*report);
   const WorkerReport& told = report->workers[0];
-  EXPECT_EQ(told.commands.sent, 3U);
+  expect_sent(told, 2);
   EXPECT_EQ(told.commands.refused, 2U);
   expect_done(told, 0);
   EXPECT_TRUE(has_record(told, "refused rebind")) << "the reason is in the worker's story";
