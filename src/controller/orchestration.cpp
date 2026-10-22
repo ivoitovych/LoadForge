@@ -1260,16 +1260,16 @@ core::Result<core::Ok, ControllerError> Run::enforce_temperature(std::int64_t el
 core::Result<core::Ok, ControllerError> Run::stop_for_temperature(const TemperatureStop& stop,
                                                                   std::int64_t now_ns) {
   temperature_stop_ = stop;
-  std::string line = "temperature ceiling: ";
-  line += describe(stop);
-  line += ": stop requested";
-  reporter_->event(stop.at_ns, line);
   if (!stop_requested_) {
     mark_phase("stop", now_ns);
     if (auto requested = request_stop(now_ns); !requested.has_value()) {
       return requested;
     }
   }
+  std::string line = "temperature ceiling: ";
+  line += describe(stop);
+  line += ": stop requested";
+  reporter_->event(stop.at_ns, line);
   // The journal's account of why the run ended, in its own label: the reading
   // is the entry's temperature, the sensor and the ceiling are the phase.
   std::string phase = stop.cause == StopCause::kReached ? "ceiling " : "ceiling unwatched ";
