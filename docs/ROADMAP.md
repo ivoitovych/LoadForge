@@ -89,10 +89,14 @@ change (ADR 0004, "Changing a contract"):
   `docs/JOURNAL.md`, proposed ADRs numbered, `docs/IMPLEMENTATION.md` §3 and §10
   reconciled with what landed, and this file's state brought up to date.
 
-**State on 2026-10-22 21:45 UTC.** Waves 1 to 4 and the integrations 21 (M3, #87), 11 (M2, #90),
-29 (M5, #96) and 33 (M6, #99) are merged. The contract corrections #92 and #95 are in. The
-streams' journal fragments are folded into `docs/JOURNAL.md` up to M6 (this change). Stream 34
-(hardening and 1.0) is being prepared, and its hardware validation waits for the owner's machines.
+**State on 2026-10-22 22:11 UTC.** Waves 1 to 4 and the integrations 21 (M3, #87), 11 (M2, #90),
+29 (M5, #96) and 33 (M6, #99) are merged; the contract corrections #92 and #95 are in; the
+streams' journal fragments are folded into `docs/JOURNAL.md` up to M6 (#100). Stream 34's
+preparation lands with this line: the planned documents, packaging, the release workflow and
+the hardware-validation checklist (`docs/hardware-validation.md`). Its review of the tree
+found that the temperature ceiling is still reported NOT ENFORCED and that an interrupted
+run writes no report; both are 1.0 work (34a, 34b below), taken before the hardware half,
+which waits for the owner's machines.
 
 #### Wave 1
 
@@ -157,3 +161,12 @@ streams' journal fragments are folded into `docs/JOURNAL.md` up to M6 (this chan
 | # | Stream | Milestone | Tier | Depends on |
 |---|---|---|---|---|
 | 34 | [Hardening and 1.0](streams/34-release-1-0.md) | M7 | B | every earlier stream merged |
+
+Found by stream 34's preparation (`docs/journal/34-release-1-0.md`); each lands as its own PR:
+
+| # | Item | Source | State |
+|---|------|--------|-------|
+| 34a | Enforce `limits.max_temperature_c` from the sampled telemetry: a reading at or above the ceiling stops every worker, the run ends with its own exit code and says which sensor and what it read; the banner stops saying NOT ENFORCED where a temperature can be read, and says why where it cannot | PLAN (safety limits, emergency stop); `src/controller/safety.cpp` | next |
+| 34b | SIGINT and SIGTERM stop the run gracefully: workers stopped, the report and the journal written, exit code stated | stream 34 finding 2 | after 34a |
+| 34c | Documents that disagree with the tree: the hardware-failure issue template's `loadforge selftest`, `benchmark`/`selftest` in PLAN and verification.md, ShellCheck over `packaging/`, IMPLEMENTATION §10's M1 state | stream 34 finding 3 | after 34b |
+| 34d | The hardware half of M7: the checklist run on the owner's machines, both architectures, live media | stream 34 brief | waits for the owner |
