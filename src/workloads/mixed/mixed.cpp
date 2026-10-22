@@ -52,7 +52,7 @@ constexpr std::uint64_t kMoveEvery = 3;
 
 using Pool = std::vector<const RosterEntry*>;
 
-/// The roster's entries of one class, or the whole roster when it has none.
+/// The roster's entries of one class; empty when it has none.
 Pool pool_of(const Pool& usable, Intensity wanted) {
   Pool pool;
   for (const RosterEntry* entry : usable) {
@@ -60,7 +60,7 @@ Pool pool_of(const Pool& usable, Intensity wanted) {
       pool.push_back(entry);
     }
   }
-  return pool.empty() ? usable : pool;
+  return pool;
 }
 
 /// The workload `slot` runs in rotation `rotation` of a phase of `kind`.
@@ -69,14 +69,18 @@ Pool pool_of(const Pool& usable, Intensity wanted) {
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 const RosterEntry& pick(Kind kind, const Pool& usable, std::uint64_t seed, std::uint64_t rotation,
                         std::size_t slot) {
-  Pool pool = usable;
+  Pool narrowed;
   if (kind == Kind::kCompute) {
-    pool = pool_of(usable, Intensity::kCompute);
+    narrowed = pool_of(usable, Intensity::kCompute);
   } else if (kind == Kind::kMemory) {
-    pool = pool_of(usable, Intensity::kMemory);
+    narrowed = pool_of(usable, Intensity::kMemory);
   } else if (kind == Kind::kBalanced) {
-    pool = pool_of(usable, slot % 2 == 0 ? Intensity::kCompute : Intensity::kMemory);
+    narrowed = pool_of(usable, slot % 2 == 0 ? Intensity::kCompute : Intensity::kMemory);
   }
+  // A phase that does not narrow, or a class the roster has none of, draws
+  // from the whole roster. A reference rather than a copy: GCC 13 at -O3
+  // reads a copy of the pointers here as a possible null dereference.
+  const Pool& pool = narrowed.empty() ? usable : narrowed;
   // Consecutive workers take consecutive entries from a seeded start, so a mix
   // gives neighbours different workloads; a join takes the start for all.
   const std::uint64_t spread = kind == Kind::kJoin ? 0 : slot;
