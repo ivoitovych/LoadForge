@@ -34,7 +34,14 @@ jobs:
         # No lock allowance is lifted: the runner's lock policy (M2 contract
         # corrections) lets a process that may not lock its working set run
         # unlocked, and the sweep and every test pass under the 8 MiB default.
-        run: ctest --preset simd-scalar
+        # A failing test's output is printed where it ran, far up a log too long
+        # to read whole; the failed tests run once more at the end, so their
+        # output is the last thing in the log. The step fails either way.
+        run: |
+          ctest --preset simd-scalar || {
+            ctest --preset simd-scalar --rerun-failed --output-on-failure
+            exit 1
+          }
       - name: No x86 intrinsics in portable code
         if: matrix.runner == 'ubuntu-24.04'
         run: |
