@@ -62,7 +62,7 @@ struct RealControllerRunner {
   static constexpr const char* kPresentGauge = "memory.available";
   static std::unique_ptr<explore::TrialRunner> make() { return std::make_unique<RealRunner>(); }
   static Candidate candidate() {
-    return Candidate{"contract", {"sort"}, 1, {}, 3'000'000'000, std::nullopt, {}};
+    return Candidate{"contract", {"sort"}, 1, {}, 6'000'000'000, std::nullopt, {}};
   }
 };
 

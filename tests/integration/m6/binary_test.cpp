@@ -80,7 +80,7 @@ std::string line_of(const std::string& text, const std::string& prefix) {
 /// the objective `objective`, with real workers verifying every unit they compute.
 std::string search_over(const std::string& objective) {
   return "explore --objective " + objective +
-         " --candidate one:sort:1 --candidate three:sort:3 --duration 3s --footprint 64MiB "
+         " --candidate one:sort:1 --candidate three:sort:3 --duration 8s --footprint 16MiB "
          "--sample-interval 250ms --replicates 1 --final-replicates 3 --reference-replicates 2 "
          "--interleave 2";
 }
