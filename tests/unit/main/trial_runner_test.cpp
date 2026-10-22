@@ -633,6 +633,103 @@ TEST(TrialRunnerSettle, TheWaitIsAQuarterOfTheWindowBetweenAMillisecondAndTheSam
   }
 }
 
+// --- the temperature ceiling ---------------------------------------------------------------
+
+/// A gauge in degrees Celsius that reads 55, then 70, and the moment it is read the
+/// second time the workers leave: the machine got hot, and the controller stops them.
+class HeatingSource final : public telemetry::Source {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override { return "level"; }
+  std::vector<telemetry::MetricStatus> probe() override {
+    return {{telemetry::Metric{"level.reading", telemetry::Unit::kCelsius, telemetry::Kind::kGauge,
+                               telemetry::Scope::kPackage, 0, std::nullopt, "test"},
+             std::nullopt}};
+  }
+  void sample(std::vector<telemetry::Reading>& out) override {
+    ++reads_;
+    out.emplace_back(telemetry::Gauge{reads_ == 1 ? 55.0 : 70.0});
+    if (reads_ == 2 && machine != nullptr) {
+      machine->script_nonblocking_reaps({{platform::Reaped{1001, 0}, 0}});
+    }
+  }
+  static testing::FakeSyscalls* machine;
+
+ private:
+  int reads_ = 0;
+};
+
+testing::FakeSyscalls* HeatingSource::machine = nullptr;
+
+std::vector<std::unique_ptr<telemetry::Source>> heating(platform::Syscalls& /*s*/,
+                                                        platform::FileSystem& /*f*/,
+                                                        const MachineRoots& /*r*/) {
+  std::vector<std::unique_ptr<telemetry::Source>> sources;
+  sources.push_back(std::make_unique<HeatingSource>());
+  return sources;
+}
+
+TEST(TrialRunnerCeiling, ACeilingNoSensorCanBeReadForRefusesTheRunnerBeforeAnyTrial) {
+  Machine machine;
+  machine.options.max_temperature_c = 80;
+  const auto made = ControllerTrialRunner::create(machine.syscalls, machine.snapshot,
+                                                  machine.registry, machine.options);
+  ASSERT_FALSE(made.has_value());
+  EXPECT_EQ(made.error().fault, TrialFault::kRun);
+  EXPECT_TRUE(contains(made.error().detail,
+                       "--max-temperature is 80 C and no temperature can be read, so the ceiling "
+                       "could not be enforced: thermal.package: no hwmon chip with a temperature "
+                       "input"))
+      << made.error().detail;
+  EXPECT_TRUE(contains(made.error().detail, "; leave the option out to run without a ceiling"));
+  EXPECT_EQ(machine.syscalls.fork_count(), 0);
+}
+
+TEST(TrialRunnerCeiling, ASourceWithoutAReasonStillRefusesAndSaysNoSensorWasOffered) {
+  Machine machine;
+  machine.options.max_temperature_c = 80;
+  machine.options.sources = [](platform::Syscalls& /*s*/, platform::FileSystem& /*f*/,
+                               const MachineRoots& /*r*/) {
+    return std::vector<std::unique_ptr<telemetry::Source>>{};
+  };
+  const auto made = ControllerTrialRunner::create(machine.syscalls, machine.snapshot,
+                                                  machine.registry, machine.options);
+  ASSERT_FALSE(made.has_value());
+  EXPECT_TRUE(contains(made.error().detail, "could not be enforced: no temperature sensor was "
+                                            "offered; leave the option out"))
+      << made.error().detail;
+}
+
+TEST(TrialRunnerCeiling, ATrialBelowTheCeilingIsScoredAsIfThereWereNone) {
+  Machine machine;
+  machine.options.max_temperature_c = 70;
+  machine.options.sources = flat_level;
+  machine.workers_that_exit_at_once(1);
+  auto runner = machine.runner();
+  ASSERT_NE(runner, nullptr);
+  const auto outcome = runner->run(a_candidate());
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+}
+
+TEST(TrialRunnerCeiling, ATrialTheCeilingEndsHasNoScoreAndStopsTheSearchWithTheReason) {
+  Machine machine;
+  machine.options.max_temperature_c = 70;
+  machine.options.sources = heating;
+  machine.syscalls.script_forks({{1001, 0}});
+  HeatingSource::machine = &machine.syscalls;
+  auto runner = machine.runner();
+  ASSERT_NE(runner, nullptr);
+  Candidate candidate = a_candidate();
+  candidate.duration_ns = 5000 * kMs;
+  const auto outcome = runner->run(candidate);
+  HeatingSource::machine = nullptr;
+  ASSERT_FALSE(outcome.has_value());
+  EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
+  EXPECT_TRUE(contains(outcome.error().detail,
+                       "the trial was ended by the temperature ceiling: level.reading 0 (test) "
+                       "read 70.0 C, at or above the ceiling of 70 C, "))
+      << outcome.error().detail;
+}
+
 // --- the contract -----------------------------------------------------------------------------
 
 /// The runner with everything it stands on, behind the contract's interface.
