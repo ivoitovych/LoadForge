@@ -94,7 +94,8 @@ and so are both integrations: 21 (M3, #87) and 11 (M2, #90). The contract change
 twelve disagreements they recorded are in: M3's seven (#92) and M2's five
 (`docs/journal/m2-contract-corrections-2026-10-21-1802-UTC.md`). The end-of-wave folding of
 the streams' journal fragments into `docs/JOURNAL.md` is done for waves 1 to 4 and the
-integrations 11 and 21 (#93; JOURNAL §7). Stream 29 is next; 33 and 34 follow it.
+integrations 11 and 21 (#93; JOURNAL §7). Stream 29, the M5 integration, lands with this
+state line's update (2026-10-22 11:45 UTC); 33 and 34 follow it.
 
 #### Wave 1
 
