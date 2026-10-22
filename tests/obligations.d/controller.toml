@@ -117,4 +117,23 @@ synced, a storage fault ends journaling and never the run, and the writer is \
 never closed by the controller. The journal contract is run against the \
 controller's own model of a journal (journal_model_test.cpp). T7: the \
 controller killed with SIGKILL mid-run leaves a journal that replays and \
-workers that leave with it (tests/supervision/journal_kill_test.cpp)."""
+workers that leave with it (tests/supervision/journal_kill_test.cpp). \
+\
+Since 34a the controller enforces `limits.max_temperature_c` (controller/temperature): \
+after each sampling round it reads back, from the timeline view and never from \
+the sensors, the point every Celsius gauge received, and a reading at or above \
+the ceiling asks every worker to stop and ends the run through the ladder it \
+already has (request, SIGTERM, SIGKILL), reported with the sensor, the reading, \
+the ceiling and the time, in the journal's phase and the reading as its \
+temperature. P2/P3: a ceiling no sensor can be read for refuses the run before \
+the first fork, so does a machine already at it, and a stop request that \
+cannot be written on the ceiling's path is the controller's failure; all are \
+injected through the controller's mocks of the sampler, the timeline and a \
+thermal source (orchestration_temperature_test.cpp), a reading below, at and \
+above the ceiling, several sensors of which one crosses, a sensor that drops \
+out and one that comes back, every sensor gone for longer than the allowance, \
+and sampling that ends. P6: tests/supervision/temperature_test.cpp runs the \
+real thermal source over a directory the test built through the roots seam, \
+changes the sensor's file mid-run and finds the real workers stopped, reaped \
+and reported, through the controller and through the command (the result \
+files, the journal and exit code 7)."""

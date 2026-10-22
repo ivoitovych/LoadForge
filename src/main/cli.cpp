@@ -970,7 +970,7 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     // The reading side of the same timeline, for the temperature ceiling. Bound
     // through a reference: the conversion of a pointer to the second base
     // carries a test for null that no run can take (journal section 4.24).
-    telemetry::BoundedTimeline& sampled = rig->timeline();
+    const telemetry::BoundedTimeline& sampled = rig->timeline();
     const telemetry::TimelineView& readings = sampled;
     options.view = &readings;
     options.temperature_unread = unread_temperature(rig->capabilities());

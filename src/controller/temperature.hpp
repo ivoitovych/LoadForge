@@ -85,9 +85,12 @@ class TemperatureWatch {
  public:
   /// Finds the temperature series of `view` and reads the baseline round, which
   /// was taken at `baseline_ns`. `view` must outlive the watch.
+  // Degrees, then two lengths of time on the one clock, each named at the one call.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   TemperatureWatch(const telemetry::TimelineView& view, std::int64_t ceiling_c,
                    std::int64_t blind_after_ns, std::int64_t baseline_ns);
 
+  [[nodiscard]] std::int64_t ceiling_c() const noexcept { return ceiling_c_; }
   [[nodiscard]] const std::vector<Sensor>& sensors() const noexcept { return sensors_; }
   /// How many sensors gave a reading in the latest round looked at.
   [[nodiscard]] std::size_t readable() const noexcept;
@@ -104,6 +107,8 @@ class TemperatureWatch {
 
   /// Looks at the point each temperature series received in the round taken at
   /// `round_ns`, `elapsed_ns` into the run.
+  // Two times on two clocks, named for what they are.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   [[nodiscard]] Observation observe(std::int64_t round_ns, std::int64_t elapsed_ns);
 
  private:

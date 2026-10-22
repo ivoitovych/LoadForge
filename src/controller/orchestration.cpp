@@ -1226,12 +1226,14 @@ core::Result<core::Ok, ControllerError> Run::arm_temperature() {
   return core::Ok{};
 }
 
+// Two times on two clocks, named for what they are; a struct for the pair would be one more type.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 core::Result<core::Ok, ControllerError> Run::enforce_temperature(std::int64_t elapsed_ns,
                                                                  std::int64_t now_ns) {
   if (!temperature_.has_value() || temperature_stop_.has_value()) {
     return core::Ok{};
   }
-  const std::int64_t ceiling = *config_->limits.max_temperature_c;
+  const std::int64_t ceiling = temperature_->ceiling_c();
   if (!sampling_live_) {
     // A round the timeline refused ended the sampling (take_round): nothing
     // reads a temperature now, so nothing can hold the ceiling.

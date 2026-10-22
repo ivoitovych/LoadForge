@@ -327,7 +327,7 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
   const std::unique_ptr<Rig> rig = std::move(made).value();
   options.sampler = &rig->sampler();
   options.timeline = &rig->timeline();
-  telemetry::BoundedTimeline& sampled = rig->timeline();
+  const telemetry::BoundedTimeline& sampled = rig->timeline();
   const telemetry::TimelineView& readings = sampled;
   options.view = &readings;
 

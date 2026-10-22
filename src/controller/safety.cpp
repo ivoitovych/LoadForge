@@ -127,9 +127,9 @@ core::Result<core::Ok, std::string> check_temperature(const config::Config& conf
     refusal += "; remove the ceiling to run without one";
     return refusal;
   }
-  if (watch->hot_at_start().has_value()) {
+  if (const std::optional<TemperatureStop>& hot = watch->hot_at_start(); hot.has_value()) {
     std::string refusal = "the machine is already at its ceiling, before any worker started: ";
-    refusal += describe_reading(*watch->hot_at_start());
+    refusal += describe_reading(*hot);
     return refusal;
   }
   return core::Ok{};

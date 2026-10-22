@@ -87,6 +87,8 @@ std::string describe(const TemperatureStop& stop) {
   return text;
 }
 
+// Degrees, then two lengths of time on the one clock, each named at the one call.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 TemperatureWatch::TemperatureWatch(const telemetry::TimelineView& view, std::int64_t ceiling_c,
                                    std::int64_t blind_after_ns, std::int64_t baseline_ns)
     : view_(&view),
@@ -145,6 +147,8 @@ std::string TemperatureWatch::describe_sensors() const {
   return text;
 }
 
+// Two times on two clocks, named for what they are.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 Observation TemperatureWatch::observe(std::int64_t round_ns, std::int64_t elapsed_ns) {
   Observation seen;
   const Sensor* hottest = nullptr;
