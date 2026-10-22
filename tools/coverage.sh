@@ -19,6 +19,15 @@
 # Nothing needs it -- GCC 13.3 and gcovr 8.6, the pinned combination CI uses,
 # produce a clean parse. If gcov output ever stops parsing, this must fail and
 # be looked at, not average over the parts it understood.
+#
+# The suspicious-hits threshold is raised from gcovr's default of 2^32 to 2^40.
+# The check guards against a gcov bug that produced absurd counts (gcovr names
+# GCC bug 68080). Real counts now pass 2^32: a byte loop of the sort workload ran
+# 7,237,273,888 times in a full run once the M6 searches ran real workers for
+# minutes (#99), and the counts of its lines agree with each other exactly (the
+# loop's line 9 times and its body 16 times the 239,075,328 calls of the
+# function, measured on the two searches alone). 2^40 is about 150 times that,
+# and a count past it is still refused.
 set -euo pipefail
 
 BUILD_DIR="${1:-build/coverage}"
@@ -32,6 +41,7 @@ gcovr \
   --exclude-unreachable-branches \
   --exclude-noncode-lines \
   --print-summary \
+  --gcov-suspicious-hits-threshold 1099511627776 \
   --html-details "$BUILD_DIR/coverage.html" \
   --xml "$BUILD_DIR/coverage.xml" \
   --fail-under-line 100 \
