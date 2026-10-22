@@ -96,6 +96,7 @@ TEST(ScheduleDeterminism, TheSameOptionsGiveTheSameScheduleEveryTimeAndOnEveryTh
   }
   std::vector<Schedule> from_threads(4);
   std::vector<std::thread> threads;
+  threads.reserve(from_threads.size());
   for (Schedule& into : from_threads) {
     threads.emplace_back([&into] { into = made(the_moving_case()); });
   }

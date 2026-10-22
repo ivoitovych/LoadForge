@@ -214,13 +214,13 @@ enum class Step : std::uint8_t { kContinue, kEnd, kLeave };
 class Ticker {
  public:
   Ticker(platform::Syscalls& syscalls, ipc::RecordWriter& records, const Session& session,
-         const WorkloadArgs& args, std::vector<std::uint32_t> cpus, const Services& services,
+         WorkloadArgs args, std::vector<std::uint32_t> cpus, const Services& services,
          Prepared prepared)
       : syscalls_(&syscalls),
         records_(&records),
         session_(&session),
         services_(&services),
-        args_(args),
+        args_(std::move(args)),
         cpus_(std::move(cpus)),
         prepared_(std::move(prepared)),
         clock_(syscalls),

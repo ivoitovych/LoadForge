@@ -957,8 +957,8 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
 
 // The two streams are the command's standard output and error, in the order every command
 // of this file takes them.
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int show_journal(const std::string& path, journal::FileOps& ops, JournalFiles& files,
+                 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                  std::ostream& out, std::ostream& err) {
   auto shown = read_journal(ops, files, path);
   if (!shown.has_value()) {

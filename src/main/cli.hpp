@@ -172,7 +172,9 @@ struct StressArgs {
 /// `loadforge journal FILE`: the crash journal at FILE, every entry in words and
 /// how it ended. Exit 0 whatever the ending (an abnormal ending is what it is
 /// there to show), 1 when there is no journal or it cannot be read. The
-/// operations are named so that a test can fail them.
+/// operations are named so that a test can fail them. The two streams are the command's
+/// standard output and error, in the order every command here takes them.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 [[nodiscard]] int show_journal(const std::string& path, journal::FileOps& ops, JournalFiles& files,
                                std::ostream& out, std::ostream& err);
 

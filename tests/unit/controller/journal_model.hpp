@@ -247,7 +247,7 @@ class ModelJournal {
     }
     entry.workers_alive = static_cast<std::uint32_t>(number(*alive));
     entry.workers_stale = static_cast<std::uint32_t>(number(*stale));
-    const std::uint8_t mask = std::to_integer<std::uint8_t>((*present)[0]);
+    const auto mask = std::to_integer<std::uint8_t>((*present)[0]);
     std::array<std::optional<std::uint64_t>, 6> fields;
     for (std::size_t field = 0; field < 6; ++field) {
       if ((mask >> field & 1U) != 0U) {

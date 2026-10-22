@@ -160,8 +160,9 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
     if (!answered.has_value()) {
       return answered.error();
     }
-    if (answered.value().has_value()) {
-      return Outcome{*answered.value(), progress, elapsed_ns};
+    const std::optional<StopReason> leaving = answered.value();
+    if (leaving.has_value()) {
+      return Outcome{*leaving, progress, elapsed_ns};
     }
     const std::optional<StopReason> lost = looked.value().lost;
     if (lost.has_value()) {
