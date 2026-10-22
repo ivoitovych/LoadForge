@@ -284,7 +284,8 @@ A hardware error counter that was blind for part of the run makes the verdict
 3. Close what you need to keep. A power-off loses unsaved work.
 4. On a laptop, plug it in. The fingerprint records `power_source` and `battery_state`
    when the kernel offers them, because a run on battery is a different experiment.
-5. Start short: `loadforge stress --test dense_linear --duration 2m --journal run.journal`.
+5. Start short, with a ceiling:
+   `loadforge stress --test dense_linear --duration 2m --max-temperature 85 --journal run.journal`.
 6. On shared machines, remember that one worker is started per CPU you may use (at most
    64), pinned to its own CPU: the machine will be unusable for other work while it runs.
    `--workers N` starts fewer.

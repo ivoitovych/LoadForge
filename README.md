@@ -156,6 +156,7 @@ See [`packaging/README.md`](packaging/README.md).
 
 ```bash
 loadforge stress --test sort --duration 2s             # one verified workload, a worker per CPU
+loadforge stress --test sort --duration 2m --max-temperature 85   # stop if any sensor reads 85 C
 loadforge stress --test mixed --duration 1h --journal run.journal --output json --output-dir out
 loadforge stress --config run.toml                     # a run from a configuration file (below)
 loadforge --check-config config/quick.toml             # check a configuration without running it
