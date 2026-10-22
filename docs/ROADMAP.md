@@ -94,7 +94,10 @@ and so are the integrations 21 (M3, #87), 11 (M2, #90) and 29 (M5, #96). The con
 changes for the twelve disagreements the M2 and M3 integrations recorded are in: M3's seven
 (#92) and M2's five (#95). The streams' journal fragments up to the M2 and M3 integrations
 are folded into `docs/JOURNAL.md` (#93; JOURNAL §7); stream 29's fragment is not yet folded.
-Stream 33 (explore on the controller) is being built; 34 follows it.
+Stream 33 (explore on the controller, M6) lands with this line's update (2026-10-22): its
+objective on an unavailable metric fails loudly, and repeatable worst-case discovery is built
+and measured on a 4-vCPU VM; the thermal half of T11 needs real hardware
+(`docs/journal/33-explore-integration.md`). 34 follows it.
 
 #### Wave 1
 
