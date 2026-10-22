@@ -17,6 +17,10 @@
 
 namespace loadforge::controller {
 
+bool operator==(const LimitStatus& lhs, const LimitStatus& rhs) {
+  return lhs.name == rhs.name && lhs.enforced == rhs.enforced && lhs.note == rhs.note;
+}
+
 std::string_view describe(StopStep step) noexcept {
   switch (step) {
     case StopStep::kNone:

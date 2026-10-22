@@ -95,14 +95,16 @@ bool operator==(const FindingReport& lhs, const FindingReport& rhs) {
 }
 
 bool operator==(const RunOptions& lhs, const RunOptions& rhs) {
-  return std::tie(lhs.executable, lhs.interval_ns, lhs.stale_after_ns, lhs.grace, lhs.budget,
-                  lhs.budget_unread, lhs.oom_record, lhs.topology, lhs.verification, lhs.fp,
-                  lhs.capabilities, lhs.sampler, lhs.timeline, lhs.sample_interval_ns, lhs.schedule,
-                  lhs.journal, lhs.journal_interval_ns, lhs.journal_notes) ==
-         std::tie(rhs.executable, rhs.interval_ns, rhs.stale_after_ns, rhs.grace, rhs.budget,
-                  rhs.budget_unread, rhs.oom_record, rhs.topology, rhs.verification, rhs.fp,
-                  rhs.capabilities, rhs.sampler, rhs.timeline, rhs.sample_interval_ns, rhs.schedule,
-                  rhs.journal, rhs.journal_interval_ns, rhs.journal_notes);
+  return lhs.executable == rhs.executable && lhs.interval_ns == rhs.interval_ns &&
+         lhs.stale_after_ns == rhs.stale_after_ns && lhs.grace == rhs.grace &&
+         lhs.budget == rhs.budget && lhs.budget_unread == rhs.budget_unread &&
+         lhs.oom_record == rhs.oom_record && lhs.topology == rhs.topology &&
+         lhs.verification == rhs.verification && lhs.fp == rhs.fp &&
+         lhs.capabilities == rhs.capabilities && lhs.sampler == rhs.sampler &&
+         lhs.timeline == rhs.timeline && lhs.sample_interval_ns == rhs.sample_interval_ns &&
+         lhs.schedule == rhs.schedule && lhs.journal == rhs.journal &&
+         lhs.journal_interval_ns == rhs.journal_interval_ns &&
+         lhs.journal_notes == rhs.journal_notes;
 }
 
 std::string describe(const ControllerError& error) { return error.stage + ": " + error.detail; }
