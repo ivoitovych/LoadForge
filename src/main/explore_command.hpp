@@ -25,7 +25,8 @@
 //   1  refused before the first trial: the objective, the search or a candidate
 //      cannot be run on this machine, or the machine cannot be described
 //   2  usage error
-//   3  a trial could not be run, or the reference could not be used
+//   3  a trial could not be run, or the reference could not be used; or the
+//      temperature ceiling (--max-temperature) ended a trial, which stops the search
 //   5  a candidate's trial produced findings: a finding, not a score
 //   6  a candidate's trial did not finish or compare everything, or a trial held no
 //      reading of the objective: a check was not made
@@ -70,6 +71,10 @@ struct ExploreArgs {
   std::optional<simd::IsaPath> isa;
   verification::LockPolicy lock = verification::LockPolicy::kTry;
   std::int64_t sample_interval_ns = 1'000'000'000;
+  /// --max-temperature: every trial's ceiling, in degrees Celsius. A trial in
+  /// which a sensor reads this or more is stopped like a stress run and fails
+  /// the search (3); with no sensor to read, nothing starts (1).
+  std::optional<std::int64_t> max_temperature_c;
   bool verbose = false;
 };
 

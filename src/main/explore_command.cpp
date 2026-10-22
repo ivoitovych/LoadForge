@@ -371,13 +371,30 @@ std::optional<std::string> take_sample_interval(const Written& option, Parsing& 
   return std::nullopt;
 }
 
+/// The range `limits.max_temperature_c` has in a configuration (config.hpp).
+std::optional<std::string> take_max_temperature(const Written& option, Parsing& out) {
+  auto celsius = whole_number(option);
+  if (!celsius.has_value()) {
+    return celsius.error();
+  }
+  if (celsius.value() < 1 ||
+      celsius.value() > static_cast<std::uint64_t>(config::kMaxTemperatureLimitC)) {
+    std::string range = "must be between 1 and ";
+    range += std::to_string(config::kMaxTemperatureLimitC);
+    range += " degrees Celsius";
+    return refused(option.key, range);
+  }
+  out.args.max_temperature_c = static_cast<std::int64_t>(celsius.value());
+  return std::nullopt;
+}
+
 struct Option {
   std::string_view key;
   std::optional<std::string> (*take)(const Written&, Parsing&);
   bool repeatable;
 };
 
-constexpr std::array<Option, 18> kOptions{{
+constexpr std::array<Option, 19> kOptions{{
     {"--objective", &take_objective, false},
     {"--candidate", &take_candidate, true},
     {"--reference", &take_reference, false},
@@ -396,6 +413,7 @@ constexpr std::array<Option, 18> kOptions{{
     {"--isa", &take_isa, false},
     {"--lock", &take_lock, false},
     {"--sample-interval", &take_sample_interval, false},
+    {"--max-temperature", &take_max_temperature, false},
 }};
 
 constexpr std::string_view kVerbose = "--verbose";
@@ -627,6 +645,7 @@ int explore_command(std::span<const std::string_view> args, const std::string& s
   options.footprint_bytes = arguments.footprint_bytes;
   options.lock = arguments.lock;
   options.sample_interval_ns = arguments.sample_interval_ns;
+  options.max_temperature_c = arguments.max_temperature_c;
   options.log = arguments.verbose ? &out : nullptr;
   auto made =
       ControllerTrialRunner::create(syscalls, launch->machine, registry, std::move(options));

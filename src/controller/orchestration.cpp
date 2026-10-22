@@ -25,6 +25,7 @@
 #include "controller/report.hpp"
 #include "controller/safety.hpp"
 #include "controller/supervision.hpp"
+#include "controller/temperature.hpp"
 #include "core/result.hpp"
 #include "platform/clock.hpp"
 #include "platform/exit_status.hpp"
@@ -104,7 +105,9 @@ bool operator==(const RunOptions& lhs, const RunOptions& rhs) {
          lhs.timeline == rhs.timeline && lhs.sample_interval_ns == rhs.sample_interval_ns &&
          lhs.schedule == rhs.schedule && lhs.journal == rhs.journal &&
          lhs.journal_interval_ns == rhs.journal_interval_ns &&
-         lhs.journal_notes == rhs.journal_notes;
+         lhs.journal_notes == rhs.journal_notes && lhs.view == rhs.view &&
+         lhs.temperature_unread == rhs.temperature_unread &&
+         lhs.temperature_blind_after_ns == rhs.temperature_blind_after_ns;
 }
 
 std::string describe(const ControllerError& error) { return error.stage + ": " + error.detail; }
@@ -309,6 +312,15 @@ class Run {
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_after_death();
   void attribute_oom_kills();
   void begin_telemetry();
+  /// Finds the temperatures the ceiling watches, once the baseline round is on
+  /// the timeline, or refuses the run that cannot keep the ceiling it was given.
+  [[nodiscard]] core::Result<core::Ok, ControllerError> arm_temperature();
+  /// Looks at the round just taken against the ceiling, and ends the run when
+  /// a sensor is at or above it or none can be read any more.
+  [[nodiscard]] core::Result<core::Ok, ControllerError> enforce_temperature(
+      std::int64_t elapsed_ns, std::int64_t now_ns);
+  [[nodiscard]] core::Result<core::Ok, ControllerError> stop_for_temperature(
+      const TemperatureStop& stop, std::int64_t now_ns);
   void take_round(std::int64_t now_ns, bool force);
   void mark_phase(std::string_view label, std::int64_t now_ns);
   void telemetry_fault(const std::string& text, std::int64_t now_ns);
@@ -342,6 +354,11 @@ class Run {
   /// after a round it refused.
   SamplingReport sampling_;
   bool sampling_live_ = false;
+  /// The temperature ceiling's watch, when one is configured (arm_temperature),
+  /// the round it last looked at, and the first thing it found.
+  std::optional<TemperatureWatch> temperature_;
+  std::int64_t temperature_checked_ns_ = -1;
+  std::optional<TemperatureStop> temperature_stop_;
   /// The monotonic time of the latest clock reading the loop made, so that the
   /// sampling and the reaping use the reading the tick already took and add no
   /// read of their own.
@@ -442,6 +459,9 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
   clock_running_ns_ = started_.running_ns;
   beat(started_);
   begin_telemetry();
+  if (auto armed = arm_temperature(); !armed.has_value()) {
+    return armed;
+  }
 
   for (Tracked& worker : workers_) {
     auto records = syscalls_->create_pipe();
@@ -616,6 +636,9 @@ core::Result<core::Ok, ControllerError> Run::tick() {
     write_journal(elapsed_ns, true);
   }
   take_round(now.value().running_ns, false);
+  if (auto held = enforce_temperature(elapsed_ns, now.value().running_ns); !held.has_value()) {
+    return held;
+  }
   if (auto scheduled = run_schedule(elapsed_ns, now.value().running_ns); !scheduled.has_value()) {
     return scheduled;
   }
@@ -715,6 +738,8 @@ journal::Entry Run::journal_entry(std::int64_t elapsed_ns) const {
   entry.elapsed_ns = elapsed_ns;
   entry.phase = phase_;
   entry.workload = workload_label_;
+  const bool reached =
+      temperature_stop_.has_value() && temperature_stop_->cause == StopCause::kReached;
   for (const Tracked& worker : workers_) {
     if (worker.tally_seen) {
       // The most units any worker has computed and checked: the units are
@@ -727,6 +752,11 @@ journal::Entry Run::journal_entry(std::int64_t elapsed_ns) const {
   }
   if (options_->journal_notes != nullptr) {
     options_->journal_notes->fill(entry);
+  }
+  if (reached) {
+    // The reading that ended the run, whichever sensor it was: the notes carry
+    // the package temperature only.
+    entry.temperature_c = temperature_stop_->celsius;
   }
   return entry;
 }
@@ -1176,6 +1206,84 @@ core::Result<core::Ok, ControllerError> Run::drain_after_death() {
   return core::Ok{};
 }
 
+core::Result<core::Ok, ControllerError> Run::arm_temperature() {
+  if (!config_->limits.max_temperature_c.has_value()) {
+    return core::Ok{};
+  }
+  // The baseline round is on the timeline (begin_telemetry), before any worker
+  // exists: a ceiling that nothing can read, or a machine already at it, is a
+  // refusal now and not a run that cannot stop.
+  if (options_->view != nullptr && sampling_live_) {
+    temperature_.emplace(*options_->view, *config_->limits.max_temperature_c,
+                         options_->temperature_blind_after_ns, started_.running_ns);
+  }
+  const TemperatureWatch* watch = temperature_.has_value() ? &*temperature_ : nullptr;
+  if (auto admitted = check_temperature(*config_, watch, options_->temperature_unread);
+      !admitted.has_value()) {
+    return error_at("temperature", admitted.error());
+  }
+  temperature_checked_ns_ = started_.running_ns;
+  return core::Ok{};
+}
+
+core::Result<core::Ok, ControllerError> Run::enforce_temperature(std::int64_t elapsed_ns,
+                                                                 std::int64_t now_ns) {
+  if (!temperature_.has_value() || temperature_stop_.has_value()) {
+    return core::Ok{};
+  }
+  const std::int64_t ceiling = *config_->limits.max_temperature_c;
+  if (!sampling_live_) {
+    // A round the timeline refused ended the sampling (take_round): nothing
+    // reads a temperature now, so nothing can hold the ceiling.
+    TemperatureStop unwatched;
+    unwatched.cause = StopCause::kUnwatched;
+    unwatched.ceiling_c = ceiling;
+    unwatched.at_ns = elapsed_ns;
+    unwatched.detail = sampling_.fault.value_or("sampling stopped");
+    unwatched.blind_ns = now_ns - sampling_.last_round_ns;
+    return stop_for_temperature(unwatched, now_ns);
+  }
+  if (sampling_.last_round_ns == temperature_checked_ns_) {
+    return core::Ok{};
+  }
+  temperature_checked_ns_ = sampling_.last_round_ns;
+  Observation seen = temperature_->observe(sampling_.last_round_ns, elapsed_ns);
+  for (const std::string& note : seen.notes) {
+    reporter_->event(elapsed_ns, "temperature: " + note);
+  }
+  if (!seen.stop.has_value()) {
+    return core::Ok{};
+  }
+  return stop_for_temperature(*seen.stop, now_ns);
+}
+
+core::Result<core::Ok, ControllerError> Run::stop_for_temperature(const TemperatureStop& stop,
+                                                                  std::int64_t now_ns) {
+  temperature_stop_ = stop;
+  std::string line = "temperature ceiling: ";
+  line += describe(stop);
+  line += ": stop requested";
+  reporter_->event(stop.at_ns, line);
+  if (!stop_requested_) {
+    mark_phase("stop", now_ns);
+    if (auto requested = request_stop(now_ns); !requested.has_value()) {
+      return requested;
+    }
+  }
+  // The journal's account of why the run ended, in its own label: the reading
+  // is the entry's temperature, the sensor and the ceiling are the phase.
+  std::string phase = stop.cause == StopCause::kReached ? "ceiling " : "ceiling unwatched ";
+  phase += std::to_string(stop.ceiling_c);
+  phase += " C";
+  if (stop.cause == StopCause::kReached) {
+    phase += " reached: ";
+    phase += stop.sensor;
+  }
+  phase_ = mixed::bounded(std::move(phase));
+  write_journal(stop.at_ns, true);
+  return core::Ok{};
+}
+
 void Run::telemetry_fault(const std::string& text, std::int64_t now_ns) {
   if (!sampling_.fault.has_value()) {
     sampling_.fault = text;
@@ -1307,6 +1415,7 @@ core::Result<RunReport, ControllerError> Run::finish() {
     report.workers.push_back(std::move(entry));
   }
   report.steps_run = steps_run_;
+  report.temperature_stop = temperature_stop_;
   // The last word of the journal: every worker is gone.
   phase_ = "done";
   write_journal(report.elapsed_ns, true);
@@ -1371,7 +1480,8 @@ core::Result<RunReport, ControllerError> Run::execute() {
   plan.duration = config_->run.duration;
   plan.workers = workers_.size();
   plan.executable = options_->executable;
-  plan.limits = limit_statuses(*config_, options_->budget, options_->budget_unread);
+  const std::string watching = temperature_.has_value() ? temperature_->describe_sensors() : "";
+  plan.limits = limit_statuses(*config_, options_->budget, options_->budget_unread, watching);
   if (options_->topology != nullptr) {
     plan.topology = topology::describe(*options_->topology);
   } else {

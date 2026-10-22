@@ -73,6 +73,38 @@ core::Result<core::Ok, telemetry::TimelineError> Rig::start(
   return core::Ok{};
 }
 
+bool has_temperature(const telemetry::CapabilityReport& report) {
+  return std::ranges::any_of(report.sources, [](const telemetry::SourceStatus& source) {
+    return std::ranges::any_of(source.metrics, [](const telemetry::MetricStatus& status) {
+      return !status.unavailable.has_value() && status.metric.unit == telemetry::Unit::kCelsius &&
+             status.metric.kind == telemetry::Kind::kGauge;
+    });
+  });
+}
+
+std::string unread_temperature(const telemetry::CapabilityReport& report) {
+  std::string text;
+  for (const telemetry::SourceStatus& source : report.sources) {
+    if (source.source != "thermal") {
+      continue;
+    }
+    for (const telemetry::MetricStatus& status : source.metrics) {
+      if (!status.unavailable.has_value()) {
+        continue;
+      }
+      if (!text.empty()) {
+        text += " | ";
+      }
+      text += status.metric.name;
+      text += ": ";
+      text += status.unavailable->detail;
+      text += "; ";
+      text += status.unavailable->remediation;
+    }
+  }
+  return text;
+}
+
 core::Result<std::unique_ptr<Rig>, telemetry::TimelineError> make_rig(
     platform::Syscalls& syscalls, platform::FileSystem& filesystem, const MachineRoots& roots,
     std::size_t capacity, SourceFactory sources_for) {

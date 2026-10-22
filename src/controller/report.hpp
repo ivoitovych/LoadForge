@@ -14,6 +14,7 @@
 #include "config/config.hpp"
 #include "controller/safety.hpp"
 #include "controller/supervision.hpp"
+#include "controller/temperature.hpp"
 #include "core/duration.hpp"
 #include "primitives/simd/dispatch.hpp"
 #include "verification/isolation.hpp"
@@ -216,6 +217,11 @@ struct RunReport {
   JournalReport journal;
   std::int64_t elapsed_ns = 0;
   std::optional<int> worker_exit_code;
+  /// Set when the temperature ceiling ended the run (RunOptions::view): which
+  /// sensor read what, or that no sensor could be read any more, and when.
+  /// The workers were then stopped as at the deadline; their fates are theirs.
+  // NOLINTNEXTLINE(readability-redundant-member-init)
+  std::optional<TemperatureStop> temperature_stop{};
 
   [[nodiscard]] friend bool operator==(const RunReport&, const RunReport&) = default;
 };

@@ -109,6 +109,10 @@ void ConsoleReporter::run_finished(const controller::RunReport& report) {
   *out_ << "run ended after " << seconds(report.elapsed_ns) << ": "
         << controller::clean_count(report) << " of " << report.workers.size()
         << " worker(s) completed\n";
+  if (report.temperature_stop.has_value()) {
+    *out_ << "  ended by the temperature ceiling: " << controller::describe(*report.temperature_stop)
+          << "\n";
+  }
   for (const controller::WorkerReport& worker : report.workers) {
     *out_ << "  worker " << worker.slot << " (pid " << worker.pid
           << "): " << controller::describe(worker.fate) << "; " << worker.termination

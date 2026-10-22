@@ -113,6 +113,7 @@ loadforge_enable_coverage(loadforge_topology)
 add_library(loadforge_controller STATIC
   src/controller/supervision.cpp
   src/controller/safety.cpp
+  src/controller/temperature.cpp
   src/controller/plan.cpp
   src/controller/rerun.cpp
   src/controller/isolate.cpp

@@ -36,26 +36,38 @@ namespace loadforge::cli {
 ///   6  nothing was wrong that was seen, and something was not seen: a check
 ///      was not performed, or a verifying worker never compared anything. A
 ///      run that checked nothing is not a pass (verification.md §5).
-/// When several apply the first of 5, 4, 3, 6 is the code. A run of nothing but
-/// null workloads (M1) has nothing to verify and is 0 or 3 by its workers.
+///   7  the temperature ceiling (`limits.max_temperature_c`) ended the run: a
+///      sensor read at or above it, or no sensor could be read any more and the
+///      ceiling could not be enforced. The workers were stopped, then killed past
+///      the grace, so their fates (3) and the checks they did not get to make (6)
+///      are consequences of the stop and 7 says why; and it is a fact about the
+///      machine that a failed write (4) must not hide. Only a fault (5), the
+///      finding, outranks it: a wrong result found on the way is still the thing
+///      to read first.
+/// When several apply the first of 5, 7, 4, 3, 6 is the code. A run of nothing
+/// but null workloads (M1) has nothing to verify and is 0 or 3 by its workers.
+/// (A configured ceiling that cannot be read before the run is not 7: nothing
+/// was started, and that is a refusal, 1.)
 inline constexpr int kExitUnclean = 3;
 inline constexpr int kExitOutputFailed = 4;
 inline constexpr int kExitFault = 5;
 inline constexpr int kExitWrongResult = kExitFault;
 inline constexpr int kExitNotVerified = 6;
+inline constexpr int kExitTemperature = 7;
 
 /// The code of a run whose verdict is known. `verified` is whether any worker
 /// ran a verified workload: only then is an incomplete verdict a check not
 /// made, and only then 6. Without one (the null workload) an incomplete verdict
-/// is what a run with nothing to check always is.
-[[nodiscard]] int exit_code_for(results::Verdict verdict, bool workers_clean,
-                                bool verified = false) noexcept;
+/// is what a run with nothing to check always is. `temperature_stopped` is
+/// whether the ceiling ended the run.
+[[nodiscard]] int exit_code_for(results::Verdict verdict, bool workers_clean, bool verified = false,
+                                bool temperature_stopped = false) noexcept;
 
 /// Whether any worker of the report ran a verified workload.
 [[nodiscard]] bool has_verified_worker(const controller::RunReport& report) noexcept;
 
-/// `code` once a result file could not be written: a fault still outranks the
-/// failure to write about it.
+/// `code` once a result file could not be written: a fault, and a stop by the
+/// temperature ceiling, still outrank the failure to write about them.
 [[nodiscard]] int with_output_failure(int code) noexcept;
 
 /// The report in the results' types: one WorkloadResult per verifying worker,

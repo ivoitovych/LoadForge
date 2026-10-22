@@ -219,6 +219,17 @@ core::Result<std::unique_ptr<ControllerTrialRunner>, TrialError> ControllerTrial
     detail += probed.error().detail;
     return refuse(TrialFault::kRun, std::move(detail));
   }
+  if (options.max_temperature_c.has_value() && !has_temperature(probed.value()->capabilities())) {
+    // Before the first trial, as the stress command refuses before the first
+    // worker: a ceiling that nothing can read is not a ceiling.
+    std::string detail = "--max-temperature is ";
+    detail += std::to_string(*options.max_temperature_c);
+    detail += " C and no temperature can be read, so the ceiling could not be enforced: ";
+    const std::string unread = unread_temperature(probed.value()->capabilities());
+    detail += unread.empty() ? "no temperature sensor was offered" : unread;
+    detail += "; leave the option out to run without a ceiling";
+    return refuse(TrialFault::kRun, std::move(detail));
+  }
   return std::make_unique<ControllerTrialRunner>(syscalls, machine, registry, std::move(options),
                                                  probed.value()->capabilities());
 }
@@ -291,6 +302,8 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
   const auto repeated = std::ranges::unique(options.verification.cpus);
   options.verification.cpus.erase(repeated.begin(), repeated.end());
   options.sample_interval_ns = options_.sample_interval_ns;
+  config.limits.max_temperature_c = options_.max_temperature_c;
+  options.temperature_unread = unread_temperature(capabilities_);
   fpenv::RealFpControl fp;
   options.fp = &fp;
 
@@ -314,6 +327,9 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
   const std::unique_ptr<Rig> rig = std::move(made).value();
   options.sampler = &rig->sampler();
   options.timeline = &rig->timeline();
+  telemetry::BoundedTimeline& sampled = rig->timeline();
+  const telemetry::TimelineView& readings = sampled;
+  options.view = &readings;
 
   const statistics::Summarizer& summarizer =
       options_.summarizer != nullptr ? *options_.summarizer : real_summarizer_;
@@ -342,6 +358,13 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
     return refuse(TrialFault::kRun,
                   "this process is a worker whose exec failed: it must exit with " +
                       std::to_string(*report.worker_exit_code));
+  }
+  if (report.temperature_stop.has_value()) {
+    // A load cut short is not the load the candidate was asked to carry, so it
+    // has no score; and the machine is hot, so the search does not go on.
+    std::string detail = "the trial was ended by the temperature ceiling: ";
+    detail += controller::describe(*report.temperature_stop);
+    return refuse(TrialFault::kRun, std::move(detail));
   }
   if (report.sampling.fault.has_value()) {
     return refuse(TrialFault::kRun,
