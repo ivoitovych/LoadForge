@@ -89,15 +89,10 @@ change (ADR 0004, "Changing a contract"):
   `docs/JOURNAL.md`, proposed ADRs numbered, `docs/IMPLEMENTATION.md` §3 and §10
   reconciled with what landed, and this file's state brought up to date.
 
-**State on 2026-10-22 16:30 UTC.** Waves 1 to 4 are merged (wave 3: #69 to #74; wave 4: #75, #76, #77),
-and so are the integrations 21 (M3, #87), 11 (M2, #90) and 29 (M5, #96). The contract
-changes for the twelve disagreements the M2 and M3 integrations recorded are in: M3's seven
-(#92) and M2's five (#95). The streams' journal fragments up to the M2 and M3 integrations
-are folded into `docs/JOURNAL.md` (#93; JOURNAL §7); stream 29's fragment is not yet folded.
-Stream 33 (explore on the controller, M6) lands with this line's update (2026-10-22): its
-objective on an unavailable metric fails loudly, and repeatable worst-case discovery is built
-and measured on a 4-vCPU VM; the thermal half of T11 needs real hardware
-(`docs/journal/33-explore-integration.md`). 34 follows it.
+**State on 2026-10-22 21:45 UTC.** Waves 1 to 4 and the integrations 21 (M3, #87), 11 (M2, #90),
+29 (M5, #96) and 33 (M6, #99) are merged. The contract corrections #92 and #95 are in. The
+streams' journal fragments are folded into `docs/JOURNAL.md` up to M6 (this change). Stream 34
+(hardening and 1.0) is being prepared, and its hardware validation waits for the owner's machines.
 
 #### Wave 1
 
