@@ -192,6 +192,14 @@ class IsaProbe {
 /// does and `supported` does not. kScalar is never refused, whatever the sets
 /// say. Without a request: the first path in kPreference that both sets hold,
 /// and kScalar when none does -- so the unrequested call never fails.
+///
+/// select_path knows no workload. A path chosen FOR a workload is chosen from
+/// three sets, and the caller makes the third part of the second argument it
+/// passes: `compiled` intersected with the workload's own paths, which
+/// workloads::Registry::descriptor gives without creating the workload (the
+/// M2 contract corrections, 1). Without that an unrequested call chooses the
+/// widest path both sets hold, which on an AVX-512 machine is one a workload
+/// with no AVX-512 kernel refuses.
 [[nodiscard]] core::Result<IsaPath, DispatchError> select_path(std::optional<IsaPath> requested,
                                                                IsaSet supported, IsaSet compiled);
 

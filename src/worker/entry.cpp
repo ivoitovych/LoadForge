@@ -66,6 +66,8 @@ constexpr std::string_view kIsa = "--isa";
 constexpr std::string_view kOraclePeriod = "--oracle-period";
 constexpr std::string_view kIntegrityPeriod = "--integrity-period";
 constexpr std::string_view kLineBytes = "--line-bytes";
+constexpr std::string_view kLock = "--lock";
+constexpr std::string_view kPhysicalPackage = "--physical-package";
 constexpr std::string_view kPhysicalCore = "--physical-core";
 constexpr std::string_view kNumaNode = "--numa-node";
 constexpr std::string_view kVersion = "--version";
@@ -78,22 +80,24 @@ constexpr std::array<std::string_view, 9> kRequired{kSlot,       kWorkers,    kH
 
 /// The keys that describe the work, required together once --workload is
 /// given and refused without it.
-constexpr std::array<std::string_view, 8> kWorkloadRequired{
-    kSeed, kFootprintBytes, kThreads,         kDecomposition,
-    kIsa,  kOraclePeriod,   kIntegrityPeriod, kLineBytes};
-constexpr std::array<std::string_view, 2> kWorkloadOptional{kPhysicalCore, kNumaNode};
+constexpr std::array<std::string_view, 9> kWorkloadRequired{
+    kSeed, kFootprintBytes, kThreads,         kDecomposition, kIsa,
+    kLock, kOraclePeriod,   kIntegrityPeriod, kLineBytes};
+constexpr std::array<std::string_view, 3> kWorkloadOptional{kPhysicalPackage, kPhysicalCore,
+                                                            kNumaNode};
 
 /// Every key a worker accepts beyond the required nine: --cpus, --workload and
 /// the keys that only mean something with it.
-constexpr std::array<std::string_view, 12> kWorkerOptional{
-    kCpus,         kWorkload,        kSeed,      kFootprintBytes, kThreads, kDecomposition, kIsa,
-    kOraclePeriod, kIntegrityPeriod, kLineBytes, kPhysicalCore,   kNumaNode};
+constexpr std::array<std::string_view, 14> kWorkerOptional{
+    kCpus,         kWorkload, kSeed,         kFootprintBytes,  kThreads,   kDecomposition,
+    kIsa,          kLock,     kOraclePeriod, kIntegrityPeriod, kLineBytes, kPhysicalPackage,
+    kPhysicalCore, kNumaNode};
 
 /// A re-run's required keys: the unit and where it runs. There is no duty
 /// (a re-run checks everything) and no placement facts beyond the CPU.
-constexpr std::array<std::string_view, 10> kRerunRequired{
-    kWorkload, kSeed,      kFootprintBytes, kThreads,   kDecomposition,
-    kIsa,      kLineBytes, kVersion,        kIteration, kCpu};
+constexpr std::array<std::string_view, 11> kRerunRequired{
+    kWorkload,  kSeed,    kFootprintBytes, kThreads, kDecomposition, kIsa, kLock,
+    kLineBytes, kVersion, kIteration,      kCpu};
 
 /// "key: what". The second parameter is a string rather than a view so the
 /// two cannot be swapped by type, and because every caller builds it anyway.
@@ -210,6 +214,18 @@ core::Result<Pacing, std::string> pacing_of(Values& values) {
   return pacing;
 }
 
+/// The policy a word names, or nothing.
+std::optional<verification::LockPolicy> parse_lock_policy(std::string_view word) {
+  for (const verification::LockPolicy policy :
+       {verification::LockPolicy::kRequire, verification::LockPolicy::kTry,
+        verification::LockPolicy::kNone}) {
+    if (verification::describe(policy) == word) {
+      return policy;
+    }
+  }
+  return std::nullopt;
+}
+
 constexpr std::uint64_t kMaxLineBytes = 4096;
 constexpr std::uint64_t kMinLineBytes = 8;
 
@@ -257,6 +273,11 @@ core::Result<WorkloadArgs, std::string> workload_of(Values& values, bool with_du
                    "'" + std::string{values[kIsa]} + "' is none of scalar, avx2, avx512, neon");
   }
   args.isa = *path;
+  const std::optional<verification::LockPolicy> lock = parse_lock_policy(values[kLock]);
+  if (!lock.has_value()) {
+    return refusal(kLock, "'" + std::string{values[kLock]} + "' is none of require, try, none");
+  }
+  args.lock = *lock;
   auto line = number_at_most(kLineBytes, values[kLineBytes], kMaxLineBytes);
   if (!line.has_value()) {
     return line.error();
@@ -277,7 +298,8 @@ core::Result<WorkloadArgs, std::string> workload_of(Values& values, bool with_du
       *target = static_cast<std::uint32_t>(period.value());
     }
   }
-  const std::array<std::pair<std::string_view, std::optional<std::uint32_t>*>, 2> where{
+  const std::array<std::pair<std::string_view, std::optional<std::uint32_t>*>, 3> where{
+      std::pair{kPhysicalPackage, &args.physical_package},
       std::pair{kPhysicalCore, &args.physical_core}, std::pair{kNumaNode, &args.numa_node}};
   for (const auto& [key, target] : where) {
     if (!values.contains(key)) {
@@ -442,10 +464,14 @@ void add_workload(std::vector<std::string>& argv, const WorkloadArgs& args, bool
   add(kThreads, std::to_string(args.threads));
   add(kDecomposition, std::to_string(args.decomposition));
   add(kIsa, std::string{simd::describe(args.isa)});
+  add(kLock, std::string{verification::describe(args.lock)});
   add(kLineBytes, std::to_string(args.line_bytes));
   if (with_duty) {
     add(kOraclePeriod, std::to_string(args.duty.oracle_period));
     add(kIntegrityPeriod, std::to_string(args.duty.integrity_period));
+  }
+  if (args.physical_package.has_value()) {
+    add(kPhysicalPackage, std::to_string(*args.physical_package));
   }
   if (args.physical_core.has_value()) {
     add(kPhysicalCore, std::to_string(*args.physical_core));
@@ -509,9 +535,11 @@ std::vector<std::string> rerun_argv_for(std::string_view executable, const Rerun
 
 bool operator==(const WorkloadArgs& lhs, const WorkloadArgs& rhs) noexcept {
   return std::tie(lhs.workload, lhs.seed, lhs.footprint_bytes, lhs.threads, lhs.decomposition,
-                  lhs.isa, lhs.duty, lhs.line_bytes, lhs.physical_core, lhs.numa_node) ==
+                  lhs.isa, lhs.lock, lhs.duty, lhs.line_bytes, lhs.physical_package,
+                  lhs.physical_core, lhs.numa_node) ==
          std::tie(rhs.workload, rhs.seed, rhs.footprint_bytes, rhs.threads, rhs.decomposition,
-                  rhs.isa, rhs.duty, rhs.line_bytes, rhs.physical_core, rhs.numa_node);
+                  rhs.isa, rhs.lock, rhs.duty, rhs.line_bytes, rhs.physical_package,
+                  rhs.physical_core, rhs.numa_node);
 }
 
 bool operator==(const WorkerArgs& lhs, const WorkerArgs& rhs) noexcept {

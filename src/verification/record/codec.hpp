@@ -6,7 +6,7 @@
 // decoder needs beside them: which validity rule a record breaks, and the
 // words for a decode error.
 //
-// THE ENCODING, FORMAT VERSION 1
+// THE ENCODING, FORMAT VERSION 2
 // ------------------------------
 // The contract fixes the first two bytes and leaves the rest to this file. It
 // is written down here so a reader can be checked against it. Little-endian,
@@ -20,7 +20,9 @@
 //     u32 logical_cpu, u32 physical_core, u32 numa_node,
 //     u64 buffer_address, u64 buffer_offset, u64 iteration,
 //     text workload, u32 workload_version, u64 seed,
-//     u8 isa, u8 input_integrity, u32 + u32 duty (oracle, integrity)
+//     u8 isa, u8 input_integrity, u32 + u32 duty (oracle, integrity),
+//     u32 physical_package, u32 decomposition, u64 footprint_bytes
+//     (the last three are version 2's)
 //   then, by kind --
 //   1: u8 side, text check, u32 line_bytes, optional difference:
 //        u8 domain, u64 first_offset, u64 last_offset, u64 popcount,

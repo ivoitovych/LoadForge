@@ -404,16 +404,54 @@ TYPED_TEST_P(SliceRunnerContract, AnOracleForAnotherWorkloadIsRefused) {
   EXPECT_EQ(TypeParam::make(rig.setup).error().fault, verification::RunnerFault::kConfiguration);
 }
 
-REGISTER_TYPED_TEST_SUITE_P(SliceRunnerContract, ASliceRunsExactlyTheUnitsAskedForAndAdvances,
-                            TheDutyCycleChoosesUnitsByIndex,
-                            AWrongOutputIsAnOutputRecordWithFullProvenance,
-                            AnInputThatWentWrongWhileReadIsCaughtByTheClosingCheck,
-                            AnInputAlreadyWrongStopsTheUnitBeforeItIsComputed,
-                            AnUncheckedUnitIsNotPerformedNeverAPassOrAFault,
-                            RecordsAreInUnitOrderAndEachUnitsInStepOrder,
-                            ARunThatCheckedNothingSaysSoWhenItFinishes,
-                            ARunThatComputedNothingAlsoCheckedNothing, ARunThatCheckedFinishesClean,
-                            NothingRunsAfterFinish, AnOracleForAnotherWorkloadIsRefused);
+// Contract change of the M2 corrections (2026-10-21): the lock policy.
+TYPED_TEST_P(SliceRunnerContract, TheDefaultPolicyLocksAndSaysSo) {
+  Rig rig(Script{});
+  const auto runner = this->make(rig);
+  ASSERT_NE(runner, nullptr);
+  EXPECT_EQ(runner->memory_lock().policy, verification::LockPolicy::kRequire);
+  EXPECT_EQ(runner->memory_lock().outcome, verification::LockOutcome::kLocked);
+  EXPECT_TRUE(runner->memory_lock().detail.empty());
+}
+
+TYPED_TEST_P(SliceRunnerContract, NoLockIsNotLockedAndStillRunsEveryUnit) {
+  Rig rig(Script{});
+  rig.setup.lock = verification::LockPolicy::kNone;
+  const auto runner = this->make(rig);
+  ASSERT_NE(runner, nullptr);
+  EXPECT_EQ(runner->memory_lock().policy, verification::LockPolicy::kNone);
+  EXPECT_EQ(runner->memory_lock().outcome, verification::LockOutcome::kNotLocked);
+  const auto report = runner->run_slice({4});
+  ASSERT_TRUE(report.has_value());
+  EXPECT_EQ(report.value().tally.units_computed, 4U);
+  EXPECT_EQ(report.value().tally.oracle_checked, 4U);
+}
+
+TYPED_TEST_P(SliceRunnerContract, ATriedLockIsLockedOrFellBackWithTheReasonNeverRefused) {
+  Rig rig(Script{});
+  rig.setup.lock = verification::LockPolicy::kTry;
+  const auto runner = this->make(rig);
+  ASSERT_NE(runner, nullptr) << "kTry does not refuse for want of the lock";
+  const verification::MemoryLock& lock = runner->memory_lock();
+  EXPECT_EQ(lock.policy, verification::LockPolicy::kTry);
+  if (lock.outcome == verification::LockOutcome::kFellBack) {
+    EXPECT_FALSE(lock.detail.empty());
+  } else {
+    EXPECT_EQ(lock.outcome, verification::LockOutcome::kLocked);
+    EXPECT_TRUE(lock.detail.empty());
+  }
+}
+
+REGISTER_TYPED_TEST_SUITE_P(
+    SliceRunnerContract, TheDefaultPolicyLocksAndSaysSo, NoLockIsNotLockedAndStillRunsEveryUnit,
+    ATriedLockIsLockedOrFellBackWithTheReasonNeverRefused,
+    ASliceRunsExactlyTheUnitsAskedForAndAdvances, TheDutyCycleChoosesUnitsByIndex,
+    AWrongOutputIsAnOutputRecordWithFullProvenance,
+    AnInputThatWentWrongWhileReadIsCaughtByTheClosingCheck,
+    AnInputAlreadyWrongStopsTheUnitBeforeItIsComputed,
+    AnUncheckedUnitIsNotPerformedNeverAPassOrAFault, RecordsAreInUnitOrderAndEachUnitsInStepOrder,
+    ARunThatCheckedNothingSaysSoWhenItFinishes, ARunThatComputedNothingAlsoCheckedNothing,
+    ARunThatCheckedFinishesClean, NothingRunsAfterFinish, AnOracleForAnotherWorkloadIsRefused);
 
 }  // namespace loadforge::contracts
 

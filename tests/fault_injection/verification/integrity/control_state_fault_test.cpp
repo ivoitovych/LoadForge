@@ -67,7 +67,10 @@ std::vector<std::byte> bytes_of(std::span<const std::byte> copy) {
 }
 
 struct Store {
-  Store() : state(std::move(ControlState::create(syscalls, sample(), {})).value()) {}
+  Store()
+      : state(std::move(
+                  ControlState::create(syscalls, sample(), {}, verification::LockPolicy::kRequire))
+                  .value()) {}
   [[nodiscard]] std::span<std::byte> copy(std::size_t which) const {
     return syscalls.mapping(which);
   }

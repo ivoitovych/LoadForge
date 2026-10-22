@@ -117,9 +117,17 @@ enum class RerunOutcome : std::uint8_t { kReproduced, kClean, kNotPerformed };
 /// Runs the unit a finding is about again, by the request.
 ///
 /// The unit is the finding's provenance (workload, workload_version,
-/// iteration, seed, isa), run in a worker of its own pinned to request.cpu,
+/// iteration, seed, isa, decomposition, footprint_bytes), run in a worker of its
+/// own pinned to request.cpu,
 /// with an executor of request.threads threads, every check on (oracle and
 /// bracket for that unit). Blocks until the re-run is over.
+///
+/// The unit's output is a function of the decomposition as well as of the input
+/// (a kBitExactFixedDecomposition workload's bits change with it), and its place
+/// in the working set of the footprint, so a Rerunner takes both from the
+/// provenance, never from a default or from anything outside the record (contract
+/// change of the M2 corrections, 3). A finding whose provenance lacks a field the
+/// unit needs is kNotPerformed.
 ///
 /// Thread-safety: one call at a time.
 class Rerunner {
@@ -138,6 +146,12 @@ class Rerunner {
 /// Where the original unit ran, and where else it may be run.
 ///
 ///   cpu          the logical CPU it ran on (its provenance's logical_cpu).
+///                A unit computed by an executor of several threads on several
+///                CPUs has no such CPU and no Placement: it is not isolated.
+///                Every rung names ONE CPU, and which of the unit's CPUs a
+///                fault was on is a question the ladder does not ask; a
+///                caller states the absence on the finding instead (contract
+///                change of the M2 corrections, 4).
 ///   threads      the thread count it ran with; at least 1. A placement of 0
 ///                is passed through as given: the requests carry 0, the
 ///                Rerunner may refuse it (kNotPerformed), and the ladder

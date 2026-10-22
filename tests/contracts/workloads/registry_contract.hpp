@@ -59,8 +59,39 @@ TYPED_TEST_P(RegistryContract, AnUnknownNameIsRefusedAsUnknown) {
   }
 }
 
+// Contract change of the M2 corrections (2026-10-21): descriptor(name) answers
+// what create() would, without creating.
+TYPED_TEST_P(RegistryContract, ADescriptorIsWhatTheCreatedWorkloadSaysAboutItself) {
+  const auto registry = TypeParam::make();
+  for (const std::string& name : registry->names()) {
+    const auto described = registry->descriptor(name);
+    ASSERT_TRUE(described.has_value()) << name << ": " << described.error().detail;
+    EXPECT_EQ(described.value().name, name);
+    EXPECT_TRUE(described.value().paths.contains(simd::IsaPath::kScalar)) << name;
+    const auto created = registry->create(name, TypeParam::config(name));
+    ASSERT_TRUE(created.has_value()) << name << ": " << created.error().detail;
+    EXPECT_EQ(described.value(), created.value()->descriptor()) << name;
+    EXPECT_EQ(registry->descriptor(name).value(), described.value())
+        << name << ": the same on every call";
+  }
+}
+
+TYPED_TEST_P(RegistryContract, AnUnknownNameHasNoDescriptorAndIsRefusedAsCreateRefusesIt) {
+  const auto registry = TypeParam::make();
+  for (const std::string_view name : {"no_such_workload", "", "Compression"}) {
+    const auto described = registry->descriptor(name);
+    ASSERT_FALSE(described.has_value()) << name;
+    EXPECT_EQ(described.error().fault, workloads::WorkloadFault::kUnknownWorkload);
+    const auto created = registry->create(name, TypeParam::config(std::string{name}));
+    ASSERT_FALSE(created.has_value()) << name;
+    EXPECT_EQ(described.error(), created.error()) << "the same words as create()";
+  }
+}
+
 REGISTER_TYPED_TEST_SUITE_P(RegistryContract, NamesAreSortedUniqueAndValid,
-                            EachNameCreatesTheWorkloadOfThatName, AnUnknownNameIsRefusedAsUnknown);
+                            EachNameCreatesTheWorkloadOfThatName, AnUnknownNameIsRefusedAsUnknown,
+                            ADescriptorIsWhatTheCreatedWorkloadSaysAboutItself,
+                            AnUnknownNameHasNoDescriptorAndIsRefusedAsCreateRefusesIt);
 
 }  // namespace loadforge::contracts
 

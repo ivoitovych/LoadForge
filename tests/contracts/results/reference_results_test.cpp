@@ -78,7 +78,8 @@ TEST(ResultsDefinition, VerdictWordsAndTheSchemaVersion) {
   EXPECT_EQ(results::describe(Verdict::kIncomplete), "incomplete");
   EXPECT_EQ(results::describe(Verdict::kFindings), "findings");
   EXPECT_EQ(results::describe(static_cast<Verdict>(9)), "unrecognised verdict");
-  EXPECT_EQ(results::kSchemaVersion, 2U) << "2: resets, microjoules, the blind verdict";
+  EXPECT_EQ(results::kSchemaVersion, 3U)
+      << "3: the provenance's package, decomposition and footprint; the lock";
   EXPECT_EQ(RunResult{}.schema_version, results::kSchemaVersion);
   EXPECT_EQ(RunResult{}.verdict, Verdict::kIncomplete) << "nothing is clean until shown to be";
 }

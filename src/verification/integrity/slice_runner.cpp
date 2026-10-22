@@ -40,6 +40,7 @@
 #include "verification/integrity/control_state.hpp"
 #include "verification/integrity/difference.hpp"
 #include "verification/integrity/layout.hpp"
+#include "verification/integrity/locking.hpp"
 #include "verification/runner.hpp"
 
 namespace loadforge::verification {
@@ -98,7 +99,7 @@ struct Unit {
 class IntegrityRunner final : public SliceRunner {
  public:
   IntegrityRunner(const RunnerSetup& setup, const Layout& layout, platform::Mapping working_set,
-                  ControlState control)
+                  ControlState control, MemoryLock memory_lock)
       : workload_(setup.workload),
         oracle_(setup.oracle),
         executor_(setup.executor),
@@ -107,6 +108,7 @@ class IntegrityRunner final : public SliceRunner {
         layout_(layout),
         working_set_(std::move(working_set)),
         control_(std::move(control)),
+        memory_lock_(std::move(memory_lock)),
         next_index_(setup.first_index) {
     // The workload's name is the setup's, and a record cannot carry one
     // longer than kMaxTextBytes; it is cut here once rather than in every
@@ -170,6 +172,7 @@ class IntegrityRunner final : public SliceRunner {
   }
 
   [[nodiscard]] const Tally& total() const noexcept override { return total_; }
+  [[nodiscard]] const MemoryLock& memory_lock() const noexcept override { return memory_lock_; }
 
  private:
   /// The provenance of a finding about the run rather than a unit: no
@@ -394,6 +397,7 @@ class IntegrityRunner final : public SliceRunner {
   std::uintptr_t start_address_ = 0;
   std::size_t slack_ = 0;
   ControlState control_;
+  MemoryLock memory_lock_;
   Tally total_;
   /// The run's progress as last confirmed, for the report's next_index only;
   /// nothing is regenerated from it, so it needs no protection.
@@ -441,10 +445,9 @@ core::Result<std::unique_ptr<SliceRunner>, RunnerError> make_slice_runner(
   platform::MappingRequest request;
   request.bytes = layout.value().mapping_bytes;
   request.populate = true;
-  request.lock = true;
   request.node = setup.base.numa_node;
   platform::Memory memory(*setup.syscalls);
-  auto working_set = memory.map(request);
+  auto working_set = integrity::map_by_policy(memory, request, setup.lock);
   if (!working_set.has_value()) {
     return RunnerError{RunnerFault::kResources,
                        "working set: " + platform::describe(working_set.error())};
@@ -461,15 +464,27 @@ core::Result<std::unique_ptr<SliceRunner>, RunnerError> make_slice_runner(
   if (setup.base.numa_node.has_value()) {
     nodes.push_back(*setup.base.numa_node);
   }
-  auto control = ControlState::create(*setup.syscalls, initial, nodes);
+  auto control = ControlState::create(*setup.syscalls, initial, nodes, setup.lock);
   if (!control.has_value()) {
     return RunnerError{RunnerFault::kResources, "control state, copy " +
                                                     std::to_string(control.error().copy) + ": " +
                                                     platform::describe(control.error().refused)};
   }
 
+  // What was done about locking, over everything the runner holds: the
+  // working set first, then the control state's copies.
+  MemoryLock lock;
+  lock.policy = setup.lock;
+  lock.outcome = working_set.value().outcome;
+  lock.detail = working_set.value().detail;
+  if (lock.outcome != LockOutcome::kFellBack &&
+      control.value().outcome() == LockOutcome::kFellBack) {
+    lock.outcome = LockOutcome::kFellBack;
+    lock.detail = "control state: " + control.value().detail();
+  }
   return std::unique_ptr<SliceRunner>(std::make_unique<IntegrityRunner>(
-      setup, layout.value(), std::move(working_set).value(), std::move(control).value()));
+      setup, layout.value(), std::move(working_set).value().mapping, std::move(control).value(),
+      std::move(lock)));
 }
 
 }  // namespace loadforge::verification

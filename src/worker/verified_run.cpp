@@ -170,7 +170,11 @@ core::Result<Prepared, WorkerError> prepare(platform::Syscalls& syscalls, const 
   setup.base.workload_version = prepared.workload->descriptor().version;
   setup.base.seed = args.seed;
   setup.base.isa = args.isa;
+  setup.base.physical_package = args.physical_package;
   setup.base.physical_core = args.physical_core;
+  setup.base.decomposition = prepared.workload->plan().decomposition;
+  setup.base.footprint_bytes = args.footprint_bytes;
+  setup.lock = args.lock;
   setup.base.numa_node = args.numa_node;
   if (cpus.size() == 1) {
     setup.base.logical_cpu = cpus.front();
@@ -327,6 +331,17 @@ core::Result<VerifiedOutcome, WorkerError> VerifiedRun::run() {
   auto prepared = prepare(*syscalls_, *workload_, args_->cpus, 0, *services_);
   if (!prepared.has_value()) {
     return prepared.error();
+  }
+  // What was done about locking is told once, before the first slice.
+  const Sent told = send_frame(*records_, kMemoryFrameType,
+                               encode_memory(prepared.value().runner->memory_lock()));
+  if (told.failure.has_value()) {
+    return *told.failure;
+  }
+  if (told.controller_gone) {
+    VerifiedOutcome gone;
+    gone.outcome.reason = StopReason::kControllerHungUp;
+    return gone;
   }
   Ticker ticker(*syscalls_, *records_, session_, *prepared.value().runner);
   if (auto failed = ticker.start(); failed.has_value()) {

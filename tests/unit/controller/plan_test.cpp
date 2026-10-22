@@ -110,28 +110,12 @@ TEST(DescribeState, SaysEveryPropertyThatExistsOnTheArchitectureAndNoOtherInTheR
 
 // --- plan_worker ---------------------------------------------------------------------
 
-/// The real workloads, with the ability to fail the second creation of a
-/// workload (the one made for the chosen path) or its first.
-class ScriptedRegistry final : public workloads::Registry {
- public:
-  [[nodiscard]] std::vector<std::string> names() const override { return inner.names(); }
-  [[nodiscard]] core::Result<std::unique_ptr<workloads::Workload>, workloads::WorkloadError> create(
-      std::string_view name, const workloads::WorkloadConfig& config) const override {
-    ++creations;
-    if (fail_from != 0 && creations >= fail_from) {
-      return workloads::WorkloadError{workloads::WorkloadFault::kConfiguration, "scripted"};
-    }
-    return inner.create(name, config);
-  }
-  workloads::BuiltinRegistry inner;
-  mutable int creations = 0;
-  int fail_from = 0;
-};
-
 config::Workload entry(std::string name, config::Threads threads = config::Threads::count(1),
                        std::optional<core::ByteSize> memory = std::nullopt) {
   return config::Workload{std::move(name), threads, true, memory};
 }
+
+using controller_testing::ScriptedRegistry;
 
 struct Planning {
   ScriptedRegistry registry;
@@ -193,8 +177,12 @@ TEST(PlanWorker, ARealWorkloadGetsEveryChoiceMadeOnceAndSaysWhatTheyAre) {
   EXPECT_EQ(args.line_bytes, 64U);
   EXPECT_EQ(plan.cpus, (std::vector<std::uint32_t>{2}));
   EXPECT_EQ(args.physical_core, 2U);
+  EXPECT_EQ(args.physical_package, 0U);
   EXPECT_EQ(args.numa_node, 0U);
+  EXPECT_EQ(args.lock, verification::LockPolicy::kTry)
+      << "the controller's choice, told to the worker";
   ASSERT_TRUE(plan.work.has_value());
+  EXPECT_EQ(plan.work->lock, verification::LockPolicy::kTry);
   EXPECT_EQ(plan.work->descriptor.name, "dense_linear");
   EXPECT_EQ(plan.work->isa, widest_kernel_of_dense_linear());
   EXPECT_EQ(plan.work->threads, 1U);
@@ -215,6 +203,22 @@ TEST(PlanWorker, ARealWorkloadGetsEveryChoiceMadeOnceAndSaysWhatTheyAre) {
       << plan.description;
 }
 
+// M2 contract corrections, 5: a core is a package and a core. Core ids repeat across
+// packages, so a plan that told the worker only the core's id would give CPU 0 (package
+// 0, core 0) and CPU 2 (package 1, core 0) the same place.
+TEST(PlanWorker, ACoreIsAPackageAndACoreBecauseCoreIdsRepeatAcrossPackages) {
+  const MachineTree tree(MachineShape{4, 64, true, 2});
+  const topology::Snapshot machine = tree.accepted();
+  const Planning planning;
+  auto first = plan_worker(entry("compression"), 0, std::nullopt, planning.options, &machine);
+  auto third = plan_worker(entry("compression"), 2, std::nullopt, planning.options, &machine);
+  ASSERT_TRUE(first.has_value() && third.has_value());
+  EXPECT_EQ(first.value().args->physical_package, 0U);
+  EXPECT_EQ(first.value().args->physical_core, 0U);
+  EXPECT_EQ(third.value().args->physical_package, 1U);
+  EXPECT_EQ(third.value().args->physical_core, 0U) << "the same core id, another core";
+}
+
 TEST(PlanWorker, WhereAWorkerRunsOnSeveralCpusOrNoneNoSingleCoreIsClaimed) {
   const MachineTree tree(MachineShape{4, 64, false});
   const topology::Snapshot machine = tree.accepted();
@@ -225,6 +229,7 @@ TEST(PlanWorker, WhereAWorkerRunsOnSeveralCpusOrNoneNoSingleCoreIsClaimed) {
   EXPECT_EQ(all.value().threads, 4U);
   EXPECT_EQ(all.value().cpus, (std::vector<std::uint32_t>{0, 1, 2, 3}));
   EXPECT_FALSE(all.value().args->physical_core.has_value());
+  EXPECT_FALSE(all.value().args->physical_package.has_value());
   EXPECT_FALSE(all.value().work->cpu.has_value());
   EXPECT_NE(all.value().description.find("on cpus 0,1,2,3"), std::string::npos);
 
@@ -254,6 +259,7 @@ TEST(PlanWorker, ASingleCpuWithNoNumaNodeOrCoreInTheSnapshotIsLeftUnsaid) {
   auto elsewhere = plan_worker(entry("compression"), 0, std::nullopt, planning.options, &machine);
   ASSERT_TRUE(elsewhere.has_value());
   EXPECT_FALSE(elsewhere.value().args->physical_core.has_value());
+  EXPECT_FALSE(elsewhere.value().args->physical_package.has_value());
   auto no_snapshot = plan_worker(entry("compression"), 0, std::nullopt, planning.options, nullptr);
   ASSERT_TRUE(no_snapshot.has_value());
   EXPECT_FALSE(no_snapshot.value().args->physical_core.has_value());
@@ -317,15 +323,40 @@ TEST(PlanWorker, EveryReasonARunCannotStartNamesTheWorkload) {
     EXPECT_EQ(planned.error(), "compression: the workload has no avx512 kernel");
   }
   {
-    // The workload accepts the scalar probe and refuses the configuration made
-    // for the chosen path.
+    // The workload refuses the configuration made for the chosen path.
     Planning planning;
-    planning.registry.fail_from = 2;
+    planning.registry.fail_from = 1;
     auto planned = plan_worker(entry("compression"), 0, std::nullopt, planning.options, nullptr);
     ASSERT_FALSE(planned.has_value());
     EXPECT_EQ(planned.error(),
               "compression: configuration outside the workload's domain: scripted");
   }
+  {
+    // The registry cannot say what the workload has kernels for.
+    Planning planning;
+    planning.registry.descriptor_fails = true;
+    auto planned = plan_worker(entry("compression"), 0, std::nullopt, planning.options, nullptr);
+    ASSERT_FALSE(planned.has_value());
+    EXPECT_EQ(planned.error(), "compression: unknown workload: scripted");
+    EXPECT_EQ(planning.registry.creations, 0) << "no workload is made to find out";
+  }
+}
+
+// M2 contract corrections, 1: the path is chosen from the workload's paths as the
+// registry gives them, and the workload is made once. Before, the controller made
+// it twice (scalar, to read its paths; then the chosen path).
+TEST(PlanWorker, AWorkloadIsMadeOnceForTheChosenPathAndItsPathsAreAskedWithoutMakingOne) {
+  Planning planning;
+  const controller_testing::ModelProbe wide{
+      IsaSet{IsaPath::kScalar, IsaPath::kAvx2, IsaPath::kAvx512}};
+  planning.options.isa_probe = &wide;
+  auto planned = plan_worker(entry("dense_linear"), 0, std::nullopt, planning.options, nullptr);
+  ASSERT_TRUE(planned.has_value()) << planned.error();
+  EXPECT_EQ(planning.registry.creations, 1);
+  EXPECT_EQ(planning.registry.descriptions, 1);
+  EXPECT_EQ(planned.value().args->isa, widest_kernel_of_dense_linear())
+      << "the machine has AVX-512 and dense_linear has no kernel for it";
+  EXPECT_NE(planned.value().args->isa, IsaPath::kAvx512);
 }
 
 TEST(PlanWorker, WithoutAnIsaProbeOnlyScalarIsOffered) {
@@ -356,6 +387,7 @@ TEST(VerificationOptionsTest, EqualityLooksAtEveryField) {
   EXPECT_TRUE(changed([](VerificationOptions& o) { o.duty.integrity_period = 4; }));
   EXPECT_TRUE(changed([](VerificationOptions& o) { o.line_bytes = 64; }));
   EXPECT_TRUE(changed([](VerificationOptions& o) { o.cpus = {1}; }));
+  EXPECT_TRUE(changed([](VerificationOptions& o) { o.lock = verification::LockPolicy::kNone; }));
 }
 
 }  // namespace

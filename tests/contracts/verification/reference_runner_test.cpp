@@ -88,7 +88,12 @@ class ReferenceRunner final : public verification::SliceRunner {
         outputs_(aligned(out_stride_ * plan_.units, setup.line_bytes)),
         regenerated_(plan_.input_bytes),
         scratch_(plan_.scratch_bytes * setup.executor->threads()),
-        next_(setup.first_index) {}
+        next_(setup.first_index) {
+    lock_.policy = setup.lock;
+    lock_.outcome = setup.lock == verification::LockPolicy::kNone
+                        ? verification::LockOutcome::kNotLocked
+                        : verification::LockOutcome::kLocked;
+  }
 
   core::Result<SliceReport, RunnerError> run_slice(const SliceRequest& request) override {
     if (finished_) {
@@ -124,6 +129,11 @@ class ReferenceRunner final : public verification::SliceRunner {
   }
 
   [[nodiscard]] const Tally& total() const noexcept override { return total_; }
+  // The reference maps nothing, so nothing is refused: the policy as given and
+  // the outcome it names.
+  [[nodiscard]] const verification::MemoryLock& memory_lock() const noexcept override {
+    return lock_;
+  }
 
  private:
   [[nodiscard]] Provenance base() const {
@@ -227,6 +237,7 @@ class ReferenceRunner final : public verification::SliceRunner {
   std::vector<std::byte> scratch_;
   std::uint64_t next_;
   Tally total_;
+  verification::MemoryLock lock_;
   bool finished_ = false;
 };
 
@@ -266,6 +277,23 @@ TEST(RunnerDefinition, FaultNamesAndErrorEquality) {
   EXPECT_EQ(verification::describe(RunnerFault::kResources), "runner resources");
   EXPECT_EQ(verification::describe(RunnerFault::kFinished), "runner already finished");
   EXPECT_EQ(verification::describe(static_cast<RunnerFault>(9)), "unrecognised runner fault");
+  EXPECT_EQ(verification::describe(verification::LockPolicy::kRequire), "require");
+  EXPECT_EQ(verification::describe(verification::LockPolicy::kTry), "try");
+  EXPECT_EQ(verification::describe(verification::LockPolicy::kNone), "none");
+  EXPECT_EQ(verification::describe(static_cast<verification::LockPolicy>(9)),
+            "unrecognised lock policy");
+  EXPECT_EQ(verification::describe(verification::LockOutcome::kLocked), "locked");
+  EXPECT_EQ(verification::describe(verification::LockOutcome::kNotLocked), "not locked");
+  EXPECT_EQ(verification::describe(verification::LockOutcome::kFellBack),
+            "not locked: the lock was refused");
+  EXPECT_EQ(verification::describe(static_cast<verification::LockOutcome>(9)),
+            "unrecognised lock outcome");
+  expect_memberwise_equality(
+      verification::MemoryLock{verification::LockPolicy::kTry, verification::LockOutcome::kLocked,
+                               "d"},
+      {[](verification::MemoryLock& l) { l.policy = verification::LockPolicy::kNone; },
+       [](verification::MemoryLock& l) { l.outcome = verification::LockOutcome::kFellBack; },
+       [](verification::MemoryLock& l) { l.detail = "e"; }});
   expect_memberwise_equality(RunnerError{RunnerFault::kResources, "d"},
                              {[](RunnerError& e) { e.fault = RunnerFault::kFinished; },
                               [](RunnerError& e) { e.detail = "e"; }});

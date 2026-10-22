@@ -75,6 +75,24 @@ constexpr std::size_t kMostDefaultWorkers = 64;
 /// machine: a sort unit takes 0.4 s in a debug build and ten times that under a
 /// sanitizer (journal fragment 11). Ten seconds; null workloads keep their two.
 constexpr std::int64_t kVerifyingStaleAfterNs = 10'000'000'000;
+/// How long a verifying worker is given to stop before it is terminated. The same
+/// fact as above: a worker sees the stop request only between units, and a
+/// unit has no upper bound. The default grace of one second killed healthy
+/// workers that were mid-unit at the deadline: on a 2-core runner under
+/// ThreadSanitizer a verified dense-linear unit takes about 1.5 s, and the run
+/// ended with "worker 0: killed by signal 15 ... 0 of 2 worker(s) completed"
+/// and the verdict incomplete (CI, TSan x86 job, 2026-10-22 01:06 UTC). Ten
+/// seconds; null workloads keep their one.
+constexpr std::int64_t kVerifyingStopGraceNs = 10'000'000'000;
+
+}  // namespace
+
+void allow_for_verified_units(controller::RunOptions& options) {
+  options.stale_after_ns = std::max(options.stale_after_ns, kVerifyingStaleAfterNs);
+  options.grace.stop_ns = std::max(options.grace.stop_ns, kVerifyingStopGraceNs);
+}
+
+namespace {
 
 void print_usage(std::ostream& out) {
   out << "loadforge " << kVersion << "\n"
@@ -90,6 +108,7 @@ void print_usage(std::ostream& out) {
       << "                                  json, csv or json,csv, written to DIR/run.<format>\n"
       << "  loadforge stress --test NAME [--duration D] [--workers N] [--footprint SIZE]\n"
       << "                   [--isa scalar|avx2|avx512|neon] [--seed N]\n"
+      << "                   [--lock require|try|none]\n"
       << "                   [--output FORMATS] [--output-dir DIR] [--sample-interval DURATION]\n"
       << "                                  stress with one verified workload, sampled and\n"
       << "                                  written the same way; NAME is one of\n"
@@ -116,6 +135,7 @@ struct TestArgs {
   std::optional<core::ByteSize> footprint;
   std::optional<simd::IsaPath> isa;
   std::optional<std::uint64_t> seed;
+  std::optional<verification::LockPolicy> lock;
   std::vector<std::string> formats;  ///< --output: none given is none written.
   std::optional<std::string> output_dir;
   std::optional<std::int64_t> sample_interval_ns;
@@ -198,6 +218,18 @@ std::optional<std::string> take_isa(const Written& option, TestArgs& out) {
   return std::nullopt;
 }
 
+std::optional<std::string> take_lock(const Written& option, TestArgs& out) {
+  for (const verification::LockPolicy policy :
+       {verification::LockPolicy::kRequire, verification::LockPolicy::kTry,
+        verification::LockPolicy::kNone}) {
+    if (verification::describe(policy) == option.value) {
+      out.lock = policy;
+      return std::nullopt;
+    }
+  }
+  return refused(option.key, "'" + std::string{option.value} + "' is none of require, try, none");
+}
+
 std::optional<std::string> take_seed(const Written& option, TestArgs& out) {
   auto seed = whole_number(option.key, option.value);
   if (!seed.has_value()) {
@@ -237,12 +269,13 @@ struct Option {
   bool (*given)(const TestArgs&);
 };
 
-constexpr std::array<Option, 8> kOptions{{
+constexpr std::array<Option, 9> kOptions{{
     {"--duration", &take_duration, [](const TestArgs& a) { return a.duration.has_value(); }},
     {"--workers", &take_workers, [](const TestArgs& a) { return a.workers.has_value(); }},
     {"--footprint", &take_footprint, [](const TestArgs& a) { return a.footprint.has_value(); }},
     {"--isa", &take_isa, [](const TestArgs& a) { return a.isa.has_value(); }},
     {"--seed", &take_seed, [](const TestArgs& a) { return a.seed.has_value(); }},
+    {"--lock", &take_lock, [](const TestArgs& a) { return a.lock.has_value(); }},
     {"--output", &take_output, [](const TestArgs& a) { return !a.formats.empty(); }},
     {"--output-dir", &take_output_dir, [](const TestArgs& a) { return a.output_dir.has_value(); }},
     {"--sample-interval", &take_sample_interval,
@@ -487,6 +520,7 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
   StressOptions options = base;
   options.isa = test.isa;
   options.seed = test.seed.value_or(options.seed);
+  options.lock = test.lock.value_or(options.lock);
   if (test.output_dir.has_value()) {
     options.output_dir = *test.output_dir;
   }
@@ -598,12 +632,13 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
         return w.enabled && std::ranges::find(registered, w.name) != registered.end();
       });
   if (verifying) {
-    options.stale_after_ns = std::max(options.stale_after_ns, kVerifyingStaleAfterNs);
+    allow_for_verified_units(options);
   }
   options.verification.registry = &registry;
   options.verification.seed = stress_options.seed;
   options.verification.footprint_bytes = stress_options.footprint_bytes;
   options.verification.requested_isa = stress_options.isa;
+  options.verification.lock = stress_options.lock;
   options.verification.isa_probe = probe.get();
   options.verification.line_bytes = line_bytes_of(snapshot);
   options.verification.cpus = allowed_cpus(syscalls, snapshot);

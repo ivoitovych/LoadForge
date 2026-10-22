@@ -54,6 +54,11 @@ namespace loadforge::workloads::compression {
 void write_unit(std::span<const std::byte> input, std::span<std::byte> output,
                 std::span<std::byte> table) noexcept;
 
+/// What every compression workload says about itself, without creating one:
+/// the descriptor of any workload create() returns (Registry::descriptor,
+/// workloads/workload.hpp).
+[[nodiscard]] Descriptor workload_descriptor();
+
 /// The workload for `config`, or why not (above).
 [[nodiscard]] core::Result<std::unique_ptr<Workload>, WorkloadError> create(
     const WorkloadConfig& config);

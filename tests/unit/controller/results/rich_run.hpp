@@ -19,6 +19,7 @@ namespace loadforge::results::testing {
 inline verification::Provenance full_provenance() {
   verification::Provenance p;
   p.logical_cpu = 3;
+  p.physical_package = 1;
   p.physical_core = 1;
   p.numa_node = 0;
   p.buffer_address = 0x7f0000001000ULL;
@@ -30,6 +31,8 @@ inline verification::Provenance full_provenance() {
   p.isa = simd::IsaPath::kAvx2;
   p.input_integrity = verification::InputIntegrity::kCorruptDuringConsumption;
   p.duty = verification::DutyCycle{4, 8};
+  p.decomposition = 8;
+  p.footprint_bytes = 33554432;
   return p;
 }
 
@@ -93,6 +96,10 @@ inline RunResult rich_run() {
   workload.duty = verification::DutyCycle{4, 8};
   workload.descriptor.paths = simd::IsaSet{simd::IsaPath::kScalar, simd::IsaPath::kAvx2};
   workload.tally = verification::Tally{1000, 250, 250, 2, 1, 125, 1};
+  workload.lock_policy = verification::LockPolicy::kTry;
+  workload.memory_lock =
+      verification::MemoryLock{verification::LockPolicy::kTry, verification::LockOutcome::kFellBack,
+                               "mlock: Cannot allocate memory"};
 
   verification::ExactBitCorruption exact = contracts::results_suite::exact_record();
   exact.provenance = full_provenance();

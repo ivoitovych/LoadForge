@@ -57,8 +57,10 @@ WorkloadArgs a_unit() {
   unit.threads = 3;
   unit.decomposition = 2;
   unit.isa = simd::IsaPath::kAvx2;
+  unit.lock = verification::LockPolicy::kNone;
   unit.duty = verification::DutyCycle{4, 9};
   unit.line_bytes = 128;
+  unit.physical_package = 1;
   unit.physical_core = 5;
   unit.numa_node = 1;
   return unit;
@@ -146,17 +148,19 @@ TEST(WorkloadArgsTest, ANullWorkerCarriesNoUnit) {
 TEST(WorkloadArgsTest, EveryKeyOfTheUnitIsRequiredWithTheWorkloadAndRefusedWithout) {
   const std::vector<std::string> argv = tail_of(a_worker(a_unit()));
   for (const std::string_view key :
-       {"--seed", "--footprint-bytes", "--threads", "--decomposition", "--isa", "--oracle-period",
-        "--integrity-period", "--line-bytes"}) {
+       {"--seed", "--footprint-bytes", "--threads", "--decomposition", "--isa", "--lock",
+        "--oracle-period", "--integrity-period", "--line-bytes"}) {
     EXPECT_EQ(refusal_of(without(argv, key)), std::string{key} + ": required with --workload");
   }
   std::vector<std::string> no_workload = without(argv, "--workload");
   EXPECT_EQ(refusal_of(no_workload), "--seed: needs --workload");
   for (const std::string_view key :
-       {"--seed", "--footprint-bytes", "--threads", "--decomposition", "--isa", "--oracle-period",
-        "--integrity-period", "--line-bytes"}) {
+       {"--seed", "--footprint-bytes", "--threads", "--decomposition", "--isa", "--lock",
+        "--oracle-period", "--integrity-period", "--line-bytes"}) {
     no_workload = without(no_workload, key);
   }
+  EXPECT_EQ(refusal_of(no_workload), "--physical-package: needs --workload");
+  no_workload = without(no_workload, "--physical-package");
   EXPECT_EQ(refusal_of(no_workload), "--physical-core: needs --workload");
   no_workload = without(no_workload, "--physical-core");
   EXPECT_EQ(refusal_of(no_workload), "--numa-node: needs --workload");
@@ -184,6 +188,11 @@ TEST(WorkloadArgsTest, EveryValueHasADomainAndItsBoundaryIsRefusedByName) {
             std::string::npos);
   EXPECT_EQ(refusal_of(with(argv, "--isa", "sse")),
             "--isa: 'sse' is none of scalar, avx2, avx512, neon");
+  EXPECT_EQ(refusal_of(with(argv, "--lock", "always")),
+            "--lock: 'always' is none of require, try, none");
+  for (const char* word : {"require", "try", "none"}) {
+    EXPECT_TRUE(parse_args(views_of(with(argv, "--lock", word))).has_value()) << word;
+  }
   for (const char* line : {"4", "0", "100", "8192"}) {
     EXPECT_NE(refusal_of(with(argv, "--line-bytes", line)).find("--line-bytes: "),
               std::string::npos)
@@ -225,7 +234,9 @@ TEST(WorkloadArgsTest, EqualityLooksAtEveryField) {
   EXPECT_TRUE(differs([](WorkloadArgs& u) { u.threads = 1; }));
   EXPECT_TRUE(differs([](WorkloadArgs& u) { u.decomposition = 1; }));
   EXPECT_TRUE(differs([](WorkloadArgs& u) { u.isa = simd::IsaPath::kScalar; }));
+  EXPECT_TRUE(differs([](WorkloadArgs& u) { u.lock = verification::LockPolicy::kTry; }));
   EXPECT_TRUE(differs([](WorkloadArgs& u) { u.duty.oracle_period = 1; }));
+  EXPECT_TRUE(differs([](WorkloadArgs& u) { u.physical_package.reset(); }));
   EXPECT_TRUE(differs([](WorkloadArgs& u) { u.line_bytes = 64; }));
   EXPECT_TRUE(differs([](WorkloadArgs& u) { u.physical_core.reset(); }));
   EXPECT_TRUE(differs([](WorkloadArgs& u) { u.numa_node = 9; }));
@@ -240,6 +251,7 @@ RerunArgs a_rerun() {
   RerunArgs args;
   args.unit = a_unit();
   args.unit.duty = verification::DutyCycle{1, 1};
+  args.unit.physical_package.reset();
   args.unit.physical_core.reset();
   args.unit.numa_node.reset();
   args.workload_version = 3;
@@ -272,7 +284,7 @@ TEST(RerunArgsTest, EveryKeyIsRequiredAndAWorkersOwnKeysAreNotAccepted) {
   const std::vector<std::string> argv = rerun_tail(a_rerun());
   for (const std::string_view key :
        {"--workload", "--seed", "--footprint-bytes", "--threads", "--decomposition", "--isa",
-        "--line-bytes", "--version", "--iteration", "--cpu"}) {
+        "--lock", "--line-bytes", "--version", "--iteration", "--cpu"}) {
     EXPECT_EQ(rerun_refusal(without(argv, key)), std::string{key} + ": required");
   }
   EXPECT_EQ(rerun_refusal(with(argv, "--oracle-period", "1")),
@@ -359,6 +371,16 @@ class DecoratedRegistry final : public workloads::Registry {
         std::make_unique<DecoratedWorkload>(std::move(made).value(), corrupt, version);
     return wrapped;
   }
+  [[nodiscard]] core::Result<workloads::Descriptor, workloads::WorkloadError> descriptor(
+      std::string_view name) const override {
+    auto described = inner.descriptor(name);
+    if (!described.has_value()) {
+      return described;
+    }
+    workloads::Descriptor adjusted = described.value();
+    adjusted.version = version;
+    return adjusted;
+  }
   workloads::BuiltinRegistry inner;
   bool corrupt = false;
   std::uint32_t version = 1;
@@ -418,9 +440,13 @@ class FailingRunner final : public verification::SliceRunner {
     return verification::SliceReport{};
   }
   [[nodiscard]] const verification::Tally& total() const noexcept override { return total_; }
+  [[nodiscard]] const verification::MemoryLock& memory_lock() const noexcept override {
+    return lock_;
+  }
 
  private:
   verification::Tally total_;
+  verification::MemoryLock lock_;
 };
 core::Result<std::unique_ptr<verification::SliceRunner>, verification::RunnerError> make_failing(
     const verification::RunnerSetup& /*setup*/) {

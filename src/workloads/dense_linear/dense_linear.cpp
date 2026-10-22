@@ -97,10 +97,9 @@ void run_tile(void* context, std::size_t tile, std::size_t /*slot*/) noexcept {
 
 class DenseLinear final : public Workload {
  public:
-  DenseLinear(const WorkloadConfig& config, simd::IsaSet paths, PanelKernel kernel,
+  DenseLinear(const WorkloadConfig& config, Descriptor descriptor, PanelKernel kernel,
               std::uint32_t depth, std::uint64_t units)
-      : descriptor_{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
-                    verification::Contract::kBounded, paths},
+      : descriptor_(std::move(descriptor)),
         plan_{kInputBytes, kOutputBytes, 0, units, depth, kLogicalBytes, kOperations},
         seed_(config.seed),
         kernel_(kernel) {}
@@ -140,6 +139,13 @@ class DenseLinear final : public Workload {
 
 const Kernels& built_kernels() noexcept { return kBuilt; }
 
+Descriptor workload_descriptor() { return workload_descriptor(kBuilt); }
+
+Descriptor workload_descriptor(const Kernels& kernels) {
+  return Descriptor{std::string(kName), kVersion, DeterminismClass::kBitExactFixedDecomposition,
+                    verification::Contract::kBounded, simd::kernel_paths(kernels)};
+}
+
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {
   return create(config, kBuilt);
 }
@@ -170,7 +176,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
                              " bytes holds no unit of " + std::to_string(kUnitBytes) + " bytes"};
   }
   return std::unique_ptr<Workload>(
-      std::make_unique<DenseLinear>(config, paths, kernel, depth, units));
+      std::make_unique<DenseLinear>(config, workload_descriptor(kernels), kernel, depth, units));
 }
 
 }  // namespace loadforge::workloads::dense_linear

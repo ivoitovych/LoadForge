@@ -24,6 +24,7 @@ loadforge_test_suite(loadforge_unit_verification_integrity_tests
   SOURCES
     contracts_test.cpp
     layout_test.cpp
+    locking_test.cpp
     difference_test.cpp
     control_state_test.cpp
     runner_test.cpp

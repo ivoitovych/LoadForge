@@ -1,7 +1,7 @@
 # The result schema
 
 **Written:** 2026-10-20 12:58 UTC
-**Schema version:** 1
+**Schema version:** 3
 **Provided by:** `src/controller/results/` (the tree), `src/reporters/json/` (`run.json`),
 `src/reporters/csv/` (the CSV table). Specified by `docs/PLAN.md` F12 and
 `docs/IMPLEMENTATION.md` M3.
@@ -19,7 +19,10 @@ changes what a rendering means. A reader of a result **refuses a version it does
 rather than misreading it: a field that moved or changed its unit under an unchanged
 version would compare two runs that are not alike.
 
-Version 1 is the first.
+Version 1 is the first. Version 2 is the M3 corrections. Version 3 (M2 contract corrections):
+a provenance carries `physical_package`, `decomposition` and `footprint_bytes`;
+`physical_core` is the core's id within its package; and a workload carries `memory_lock`
+(below).
 
 ## Absence
 
@@ -125,6 +128,10 @@ tally        { units_computed, oracle_checked, oracle_blocks, oracle_failed,
                oracle_not_performed, integrity_checked, integrity_failed }
 logical_bytes
 findings     [ finding ]
+lock_policy  "require" | "try" | "none"      what the controller chose for the working set's lock
+memory_lock  null | { outcome, detail | null }
+               outcome: "locked" | "not locked" | "not locked: the lock was refused"
+               null when the worker never said; detail is the refusal when the lock was refused
 ```
 
 ### finding
@@ -144,10 +151,11 @@ Every record has `kind` (`ExactBitCorruption`, `NumericalVerificationFailure` or
 `VerificationNotPerformed`, from `kind_name()`) and `provenance`:
 
 ```text
-provenance  logical_cpu | null  physical_core | null  numa_node | null
+provenance  logical_cpu | null  physical_package | null  physical_core | null  numa_node | null
             buffer_address | null  buffer_offset | null  iteration | null
             workload | null  workload_version | null  seed | null
             isa | null  input_integrity | null  duty | null { oracle_period, integrity_period }
+            decomposition | null  footprint_bytes | null
 ```
 
 then, by kind, and **only** these (a field that does not exist is not written as zero):

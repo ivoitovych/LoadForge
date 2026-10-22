@@ -350,6 +350,7 @@ Node provenance_node(const verification::Provenance& provenance) {
   };
   Node node = Node::object();
   node.add("logical_cpu", number(provenance.logical_cpu));
+  node.add("physical_package", number(provenance.physical_package));
   node.add("physical_core", number(provenance.physical_core));
   node.add("numa_node", number(provenance.numa_node));
   node.add("buffer_address", opt_unsigned(provenance.buffer_address));
@@ -371,6 +372,8 @@ Node provenance_node(const verification::Provenance& provenance) {
   } else {
     node.add("duty", Node::null());
   }
+  node.add("decomposition", number(provenance.decomposition));
+  node.add("footprint_bytes", opt_unsigned(provenance.footprint_bytes));
   return node;
 }
 
@@ -513,6 +516,19 @@ Node workload_node(const WorkloadResult& workload) {
   node.add("tally", std::move(counts));
   node.add("logical_bytes", Node::unsigned_integer(workload.logical_bytes));
   node.add("findings", std::move(findings));
+  node.add("lock_policy", text(verification::describe(workload.lock_policy)));
+  if (workload.memory_lock.has_value()) {
+    Node lock = Node::object();
+    lock.add("outcome", text(verification::describe(workload.memory_lock->outcome)));
+    Node detail = Node::null();
+    if (!workload.memory_lock->detail.empty()) {
+      detail = Node::text(workload.memory_lock->detail);
+    }
+    lock.add("detail", std::move(detail));
+    node.add("memory_lock", std::move(lock));
+  } else {
+    node.add("memory_lock", Node::null());
+  }
   return node;
 }
 

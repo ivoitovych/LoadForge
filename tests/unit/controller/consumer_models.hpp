@@ -22,6 +22,8 @@
 #include "telemetry/sample.hpp"
 #include "telemetry/source.hpp"
 #include "verification/isolation.hpp"
+#include "workloads/registry/registry.hpp"
+#include "workloads/workload.hpp"
 
 namespace loadforge::controller_testing {
 
@@ -190,6 +192,36 @@ class ModelIsolator final : public verification::Isolator {
     report.confidence = verification::confidence_of(report.finding);
     return report;
   }
+};
+
+/// The real workloads, with the ability to fail the creation of a workload or
+/// the question of what a workload has, and a count of each: a plan makes a
+/// workload once (for the path it chose) and asks the registry for its paths
+/// once, without making one.
+class ScriptedRegistry final : public workloads::Registry {
+ public:
+  [[nodiscard]] std::vector<std::string> names() const override { return inner.names(); }
+  [[nodiscard]] core::Result<std::unique_ptr<workloads::Workload>, workloads::WorkloadError> create(
+      std::string_view name, const workloads::WorkloadConfig& config) const override {
+    ++creations;
+    if (fail_from != 0 && creations >= fail_from) {
+      return workloads::WorkloadError{workloads::WorkloadFault::kConfiguration, "scripted"};
+    }
+    return inner.create(name, config);
+  }
+  [[nodiscard]] core::Result<workloads::Descriptor, workloads::WorkloadError> descriptor(
+      std::string_view name) const override {
+    ++descriptions;
+    if (descriptor_fails) {
+      return workloads::WorkloadError{workloads::WorkloadFault::kUnknownWorkload, "scripted"};
+    }
+    return inner.descriptor(name);
+  }
+  workloads::BuiltinRegistry inner;
+  mutable int creations = 0;
+  mutable int descriptions = 0;
+  int fail_from = 0;
+  bool descriptor_fails = false;
 };
 
 }  // namespace loadforge::controller_testing

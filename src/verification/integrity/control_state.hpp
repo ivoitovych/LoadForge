@@ -55,6 +55,7 @@
 #include "core/result.hpp"
 #include "platform/memory.hpp"
 #include "platform/syscalls.hpp"
+#include "verification/runner.hpp"
 
 namespace loadforge::verification::integrity {
 
@@ -104,12 +105,18 @@ struct ControlRefused {
 
 class ControlState {
  public:
-  /// Maps the three copies -- populated, locked, bound to `nodes` round-robin
-  /// when any are given -- and writes `initial` into each. A refusal at copy
-  /// i unmaps copies 0 to i-1 before it returns.
+  /// Maps the three copies -- populated, locked as `policy` says (locking.hpp),
+  /// bound to `nodes` round-robin when any are given -- and writes `initial`
+  /// into each. A refusal at copy i unmaps copies 0 to i-1 before it returns.
   [[nodiscard]] static core::Result<ControlState, ControlRefused> create(
       platform::Syscalls& syscalls, const ControlWords& initial,
-      std::span<const std::uint32_t> nodes);
+      std::span<const std::uint32_t> nodes, LockPolicy policy);
+
+  /// What was done about locking the copies: kLocked when all three are,
+  /// kNotLocked under kNone, kFellBack when any copy's lock was refused under
+  /// kTry (detail: the first refusal).
+  [[nodiscard]] LockOutcome outcome() const noexcept { return outcome_; }
+  [[nodiscard]] const std::string& detail() const noexcept { return detail_; }
 
   /// Votes, repairs every copy that did not hold the decided value, and
   /// returns it; or says why nothing was decided, and changes nothing.
@@ -123,11 +130,14 @@ class ControlState {
   [[nodiscard]] std::uint64_t repairs() const noexcept { return repairs_; }
 
  private:
-  explicit ControlState(std::vector<platform::Mapping> copies) noexcept;
+  ControlState(std::vector<platform::Mapping> copies, LockOutcome outcome,
+               std::string detail) noexcept;
 
   void write_copy(std::size_t copy, const ControlWords& words) noexcept;
 
   std::vector<platform::Mapping> copies_;
+  LockOutcome outcome_;
+  std::string detail_;
   std::uint64_t repairs_ = 0;
 };
 

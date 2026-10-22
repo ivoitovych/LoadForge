@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/orchestration.hpp"
 #include "controller/results/result.hpp"
 #include "core/result.hpp"
 #include "core/version.hpp"
@@ -23,6 +24,7 @@
 #include "primitives/simd/dispatch.hpp"
 #include "statistics/signature.hpp"
 #include "topology/snapshot.hpp"
+#include "verification/runner.hpp"
 
 namespace loadforge::cli {
 
@@ -90,6 +92,8 @@ struct HostFacts {
 ///   seed             the run's seed; worker i runs seed + i * controller::kSeedStride.
 ///   footprint_bytes  a worker's footprint when its configuration names none.
 ///   isolation_limit  the most wrong results of one worker that fault isolation repeats.
+///   lock             what each worker's runner does about locking its working set
+///                    (verification::LockPolicy); `stress --test --lock` sets it.
 struct StressOptions {
   std::vector<std::string> formats;
   std::string output_dir = ".";
@@ -106,6 +110,7 @@ struct StressOptions {
   std::uint64_t seed = 1;
   std::uint64_t footprint_bytes = std::uint64_t{32} << 20U;
   std::size_t isolation_limit = 16;
+  verification::LockPolicy lock = verification::LockPolicy::kTry;
 };
 
 /// The stress command's arguments after "stress": `--config FILE`, and
@@ -139,6 +144,13 @@ struct StressArgs {
 [[nodiscard]] int stress_test(std::span<const std::string_view> args, const std::string& self_link,
                               std::string_view sysfs_root, const StressOptions& base,
                               std::ostream& out, std::ostream& err);
+
+/// The allowances a run of verified units needs, raised in `options` and never
+/// lowered: a worker beats and sees a stop request only between units, and a
+/// unit has no upper bound, so its beat may stand still for ten seconds before
+/// it is called a hang and it is given ten seconds to stop before SIGTERM.
+/// Public so that the values the controller is handed are tested directly.
+void allow_for_verified_units(controller::RunOptions& options);
 
 /// The stress command past its argument handling: a loaded configuration,
 /// the executable the workers will be, the topology snapshot already taken,

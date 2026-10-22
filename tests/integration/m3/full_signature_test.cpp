@@ -101,7 +101,7 @@ TEST(FullSignatureTest, EverySourceContributesToOneSignatureFromFixturesAlone) {
     EXPECT_NE(json.find(std::string{"\"name\": \""} + name + "\""), std::string::npos) << name;
     EXPECT_NE(csv.find(name), std::string::npos) << name;
   }
-  EXPECT_NE(json.find("\"schema_version\": 2"), std::string::npos);
+  EXPECT_NE(json.find("\"schema_version\": 3"), std::string::npos);
   EXPECT_NE(json.find("\"delta\": 2,"), std::string::npos) << "the corrected errors, in the JSON";
 }
 

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/crc32.hpp"
+#include "verification/integrity/locking.hpp"
 
 namespace loadforge::verification::integrity {
 namespace {
@@ -93,33 +94,40 @@ std::string describe(const VoteFailure& failure) {
 }
 
 core::Result<ControlState, ControlRefused> ControlState::create(
-    platform::Syscalls& syscalls, const ControlWords& initial,
-    std::span<const std::uint32_t> nodes) {
+    platform::Syscalls& syscalls, const ControlWords& initial, std::span<const std::uint32_t> nodes,
+    LockPolicy policy) {
   platform::Memory memory(syscalls);
   std::vector<platform::Mapping> copies;
   copies.reserve(kCopies);
+  LockOutcome outcome =
+      policy == LockPolicy::kNone ? LockOutcome::kNotLocked : LockOutcome::kLocked;
+  std::string detail;
   for (std::size_t copy = 0; copy < kCopies; ++copy) {
     platform::MappingRequest request;
     request.bytes = kCopyBytes;
     request.populate = true;
-    request.lock = true;
     if (!nodes.empty()) {
       request.node = nodes[copy % nodes.size()];
     }
-    auto mapped = memory.map(request);
+    auto mapped = map_by_policy(memory, request, policy);
     if (!mapped.has_value()) {
       // The copies already mapped are unmapped by the vector's destructor.
       return ControlRefused{copy, mapped.error()};
     }
-    copies.push_back(std::move(mapped).value());
+    if (mapped.value().outcome == LockOutcome::kFellBack && outcome != LockOutcome::kFellBack) {
+      outcome = LockOutcome::kFellBack;
+      detail = mapped.value().detail;
+    }
+    copies.push_back(std::move(mapped).value().mapping);
   }
-  ControlState state(std::move(copies));
+  ControlState state(std::move(copies), outcome, std::move(detail));
   state.write(initial);
   return state;
 }
 
-ControlState::ControlState(std::vector<platform::Mapping> copies) noexcept
-    : copies_(std::move(copies)) {}
+ControlState::ControlState(std::vector<platform::Mapping> copies, LockOutcome outcome,
+                           std::string detail) noexcept
+    : copies_(std::move(copies)), outcome_(outcome), detail_(std::move(detail)) {}
 
 void ControlState::write_copy(std::size_t copy, const ControlWords& words) noexcept {
   // Encoded afresh for every copy: three encodings, three checksums, three

@@ -36,7 +36,8 @@ TEST(RecordRender, AnExactCorruptionWithEveryFieldReadsInFull) {
             "    xor      00 00 00 10 00 00 00 00\n"
             "  provenance:\n"
             "    logical CPU: 11\n"
-            "    physical core: 5\n"
+            "    physical package: 1\n"
+            "    physical core (within its package): 5\n"
             "    NUMA node: 1\n"
             "    buffer address: 0x7f0012340000\n"
             "    buffer offset: 0x40000\n"
@@ -46,14 +47,17 @@ TEST(RecordRender, AnExactCorruptionWithEveryFieldReadsInFull) {
             "    seed: 0xfeedfacecafebeef\n"
             "    ISA path: avx2\n"
             "    input integrity: corrupt during consumption\n"
-            "    duty cycle: oracle on 1 unit in 4, input integrity on 1 unit in 16\n");
+            "    duty cycle: oracle on 1 unit in 4, input integrity on 1 unit in 16\n"
+            "    decomposition: 64\n"
+            "    footprint bytes: 33554432\n");
 }
 
 TEST(RecordRender, AbsentProvenanceIsNotRecordedNeverZero) {
   const std::string text = render(contracts::record_samples::not_performed());
   for (const char* label :
-       {"logical CPU", "physical core", "NUMA node", "buffer address", "buffer offset", "iteration",
-        "workload", "workload version", "seed", "ISA path", "input integrity", "duty cycle"}) {
+       {"logical CPU", "physical package", "physical core (within its package)", "NUMA node",
+        "buffer address", "buffer offset", "iteration", "workload", "workload version", "seed",
+        "ISA path", "input integrity", "duty cycle", "decomposition", "footprint bytes"}) {
     EXPECT_TRUE(contains(text, std::string("    ") + label + ": not recorded\n")) << label;
   }
   EXPECT_FALSE(contains(text, "0x0")) << "no manufactured address";

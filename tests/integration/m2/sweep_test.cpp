@@ -102,6 +102,10 @@ TEST(Sweep, EveryWorkloadItsOracleAndTheRunnerAgreeOnEveryConfigurationTheWorklo
             setup.base.seed = config.seed;
             setup.base.isa = path;
             setup.first_index = first;
+            // The sweep is about what the components agree on, not about the allowance
+            // to lock memory: a process that may not lock the working set (an ordinary
+            // user's 8 MiB, which sort on three threads exceeds) runs it unlocked.
+            setup.lock = verification::LockPolicy::kTry;
             auto runner = verification::make_slice_runner(setup);
             ASSERT_TRUE(runner.has_value()) << name << ": " << runner.error().detail;
             auto slice = runner.value()->run_slice(verification::SliceRequest{2});

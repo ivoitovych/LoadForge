@@ -48,10 +48,7 @@ void compress_in_slot(void* context, std::size_t /*index*/, std::size_t slot) no
 class Compression final : public Workload {
  public:
   Compression(const WorkloadConfig& config, const Plan& plan)
-      : descriptor_{std::string(kName), kVersion, DeterminismClass::kBitExact,
-                    verification::Contract::kExact, simd::IsaSet{simd::IsaPath::kScalar}},
-        plan_(plan),
-        seed_(config.seed) {}
+      : descriptor_(compression::workload_descriptor()), plan_(plan), seed_(config.seed) {}
 
   [[nodiscard]] const Descriptor& descriptor() const noexcept override { return descriptor_; }
   [[nodiscard]] const Plan& plan() const noexcept override { return plan_; }
@@ -84,6 +81,11 @@ void write_unit(std::span<const std::byte> input, std::span<std::byte> output,
   store_le32(output, 0, kMagic);
   store_le32(output, 4, static_cast<std::uint32_t>(length));
   std::ranges::fill(output.subspan(kHeaderBytes + length), std::byte{0});
+}
+
+Descriptor workload_descriptor() {
+  return Descriptor{std::string(kName), kVersion, DeterminismClass::kBitExact,
+                    verification::Contract::kExact, simd::IsaSet{simd::IsaPath::kScalar}};
 }
 
 core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConfig& config) {

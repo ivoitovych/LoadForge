@@ -176,6 +176,11 @@ class CorruptingRegistry final : public loadforge::workloads::Registry {
         std::make_unique<Corrupting>(std::move(made).value(), fault_);
     return workload;
   }
+  [[nodiscard]] loadforge::core::Result<loadforge::workloads::Descriptor,
+                                        loadforge::workloads::WorkloadError>
+  descriptor(std::string_view name) const override {
+    return inner_->descriptor(name);
+  }
 
  private:
   const loadforge::workloads::Registry* inner_;
