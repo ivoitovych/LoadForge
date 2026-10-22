@@ -97,10 +97,12 @@ TEST(MixedRefusals, EveryOptionThatMakesNoScheduleIsRefusedInWords) {
   options.placements = {{0, 1}};
   EXPECT_EQ(refusal(options), "workers move across at least two sets of CPUs, not one");
   for (const std::vector<std::uint32_t>& bad :
-       {std::vector<std::uint32_t>{}, std::vector<std::uint32_t>{3, 2}, std::vector<std::uint32_t>{1024}}) {
+       {std::vector<std::uint32_t>{}, std::vector<std::uint32_t>{3, 2},
+        std::vector<std::uint32_t>{1024}}) {
     options = options_for(4);
     options.placements = {{0}, bad};
-    EXPECT_EQ(refusal(options), "a set of CPUs to move across is empty, unordered or past CPU 1023");
+    EXPECT_EQ(refusal(options),
+              "a set of CPUs to move across is empty, unordered or past CPU 1023");
   }
   options = options_for(4);
   options.footprint_bytes = kMiB / 2;  // Nothing in the roster accepts so little.
@@ -151,10 +153,10 @@ TEST(MixedSchedule, ThePhasesFollowTheirOrderAndNameWhatTheMachineIsDoing) {
   for (const Step& step : schedule.steps) {
     phases.push_back(step.phase);
   }
-  EXPECT_EQ(phases, (std::vector<std::string>{"r1 compute-heavy", "r2 memory-heavy", "r3 balanced",
-                                              "r4 all-join", "r5 mixed", "r6 compute-heavy",
-                                              "r7 memory-heavy", "r8 balanced", "r9 all-join",
-                                              "r10 mixed"}));
+  EXPECT_EQ(phases,
+            (std::vector<std::string>{
+                "r1 compute-heavy", "r2 memory-heavy", "r3 balanced", "r4 all-join", "r5 mixed",
+                "r6 compute-heavy", "r7 memory-heavy", "r8 balanced", "r9 all-join", "r10 mixed"}));
   EXPECT_EQ(std::set<std::string>(phases.begin(), phases.end()).size(), phases.size())
       << "a phase label never repeats, so that a counter's advance can be told per phase";
 }

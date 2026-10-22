@@ -95,8 +95,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
                   kOperations};
   // The descriptor is built inside the constructor, so no temporary with a
   // destructor is alive across the allocation (journal 1.13).
-  return std::unique_ptr<Workload>(
-      std::make_unique<FftWorkload>(plan, radix, kernel, config.seed));
+  return std::unique_ptr<Workload>(std::make_unique<FftWorkload>(plan, radix, kernel, config.seed));
 }
 
 }  // namespace loadforge::workloads::fft

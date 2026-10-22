@@ -46,9 +46,8 @@ core::Result<ScheduledRun, std::string> plan_mixed(const MixedRequest& request) 
   options.workers = request.workers;
   options.seed = request.seed;
   options.duration_ns = request.duration_ms * kNanosecondsPerMillisecond;
-  options.rotation_ns =
-      request.rotation_ms.value_or(default_rotation_ms(request.duration_ms)) *
-      kNanosecondsPerMillisecond;
+  options.rotation_ns = request.rotation_ms.value_or(default_rotation_ms(request.duration_ms)) *
+                        kNanosecondsPerMillisecond;
   options.footprint_bytes = request.footprint_bytes;
   options.duty = request.duty;
   // The workers are placed one to a CPU (controller::assign_cpus, as `stress
@@ -81,8 +80,8 @@ core::Result<ScheduledRun, std::string> plan_cycling(const CyclingRequest& reque
   options.kind = request.kind;
   options.workers = request.workers;
   options.duration_ns = request.duration_ms * kNanosecondsPerMillisecond;
-  options.dwell_ns = request.dwell_ms.value_or(default_dwell_ms(request.duration_ms)) *
-                     kNanosecondsPerMillisecond;
+  options.dwell_ns =
+      request.dwell_ms.value_or(default_dwell_ms(request.duration_ms)) * kNanosecondsPerMillisecond;
   auto made = mixed::make_cycling(options);
   if (!made.has_value()) {
     return made.error();

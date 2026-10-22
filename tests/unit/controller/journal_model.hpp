@@ -182,12 +182,12 @@ class ModelJournal {
         entry.last_verified_unit,
         entry.temperature_c ? std::optional{std::bit_cast<std::uint64_t>(*entry.temperature_c)}
                             : std::nullopt,
-        entry.package_power_w
-            ? std::optional{std::bit_cast<std::uint64_t>(*entry.package_power_w)}
-            : std::nullopt,
+        entry.package_power_w ? std::optional{std::bit_cast<std::uint64_t>(*entry.package_power_w)}
+                              : std::nullopt,
         entry.frequency_hz ? std::optional{std::bit_cast<std::uint64_t>(*entry.frequency_hz)}
                            : std::nullopt,
-        entry.ecc_corrected, entry.ecc_uncorrected};
+        entry.ecc_corrected,
+        entry.ecc_uncorrected};
     std::uint8_t present = 0;
     for (std::size_t at = 0; at < std::size(fields); ++at) {
       present = static_cast<std::uint8_t>(present | (fields[at].has_value() ? 1U << at : 0U));

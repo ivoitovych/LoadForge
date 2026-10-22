@@ -98,8 +98,7 @@ struct RunJournal {
 /// when no series of it has a reading.
 class TimelineNotes final : public controller::JournalNotes {
  public:
-  explicit TimelineNotes(const telemetry::TimelineView& timeline) noexcept
-      : timeline_(&timeline) {}
+  explicit TimelineNotes(const telemetry::TimelineView& timeline) noexcept : timeline_(&timeline) {}
 
   void fill(journal::Entry& entry) override;
 

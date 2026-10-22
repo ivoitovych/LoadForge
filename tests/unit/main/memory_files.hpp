@@ -75,9 +75,7 @@ class MemoryFiles final : public journal::FileOps, public cli::JournalFiles {
 
   // --- the housekeeping ------------------------------------------------------------------
 
-  bool exists(const std::string& path) override {
-    return always_exists || files.contains(path);
-  }
+  bool exists(const std::string& path) override { return always_exists || files.contains(path); }
 
   core::Result<core::Ok, std::string> rename(const std::string& from,
                                              const std::string& to) override {

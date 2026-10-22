@@ -3,12 +3,13 @@
 // ADR 0003, rule 3: the provider's suite for the crash journal, run against the
 // controller's own model of the contract (journal_model.hpp).
 
+#include "unit/controller/journal_model.hpp"
+
 #include <gtest/gtest.h>
 
 #include <memory>
 
 #include "contracts/journal/journal_contract.hpp"
-#include "unit/controller/journal_model.hpp"
 
 namespace loadforge::contracts {
 namespace {

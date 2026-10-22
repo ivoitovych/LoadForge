@@ -673,13 +673,14 @@ TEST(ControllerVerified, ARecordAboutAWorkloadTheWorkerWasToldToSwitchToIsItsOwn
 TEST(ControllerVerified, TheLockOutcomeKeptIsTheWeakestARunnerOfTheWorkerHad) {
   const auto told = [](Rig& rig, verification::LockOutcome outcome, const std::string& detail) {
     rig.deliver(0, worker::kMemoryFrameType,
-                worker::encode_memory(verification::MemoryLock{verification::LockPolicy::kTry,
-                                                               outcome, detail}));
+                worker::encode_memory(
+                    verification::MemoryLock{verification::LockPolicy::kTry, outcome, detail}));
   };
   Rig rig;
   rig.both_exit_after([&rig, &told] {
     told(rig, verification::LockOutcome::kLocked, "");
-    told(rig, verification::LockOutcome::kLocked, "");  // Told again after a replacement: nothing new.
+    told(rig, verification::LockOutcome::kLocked,
+         "");  // Told again after a replacement: nothing new.
     told(rig, verification::LockOutcome::kFellBack, "mlock: refused");
     told(rig, verification::LockOutcome::kLocked, "");  // A later runner locked: not the weakest.
     told(rig, verification::LockOutcome::kFellBack, "mlock: refused");  // The same again.

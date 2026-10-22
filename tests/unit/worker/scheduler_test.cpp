@@ -74,9 +74,7 @@ struct Rig {
         region->publish(ipc::kControllerSlot, Heartbeat{timestamp_ns, 1, 1, 1}).has_value());
   }
 
-  Session session(Pacing pacing) {
-    return Session{&*region, 0, control.read_fd, pacing, &*writer};
-  }
+  Session session(Pacing pacing) { return Session{&*region, 0, control.read_fd, pacing, &*writer}; }
 
   core::Result<Outcome, WorkerError> run(Pacing pacing) {
     NullWorkload workload(syscalls, session(pacing));

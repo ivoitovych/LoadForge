@@ -99,7 +99,8 @@ TEST(ScheduleProblem, AValidScheduleHasNone) {
   EXPECT_FALSE(problem(a_schedule(), 2).has_value());
   Schedule none;
   none.workers = 4;
-  EXPECT_FALSE(problem(none, 4).has_value()) << "no start (the workers start as configured), no steps";
+  EXPECT_FALSE(problem(none, 4).has_value())
+      << "no start (the workers start as configured), no steps";
 }
 
 TEST(ScheduleProblem, EachWayAScheduleFailsToFitTheRunIsNamed) {
@@ -113,10 +114,12 @@ TEST(ScheduleProblem, EachWayAScheduleFailsToFitTheRunIsNamed) {
   {
     Schedule schedule = a_schedule();
     schedule.phase = std::string(journal::kMaxLabelBytes + 1, 'p');
-    EXPECT_NE(problem(schedule, 2).value().find("first phase or workload label"), std::string::npos);
+    EXPECT_NE(problem(schedule, 2).value().find("first phase or workload label"),
+              std::string::npos);
     schedule = a_schedule();
     schedule.workload = std::string(journal::kMaxLabelBytes + 1, 'w');
-    EXPECT_NE(problem(schedule, 2).value().find("first phase or workload label"), std::string::npos);
+    EXPECT_NE(problem(schedule, 2).value().find("first phase or workload label"),
+              std::string::npos);
   }
   {
     Schedule schedule = a_schedule();
@@ -144,8 +147,7 @@ TEST(ScheduleProblem, EachWayAScheduleFailsToFitTheRunIsNamed) {
   {
     Schedule schedule = a_schedule();
     schedule.steps[0].workers[1].slot = 2;
-    EXPECT_EQ(problem(schedule, 2).value(),
-              "the step \"r1 compute-heavy\" names worker 2 of 2");
+    EXPECT_EQ(problem(schedule, 2).value(), "the step \"r1 compute-heavy\" names worker 2 of 2");
   }
   {
     Schedule schedule = a_schedule();
@@ -213,9 +215,7 @@ TEST(ScheduleDigest, IsTheSameForTheSameScheduleAndDiffersForEveryChange) {
   EXPECT_TRUE(differs(other));
 }
 
-TEST(ScheduleDigest, AnEmptyScheduleHasADigestToo) {
-  EXPECT_NE(digest(Schedule{}), 0U);
-}
+TEST(ScheduleDigest, AnEmptyScheduleHasADigestToo) { EXPECT_NE(digest(Schedule{}), 0U); }
 
 }  // namespace
 }  // namespace loadforge::mixed

@@ -161,8 +161,7 @@ core::Result<std::unique_ptr<Workload>, WorkloadError> create(const WorkloadConf
                              " bytes holds no stencil unit (" +
                              std::to_string(kInputBytes + kOutputBytes) + " bytes each)"};
   }
-  return std::unique_ptr<Workload>(
-      std::make_unique<Stencil>(config, tile_edge, kernel, units));
+  return std::unique_ptr<Workload>(std::make_unique<Stencil>(config, tile_edge, kernel, units));
 }
 
 }  // namespace loadforge::workloads::stencil

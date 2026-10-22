@@ -51,13 +51,13 @@ TEST(DutyClockTest, ABusyPartThenAnIdlePartInEveryPeriodFromTheInstantItWasSet) 
     std::int64_t remaining;
   };
   const Case cases[] = {
-      {5000 * kMs, true, 300 * kMs},         // The wave begins with its busy part.
-      {5100 * kMs, true, 200 * kMs},         //
-      {5299 * kMs, true, 1 * kMs},           //
-      {5300 * kMs, false, 700 * kMs},        // The first nanosecond past the busy part.
-      {5999 * kMs, false, 1 * kMs},          //
-      {6000 * kMs, true, 300 * kMs},         // The second period.
-      {6450 * kMs, false, 550 * kMs},        //
+      {5000 * kMs, true, 300 * kMs},                  // The wave begins with its busy part.
+      {5100 * kMs, true, 200 * kMs},                  //
+      {5299 * kMs, true, 1 * kMs},                    //
+      {5300 * kMs, false, 700 * kMs},                 // The first nanosecond past the busy part.
+      {5999 * kMs, false, 1 * kMs},                   //
+      {6000 * kMs, true, 300 * kMs},                  // The second period.
+      {6450 * kMs, false, 550 * kMs},                 //
       {5000 * kMs + 3'000'000'000, true, 300 * kMs},  // Three periods on.
   };
   for (const Case& each : cases) {

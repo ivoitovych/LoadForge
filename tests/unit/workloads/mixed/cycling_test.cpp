@@ -91,19 +91,19 @@ TEST(CyclingLoad, IdleHeavyModerateHeavyAndAgainEachLevelOneDwell) {
     EXPECT_EQ(schedule.steps[at].workload, "cycling load");
     phases.push_back(schedule.steps[at].phase);
   }
-  EXPECT_EQ(phases, (std::vector<std::string>{"c0 idle", "c1 heavy", "c2 moderate", "c3 heavy",
-                                              "c4 idle", "c5 heavy", "c6 moderate", "c7 heavy",
-                                              "c8 idle"}));
+  EXPECT_EQ(phases,
+            (std::vector<std::string>{"c0 idle", "c1 heavy", "c2 moderate", "c3 heavy", "c4 idle",
+                                      "c5 heavy", "c6 moderate", "c7 heavy", "c8 idle"}));
 }
 
 TEST(CyclingLoad, ACommandIsSentOnlyWhereItChangesWhatTheWorkerIsDoing) {
   const Schedule schedule = made(load_for(2, 5));
   const std::vector<std::vector<worker::Command>> expected = {
-      {worker::Pause{}},                            // c0 idle: from running to paused.
-      {worker::Resume{}},                           // c1 heavy: continuous load was never changed.
-      {worker::SetDuty{500, kSecond}},              // c2 moderate.
-      {worker::SetDuty{1000, kSecond}},             // c3 heavy again.
-      {worker::Pause{}},                            // c4 idle.
+      {worker::Pause{}},                 // c0 idle: from running to paused.
+      {worker::Resume{}},                // c1 heavy: continuous load was never changed.
+      {worker::SetDuty{500, kSecond}},   // c2 moderate.
+      {worker::SetDuty{1000, kSecond}},  // c3 heavy again.
+      {worker::Pause{}},                 // c4 idle.
   };
   ASSERT_EQ(schedule.steps.size(), expected.size());
   for (std::size_t at = 0; at < expected.size(); ++at) {
@@ -157,18 +157,21 @@ TEST(CyclingCores, AnEighthHalfAllAQuarterAllOfTheWorkersWork) {
   // Level 0: workers 1..7 are paused, worker 0 is left running.
   EXPECT_TRUE(commands_for(schedule.steps[0], 0).empty());
   for (std::size_t slot = 1; slot < 8; ++slot) {
-    EXPECT_EQ(commands_for(schedule.steps[0], slot), (std::vector<worker::Command>{worker::Pause{}}));
+    EXPECT_EQ(commands_for(schedule.steps[0], slot),
+              (std::vector<worker::Command>{worker::Pause{}}));
   }
   // Level 1: workers 1..3 resume, 4..7 stay paused.
   for (std::size_t slot = 1; slot < 4; ++slot) {
-    EXPECT_EQ(commands_for(schedule.steps[1], slot), (std::vector<worker::Command>{worker::Resume{}}));
+    EXPECT_EQ(commands_for(schedule.steps[1], slot),
+              (std::vector<worker::Command>{worker::Resume{}}));
   }
   for (std::size_t slot = 4; slot < 8; ++slot) {
     EXPECT_TRUE(commands_for(schedule.steps[1], slot).empty());
   }
   // Level 3 (a quarter): 2..7 pause again, 0 and 1 are left alone.
   for (std::size_t slot = 2; slot < 8; ++slot) {
-    EXPECT_EQ(commands_for(schedule.steps[3], slot), (std::vector<worker::Command>{worker::Pause{}}));
+    EXPECT_EQ(commands_for(schedule.steps[3], slot),
+              (std::vector<worker::Command>{worker::Pause{}}));
   }
   EXPECT_TRUE(commands_for(schedule.steps[3], 0).empty());
 }
