@@ -1202,6 +1202,19 @@ machine's 400 ticks a second, and one and two read 108 and 207 (the instrument r
 files are the machine's and are not committed. This is the half of T11 a VM can show (§5.14); it says
 nothing of temperature.
 
+### 1.61 Two variances in one interval: combine their degrees of freedom, do not take the smaller
+
+*R3, 2026-10-23.* An explore interval adds the replicates' variance to the reference's (the
+drift correction), each with its own degrees of freedom. The first fix took the t at the smaller
+of the two. With the few reference readings of a short search (three to five, one or two degrees)
+that gave t = 12.7 even for a steady reference, and the simulated coverage was 99.8% where 95% was
+asked. The interval now takes the t at the Welch-Satterthwaite degrees,
+`(v1 + v2)^2 / (v1^2 / (n - 1) + v2^2 / d2)`, floored, capped at the replicates' `n - 1` and at
+least 1 (`combined_degrees` in `src/explore/estimate.cpp`). A steady reference then costs nothing,
+and a noisy one costs what it adds. The reference's degrees are `max(1, (readings - 2) / 2)`
+(fragment r3, which derives them). The test simulates coverage. It does not compare against a
+hand-picked t.
+
 ---
 
 ## 2. Decisions, and the alternatives that were rejected
@@ -3524,6 +3537,26 @@ and failed 2 in 30. Assert what holds on any machine under any load (the report 
 no candidate changes ranks nothing) and measure the rest, with the evidence written down (§1.60).
 Repeating the file thirty times is what exposed it; one green run did not.
 
+### 4.26 A temporary passed to `push_back` left an unwind branch no test can take
+
+*R2, 2026-10-23.* `worker.unanswered.push_back(Tracked::Unanswered{message.sequence, what, clock_running_ns_})` builds a
+temporary whose `std::string` member is destroyed on a cleanup path. That path runs only if the
+vector's growth throws, and no test can make it throw. The coverage gate reported the branch.
+`emplace_back(message.sequence, what, clock_running_ns_)` builds the element in place and leaves no
+such path. This is the same trap as §1.13 and §4.24 in another shape: any temporary with a
+non-trivial destructor, made in a call that can throw, is a branch.
+
+### 4.27 `(void)` does not silence `warn_unused_result` under GCC
+
+*34b, 2026-10-23.* The signal handler writes one byte to a self-pipe and has nothing to do if the
+write fails. `(void)::write(fd, &byte, 1);` passed the debug build and clang-tidy. It failed the
+static build (GCC 13, `-O3`, fortified headers, `-Werror`), where glibc declares `write` with
+`warn_unused_result`; GCC deliberately ignores a cast to void for that attribute. The form that
+works under both compilers is a named result marked unused:
+`[[maybe_unused]] const ssize_t written = ::write(fd, &byte, 1);`. The static build is the only job
+that sees fortified declarations, so a change that touches a raw syscall result is not done until
+that job is green.
+
 ---
 
 ## 5. Process knowledge
@@ -3698,6 +3731,31 @@ measurement does not show (a temperature, drift from a warming machine, a settle
 sensor) and gives the protocol, so the criterion is marked met by a person with the machine and not by
 the next reader's optimism. The report names the machine, so a VM cannot be mistaken for the hardware
 (§1.42). The same shape applies to stream 34's validation.
+
+### 5.15 What the work costs, and the owner's limit on it
+
+*Owner, 2026-10-23.* The project runs on a fixed monthly plan, and the owner asked for less spend.
+From what this work has measured:
+
+- Each delegated agent cost between 60 thousand and 455 thousand tokens. Starting one costs tens of
+  thousands before any work is done.
+- The managing session's turns are a large share of the total, and every CI wake-up is a turn.
+
+The rules since then:
+
+- delegate only long, well-scoped tasks, to one agent at a time;
+- make small fixes inline;
+- wait on CI with one poll of the last running job, not job by job;
+- take a slower pace when the plan is short.
+
+### 5.16 A body line shaped like a trailer is a trailer
+
+*R2, 2026-10-23.* A commit message's last paragraph ended `Test: <command>` on the line above
+`Signed-off-by:`. git reads every `Word: text` line in the final paragraph as a trailer, and CI's
+identity check admits only Signed-off-by, so the pull request was refused. That branch was this
+work's own, so it was reworded and force-pushed with lease. The local `commit-msg` hook now parses
+trailers with `git interpret-trailers --parse` and refuses any that is not Signed-off-by, so the
+commit is refused when it is made, not after a push.
 
 ---
 
@@ -3886,6 +3944,13 @@ Kept short and current; move an item to the relevant document once it is settled
   28's question about window order); and the list of `TrialFault::kCandidate` causes (§2.55). Still
   open from stream 28: a trial with verdict `kCorrectedErrors` reaches explore as a score, and the
   report does not flag it.
+- **Two single failures not explained (2026-10-23).**
+  - `CliJournal.ARunWritesItAndTheNextOneSaysHowItEnded` failed once in CI on 34b (#114).
+  - `ControlOverRealWorkers.ADutyCycleMakesOneWorkerDoLessThanItsNeighbour` failed once on 34e
+    (#115).
+  - Both passed on the next run, and neither failure's output was kept. §4.23 says a "flake" has
+    twice been a defect. The next failure of either is read in full, with `--timeout 900` output,
+    before anything is changed.
 - **T11, the thermal half (M6 exit criterion 1).** Unmet. It needs a machine with a readable package
   temperature (coretemp, k10temp or a thermal zone) that is otherwise idle; the same command with
   `--objective thermal.package:max:higher --settle thermal.package` over a curated set (for instance
