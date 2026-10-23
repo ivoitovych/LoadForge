@@ -47,10 +47,15 @@ TEST(BaselineAt, TwoReadingsAtOneTimeNeverDivideByZero) {
   EXPECT_EQ(baseline_at(same, 101), 12.0);
 }
 
-TEST(BaselineAt, AReadingOutOfOrderIsPassedOver) {
+// The points must be in time order (a search's reference readings are: each trial is
+// later than the one before). Nothing reorders or skips a reading that is not, which
+// the test once claimed ("passed over"): with {300, 100} the scan holds the first
+// value up to 300 and the last element after it. Review verdicts 2026-10-23, finding
+// 12d.
+TEST(BaselineAt, AReadingOutOfOrderIsNotReorderedOrSkippedItIsReadAsItLies) {
   const std::vector<ReferencePoint> points = {{300, 5.0}, {100, 9.0}};
-  EXPECT_EQ(baseline_at(points, 200), 5.0);
-  EXPECT_EQ(baseline_at(points, 400), 9.0);
+  EXPECT_EQ(baseline_at(points, 200), 5.0) << "held at the first element up to its time";
+  EXPECT_EQ(baseline_at(points, 400), 9.0) << "the last element, not the latest reading";
 }
 
 TEST(BracketAt, NamesTheNeighboursAndThePlaceBetweenThem) {

@@ -30,8 +30,10 @@ struct ReferencePoint {
 };
 
 /// The reference at `at_ns`: linear between the neighbouring readings, held
-/// at the first before it and the last after it. `points` are in time order
-/// (a reading out of order is passed over); empty gives 0.
+/// at the first before it and the last after it. `points` must be in time order,
+/// as a search's reference readings always are; nothing reorders them, so for a
+/// reading out of order the answer is whatever the scan meets first (past the last
+/// reading in the array, that array's last value). Empty gives 0.
 [[nodiscard]] double baseline_at(std::span<const ReferencePoint> points,
                                  std::int64_t at_ns) noexcept;
 
