@@ -96,16 +96,21 @@ void keep_true_statements(verification::SliceReport& report, const verification:
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::uint64_t next_slice_units(std::uint64_t last_units, std::int64_t took_ns,
                                std::int64_t target_ns) noexcept {
-  const std::uint64_t doubled = std::min(last_units * 2, kMaxSliceUnits);
+  // Doubling is cut at the largest slice before it can wrap.
+  const std::uint64_t doubled = std::min(std::min(last_units, kMaxSliceUnits / 2) * 2,
+                                         kMaxSliceUnits);
   if (took_ns <= 0) {
     return doubled;
   }
   const auto took = static_cast<std::uint64_t>(took_ns);
   const auto target = static_cast<std::uint64_t>(std::max<std::int64_t>(target_ns, 1));
-  // last_units is at most kMaxSliceUnits (2^20) and a target is a heartbeat
-  // interval in nanoseconds, so the product stays far inside 64 bits.
-  const std::uint64_t wanted = last_units * target / took;
-  return std::clamp<std::uint64_t>(wanted, 1, doubled);
+  // last_units times a target in nanoseconds does not fit 64 bits for every
+  // interval the type allows: 2^20 units and a target past 2^44 ns (4.9 hours,
+  // an interval of 9.8 hours, the target being half of it) wrap. The product is
+  // made, and divided, in 128 bits; each factor is below 2^64, so it is below 2^128.
+  __extension__ using Wide = unsigned __int128;
+  const Wide wanted = Wide{last_units} * target / took;
+  return static_cast<std::uint64_t>(std::clamp<Wide>(wanted, 1, doubled));
 }
 
 core::Result<std::vector<ThreadPlacement>, std::string> placements_for(
@@ -226,7 +231,7 @@ class Ticker {
         clock_(syscalls),
         channel_(syscalls, session.control_fd, records),
         pid_(static_cast<std::uint32_t>(syscalls.process_id())),
-        interval_ms_(static_cast<int>(session.pacing.interval_ns / kNanosecondsPerMillisecond)),
+        interval_ms_(interval_milliseconds(session.pacing.interval_ns)),
         target_ns_(std::max(session.pacing.interval_ns / kTargetDivisor, kMinTargetNs)) {}
 
   /// Reads the clock for the first time and arms the watch on the controller.

@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <ctime>
 #include <functional>
 #include <memory>
@@ -57,6 +58,24 @@ TEST(NextSliceUnits, AimsAtTheTargetTimeButNeverMoreThanDoubles) {
   EXPECT_EQ(next_slice_units(10, 20 * kMs, 10 * kMs), 5U) << "twice too slow: half";
   EXPECT_EQ(next_slice_units(10, 1000 * kMs, 10 * kMs), 1U) << "never fewer than one";
   EXPECT_EQ(next_slice_units(1, 1000 * kMs, 10 * kMs), 1U);
+}
+
+TEST(NextSliceUnits, AnIntervalOfHoursDoesNotWrapTheProduct) {
+  // 2^20 units times a target of 2^44 ns is 2^64: it wrapped to zero, and the
+  // slice shrank to one unit instead of staying at the cap.
+  constexpr std::int64_t kWraps = std::int64_t{1} << 44U;
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, 1, kWraps), kMaxSliceUnits);
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, kWraps, kWraps), kMaxSliceUnits)
+      << "on target at the cap";
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, 2 * kWraps, kWraps), kMaxSliceUnits / 2);
+  // The largest target and measurement the type holds, and the largest last
+  // slice: the answer is the cap, not a wrapped number.
+  constexpr std::int64_t kLargest = std::numeric_limits<std::int64_t>::max();
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, 1, kLargest), kMaxSliceUnits);
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, kLargest, kLargest), kMaxSliceUnits);
+  EXPECT_EQ(next_slice_units(std::numeric_limits<std::uint64_t>::max(), 1, kLargest),
+            kMaxSliceUnits)
+      << "doubling a last slice past 2^63 does not wrap either";
 }
 
 TEST(NextSliceUnits, ASliceThatMeasuredNoTimeDoublesAndNothingExceedsTheCap) {
