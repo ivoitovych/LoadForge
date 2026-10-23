@@ -92,7 +92,7 @@ echo "exit $?"
 ```
 
 The script prints one `PASS` or `FAIL` line per step and ends with the path of the results
-file. It takes about 25 minutes at 60 s per workload. Its steps: the version, `--help`,
+file. It takes about 20 minutes at 60 s per workload. Its steps: the version, `--help`,
 the self-test digest, the two exit codes of a usage error, a configuration check and a
 configuration-driven run, the capability report, each of the eleven workloads for the
 given time, `mixed` and `cycling` for three times that, the crash journal, a result
@@ -206,7 +206,9 @@ image, a Debian 12 live image, SystemRescue):
 What is different on live media, and not a defect: no writable disk (results go to RAM or
 the stick), fewer or different sensors, small RAM (the default footprint is 32 MiB per
 worker, so a machine with few CPUs and 1 GiB of RAM is fine, and one with 256 cores is
-not: use `--workers 8`).
+not: use `--workers 8`, which is your own limit, because the default
+footprint and `--workers` are not checked against memory unless the configuration or
+`--footprint` states a memory figure).
 
 ## 6. The long procedures
 
@@ -277,7 +279,7 @@ case** and their **intervals overlap**. Write that claim in the results file wit
 says the objective is not stable on that machine; do not rerun until they agree.
 
 Record with the searches: the machine (CPU model, cooling, fan behaviour, ambient
-temperature if you know it), whether the settle phase settled (`settled`/`unsettled`
+temperature if you know it), whether the settle phase settled (`settled`/`not settled`
 per trial in the report), and the highest temperature seen. No temperature number goes in
 that was not read from the machine by the tool or by a named instrument.
 
@@ -339,7 +341,8 @@ After about two minutes **pull the power** (or hold the power button). Boot agai
 loadforge journal ./power.journal
 ```
 
-Expected: `ended abnormally between records` (or `with a torn last record`) and the last
+Expected: `ended abnormally between records` (or `ended abnormally inside a
+record` when the last record was cut short) and the last
 entries, a few seconds old at most. A journal that is empty or missing after a power cut
 is a defect. Record what it printed.
 
