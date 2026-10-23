@@ -117,6 +117,40 @@ std::vector<std::unique_ptr<telemetry::Source>> ticks(platform::Syscalls& /*s*/,
   return sources;
 }
 
+/// One metric in two scopes, the first unreadable: what a machine with a dead sensor
+/// on its first package and a live one on its second looks like.
+class TwoScopeSource final : public telemetry::Source {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override { return "two"; }
+  std::vector<telemetry::MetricStatus> probe() override {
+    telemetry::Metric first{"level.reading",
+                            telemetry::Unit::kCelsius,
+                            telemetry::Kind::kGauge,
+                            telemetry::Scope::kPackage,
+                            0,
+                            std::nullopt,
+                            "test"};
+    telemetry::Metric second = first;
+    second.scope_index = 1;
+    return {{first, telemetry::Unavailable{topology::Availability::kUnreadable, "/sys/a", "dead",
+                                           "replace it"}},
+            {second, std::nullopt}};
+  }
+  void sample(std::vector<telemetry::Reading>& out) override {
+    out.emplace_back(telemetry::Unavailable{topology::Availability::kUnreadable, "/sys/a", "dead",
+                                            "replace it"});
+    out.emplace_back(telemetry::Gauge{40.0});
+  }
+};
+
+std::vector<std::unique_ptr<telemetry::Source>> two_scopes(platform::Syscalls& /*s*/,
+                                                           platform::FileSystem& /*f*/,
+                                                           const MachineRoots& /*r*/) {
+  std::vector<std::unique_ptr<telemetry::Source>> sources;
+  sources.push_back(std::make_unique<TwoScopeSource>());
+  return sources;
+}
+
 /// More series than a timeline sized for a machine can take a few rounds of: with a
 /// sample interval of a thousand seconds it is built for eight rounds of 72 series, and
 /// a run takes three rounds of these 300.
@@ -320,6 +354,24 @@ TEST(TrialRunnerCandidate, EachWayACandidateCannotRunIsRefusedByName) {
   }
   EXPECT_EQ(machine.syscalls.fork_count(), 0) << "nothing was started for any of them";
   EXPECT_EQ(runner->trials_started(), 0U);
+}
+
+// The search takes the first series of the settle metric's name (search.cpp,
+// settle_problem) and refuses if it cannot be read; the runner accepted any readable
+// scope and then read the slope of the first. Both now take the first, so what the
+// search accepts is what the runner runs and the reverse. Review verdicts 2026-10-23,
+// finding 12b.
+TEST(TrialRunnerCandidate, TheSettleMetricIsTheFirstSeriesOfItsNameAsTheSearchTakesIt) {
+  Machine machine;
+  machine.options.sources = two_scopes;
+  auto runner = machine.runner();
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 10 * kMs, 100 * kMs};
+  const auto outcome = runner->run(candidate);
+  ASSERT_FALSE(outcome.has_value()) << "the second scope is readable, the first is not";
+  EXPECT_EQ(outcome.error().fault, TrialFault::kMetricUnavailable);
+  EXPECT_TRUE(contains(outcome.error().detail, "'level.reading' is not readable on this machine"));
+  EXPECT_TRUE(contains(outcome.error().detail, "replace it"));
 }
 
 TEST(TrialRunnerCandidate, ASettleMetricThatCannotBeReadIsRefusedWithTheSourcesOwnRemedy) {

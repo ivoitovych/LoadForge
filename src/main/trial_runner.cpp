@@ -121,29 +121,34 @@ std::optional<TrialError> check_candidate(const Candidate& candidate,
   return std::nullopt;
 }
 
-/// Why the settle metric cannot be measured, or nothing: a gauge of that name
-/// must be present in the report, in some scope.
+/// Why the settle metric cannot be measured, or nothing: the first series of that
+/// name in the report must be a gauge this machine can read. The first, in every
+/// place that names one: the search's own check (search.cpp, settle_problem) and the
+/// slope below take the same series, so a scope that happens to be readable behind an
+/// unreadable first one is never settled on in silence. Review verdicts 2026-10-23,
+/// finding 12b.
 std::optional<TrialError> check_settle_metric(const Settle& settle,
                                               const telemetry::CapabilityReport& report) {
-  std::optional<std::string> why;
+  std::string detail = "settle metric " + quoted(settle.metric);
   for (const telemetry::SourceStatus& source : report.sources) {
     for (const telemetry::MetricStatus& status : source.metrics) {
-      if (status.metric.name != settle.metric || status.metric.kind != telemetry::Kind::kGauge) {
+      if (status.metric.name != settle.metric) {
         continue;
       }
-      if (!status.unavailable.has_value()) {
-        return std::nullopt;
+      if (status.unavailable.has_value()) {
+        detail += " is not readable on this machine: " + status.unavailable->detail + "; " +
+                  status.unavailable->remediation;
+        return refuse(TrialFault::kMetricUnavailable, std::move(detail));
       }
-      why = status.unavailable->detail + "; " + status.unavailable->remediation;
+      if (status.metric.kind != telemetry::Kind::kGauge) {
+        return refuse(TrialFault::kMetricUnavailable,
+                      std::move(detail) + " is not a gauge in the capability report");
+      }
+      return std::nullopt;
     }
   }
-  std::string detail = "settle metric " + quoted(settle.metric);
-  if (why.has_value()) {
-    detail += " is not readable on this machine: " + *why;
-  } else {
-    detail += " is not a gauge in the capability report";
-  }
-  return refuse(TrialFault::kMetricUnavailable, std::move(detail));
+  return refuse(TrialFault::kMetricUnavailable,
+                std::move(detail) + " is not a gauge in the capability report");
 }
 
 /// The settle metric's slope per second over `window`, if the timeline has it.
@@ -158,9 +163,11 @@ std::optional<double> slope_of(const statistics::Summarizer& summarizer,
     if (summary.metric.name != metric) {
       continue;
     }
+    // The first series of that name, as the capability check took it.
     if (const auto* gauge = std::get_if<statistics::GaugeSummary>(&summary.value)) {
       return gauge->slope_per_second;
     }
+    return std::nullopt;
   }
   return std::nullopt;
 }
