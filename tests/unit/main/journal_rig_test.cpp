@@ -69,6 +69,26 @@ TEST(JournalWords, AnEntryNamesWhatItCarriesAndNothingElse) {
             "3 uncorrected 1 workers 4 alive 1 stale");
 }
 
+TEST(JournalWords, ALabelIsPrintedWithItsControlCharactersEscaped) {
+  // Review C7c: a journal file can hold anything, and `loadforge journal` prints to a terminal.
+  journal::Entry hostile = an_entry(1'000'000'000, "r1 \x1b[2J\nforged line");
+  hostile.workload = "a\"b\\c\x7f\x9b\ttab";
+  const std::string line = render_entry(hostile);
+  EXPECT_EQ(line.find('\x1b'), std::string::npos) << line;
+  EXPECT_EQ(line.find('\n'), std::string::npos) << line;
+  EXPECT_EQ(line.find('\t'), std::string::npos) << line;
+  EXPECT_EQ(line.find('\x7f'), std::string::npos) << line;
+  EXPECT_EQ(line.find('\x9b'), std::string::npos) << line;
+  EXPECT_EQ(line,
+            "t=1.0s phase \"r1 \\x1b[2J\\x0aforged line\" workload a\\x22b\\x5cc\\x7f\\x9b\\x09tab "
+            "workers 4 alive 0 stale");
+  // And all of a replay, one entry to a line.
+  journal::Replay replay;
+  replay.entries = {hostile};
+  const std::string all = render_replay(replay, "run.lfj", true);
+  EXPECT_EQ(std::count(all.begin(), all.end(), '\n'), 2) << "the header's and the entry's";
+}
+
 TEST(JournalWords, AReplayNamesHowTheJournalEndedAndItsLastEntryOrEveryEntry) {
   journal::Replay replay;
   replay.ending = journal::Ending::kUnterminated;
@@ -149,26 +169,6 @@ TEST(RunJournal, AJournalThatDidNotEndCleanlyIsKeptBesideTheNewOneAndNeverOverwr
   EXPECT_TRUE(files.files.contains("run.lfj.2"));
 }
 
-TEST(RunJournal, ATornJournalIsKeptToo) {
-  MemoryFiles files;
-  leave_a_journal(files, "run.lfj", false);
-  files.files["run.lfj"].resize(files.files["run.lfj"].size() - 5);  // The machine died mid-record.
-  auto opened = open_run_journal(files, files, "run.lfj");
-  ASSERT_TRUE(opened.has_value()) << opened.error();
-  EXPECT_NE(opened.value().previous.find("ended abnormally inside a record"), std::string::npos)
-      << opened.value().previous;
-  EXPECT_TRUE(files.files.contains("run.lfj.1"));
-}
-
-TEST(RunJournal, EveryStepThatCanFailSaysWhichAndWhy) {
-  const auto refusal = [](MemoryFiles& files) {
-    auto opened = open_run_journal(files, files, "run.lfj");
-    EXPECT_FALSE(opened.has_value());
-    return opened.has_value() ? std::string{} : opened.error();
-  };
-  {
-    MemoryFiles files;
-    files.fail_open_from(1, EACCES);
 // --- review C6: a file that is not a journal is not moved; a journal in use is not shared -------
 
 TEST(RunJournal, AFileThatIsNotAJournalIsRefusedAndLeftWhereItIs) {
@@ -271,6 +271,26 @@ TEST(RunJournal, ALockOnTheNewJournalThatCannotBeTakenIsRefusedToo) {
   EXPECT_TRUE(files.files.contains("run.lfj.1")) << "the evidence was kept before the new file";
 }
 
+TEST(RunJournal, ATornJournalIsKeptToo) {
+  MemoryFiles files;
+  leave_a_journal(files, "run.lfj", false);
+  files.files["run.lfj"].resize(files.files["run.lfj"].size() - 5);  // The machine died mid-record.
+  auto opened = open_run_journal(files, files, "run.lfj");
+  ASSERT_TRUE(opened.has_value()) << opened.error();
+  EXPECT_NE(opened.value().previous.find("ended abnormally inside a record"), std::string::npos)
+      << opened.value().previous;
+  EXPECT_TRUE(files.files.contains("run.lfj.1"));
+}
+
+TEST(RunJournal, EveryStepThatCanFailSaysWhichAndWhy) {
+  const auto refusal = [](MemoryFiles& files) {
+    auto opened = open_run_journal(files, files, "run.lfj");
+    EXPECT_FALSE(opened.has_value());
+    return opened.has_value() ? std::string{} : opened.error();
+  };
+  {
+    MemoryFiles files;
+    files.fail_open_from(1, EACCES);
     EXPECT_NE(refusal(files).find("cannot open the journal run.lfj: "), std::string::npos);
   }
   {

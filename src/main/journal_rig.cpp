@@ -66,6 +66,26 @@ std::string kept_name(const std::string& path, int number) {
   return name;
 }
 
+/// A label as it is printed: the printable ASCII it is made of, and an
+/// escape (\xNN) for every other byte, the backslash and the quote that closes
+/// it. A journal file can hold anything, and `loadforge journal FILE` prints
+/// it to a terminal (review C7c).
+std::string escaped(std::string_view label) {
+  constexpr std::string_view kDigits = "0123456789abcdef";
+  std::string text;
+  for (const char each : label) {
+    const auto byte = static_cast<unsigned char>(each);
+    if (byte == '\\' || byte == '"' || byte < 0x20 || byte > 0x7e) {
+      text += "\\x";
+      text += kDigits[byte >> 4U];
+      text += kDigits[byte & 0xfU];
+    } else {
+      text += each;
+    }
+  }
+  return text;
+}
+
 /// Why a run is refused when the journal is held by another.
 std::string unlocked(const std::string& path, const platform::SyscallError& error) {
   std::string text;
@@ -105,7 +125,7 @@ std::string too_many_kept(const std::string& path) {
 std::string render_entry(const journal::Entry& entry) {
   std::string text =
       "t=" + one_place(static_cast<double>(entry.elapsed_ns) / kNanosecondsPerSecond) +
-      "s phase \"" + entry.phase + "\" workload " + entry.workload;
+      "s phase \"" + escaped(entry.phase) + "\" workload " + escaped(entry.workload);
   if (entry.last_verified_unit.has_value()) {
     text += " units " + std::to_string(*entry.last_verified_unit);
   }
