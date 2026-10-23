@@ -32,8 +32,9 @@ Outcome loadforge(const std::string& arguments) {
       std::string{"'"} + LOADFORGE_BINARY + "' " + arguments + " > '" + console.string() + "' 2>&1";
   const int status = std::system(command.c_str());
   std::ifstream in(console, std::ios::binary);
-  Outcome outcome{WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-                  std::string{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()}};
+  Outcome outcome{
+      WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+      std::string{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()}};
   std::error_code ignored;
   fs::remove(console, ignored);
   return outcome;
@@ -48,9 +49,9 @@ TEST(SelftestBinary, PassesOnThisMachineAndSaysWhatItChecked) {
   ASSERT_EQ(ran.code, 0) << ran.console;
   EXPECT_TRUE(contains(ran.console, "PASS  golden corpus")) << ran.console;
   EXPECT_TRUE(contains(ran.console, "PASS  golden kernels")) << ran.console;
-  for (const char* workload : {"adaptive_mesh", "compression", "dense_linear", "fft", "graph",
-                               "monte_carlo", "particles", "raytrace", "sort", "sparse",
-                               "stencil"}) {
+  for (const char* workload :
+       {"adaptive_mesh", "compression", "dense_linear", "fft", "graph", "monte_carlo", "particles",
+        "raytrace", "sort", "sparse", "stencil"}) {
     EXPECT_TRUE(contains(ran.console, std::string{"PASS  "} + workload + " [scalar]: "))
         << workload << "\n"
         << ran.console;

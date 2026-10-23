@@ -54,7 +54,8 @@ TEST(SelftestArgs, NoneAreTheDefaults) {
 }
 
 TEST(SelftestArgs, EveryOptionInAnyOrder) {
-  const auto parsed = parse({"--verbose", "--seed", "77", "--footprint", "5MiB", "--isa", "scalar"});
+  const auto parsed =
+      parse({"--verbose", "--seed", "77", "--footprint", "5MiB", "--isa", "scalar"});
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed.value().isa, IsaPath::kScalar);
   EXPECT_EQ(parsed.value().footprint_bytes, std::uint64_t{5} << 20U);
@@ -103,9 +104,9 @@ TEST(SelftestPaths, OnlyWhatTheWorkloadHas) {
 }
 
 TEST(SelftestPaths, ScalarAloneIsCheckedOnce) {
-  for (const auto& requested : {std::optional<IsaPath>{}, std::optional<IsaPath>{IsaPath::kScalar}}) {
-    const SelftestPaths paths =
-        selftest_paths(requested, IsaSet{IsaPath::kScalar}, kWide, kWide);
+  for (const auto& requested :
+       {std::optional<IsaPath>{}, std::optional<IsaPath>{IsaPath::kScalar}}) {
+    const SelftestPaths paths = selftest_paths(requested, IsaSet{IsaPath::kScalar}, kWide, kWide);
     ASSERT_EQ(paths.run.size(), 1U);
     EXPECT_EQ(paths.run[0], IsaPath::kScalar);
   }
@@ -163,7 +164,8 @@ class TestRegistry final : public workloads::Registry {
     if (!created.has_value() || !wrong) {
       return created;
     }
-    std::unique_ptr<workloads::Workload> workload = std::make_unique<Wrong>(std::move(created).value());
+    std::unique_ptr<workloads::Workload> workload =
+        std::make_unique<Wrong>(std::move(created).value());
     return workload;
   }
   [[nodiscard]] core::Result<workloads::Descriptor, workloads::WorkloadError> descriptor(
@@ -257,8 +259,7 @@ TEST(SelftestExpected, TheCommittedDigestsAreWhatThisTreeComputes) {
       << "kExpectedCorpusDigest is now 0x" << corpus.str();
   EXPECT_EQ(selftest::core_digest(), selftest::kExpectedDigest)
       << "kExpectedDigest is now 0x" << full.str();
-  EXPECT_EQ(selftest::workloads_digest(selftest::kExpectedCorpusDigest),
-            selftest::kExpectedDigest);
+  EXPECT_EQ(selftest::workloads_digest(selftest::kExpectedCorpusDigest), selftest::kExpectedDigest);
 }
 
 TEST(SelftestExpected, TheHexTheDigestSwitchPrintsIsTheExpectedDigest) {
@@ -289,8 +290,9 @@ TEST(Selftest, AKernelDigestThatDiffersIsNamedAndFails) {
   const Ran run = run_over(services, SelftestOptions{}, wrong);
   EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
   EXPECT_TRUE(has(run.out, "PASS  golden corpus")) << run.out;
-  EXPECT_TRUE(has(run.out, "FAIL  golden kernels: the scalar workload-kernel digest differ: "
-                           "expected "))
+  EXPECT_TRUE(has(run.out,
+                  "FAIL  golden kernels: the scalar workload-kernel digest differ: "
+                  "expected "))
       << run.out;
   EXPECT_TRUE(has(run.out, "selftest FAILED: 1 of 2 checks failed")) << run.out;
   EXPECT_TRUE(has(run.out, "not trustworthy for a hardware verdict")) << run.out;
@@ -319,7 +321,8 @@ TEST(Selftest, EveryWorkloadIsCheckedAndPasses) {
   const Ran run = run_over(production.services(), options, kRight);
   EXPECT_EQ(run.code, 0) << run.out;
   for (const std::string& name : workloads::BuiltinRegistry{}.names()) {
-    EXPECT_TRUE(has(run.out, "PASS  " + name + " [scalar]: 3 unit(s) computed, 3 checked by the oracle"))
+    EXPECT_TRUE(
+        has(run.out, "PASS  " + name + " [scalar]: 3 unit(s) computed, 3 checked by the oracle"))
         << name << "\n"
         << run.out;
   }
@@ -340,7 +343,7 @@ TEST(Selftest, AWorkloadWhoseOracleFindsAFaultFailsTheCommand) {
   EXPECT_TRUE(has(run.out, "finding(s), the first: ExactBitCorruption: ")) << run.out;
   EXPECT_TRUE(has(run.out, "; check: ")) << "what the record checked is on the line\n" << run.out;
   EXPECT_TRUE(has(run.out, "selftest FAILED: 2 of 4 checks failed")) << "the golden checks pass\n"
-                                                                    << run.out;
+                                                                     << run.out;
 }
 
 TEST(Selftest, VerboseShowsThePathsTheTallyAndEveryFindingInFull) {
@@ -405,7 +408,8 @@ TEST(Selftest, ANameTheRegistryWillNotDescribeFailsItsCheck) {
   services.workloads = &registry;
   const Ran run = run_over(services, SelftestOptions{}, kRight);
   EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
-  EXPECT_TRUE(has(run.out, "FAIL  ghost: the registry would not describe it: unknown workload: no ghosts"))
+  EXPECT_TRUE(
+      has(run.out, "FAIL  ghost: the registry would not describe it: unknown workload: no ghosts"))
       << run.out;
 }
 

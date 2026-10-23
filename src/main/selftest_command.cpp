@@ -122,8 +122,7 @@ core::Result<Outcome, std::string> run_units(verification::SliceRunner& runner) 
 
 /// The check of one workload on one path.
 Check oracle_check(platform::Syscalls& syscalls, const worker::Services& services,
-                   const SelftestOptions& options, std::string_view workload,
-                   simd::IsaPath path) {
+                   const SelftestOptions& options, std::string_view workload, simd::IsaPath path) {
   Check check;
   check.name = std::string{workload} + " [" + std::string{simd::describe(path)} + "]";
   worker::WorkloadArgs args;
@@ -172,8 +171,8 @@ std::vector<Check> oracle_checks(platform::Syscalls& syscalls, const worker::Ser
       checks.push_back(std::move(check));
       continue;
     }
-    const SelftestPaths paths = selftest_paths(options.isa, supported, simd::compiled_paths(),
-                                               described.value().paths);
+    const SelftestPaths paths =
+        selftest_paths(options.isa, supported, simd::compiled_paths(), described.value().paths);
     for (const simd::IsaPath path : paths.run) {
       Check check = oracle_check(syscalls, services, options, name, path);
       if (!paths.note.empty()) {
@@ -190,9 +189,9 @@ std::string set_of(simd::IsaSet paths) {
   for (const simd::IsaPath path : simd::kPreference) {
     if (paths.contains(path)) {
       if (!text.empty()) {
-      text += ' ';
-    }
-    text += simd::describe(path);
+        text += ' ';
+      }
+      text += simd::describe(path);
     }
   }
   return text;
@@ -227,16 +226,16 @@ SelftestPaths selftest_paths(std::optional<simd::IsaPath> requested, simd::IsaSe
 }
 
 int run_selftest(platform::Syscalls& syscalls, const worker::Services& services,
-                 const SelftestOptions& options, const ExpectedDigests& expected,
-                 std::ostream& out, std::ostream& err) {
+                 const SelftestOptions& options, const ExpectedDigests& expected, std::ostream& out,
+                 std::ostream& err) {
   if (options.isa.has_value()) {
     // Used or refused, never replaced (dispatch.hpp): a selftest of a path that was not asked
     // for would say the asked one was sound.
-    const auto path = simd::select_path(options.isa, services.isa->supported(),
-                                        simd::compiled_paths());
+    const auto path =
+        simd::select_path(options.isa, services.isa->supported(), simd::compiled_paths());
     if (!path.has_value()) {
-      err << "loadforge selftest: --isa " << simd::describe(*options.isa)
-          << ": " << path.error().detail << "\n";
+      err << "loadforge selftest: --isa " << simd::describe(*options.isa) << ": "
+          << path.error().detail << "\n";
       return kRefused;
     }
   }
@@ -254,8 +253,7 @@ int run_selftest(platform::Syscalls& syscalls, const worker::Services& services,
   const auto failed = static_cast<std::size_t>(
       std::ranges::count_if(checks, [](const Check& check) { return !check.passed; }));
   if (failed == 0) {
-    out << "selftest passed: " << checks.size()
-        << " of " << checks.size()
+    out << "selftest passed: " << checks.size() << " of " << checks.size()
         << " checks. This build on this machine reproduced what it is expected to; that is a "
            "precondition of a hardware verdict, not a finding that the hardware is sound.\n";
     return kOk;
@@ -266,7 +264,6 @@ int run_selftest(platform::Syscalls& syscalls, const worker::Services& services,
          "unsupported. Selftest does not say which (docs/verification.md section 9).\n";
   return kExitSelftestFailed;
 }
-
 
 namespace {
 
@@ -289,7 +286,8 @@ core::Result<bool, std::string> take_value(SelftestOptions& options, std::string
   if (flag == "--isa") {
     options.isa = simd::parse_isa_path(value);
     if (!options.isa.has_value()) {
-      return std::string{"--isa: '"} + std::string{value} + "' is none of scalar, avx2, avx512, neon";
+      return std::string{"--isa: '"} + std::string{value} +
+             "' is none of scalar, avx2, avx512, neon";
     }
   } else if (flag == "--footprint") {
     const auto size = core::parse_byte_size(value);
@@ -344,8 +342,7 @@ core::Result<SelftestOptions, std::string> parse_selftest_args(
   return options;
 }
 
-int selftest_command(std::span<const std::string_view> args, std::ostream& out,
-                     std::ostream& err) {
+int selftest_command(std::span<const std::string_view> args, std::ostream& out, std::ostream& err) {
   const auto options = parse_selftest_args(args);
   if (!options.has_value()) {
     err << "loadforge selftest: " << options.error() << "\n";
