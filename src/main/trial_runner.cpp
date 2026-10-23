@@ -230,7 +230,10 @@ std::optional<std::int64_t> reading_before(const telemetry::TimelineView& timeli
 /// span it counted). Review verdicts 2026-10-23, finding 5.
 void take_whole_window_deltas(statistics::LoadSignature& signature,
                               const statistics::LoadSignature& widened) {
-  for (std::size_t index = 0; index < signature.metrics.size(); ++index) {
+  // Both summaries are of one timeline, so their metrics line up; a summary that does
+  // not is not read past its end, and its series are not taken for the window's.
+  const std::size_t common = std::min(signature.metrics.size(), widened.metrics.size());
+  for (std::size_t index = 0; index < common; ++index) {
     auto* counter = std::get_if<statistics::CounterSummary>(&signature.metrics[index].value);
     const auto* wider = std::get_if<statistics::CounterSummary>(&widened.metrics[index].value);
     if (counter != nullptr && wider != nullptr) {

@@ -13,6 +13,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -222,6 +223,30 @@ class FailingSummarizer final : public statistics::Summarizer {
  private:
   int failing_call_;
   mutable int calls_ = 0;
+  statistics::CompensatedSummarizer real_;
+};
+
+/// The real summarizer, with `alter` applied to what it returns for the windows `when`
+/// chooses.
+class AlteringSummarizer final : public statistics::Summarizer {
+ public:
+  AlteringSummarizer(std::function<bool(const statistics::Window&)> when,
+                     std::function<void(statistics::LoadSignature&)> alter)
+      : when_(std::move(when)), alter_(std::move(alter)) {}
+  [[nodiscard]] core::Result<statistics::LoadSignature, statistics::StatisticsError> summarize(
+      const telemetry::TimelineView& view, const statistics::Window& window) const override {
+    auto made = real_.summarize(view, window);
+    if (!made.has_value() || !when_(window)) {
+      return made;
+    }
+    statistics::LoadSignature signature = std::move(made).value();
+    alter_(signature);
+    return signature;
+  }
+
+ private:
+  std::function<bool(const statistics::Window&)> when_;
+  std::function<void(statistics::LoadSignature&)> alter_;
   statistics::CompensatedSummarizer real_;
 };
 
@@ -452,6 +477,31 @@ TEST(TrialRunnerRun, ACountersDeltaIncludesTheAdvanceFromTheReadingBeforeTheWind
   EXPECT_EQ(counter.delta, 100U) << "and the advance from the reading before it is counted";
 }
 
+TEST(TrialRunnerRun, AWiderSummaryThatDoesNotLineUpLeavesTheWindowsOwnDelta) {
+  Machine machine;
+  machine.options.sources = ticks;
+  machine.workers_that_exit_at_once(1);
+  // The summary of the window widened to the reading before it (the only one wider
+  // than the trial's millisecond) comes back with gauges where the window has counters,
+  // and is not read as their advance.
+  const AlteringSummarizer regauged(
+      [](const statistics::Window& window) { return window.end_ns - window.start_ns > kMs; },
+      [](statistics::LoadSignature& signature) {
+        for (statistics::MetricSummary& summary : signature.metrics) {
+          summary.value = statistics::GaugeSummary{};
+        }
+      });
+  machine.options.summarizer = &regauged;
+  Candidate candidate = a_candidate();
+  candidate.duration_ns = 1'000'000;  // the window holds the last round alone
+  auto runner = machine.runner();
+  const auto outcome = runner->run(candidate);
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  const auto& counter =
+      std::get<statistics::CounterSummary>(outcome.value().signature.metrics.at(0).value);
+  EXPECT_EQ(counter.delta, 0U) << "one reading, no pair of its own, and no wider delta taken";
+}
+
 TEST(TrialRunnerRun, ADeltaOfAWindowThatOpensBeforeEveryReadingIsTheWindowsOwn) {
   Machine machine;
   machine.options.sources = ticks;
@@ -667,6 +717,22 @@ TEST(TrialRunnerSettle, ASensorThatDroppedOutCannotSettleAndIsNotCalledSettled) 
   ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
   EXPECT_FALSE(outcome.value().settled);
   EXPECT_EQ(outcome.value().settle_ns, 100 * kMs);
+}
+
+TEST(TrialRunnerSettle, ASettleWindowWhoseSummaryLacksTheMetricIsNotSettled) {
+  Machine machine;
+  machine.options.sources = flat_level;
+  machine.workers_that_exit_at_once(1);
+  const AlteringSummarizer stripped(
+      [](const statistics::Window& /*window*/) { return true; },
+      [](statistics::LoadSignature& signature) { signature.metrics.clear(); });
+  machine.options.summarizer = &stripped;
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 30 * kMs, 100 * kMs};
+  auto runner = machine.runner();
+  const auto outcome = runner->run(candidate);
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  EXPECT_FALSE(outcome.value().settled) << "no slope of the metric, so no settling on it";
 }
 
 TEST(TrialRunnerSettle, ASettleWindowTheSummarizerRefusesIsNotSettled) {
