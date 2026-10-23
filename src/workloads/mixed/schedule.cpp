@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -13,6 +15,7 @@
 #include "controller/journal/journal.hpp"
 #include "core/crc32.hpp"
 #include "worker/control.hpp"
+#include "workloads/workload.hpp"
 
 namespace loadforge::mixed {
 namespace {
@@ -93,8 +96,21 @@ std::optional<std::string> problem(const Schedule& schedule, std::size_t workers
   if (schedule.phase.size() > kMaxLabelBytes || schedule.workload.size() > kMaxLabelBytes) {
     return std::string{"the schedule's first phase or workload label is past the journal's limit"};
   }
+  for (std::size_t slot = 0; slot < schedule.start.size(); ++slot) {
+    // A start is a workload the worker is launched with: held to the rules of
+    // the Switch that would make the same change.
+    const Start& start = schedule.start[slot];
+    if (!workloads::is_valid_name(start.workload) || start.footprint_bytes == 0) {
+      return "the start of worker " + std::to_string(slot) +
+             " names no workload of a valid name or no footprint";
+    }
+  }
+  std::set<std::string_view> seen;
   std::int64_t before = 0;
   for (const Step& step : schedule.steps) {
+    if (!seen.insert(step.phase).second) {
+      return "the step \"" + step.phase + "\" repeats the label of an earlier step";
+    }
     if (step.at_ns < before) {
       return "the step \"" + step.phase + "\" is not after the one before it";
     }
