@@ -341,6 +341,91 @@ TEST(FileStorageRead, AnEmptyFileIsNoBytes) {
   EXPECT_TRUE(opened(ops)->read_all().value().empty());
 }
 
+// --- lock (review C6) ------------------------------------------------------------------------
+
+// What flock(2) documents, less what the kernel cannot be made to say here (ENOMEM).
+const std::vector<int> kLockErrors{EWOULDBLOCK, EBADF, EINVAL, ENOLCK};
+
+class LockFailure : public ::testing::TestWithParam<int> {};
+INSTANTIATE_TEST_SUITE_P(Errno, LockFailure, ::testing::ValuesIn(kLockErrors));
+
+TEST_P(LockFailure, IsReportedWithTheKernelsErrno) {
+  FakeFileOps ops;
+  const auto storage = opened(ops);
+  ops.script(Call::kLock, GetParam());
+  const auto locked = storage->lock();
+  ASSERT_FALSE(locked.has_value());
+  EXPECT_EQ(locked.error().number, GetParam());
+  EXPECT_EQ(locked.error().call, "flock");
+}
+
+TEST(FileStorageLock, LocksTheJournalDescriptorAndRetriesAnInterruptedCall) {
+  FakeFileOps ops;
+  const auto storage = opened(ops);
+  ops.script(Call::kLock, EINTR, 2);
+  ASSERT_TRUE(storage->lock().has_value());
+  EXPECT_EQ(ops.locked_fds.size(), 3U);
+  EXPECT_EQ(ops.locked_fds.front(), ops.locked_fds.back());
+  EXPECT_EQ(ops.opens.size(), 2U);
+}
+
+TEST(FileStorageLock, GivesUpOnLocksInterruptedWithoutEnd) {
+  FakeFileOps ops;
+  const auto storage = opened(ops);
+  ops.script(Call::kLock, EINTR, FileStorage::kMaxConsecutiveInterrupts + 1);
+  const auto locked = storage->lock();
+  ASSERT_FALSE(locked.has_value());
+  EXPECT_EQ(locked.error().number, EINTR);
+}
+
+// --- close (review C3) -----------------------------------------------------------------------
+
+class ExplicitCloseFailure : public ::testing::TestWithParam<int> {};
+INSTANTIATE_TEST_SUITE_P(Errno, ExplicitCloseFailure, ::testing::ValuesIn(kCloseErrors));
+
+TEST_P(ExplicitCloseFailure, IsReportedAndTheDescriptorIsReleasedAnyway) {
+  FakeFileOps ops;
+  auto storage = opened(ops);
+  ops.closed_fds.clear();
+  ops.script(Call::kClose, GetParam());
+  const auto closed = storage->close();
+  ASSERT_FALSE(closed.has_value());
+  expect_storage_fault(closed.error(), GetParam());
+  EXPECT_EQ(ops.closed_fds.size(), 1U);
+  storage.reset();
+  EXPECT_EQ(ops.closed_fds.size(), 1U) << "the destructor does not close it a second time";
+}
+
+TEST(FileStorageClose, ClosesOnceAndSuccessIsSuccess) {
+  FakeFileOps ops;
+  auto storage = opened(ops);
+  ASSERT_TRUE(storage->close().has_value());
+  EXPECT_TRUE(ops.open_fds.empty());
+  storage.reset();
+  EXPECT_EQ(ops.closed_fds.size(), 2U) << "the directory's and the journal's, once each";
+}
+
+TEST(FileStorageClose, AnInterruptedCloseIsNotAnErrorAndIsNotRepeated) {
+  // On Linux the descriptor is already released when close(2) reports EINTR, and a second
+  // close could close a descriptor another thread has just been given.
+  FakeFileOps ops;
+  auto storage = opened(ops);
+  ops.closed_fds.clear();
+  ops.script(Call::kClose, EINTR);
+  EXPECT_TRUE(storage->close().has_value());
+  EXPECT_EQ(ops.closed_fds.size(), 1U);
+}
+
+TEST(FileStorageSyncDirectory, SyncsTheDirectoryOfAPathAndClosesIt) {
+  FakeFileOps ops;
+  ASSERT_TRUE(sync_directory(ops, "/var/lib/x/run.json").has_value());
+  ASSERT_EQ(ops.opens.size(), 1U);
+  EXPECT_EQ(ops.opens[0].first, "/var/lib/x");
+  EXPECT_EQ(ops.opens[0].second, FileOps::Mode::kDirectory);
+  EXPECT_EQ(ops.synced_fds.size(), 1U);
+  EXPECT_TRUE(ops.open_fds.empty());
+}
+
 TEST(FileStorageJournal, AWriterOverFileStorageSurvivesAReplay) {
   FakeFileOps ops;
   const auto storage = opened(ops);

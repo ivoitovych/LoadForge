@@ -556,6 +556,9 @@ class SteppedSyscalls final : public platform::Syscalls {
   core::Result<core::Ok, platform::SyscallError> ignore_signal(int signal) override {
     return fake.ignore_signal(signal);
   }
+  core::Result<core::Ok, platform::SyscallError> default_signal(int signal) override {
+    return fake.default_signal(signal);
+  }
   pid_t process_id() override { return fake.process_id(); }
   core::Result<std::optional<platform::Reaped>, platform::SyscallError> reap_any_nonblocking()
       override {

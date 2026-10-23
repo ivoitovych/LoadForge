@@ -674,6 +674,18 @@ class FakeSyscalls final : public platform::Syscalls {
     return core::Ok{};
   }
 
+  void fail_default_signal(int error) { default_signal_error_ = error; }
+  [[nodiscard]] const std::vector<int>& signals_defaulted() const { return signals_defaulted_; }
+
+  core::Result<core::Ok, platform::SyscallError> default_signal(int signal) override {
+    signals_defaulted_.push_back(signal);
+    if (default_signal_error_ != 0) {
+      return platform::SyscallError{default_signal_error_, "sigaction",
+                                    "signal " + std::to_string(signal)};
+    }
+    return core::Ok{};
+  }
+
   /// The pid this fake reports as its own.
   static constexpr pid_t kFakePid = 4242;
   pid_t process_id() override { return kFakePid; }
@@ -1373,7 +1385,9 @@ class FakeSyscalls final : public platform::Syscalls {
   std::map<int, std::pair<int, platform::TimeSpec>> clock_jumps_at_;
   std::int64_t clock_step_ns_ = 0;
   int ignore_signal_error_ = 0;
+  int default_signal_error_ = 0;
   std::vector<int> signals_ignored_;
+  std::vector<int> signals_defaulted_;
 
   struct FakeMapping {
     std::unique_ptr<std::byte[]> storage;

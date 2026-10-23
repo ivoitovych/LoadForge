@@ -13,6 +13,13 @@
 
 namespace loadforge::journal {
 
+/// fsync of the directory that holds `path` (the current directory for a bare
+/// name), so that a name just made or renamed there survives a power cut. The
+/// directory is closed whatever the fsync said, and the fsync's failure is the
+/// one reported.
+[[nodiscard]] core::Result<core::Ok, platform::SyscallError> sync_directory(
+    FileOps& ops, const std::string& path);
+
 /// A journal's Storage over a real file.
 ///
 /// open() creates the file if it is missing (and does not truncate one that
@@ -56,6 +63,19 @@ class FileStorage final : public Storage {
       std::span<const std::byte> bytes) override;
   [[nodiscard]] core::Result<core::Ok, JournalError> sync() override;
   [[nodiscard]] core::Result<std::vector<std::byte>, JournalError> read_all() const override;
+
+  /// An exclusive advisory lock on the file, taken without waiting and held
+  /// until the storage is destroyed or closed (review C6: two runs on one
+  /// journal path). EWOULDBLOCK in the error says another holds it; EINTR is
+  /// retried as everywhere here.
+  [[nodiscard]] core::Result<core::Ok, platform::SyscallError> lock();
+
+  /// Closes the descriptor now and answers what close(2) said, which the
+  /// destructor cannot: a file system may report a deferred write error there
+  /// (review C3). The descriptor is released whatever the answer; EINTR from
+  /// close is not an error, because on Linux the descriptor is closed when it
+  /// is reported and a second close could close another file's.
+  [[nodiscard]] core::Result<core::Ok, JournalError> close();
 
  private:
   FileOps* ops_;

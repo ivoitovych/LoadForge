@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,6 +50,13 @@ class Threads {
   constexpr explicit Threads(std::uint32_t n) noexcept : count_(n) {}
   std::uint32_t count_;
 };
+
+/// The longest a run may be, in milliseconds: a quarter of what a signed 64-bit
+/// count of nanoseconds holds, about 73 years, so that sums of a few such
+/// lengths (the controller's deadline, the stop grace, a sampling horizon) do
+/// not overflow. The command line's `--duration` is held to the same bound.
+inline constexpr std::int64_t kLongestRunMilliseconds =
+    std::numeric_limits<std::int64_t>::max() / 1'000'000 / 4;
 
 struct Run {
   Mode mode = Mode::kStress;

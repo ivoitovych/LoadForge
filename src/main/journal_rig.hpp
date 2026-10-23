@@ -18,6 +18,13 @@
 // journal that does not verify -- is the evidence the journal exists for, and is
 // kept: renamed to FILE.1, or FILE.2 if that is taken, and so on, never
 // overwritten. The new journal is FILE.
+//
+// Two things are refused before anything is moved (review C6). A file that is
+// not a journal -- its first record does not verify -- is left where it is: it
+// is not evidence of a crash, and renaming a user's file to FILE.1 is not a
+// thing a journal path may do. And the journal file is locked (flock, without
+// waiting) for as long as the run holds it, so a second run on the same path is
+// refused instead of moving the first one's journal away under it.
 
 #include <memory>
 #include <string>

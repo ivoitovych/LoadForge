@@ -2,6 +2,7 @@
 #include "controller/journal/file_ops.hpp"
 
 #include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #include <array>
@@ -58,6 +59,13 @@ core::Result<core::Ok, platform::SyscallError> RealFileOps::fsync(int fd) {
 core::Result<core::Ok, platform::SyscallError> RealFileOps::close(int fd) {
   if (::close(fd) != 0) {
     return platform::SyscallError{errno, "close", describe_fd(fd)};
+  }
+  return core::Ok{};
+}
+
+core::Result<core::Ok, platform::SyscallError> RealFileOps::lock(int fd) {
+  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    return platform::SyscallError{errno, "flock", describe_fd(fd)};
   }
   return core::Ok{};
 }

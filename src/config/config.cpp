@@ -302,6 +302,10 @@ class Validator {
     if (duration.value() <= core::Duration{0}) {
       return fault_at("run.duration", *run.get("duration"), "duration must be longer than zero");
     }
+    if (duration.value().count() > kLongestRunMilliseconds) {
+      return fault_at("run.duration", *run.get("duration"),
+                      "duration is longer than any run can be (about 73 years)");
+    }
     parsed.duration = duration.value();
     return parsed;
   }

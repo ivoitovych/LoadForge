@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "controller/journal/file_ops.hpp"
 #include "controller/results/result.hpp"
 #include "core/result.hpp"
 #include "reporters/writer.hpp"
@@ -37,11 +38,25 @@ class ResultSink {
                                                                   const std::string& bytes) = 0;
 };
 
+/// The result files on disk. store() makes `path` durable before it says so
+/// (review C3): the bytes go to "<path>.partial", which is fsynced and closed
+/// with the close checked, then renamed over `path`, then the directory is
+/// fsynced so that the rename survives a power cut. A failure at any step
+/// removes the ".partial" and leaves what was at `path` as it was.
 class FileResultSink final : public ResultSink {
  public:
+  FileResultSink() = default;
+  /// The file operations are `ops`, so that a test can make each fail; it must
+  /// outlive the sink.
+  explicit FileResultSink(journal::FileOps& ops) noexcept : ops_(&ops) {}
+
   [[nodiscard]] core::Result<core::Ok, std::string> prepare(const std::string& directory) override;
   [[nodiscard]] core::Result<core::Ok, std::string> store(const std::string& path,
                                                           const std::string& bytes) override;
+
+ private:
+  journal::RealFileOps real_;
+  journal::FileOps* ops_ = &real_;
 };
 
 /// The formats named by a comma-separated list ("json,csv"), in the order

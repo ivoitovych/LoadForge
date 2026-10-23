@@ -91,7 +91,11 @@ struct FindingReport {
 ///                   ends by its own duration before it reads the controller's,
 ///                   and its exit is the answer.
 ///   dropped         not sent, because the worker had too many unanswered
-///                   already (a worker that does not read its pipe).
+///                   already (a worker that does not read its pipe). Only that:
+///                   a command written to a pipe already closed (EPIPE) is a
+///                   worker gone, whose exit is the answer, and is in no count;
+///                   the console line says "dropped (too many unanswered)" so
+///                   it does not read as every command not sent.
 struct CommandReport {
   std::uint64_t sent = 0;
   std::uint64_t done = 0;

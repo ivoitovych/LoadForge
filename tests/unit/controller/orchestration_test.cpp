@@ -262,6 +262,8 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
   rig.reporter.on_event = [&rig](const std::string& line) {
     if (starts_with(line, "spawned")) {
+      // Review C2: SIGCHLD was put back to its default, once, before the workers existed.
+      EXPECT_EQ(rig.syscalls.signals_defaulted(), std::vector<int>{SIGCHLD});
       rig.beat(0, 7, 10 * kMs);
       rig.beat(1, 9, 10 * kMs);
     } else if (starts_with(line, "deadline")) {
@@ -296,6 +298,7 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(rig.syscalls.signals_ignored(), std::vector<int>{SIGPIPE})
       << "a stop to a worker that just died must be EPIPE, not signal 13";
+  EXPECT_EQ(rig.syscalls.signals_defaulted(), std::vector<int>{SIGCHLD});
   const RunReport& report = result.value();
   EXPECT_FALSE(report.worker_exit_code.has_value());
   ASSERT_EQ(report.workers.size(), 2U);
@@ -1532,6 +1535,18 @@ TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehin
     EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
   }
   {
+    // Review C2: SIGCHLD is put back to its default before anything is created.
+    Rig rig;
+    rig.syscalls.fail_default_signal(EINVAL);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "signals");
+    EXPECT_NE(result.error().detail.find("signal " + std::to_string(SIGCHLD)), std::string::npos)
+        << result.error().detail;
+    EXPECT_EQ(rig.syscalls.fork_count(), 0);
+    EXPECT_TRUE(rig.reporter.plans.empty());
+  }
+  {
     Rig rig;
     rig.syscalls.fail_create_memory_file(ENOMEM);
     auto result = rig.run();
@@ -2054,6 +2069,29 @@ TEST(ControllerControl, AScheduleThatDoesNotFitTheRunIsRefusedBeforeTheFirstFork
   EXPECT_NE(invalid.detail.find("set duty"), std::string::npos) << invalid.detail;
 }
 
+TEST(ControllerControl, AScheduleThatOutgrowsTheMemoryBudgetIsRefusedBeforeTheFirstFork) {
+  // Review A3: the start fits (two workers at 100 MiB in a ceiling of 250 MiB);
+  // a later Switch makes one of them 160 MiB, which does not.
+  Rig rig;
+  const std::uint64_t mib = std::uint64_t{1} << 20U;
+  rig.config.workloads[0].memory = core::ByteSize::bytes(100 * mib);
+  rig.config.workloads[1].memory = core::ByteSize::bytes(100 * mib);
+  rig.options.budget = config::MemoryBudget{250 * mib, std::nullopt};
+  worker::Switch grow;
+  grow.workload = "sort";
+  grow.footprint_bytes = 160 * mib;
+  const mixed::Schedule schedule = schedule_of({step_of(10 * kMs, "r1", {tell(0, {grow})})});
+  rig.options.schedule = &schedule;
+  auto result = rig.run();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(
+      result.error(),
+      (ControllerError{
+          "memory",
+          "the schedule holds up to 260MiB (at the step \"r1\"), past the ceiling of 250MiB"}));
+  EXPECT_EQ(rig.syscalls.fork_count(), 0);
+}
+
 TEST(ControllerControl, AcknowledgementsAreCountedAndARefusalIsToldWithTheWorkersReason) {
   Rig rig;
   const mixed::Schedule schedule =
@@ -2084,7 +2122,8 @@ TEST(ControllerControl, AcknowledgementsAreCountedAndARefusalIsToldWithTheWorker
                       "refused rebind: CPU 5 is not in this cpuset"),
             zero.records.end());
   EXPECT_NE(std::find(zero.records.begin(), zero.records.end(),
-                      "control: 4 message(s) sent, 2 done, 1 refused, 0 unanswered, 0 not sent"),
+                      "control: 4 message(s) sent, 2 done, 1 refused, 0 unanswered, 0 dropped (too "
+                      "many unanswered)"),
             zero.records.end());
   EXPECT_EQ(result.value().workers[1].commands.done, 1U);
 }
@@ -2173,6 +2212,14 @@ TEST(ControllerControl, AFailureToWriteOnAControlPipeIsTheControllersAndAWorkerG
     ASSERT_TRUE(result.has_value()) << describe(result.error());
     EXPECT_EQ(result.value().workers[0].commands.sent, 0U);
     EXPECT_EQ(result.value().workers[1].commands.sent, 1U);
+    // Review A4: the last count of the line is what it says, the commands held back because
+    // the worker had too many unanswered; a command written to a pipe that was already
+    // closed is in no count, and the line does not call it "not sent".
+    const std::string line = describe(result.value().workers[0].commands);
+    EXPECT_EQ(line,
+              "control: 0 message(s) sent, 0 done, 0 refused, 0 unanswered, "
+              "0 dropped (too many unanswered)");
+    EXPECT_EQ(line.find("not sent"), std::string::npos);
   }
 }
 
@@ -2303,6 +2350,76 @@ TEST(ControllerControl, ADutyCycleExtendsTheStallAllowanceByTheIdlePartOfItsPeri
       << "30 ms and the 100 ms it was told to idle";
 }
 
+// Review A5: the worker beats nothing while it replaces its runner, so the controller allows
+// that much longer, from the write of the Switch or Rebind until it is answered.
+class ReplacementAllowance : public ::testing::TestWithParam<worker::Command> {};
+
+TEST_P(ReplacementAllowance, ASlowReplacementIsNotAHangUntilTheAllowanceFromTheWriteIsSpent) {
+  Rig rig;
+  spin_both(rig);
+  rig.options.replacement_allowance_ns = 200 * kMs;
+  const mixed::Schedule schedule = schedule_of({step_of(0, "swap", {tell(0, {GetParam()})})});
+  rig.options.schedule = &schedule;
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 7, 10'000 * kMs);
+      rig.beat(1, 7, 10'000 * kMs);
+    } else if (line == "worker 0: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const auto& events = rig.reporter.events;
+  const auto plain =
+      std::find(events.begin(), events.end(), "worker 1: sent signal 15 (heartbeat stale)");
+  const auto replacing =
+      std::find(events.begin(), events.end(), "worker 0: sent signal 15 (heartbeat stale)");
+  ASSERT_NE(plain, events.end());
+  ASSERT_NE(replacing, events.end()) << "a replacement that never ends is still stopped";
+  EXPECT_LE(rig.reporter.elapsed[static_cast<std::size_t>(plain - events.begin())], 50 * kMs);
+  EXPECT_GE(rig.reporter.elapsed[static_cast<std::size_t>(replacing - events.begin())], 200 * kMs)
+      << "not before the 200 ms allowed for a replacement have passed";
+}
+
+TEST_P(ReplacementAllowance, AnAnsweredReplacementAllowsNothingMore) {
+  Rig rig;
+  spin_both(rig);
+  rig.options.replacement_allowance_ns = 5000 * kMs;
+  const mixed::Schedule schedule = schedule_of({step_of(0, "swap", {tell(0, {GetParam()})})});
+  rig.options.schedule = &schedule;
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 7, 10'000 * kMs);
+      rig.beat(1, 7, 10'000 * kMs);
+    } else if (starts_with(line, "phase swap")) {
+      answer(rig, 0, 1);
+    } else if (line == "worker 0: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const auto& events = rig.reporter.events;
+  const auto answered =
+      std::find(events.begin(), events.end(), "worker 0: sent signal 15 (heartbeat stale)");
+  ASSERT_NE(answered, events.end());
+  EXPECT_LE(rig.reporter.elapsed[static_cast<std::size_t>(answered - events.begin())], 100 * kMs)
+      << "judged by the usual 30 ms again once the worker has answered";
+}
+
+worker::Command a_switch() {
+  worker::Switch change;
+  change.workload = "sort";
+  change.footprint_bytes = std::uint64_t{1} << 20U;
+  return change;
+}
+
+INSTANTIATE_TEST_SUITE_P(Replacements, ReplacementAllowance,
+                         ::testing::Values(a_switch(), worker::Command{worker::Rebind{{0}}}));
+
 TEST(ControllerControl, ARefusedCommandChangesNothingAboutHowTheWorkerIsJudged) {
   Rig rig;
   spin_both(rig);
@@ -2344,7 +2461,8 @@ TEST(ControllerControl, ReportValuesOfTheControlComparedFieldByField) {
   b.dropped = 1;
   EXPECT_NE(a, b);
   EXPECT_EQ(describe(CommandReport{5, 4, 3, 2, 1}),
-            "control: 5 message(s) sent, 4 done, 3 refused, 2 unanswered, 1 not sent");
+            "control: 5 message(s) sent, 4 done, 3 refused, 2 unanswered, 1 dropped (too many "
+            "unanswered)");
 
   const JournalReport quiet;
   JournalReport kept = quiet;
@@ -2468,6 +2586,34 @@ TEST(ControllerJournal, WithoutAScheduleThePhaseIsRunAndTheWorkloadIsWhatTheWork
   EXPECT_EQ(journal.entries.front().phase, "run");
   EXPECT_EQ(journal.entries.front().workload, "null") << "workers that run no workload";
   EXPECT_FALSE(journal.entries.front().temperature_c.has_value()) << "no notes, no readings";
+}
+
+TEST(ControllerJournal, ABacklogOfDueStepsForcesOneWriteAndNotOnePerStep) {
+  // Review C5: each forced write is an fsync, and a loop that makes one per due step kept the
+  // controller from its next beat. Five steps are due at the first tick (10 ms by the fake's
+  // clock); one entry is forced for them, naming the phase the run is in after the last.
+  Rig rig;
+  rig.config.run.duration = core::Duration{200};
+  controller_testing::RecordingWriter journal;
+  rig.options.journal = &journal;
+  rig.options.journal_interval_ns = 10'000 * kMs;
+  const mixed::Schedule schedule = schedule_of(
+      {step_of(1 * kMs, "p0", {}), step_of(2 * kMs, "p1", {}), step_of(3 * kMs, "p2", {}),
+       step_of(4 * kMs, "p3", {}), step_of(5 * kMs, "p4", {})});
+  rig.options.schedule = &schedule;
+  complete_at_deadline(rig);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().steps_run, 5U);
+  const auto phase_count = [&journal](const std::string& phase) {
+    return std::ranges::count_if(
+        journal.entries, [&phase](const journal::Entry& entry) { return entry.phase == phase; });
+  };
+  for (const char* skipped : {"p0", "p1", "p2", "p3"}) {
+    EXPECT_EQ(phase_count(skipped), 0) << skipped << " was run through within the tick";
+  }
+  EXPECT_EQ(phase_count("p4"), 1) << "one forced write for the five steps";
+  EXPECT_EQ(journal.syncs, journal.appends);
 }
 
 TEST(ControllerJournal, TheMostAdvancedWorkersUnitsAndTheStaleOnesAreWhatAnEntrySays) {

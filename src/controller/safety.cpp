@@ -8,12 +8,15 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "config/config.hpp"
 #include "core/byte_size.hpp"
 #include "core/duration.hpp"
 #include "core/result.hpp"
+#include "worker/control.hpp"
+#include "workloads/mixed/schedule.hpp"
 
 namespace loadforge::controller {
 
@@ -135,14 +138,62 @@ core::Result<core::Ok, std::string> check_temperature(const config::Config& conf
   return core::Ok{};
 }
 
-core::Result<core::Ok, std::string> check_memory(
-    const config::Config& config, const std::optional<config::MemoryBudget>& budget) {
+namespace {
+
+/// The most the workers can hold at once over a schedule, and the step where
+/// that is first reached ("the start" before any step). `held` begins with each
+/// worker's footprint at launch; a Switch replaces its worker's footprint (the
+/// worker releases the old runner before it prepares the new one, so the two
+/// are not held together). Pure: the schedule is data made before the run.
+struct Peak {
+  std::uint64_t bytes = 0;
+  std::string at;
+};
+
+Peak peak_of(const mixed::Schedule& schedule, std::vector<std::uint64_t> held) {
+  // Saturating: a footprint past 2^63 is refused, not wrapped into room.
+  const auto sum = [&held] {
+    std::uint64_t total = 0;
+    for (const std::uint64_t each : held) {
+      total = each > UINT64_MAX - total ? UINT64_MAX : total + each;
+    }
+    return total;
+  };
+  Peak peak{sum(), "the start"};
+  for (const mixed::Step& step : schedule.steps) {
+    for (const mixed::WorkerCommands& each : step.workers) {
+      for (const worker::Command& command : each.commands) {
+        const auto* change = std::get_if<worker::Switch>(&command);
+        if (change != nullptr && each.slot < held.size()) {
+          held[each.slot] = change->footprint_bytes;
+        }
+      }
+    }
+    if (const std::uint64_t now = sum(); now > peak.bytes) {
+      peak.bytes = now;
+      peak.at = "the step \"" + step.phase + "\"";
+    }
+  }
+  return peak;
+}
+
+}  // namespace
+
+core::Result<core::Ok, std::string> check_memory(const config::Config& config,
+                                                 const std::optional<config::MemoryBudget>& budget,
+                                                 const mixed::Schedule* schedule) {
   if (!budget.has_value()) {
     return core::Ok{};
   }
   std::uint64_t total = 0;
+  // One entry per enabled workload, in slot order: what each is launched with.
+  std::vector<std::uint64_t> launched;
   for (const config::Workload& workload : config.workloads) {
-    if (!workload.enabled || !workload.memory.has_value()) {
+    if (!workload.enabled) {
+      continue;
+    }
+    if (!workload.memory.has_value()) {
+      launched.push_back(0);
       continue;
     }
     const std::string key = "workload." + workload.name;
@@ -152,10 +203,31 @@ core::Result<core::Ok, std::string> check_memory(
       return refusal;
     }
     total += resolved.value();
+    launched.push_back(resolved.value());
+  }
+  // A schedule moves the footprints after the start (a Switch resizes a
+  // worker's dataset), so the budget holds for the largest total any step
+  // can hold, not only for the start: the schedule is known before the first
+  // fork, and the check is made then.
+  std::string held_what = "the workloads' memory adds up to ";
+  std::string held_where;
+  if (schedule != nullptr) {
+    std::vector<std::uint64_t> held = launched;
+    if (!schedule->start.empty()) {
+      held.clear();
+      for (const mixed::Start& start : schedule->start) {
+        held.push_back(start.footprint_bytes);
+      }
+    }
+    if (const Peak peak = peak_of(*schedule, std::move(held)); peak.bytes > total) {
+      total = peak.bytes;
+      held_what = "the schedule holds up to ";
+      held_where = " (at " + peak.at + ")";
+    }
   }
   const std::uint64_t ceiling = config::ceiling_of(*budget);
   if (total > ceiling) {
-    return "the workloads' memory adds up to " + core::to_string(core::ByteSize::bytes(total)) +
+    return held_what + core::to_string(core::ByteSize::bytes(total)) + held_where +
            ", past the ceiling of " + core::to_string(core::ByteSize::bytes(ceiling));
   }
   if (config.limits.memory.has_value()) {
@@ -165,7 +237,7 @@ core::Result<core::Ok, std::string> check_memory(
       return refusal;
     }
     if (total > limit.value()) {
-      return "the workloads' memory adds up to " + core::to_string(core::ByteSize::bytes(total)) +
+      return held_what + core::to_string(core::ByteSize::bytes(total)) + held_where +
              ", past limits.memory of " + core::to_string(core::ByteSize::bytes(limit.value()));
     }
   }

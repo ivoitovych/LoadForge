@@ -2,6 +2,7 @@
 #include "main/journal_rig.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -17,6 +18,7 @@
 
 #include "controller/journal/file_storage.hpp"
 #include "core/result.hpp"
+#include "platform/syscall_error.hpp"
 #include "telemetry/sample.hpp"
 
 namespace loadforge::cli {
@@ -64,6 +66,50 @@ std::string kept_name(const std::string& path, int number) {
   return name;
 }
 
+/// A label as it is printed: the printable ASCII it is made of, and an
+/// escape (\xNN) for every other byte, the backslash and the quote that closes
+/// it. A journal file can hold anything, and `loadforge journal FILE` prints
+/// it to a terminal (review C7c).
+std::string escaped(std::string_view label) {
+  constexpr std::string_view kDigits = "0123456789abcdef";
+  std::string text;
+  for (const char each : label) {
+    const auto byte = static_cast<unsigned char>(each);
+    if (byte == '\\' || byte == '"' || byte < 0x20 || byte > 0x7e) {
+      text += "\\x";
+      text += kDigits[byte >> 4U];
+      text += kDigits[byte & 0xfU];
+    } else {
+      text += each;
+    }
+  }
+  return text;
+}
+
+/// Why a run is refused when the journal is held by another.
+std::string unlocked(const std::string& path, const platform::SyscallError& error) {
+  std::string text;
+  if (error.number == EWOULDBLOCK) {
+    text = "the journal ";
+    text += path;
+    text += " is in use by another run; give this run a journal of its own, or wait for that one";
+    return text;
+  }
+  text = "cannot lock the journal ";
+  text += path;
+  text += ": ";
+  text += platform::describe(error);
+  return text;
+}
+
+/// Why a run is refused when the file at the journal's path is not a journal.
+std::string not_a_journal(const std::string& path) {
+  std::string text = path;
+  text += " exists and is not a journal (its first record does not verify); it is left as it is. ";
+  text += "Give --journal a path of its own, or move that file away";
+  return text;
+}
+
 /// Why a run is refused when every name for a kept journal is taken.
 std::string too_many_kept(const std::string& path) {
   std::string text = "there are already ";
@@ -79,7 +125,7 @@ std::string too_many_kept(const std::string& path) {
 std::string render_entry(const journal::Entry& entry) {
   std::string text =
       "t=" + one_place(static_cast<double>(entry.elapsed_ns) / kNanosecondsPerSecond) +
-      "s phase \"" + entry.phase + "\" workload " + entry.workload;
+      "s phase \"" + escaped(entry.phase) + "\" workload " + escaped(entry.workload);
   if (entry.last_verified_unit.has_value()) {
     text += " units " + std::to_string(*entry.last_verified_unit);
   }
@@ -125,11 +171,48 @@ std::string render_replay(const journal::Replay& replay, std::string_view path, 
   return text;
 }
 
+namespace {
+
+/// Removes a previous journal that ended cleanly, or moves one that did not to the
+/// first free PATH.N and says so in `previous`; why not, if it could not.
+std::optional<std::string> set_aside(JournalFiles& files, const std::string& path,
+                                     journal::Ending ending, std::string& previous) {
+  if (ending == journal::Ending::kTerminated) {
+    if (auto removed = files.remove(path); !removed.has_value()) {
+      return removed.error();
+    }
+    return std::nullopt;
+  }
+  int number = 1;
+  while (number <= kMostKeptJournals) {
+    if (!files.exists(kept_name(path, number))) {
+      break;
+    }
+    ++number;
+  }
+  if (number > kMostKeptJournals) {
+    return too_many_kept(path);
+  }
+  const std::string kept = kept_name(path, number);
+  if (auto moved = files.rename(path, kept); !moved.has_value()) {
+    return moved.error();
+  }
+  previous += "; kept as " + kept;
+  return std::nullopt;
+}
+
+}  // namespace
+
 core::Result<RunJournal, std::string> open_run_journal(journal::FileOps& ops, JournalFiles& files,
                                                        const std::string& path) {
   auto first = journal::FileStorage::open(ops, path);
   if (!first.has_value()) {
     return "cannot open the journal " + path + ": " + first.error().detail;
+  }
+  // Before anything is read, moved or removed: a second run on this path is
+  // refused here and touches nothing (review C6).
+  if (auto locked = first.value()->lock(); !locked.has_value()) {
+    return unlocked(path, locked.error());
   }
   auto replayed = journal::replay(*first.value());
   if (!replayed.has_value()) {
@@ -138,32 +221,27 @@ core::Result<RunJournal, std::string> open_run_journal(journal::FileOps& ops, Jo
   RunJournal opened;
   std::unique_ptr<journal::FileStorage> storage = std::move(first).value();
   if (replayed.value().ending != journal::Ending::kEmpty) {
+    // A file whose first record does not verify was not written by a run: the
+    // format has no magic, and a record that fails its check before any entry
+    // is as near to one as it has. It is not renamed to a name of its own as if
+    // it were the evidence of a crash (review C6).
+    if (replayed.value().ending == journal::Ending::kCorrupt && replayed.value().entries.empty()) {
+      return not_a_journal(path);
+    }
     opened.previous = "previous " + render_replay(replayed.value(), path, false);
-    storage.reset();  // Closed before the file is moved or removed.
-    if (replayed.value().ending == journal::Ending::kTerminated) {
-      if (auto removed = files.remove(path); !removed.has_value()) {
-        return removed.error();
-      }
-    } else {
-      int number = 1;
-      while (number <= kMostKeptJournals) {
-        if (!files.exists(kept_name(path, number))) {
-          break;
-        }
-        ++number;
-      }
-      if (number > kMostKeptJournals) {
-        return too_many_kept(path);
-      }
-      const std::string kept = kept_name(path, number);
-      if (auto moved = files.rename(path, kept); !moved.has_value()) {
-        return moved.error();
-      }
-      opened.previous += "; kept as " + kept;
+    if (auto refused = set_aside(files, path, replayed.value().ending, opened.previous);
+        refused.has_value()) {
+      return *refused;
     }
     auto fresh = journal::FileStorage::open(ops, path);
     if (!fresh.has_value()) {
       return "cannot open the journal " + path + ": " + fresh.error().detail;
+    }
+    // The previous file's descriptor, and its lock, are kept until the new
+    // file is open and locked, so that no second run can take the old file's
+    // lock in between and then move the new journal away.
+    if (auto locked = fresh.value()->lock(); !locked.has_value()) {
+      return unlocked(path, locked.error());
     }
     storage = std::move(fresh).value();
   }

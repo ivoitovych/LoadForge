@@ -43,6 +43,10 @@ class FileOps {
       int fd, std::span<std::byte> into) = 0;
   [[nodiscard]] virtual core::Result<core::Ok, platform::SyscallError> fsync(int fd) = 0;
   [[nodiscard]] virtual core::Result<core::Ok, platform::SyscallError> close(int fd) = 0;
+  /// flock(2) with LOCK_EX | LOCK_NB: an exclusive advisory lock on the open
+  /// file, taken without waiting. EWOULDBLOCK says another open file
+  /// description holds it. The lock lasts as long as the descriptor does.
+  [[nodiscard]] virtual core::Result<core::Ok, platform::SyscallError> lock(int fd) = 0;
 };
 
 /// The kernel.
@@ -56,6 +60,7 @@ class RealFileOps final : public FileOps {
       int fd, std::span<std::byte> into) override;
   [[nodiscard]] core::Result<core::Ok, platform::SyscallError> fsync(int fd) override;
   [[nodiscard]] core::Result<core::Ok, platform::SyscallError> close(int fd) override;
+  [[nodiscard]] core::Result<core::Ok, platform::SyscallError> lock(int fd) override;
 };
 
 }  // namespace loadforge::journal

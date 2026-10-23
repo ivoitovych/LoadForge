@@ -67,8 +67,7 @@ constexpr std::int64_t kScheduledStopGraceNs = 5'000'000'000;
 /// The longest a run or an interval may be taken to be in nanoseconds-safe
 /// milliseconds: a quarter of what a signed 64-bit count of nanoseconds holds,
 /// about 73 years, so that sums of a few such lengths do not overflow.
-constexpr std::int64_t kLongestMilliseconds =
-    std::numeric_limits<std::int64_t>::max() / kNanosecondsPerMillisecond / 4;
+constexpr std::int64_t kLongestMilliseconds = config::kLongestRunMilliseconds;
 
 /// How long a `--test` runs when it is not told.
 constexpr std::int64_t kDefaultTestMilliseconds = 10'000;
@@ -782,9 +781,11 @@ struct Ending {
 };
 
 /// Says that the run ended, in the journal: the terminator a replay reads as a
-/// clean end. Whether the run did end cleanly is not asked here: the run came
-/// back to say how it went, which is all a terminator claims -- a machine that
-/// dies, or a controller that is killed, never gets here.
+/// clean end. It is written for a run that came back with a report, which says
+/// how it went (a fault found, a worker killed: those are findings, and the run
+/// still ended). It is not written when the controller itself failed, nor in a
+/// machine that dies or a controller that is killed: those journals read as
+/// ended abnormally, and the next start keeps them (docs/journal/r2-review-fixes.md).
 void end_journal(std::optional<RunJournal>& journal, std::ostream& err) {
   if (!journal.has_value()) {
     return;
@@ -1006,7 +1007,9 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   err.flush();
   auto ran = supervisor.run(config, options);
   if (!ran.has_value()) {
-    end_journal(journal_open, err);
+    // No terminator: the controller failed, which is not an end the journal may
+    // call clean. The next start replays this journal as ended abnormally and
+    // keeps it (review C4).
     err << "loadforge: " << describe(ran.error()) << "\n";
     return kConfigRefused;
   }

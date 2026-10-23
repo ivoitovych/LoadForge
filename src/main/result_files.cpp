@@ -2,11 +2,16 @@
 #include "main/result_files.hpp"
 
 #include <cerrno>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <system_error>
+#include <utility>
 
+#include "controller/journal/file_storage.hpp"
+#include "platform/syscall_error.hpp"
 #include "reporters/csv/csv_writer.hpp"
 #include "reporters/json/json_writer.hpp"
 
@@ -40,21 +45,45 @@ core::Result<core::Ok, std::string> FileResultSink::prepare(const std::string& d
 core::Result<core::Ok, std::string> FileResultSink::store(const std::string& path,
                                                           const std::string& bytes) {
   const std::string partial = path + ".partial";
-  {
-    std::ofstream file(partial, std::ios::binary | std::ios::trunc);
-    if (!file.is_open()) {
-      return "cannot create " + partial + ": " + os_error();
-    }
-    file << bytes;
-    file.flush();
-    if (!file.good()) {
-      return "cannot write " + partial + ": " + os_error();
-    }
+  // A leftover of an earlier run that died is not this result's beginning: the
+  // storage appends, so it is removed first.
+  std::error_code ignored;
+  std::filesystem::remove(partial, ignored);
+  // A failure from here on leaves nothing of ours behind: the ".partial" goes,
+  // and `path` is as it was.
+  const auto abandon = [&partial](const std::string& what, const std::string& detail) {
+    std::error_code gone;
+    std::filesystem::remove(partial, gone);
+    return what + " " + partial + ": " + detail;
+  };
+  auto storage = journal::FileStorage::open(*ops_, partial);
+  if (!storage.has_value()) {
+    return abandon("cannot create", storage.error().detail);
+  }
+  if (auto written = storage.value()->append(std::as_bytes(std::span{bytes}));
+      !written.has_value()) {
+    return abandon("cannot write", written.error().detail);
+  }
+  // The bytes are on the disk before the name is: a rename that outlives a
+  // power cut over a file whose contents did not is a result that reads as
+  // written and is not.
+  if (auto synced = storage.value()->sync(); !synced.has_value()) {
+    return abandon("cannot sync", synced.error().detail);
+  }
+  // Closed here, and the close read: a file system may report a deferred write
+  // error only there.
+  if (auto closed = storage.value()->close(); !closed.has_value()) {
+    return abandon("cannot close", closed.error().detail);
   }
   std::error_code renamed;
   std::filesystem::rename(partial, path, renamed);
   if (renamed) {
-    return "cannot rename " + partial + " to " + path + ": " + renamed.message();
+    std::string detail = "cannot rename " + partial + " to " + path + ": " + renamed.message();
+    std::filesystem::remove(partial, ignored);
+    return detail;
+  }
+  if (auto durable = journal::sync_directory(*ops_, path); !durable.has_value()) {
+    return "cannot make " + path + " durable: " + platform::describe(durable.error());
   }
   return core::Ok{};
 }
@@ -97,10 +126,22 @@ core::Result<std::vector<std::string>, std::string> write_results(
     const results::RunResult& result, const std::vector<std::string>& formats,
     const std::string& directory, ResultSink& sink, WriterFactory writer_for) {
   std::vector<std::string> paths;
+  // A failure after the first format says which files were written: the user
+  // would otherwise find one of two result files and not know which.
+  const auto refused = [&paths](std::string why) {
+    if (!paths.empty()) {
+      why += "; written before it:";
+      for (const std::string& written : paths) {
+        why += ' ';
+        why += written;
+      }
+    }
+    return why;
+  };
   for (const std::string& format : formats) {
     const auto writer = writer_for(format);
     if (writer == nullptr) {
-      return "no writer for output format \"" + format + "\"";
+      return refused("no writer for output format \"" + format + "\"");
     }
     std::ostringstream bytes;
     if (auto written = writer->write(result, bytes); !written.has_value()) {
@@ -108,13 +149,13 @@ core::Result<std::vector<std::string>, std::string> write_results(
       refusal += format;
       refusal += " rendering failed: ";
       refusal += written.error().detail;
-      return refusal;
+      return refused(std::move(refusal));
     }
     std::string path = directory;
     path += "/run.";
     path += format;
     if (auto stored = sink.store(path, bytes.str()); !stored.has_value()) {
-      return stored.error();
+      return refused(stored.error());
     }
     paths.push_back(path);
   }

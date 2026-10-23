@@ -251,6 +251,22 @@ TEST(ConfigRefusalTest, RunDurationMustParseAndBePositive) {
   EXPECT_EQ(error.message, "duration must be longer than zero");
 }
 
+TEST(ConfigParseTest, ADurationPastWhatARunCanBeIsRefusedAndTheLongestOneIsKept) {
+  // Review C1: 10000000000s is 1e19 ns, past int64, and wrapped to a negative deadline.
+  for (const char* too_long : {"10000000000s", "9223372036854775807ms", "2305843009214ms"}) {
+    const ConfigError error =
+        refused(std::string{"schema_version = 1\n[run]\nmode = \"stress\"\nduration = \""} +
+                too_long + "\"\n");
+    EXPECT_EQ(error.key, "run.duration") << too_long;
+    EXPECT_EQ(error.message, "duration is longer than any run can be (about 73 years)") << too_long;
+  }
+  const Config longest = parsed(
+      "schema_version = 1\n[run]\nmode = \"stress\"\nduration = \"2305843009213ms\"\n"
+      "[[workload]]\nname = \"null\"\nthreads = 1\n");
+  EXPECT_EQ(longest.run.duration, core::Duration{kLongestRunMilliseconds});
+  EXPECT_EQ(kLongestRunMilliseconds, 2'305'843'009'213);
+}
+
 TEST(ConfigParseTest, TheShortestDurationIsOneMillisecond) {
   const Config config = parsed(
       "schema_version = 1\n[run]\nmode = \"stress\"\nduration = \"1ms\"\n"

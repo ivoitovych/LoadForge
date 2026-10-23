@@ -39,6 +39,7 @@ class MemoryFiles final : public journal::FileOps, public cli::JournalFiles {
       return platform::SyscallError{ENOENT, "open", path};
     }
     files.try_emplace(path);
+    ids_.try_emplace(path, ++ids_made_);
     return handout(path, path);
   }
 
@@ -73,6 +74,30 @@ class MemoryFiles final : public journal::FileOps, public cli::JournalFiles {
     return core::Ok{};
   }
 
+  /// flock as the kernel has it: the lock belongs to the file (its id follows a rename) and is
+  /// held while the descriptor that took it is open. A second descriptor on the same file
+  /// finds EWOULDBLOCK. `fail_lock` forces an errno instead.
+  core::Result<core::Ok, platform::SyscallError> lock(int fd) override {
+    ++locks_;
+    if (lock_error_ != 0 && locks_ >= lock_from_) {
+      return platform::SyscallError{lock_error_, "flock", std::to_string(fd)};
+    }
+    const int id = id_.at(fd);
+    const auto held = holder_.find(id);
+    if (held != holder_.end() && held->second != fd && open_.contains(held->second)) {
+      return platform::SyscallError{EWOULDBLOCK, "flock", std::to_string(fd)};
+    }
+    holder_[id] = fd;
+    return core::Ok{};
+  }
+
+  /// Fail the Nth lock from now (from one) and every later one with this errno.
+  void fail_lock(int error, int from = 1) {
+    lock_error_ = error;
+    lock_from_ = locks_ + from;
+  }
+  [[nodiscard]] int lock_calls() const { return locks_; }
+
   // --- the housekeeping ------------------------------------------------------------------
 
   bool exists(const std::string& path) override { return always_exists || files.contains(path); }
@@ -84,6 +109,8 @@ class MemoryFiles final : public journal::FileOps, public cli::JournalFiles {
     }
     files[to] = files.at(from);
     files.erase(from);
+    ids_[to] = ids_.contains(from) ? ids_.at(from) : ++ids_made_;
+    ids_.erase(from);
     renamed.emplace_back(from, to);
     return core::Ok{};
   }
@@ -93,6 +120,7 @@ class MemoryFiles final : public journal::FileOps, public cli::JournalFiles {
       return "cannot remove " + path + ": scripted";
     }
     files.erase(path);
+    ids_.erase(path);
     removed.push_back(path);
     return core::Ok{};
   }
@@ -118,10 +146,18 @@ class MemoryFiles final : public journal::FileOps, public cli::JournalFiles {
   int handout(const std::string& path, const std::string& /*shown*/) {
     const int fd = next_++;
     open_[fd] = path;
+    id_[fd] = path.empty() ? 0 : ids_.at(path);
     return fd;
   }
 
   std::map<int, std::string> open_;
+  std::map<int, int> id_;           ///< fd -> the file it was opened on
+  std::map<std::string, int> ids_;  ///< name -> file
+  std::map<int, int> holder_;       ///< file -> the fd that took its lock
+  int ids_made_ = 0;
+  int locks_ = 0;
+  int lock_error_ = 0;
+  int lock_from_ = 0;
   std::map<int, std::size_t> offset_;
   int next_ = 50;
   int opens_ = 0;

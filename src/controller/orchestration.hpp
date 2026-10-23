@@ -109,6 +109,13 @@ struct RunOptions {
   /// How long every temperature sensor may stay unread, once running, before
   /// the ceiling is taken as no longer enforceable and the run is stopped.
   std::int64_t temperature_blind_after_ns = 10'000'000'000;
+  /// How much longer a worker may go without a beat, and without progress, while
+  /// a Switch or a Rebind written to it is unanswered, counted from the write.
+  /// The worker replaces its runner in calls that cannot beat; a slow but
+  /// healthy replacement is not a hang. Past this after the write the usual
+  /// allowance (`stale_after_ns`) alone judges it again, so a replacement that
+  /// never ends is still killed.
+  std::int64_t replacement_allowance_ns = 60'000'000'000;
   /// The interval between rounds. A tick comes at least this often (the poll
   /// interval above), so a value below `interval_ns` samples at that rate.
   std::int64_t sample_interval_ns = 100'000'000;

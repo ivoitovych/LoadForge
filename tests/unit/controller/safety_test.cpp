@@ -18,6 +18,8 @@
 #include "core/duration.hpp"
 #include "topology/source.hpp"
 #include "unit/controller/telemetry_mocks.hpp"
+#include "worker/control.hpp"
+#include "workloads/mixed/schedule.hpp"
 
 namespace loadforge::controller {
 namespace {
@@ -174,6 +176,103 @@ TEST(LimitsTest, MemoryIsCheckedAgainstTheBudgetBeforeAnyWorkerStarts) {
   shares.workloads[0].memory = ByteSize::percent(50).value();
   shares.workloads[1].memory = ByteSize::percent(50).value();
   EXPECT_TRUE(check_memory(shares, roomy).has_value()) << "two halves fill the ceiling exactly";
+}
+
+mixed::Step switch_step(const std::string& phase, std::size_t slot, std::uint64_t footprint) {
+  worker::Switch change;
+  change.workload = "sort";
+  change.footprint_bytes = footprint;
+  mixed::Step step;
+  step.at_ns = 1;
+  step.phase = phase;
+  step.workers.push_back(mixed::WorkerCommands{slot, {worker::Command{change}}});
+  return step;
+}
+
+TEST(LimitsTest, MemoryIsCheckedForTheLargestTotalAnyStepOfAScheduleHolds) {
+  // Two workers launched at 100 MiB each: 200 MiB at the start, within a ceiling of 250.
+  Config config = base_config();
+  config.workloads[0].memory = ByteSize::bytes(100 * kMiB);
+  config.workloads.push_back(Workload{"second", config::Threads::all(), true,
+                                      std::optional<ByteSize>{ByteSize::bytes(100 * kMiB)}});
+  config.workloads.push_back(Workload{"off", config::Threads::all(), false,
+                                      std::optional<ByteSize>{ByteSize::bytes(9999 * kMiB)}});
+  config.workloads.push_back(Workload{"no footprint", config::Threads::all(), true, {}});
+  const MemoryBudget budget{250 * kMiB, std::nullopt};
+
+  mixed::Schedule schedule;
+  schedule.workers = 3;
+  EXPECT_TRUE(check_memory(config, budget, &schedule).has_value())
+      << "a schedule with no step holds what the start holds";
+  EXPECT_TRUE(check_memory(config, budget, nullptr).has_value());
+
+  // Worker 0 grows to 160 MiB at "r1": 260 MiB held, past the 250 the start fits in.
+  schedule.steps.push_back(switch_step("r1", 0, 160 * kMiB));
+  auto grown = check_memory(config, budget, &schedule);
+  ASSERT_FALSE(grown.has_value());
+  EXPECT_EQ(grown.error(),
+            "the schedule holds up to 260MiB (at the step \"r1\"), past the ceiling of 250MiB");
+
+  // The same schedule within the ceiling, but past limits.memory.
+  const MemoryBudget roomy{1024 * kMiB, std::nullopt};
+  Config limited = config;
+  limited.limits.memory = ByteSize::bytes(230 * kMiB);
+  auto past_limit = check_memory(limited, roomy, &schedule);
+  ASSERT_FALSE(past_limit.has_value());
+  EXPECT_EQ(past_limit.error(),
+            "the schedule holds up to 260MiB (at the step \"r1\"), past limits.memory of 230MiB");
+  limited.limits.memory = ByteSize::bytes(260 * kMiB);
+  EXPECT_TRUE(check_memory(limited, roomy, &schedule).has_value()) << "fills the limit exactly";
+
+  // A later step that shrinks it again does not lower the peak; a step that
+  // holds less than the start does not raise it.
+  schedule.steps.push_back(switch_step("r2", 0, 10 * kMiB));
+  EXPECT_FALSE(check_memory(config, budget, &schedule).has_value());
+  mixed::Schedule shrinking;
+  shrinking.workers = 3;
+  shrinking.steps.push_back(switch_step("r1", 1, 50 * kMiB));
+  EXPECT_TRUE(check_memory(config, budget, &shrinking).has_value())
+      << "150 MiB after the step, 200 at the start";
+
+  // A schedule that names its starts: the starts replace the configuration's footprints.
+  mixed::Schedule started;
+  started.workers = 3;
+  started.start = {mixed::Start{"sort", 120 * kMiB}, mixed::Start{"sort", 120 * kMiB},
+                   mixed::Start{"sort", 120 * kMiB}};
+  started.steps.push_back(switch_step("r1", 2, 130 * kMiB));
+  auto from_starts = check_memory(config, MemoryBudget{1024 * kMiB, std::nullopt}, &started);
+  EXPECT_TRUE(from_starts.has_value()) << "within a roomy ceiling";
+  auto start_big = check_memory(config, budget, &started);
+  ASSERT_FALSE(start_big.has_value());
+  EXPECT_EQ(start_big.error(),
+            "the schedule holds up to 370MiB (at the step \"r1\"), past the ceiling of 250MiB")
+      << "the starts alone are 360 MiB; the Switch makes 370";
+
+  mixed::Schedule start_only = started;
+  start_only.steps.clear();
+  auto at_start = check_memory(config, budget, &start_only);
+  ASSERT_FALSE(at_start.has_value());
+  EXPECT_EQ(at_start.error(),
+            "the schedule holds up to 360MiB (at the start), past the ceiling of 250MiB");
+
+  // A slot the run does not have changes nothing; a total past 2^64 saturates and is refused.
+  mixed::Schedule stray;
+  stray.workers = 3;
+  stray.steps.push_back(switch_step("r1", 7, 900 * kMiB));
+  EXPECT_TRUE(check_memory(config, budget, &stray).has_value());
+  mixed::Schedule huge;
+  huge.workers = 3;
+  huge.steps.push_back(switch_step("r1", 0, UINT64_MAX));
+  huge.steps.push_back(switch_step("r2", 1, UINT64_MAX));
+  EXPECT_FALSE(check_memory(config, budget, &huge).has_value());
+
+  // A command that is not a Switch holds nothing.
+  mixed::Schedule paused;
+  paused.workers = 3;
+  mixed::Step step;
+  step.workers.push_back(mixed::WorkerCommands{0, {worker::Command{worker::Pause{}}}});
+  paused.steps.push_back(step);
+  EXPECT_TRUE(check_memory(config, budget, &paused).has_value());
 }
 
 // --- the temperature ceiling, refused when it cannot be kept ------------------------------

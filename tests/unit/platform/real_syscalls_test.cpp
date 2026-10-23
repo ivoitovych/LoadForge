@@ -1449,6 +1449,29 @@ TEST_F(RealSyscallsTest, IgnoresASignalAndIsRefusedForTheOneThatCannotBeIgnored)
   EXPECT_EQ(refused.error().subject, "signal 9");
 }
 
+TEST_F(RealSyscallsTest, PutsASignalBackToItsDefaultAndIsRefusedForTheOneThatCannotBeChanged) {
+  // Review C2: an ignored SIGCHLD is what a launcher can hand a program.
+  struct sigaction before {};
+  ASSERT_EQ(::sigaction(SIGCHLD, nullptr, &before), 0);
+  struct sigaction ignore {};
+  ignore.sa_handler = SIG_IGN;  // NOLINT(cppcoreguidelines-pro-type-union-access)
+  ::sigemptyset(&ignore.sa_mask);
+  ASSERT_EQ(::sigaction(SIGCHLD, &ignore, nullptr), 0);
+
+  auto defaulted = syscalls.default_signal(SIGCHLD);
+  ASSERT_TRUE(defaulted.has_value()) << describe(defaulted.error());
+  struct sigaction after {};
+  ASSERT_EQ(::sigaction(SIGCHLD, nullptr, &after), 0);
+  EXPECT_EQ(after.sa_handler, SIG_DFL);  // NOLINT(cppcoreguidelines-pro-type-union-access)
+  ASSERT_EQ(::sigaction(SIGCHLD, &before, nullptr), 0) << "restored for the other tests";
+
+  auto refused = syscalls.default_signal(SIGKILL);
+  ASSERT_FALSE(refused.has_value());
+  EXPECT_EQ(refused.error().number, EINVAL);
+  EXPECT_EQ(refused.error().call, "sigaction");
+  EXPECT_EQ(refused.error().subject, "signal 9");
+}
+
 TEST_F(RealSyscallsTest, ProcessIdIsTheKernelsAnswer) {
   EXPECT_EQ(syscalls.process_id(), ::getpid());
 }

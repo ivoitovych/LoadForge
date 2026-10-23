@@ -27,6 +27,8 @@ auto retry_interrupted(Call call) {
   return result;
 }
 
+}  // namespace
+
 core::Result<core::Ok, platform::SyscallError> sync_directory(FileOps& ops,
                                                               const std::string& path) {
   std::filesystem::path directory = std::filesystem::path(path).parent_path();
@@ -46,8 +48,6 @@ core::Result<core::Ok, platform::SyscallError> sync_directory(FileOps& ops,
   return closed;
 }
 
-}  // namespace
-
 core::Result<std::unique_ptr<FileStorage>, JournalError> FileStorage::open(FileOps& ops,
                                                                            std::string path) {
   auto opened = ops.open(path, FileOps::Mode::kAppend);
@@ -66,7 +66,24 @@ core::Result<std::unique_ptr<FileStorage>, JournalError> FileStorage::open(FileO
 FileStorage::FileStorage(FileOps& ops, std::string path, int fd)
     : ops_(&ops), path_(std::move(path)), fd_(fd) {}
 
-FileStorage::~FileStorage() { static_cast<void>(ops_->close(fd_)); }
+FileStorage::~FileStorage() {
+  if (fd_ >= 0) {
+    static_cast<void>(ops_->close(fd_));
+  }
+}
+
+core::Result<core::Ok, platform::SyscallError> FileStorage::lock() {
+  return retry_interrupted([&] { return ops_->lock(fd_); });
+}
+
+core::Result<core::Ok, JournalError> FileStorage::close() {
+  const int fd = std::exchange(fd_, -1);
+  const auto closed = ops_->close(fd);
+  if (!closed.has_value() && closed.error().number != EINTR) {
+    return storage_fault(closed.error());
+  }
+  return core::Ok{};
+}
 
 core::Result<core::Ok, JournalError> FileStorage::append(std::span<const std::byte> bytes) {
   while (!bytes.empty()) {

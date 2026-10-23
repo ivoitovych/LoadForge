@@ -234,6 +234,9 @@ class MemFs final : public platform::Syscalls {
   core::Result<core::Ok, platform::SyscallError> ignore_signal(int /*signal*/) override {
     return unsupported("sigaction", {});
   }
+  core::Result<core::Ok, platform::SyscallError> default_signal(int /*signal*/) override {
+    return unsupported("sigaction", {});
+  }
   pid_t process_id() override { return 1; }
   core::Result<int, platform::SyscallError> open_perf_event(
       const platform::PerfEventSpec& /*spec*/) override {

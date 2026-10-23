@@ -54,8 +54,10 @@ cannot be written is injected through the sink the command line is given \
 after it), a file that cannot be stored, a writer that fails, a telemetry \
 probe the timeline refuses, a window the summarizer refuses -- and the \
 file sink's own failures are real and deterministic: a directory that does \
-not exist, a device that is full (/dev/full as the partial file), a \
-directory where the result belongs. P3: a timeline capacity that \
+not exist, a directory where the result belongs; and, injected through the \
+file operations it is given (review C3), every documented errno of the write, \
+of the fsync of the file and of the directory, and of the close of each, with \
+the leftover removed and the old result kept. P3: a timeline capacity that \
 saturates, an interval of zero, a run of negative length, an overhead \
 larger than the run. \
 \

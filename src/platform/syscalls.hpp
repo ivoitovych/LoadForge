@@ -432,6 +432,14 @@ class Syscalls {
   /// (EINVAL), which is the failing arm's real-kernel test.
   [[nodiscard]] virtual core::Result<core::Ok, SyscallError> ignore_signal(int signal) = 0;
 
+  /// sigaction(2) setting the signal's disposition to SIG_DFL, with no mask
+  /// and no flags. The controller does it for SIGCHLD before its first fork:
+  /// a disposition of SIG_IGN is inherited across exec, and with it the kernel
+  /// reaps a child at its exit, so every waitpid(2) after the last child is
+  /// gone fails with ECHILD and the run is aborted (review C2). The kernel
+  /// refuses for SIGKILL and SIGSTOP (EINVAL).
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> default_signal(int signal) = 0;
+
   /// getpid(2). Cannot fail. A worker stamps its beats with it so a reader
   /// can tell a slot's writer from a stale pid the controller remembers.
   [[nodiscard]] virtual pid_t process_id() = 0;
@@ -509,6 +517,7 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] core::Result<std::vector<Readiness>, SyscallError> poll_readable(
       const std::vector<int>& fds, int timeout_ms) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> ignore_signal(int signal) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> default_signal(int signal) override;
   [[nodiscard]] pid_t process_id() override;
   [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_any_nonblocking() override;
   [[nodiscard]] core::Result<int, SyscallError> open_perf_event(const PerfEventSpec& spec) override;
