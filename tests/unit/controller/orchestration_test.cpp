@@ -2083,7 +2083,8 @@ TEST(ControllerControl, AScheduleThatOutgrowsTheMemoryBudgetIsRefusedBeforeTheFi
                       "refused rebind: CPU 5 is not in this cpuset"),
             zero.records.end());
   EXPECT_NE(std::find(zero.records.begin(), zero.records.end(),
-                      "control: 4 message(s) sent, 2 done, 1 refused, 0 unanswered, 0 not sent"),
+                      "control: 4 message(s) sent, 2 done, 1 refused, 0 unanswered, 0 dropped (too "
+                      "many unanswered)"),
             zero.records.end());
   EXPECT_EQ(result.value().workers[1].commands.done, 1U);
 }
@@ -2187,6 +2188,14 @@ TEST(ControllerControl, ACommandForAWorkerAlreadyReapedIsNotSent) {
       rig.deliver(0, ipc::RecordType::kFinished, "early");
       rig.worker_exits(0, 0);
     } else if (starts_with(line, "deadline")) {
+    // Review A4: the last count of the line is what it says, the commands held back because
+    // the worker had too many unanswered; a command written to a pipe that was already
+    // closed is in no count, and the line does not call it "not sent".
+    const std::string line = describe(result.value().workers[0].commands);
+    EXPECT_EQ(line,
+              "control: 0 message(s) sent, 0 done, 0 refused, 0 unanswered, "
+              "0 dropped (too many unanswered)");
+    EXPECT_EQ(line.find("not sent"), std::string::npos);
       rig.deliver(1, ipc::RecordType::kFinished, "done");
       rig.worker_exits(1, 0);
     }
@@ -2343,7 +2352,7 @@ TEST(ControllerControl, ReportValuesOfTheControlComparedFieldByField) {
   b.dropped = 1;
   EXPECT_NE(a, b);
   EXPECT_EQ(describe(CommandReport{5, 4, 3, 2, 1}),
-            "control: 5 message(s) sent, 4 done, 3 refused, 2 unanswered, 1 not sent");
+            "control: 5 message(s) sent, 4 done, 3 refused, 2 unanswered, 1 dropped (too many unanswered)");
 
   const JournalReport quiet;
   JournalReport kept = quiet;

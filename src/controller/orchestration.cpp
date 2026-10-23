@@ -118,7 +118,7 @@ std::string describe(const CommandReport& commands) {
   text += std::to_string(commands.done) + " done, ";
   text += std::to_string(commands.refused) + " refused, ";
   text += std::to_string(commands.unacknowledged) + " unanswered, ";
-  text += std::to_string(commands.dropped) + " not sent";
+  text += std::to_string(commands.dropped) + " dropped (too many unanswered)";
   return text;
 }
 
