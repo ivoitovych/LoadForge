@@ -2437,7 +2437,8 @@ TEST(ControllerControl, ReportValuesOfTheControlComparedFieldByField) {
   b.dropped = 1;
   EXPECT_NE(a, b);
   EXPECT_EQ(describe(CommandReport{5, 4, 3, 2, 1}),
-            "control: 5 message(s) sent, 4 done, 3 refused, 2 unanswered, 1 dropped (too many unanswered)");
+            "control: 5 message(s) sent, 4 done, 3 refused, 2 unanswered, 1 dropped (too many "
+            "unanswered)");
 
   const JournalReport quiet;
   JournalReport kept = quiet;
