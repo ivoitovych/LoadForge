@@ -709,7 +709,7 @@ core::Result<core::Ok, ControllerError> Run::command(Tracked& worker, const work
   }
   ++worker.next_sequence;
   ++worker.commands.sent;
-  worker.unanswered.push_back(Tracked::Unanswered{message.sequence, what, clock_running_ns_});
+  worker.unanswered.emplace_back(message.sequence, what, clock_running_ns_);
   if (const auto* change = std::get_if<worker::Switch>(&what)) {
     worker.told.push_back(change->workload);
   }
