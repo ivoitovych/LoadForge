@@ -57,16 +57,19 @@ the maths, ideally before or independently of the optimized version.
 
 | Workload | Stress implementation | Independent oracle |
 |---|---|---|
-| Dense linear | Blocked, vectorized GEMM / factorization | Naive scalar triple loop on sampled blocks; residual `‖Ax − b‖` |
-| FFT | Multi-threaded radix FFT | Direct O(n²) DFT on small blocks, **plus** Parseval, **plus** round-trip |
-| Sparse | Parallel CG with preconditioner | Scalar SpMV and explicit residual |
+| Dense linear | Blocked, vectorized GEMM, `C = AB` (no factorization or solve is built) | Naive scalar dot products on sampled entries of `C`, tolerance derived per entry |
+| FFT | Multi-threaded radix FFT | Direct O(n²) DFT at sampled bins, **plus** Parseval; no round trip is checked |
+| Sparse | Conjugate gradients, no preconditioner | Scalar SpMV and explicit residual |
 | Stencil | Vectorized blocked sweep | Scalar per-cell update on a sampled sub-region |
-| Particles | Barnes-Hut / neighbour lists | Direct O(n²) force summation on a particle subset |
+| Particles | Neighbour search with a cutoff (Barnes-Hut was rejected: its error is a property of the opening angle, not of arithmetic, so no derived bound covers it) | Direct O(n²) force summation on a particle subset |
 | Ray tracing | BVH traversal | Brute-force ray/primitive intersection for sampled pixels |
 | Sort | Parallel radix / merge | Permutation check + ordering check — **never a second sort** |
 | Compression | Optimized codec | Byte-exact round-trip identity **plus input re-verification** — see §4a |
-| Graph | Parallel BFS / PageRank | Scalar BFS on a subgraph; triangle inequality |
+| Graph | Parallel BFS / PageRank | Whole-output scalar recomputation of BFS and PageRank, exact under pinned arithmetic; no subgraph is sampled, and the triangle inequality is a cross-check in tests only |
 | Monte-Carlo | Vectorized batches | Scalar replay of a fixed-seed subset |
+| Adaptive mesh | Refinement from a shared queue of cells | A plain recursion rebuilding the mesh: leaf counts of every coarse cell, then the integrals of the sampled coarse cells; bounded residual |
+
+The mixed and cycling runs schedule these eleven workloads and have no oracle or determinism class of their own.
 
 Compression is often described as *self-oracular* — `decompress(compress(x)) == x` is
 exact, byte-for-byte, needs no tolerance and no second implementation. **That description
@@ -94,8 +97,9 @@ records the wrong answer and the test passes forever.
 | Independent oracle | An algorithm that is wrong | — |
 
 Both are kept. Their roles are never conflated. Regenerating a golden vector is a
-deliberate, reviewed act (`tools/gen-golden/`) and a PR that regenerates one must say
-why.
+deliberate, reviewed act and a PR that regenerates one must say why. Vectors are regenerated
+by the script beside each fixture (`tests/fixtures/**/make_golden.py`); there is no
+`tools/gen-golden/` and none is planned (2026-10-23 00:45 UTC).
 
 ## 4a. The input can be corrupted too — verify it, don't trust it
 
@@ -148,8 +152,13 @@ For a tool built to detect RAM corruption this is the sharpest possible failure,
    raising a false alarm rather than hiding a real one.
 3. **Protect the control state.** Seeds, indices, tolerances and expected checksums are
    tiny and catastrophic to lose — a corrupted seed makes regeneration produce different
-   data and reports a hardware fault that never happened. They are controller-owned,
-   stored redundantly with majority vote, and re-validated on every use.
+   data and reports a hardware fault that never happened. They are stored redundantly with
+   majority vote and re-validated on use. *(As built, 2026-10-23 00:45 UTC: the copies belong to the runner, in
+   the worker process, not the controller. They hold the seed, the next index, the two duty
+   periods and the line size; tolerances and expected checksums are not among them. The vote
+   is taken once at the start of each unit, not at every use. Placement as described below
+   holds except one point: the copies are not guaranteed to be more than a page apart; where
+   they land is the kernel's choice, and the header says so.)*
 
    Redundancy only counts if the copies fail independently: separate cache lines at
    minimum, separate pages preferably, spread across NUMA nodes where available, each
@@ -168,7 +177,8 @@ For a tool built to detect RAM corruption this is the sharpest possible failure,
 ### `exact`
 
 Bit-identical comparison. Used for integer arithmetic, sorting, compression round-trips,
-hashes, checksums, discrete structures.
+hashes, checksums, discrete structures, and the graph workload, whose PageRank is floating
+point but computed in pinned arithmetic so that its output is bit-exact.
 
 Preferred whenever available. There is no tolerance to argue about and no ambiguity in
 the result.
@@ -179,7 +189,7 @@ Result within a tolerance. Used for floating-point workloads.
 
 **Tolerances are derived, never hand-picked.** A bound must be computed from the
 problem's conditioning and operation count — for a linear solve, something of the form
-`‖Ax − b‖ ≤ c · κ(A) · ε · n`. A magic epsilon that "seemed to work" is a bug waiting
+`‖Ax − b‖ ≤ c · κ(A) · ε · n` (an illustration of the general hazard: the built dense-linear workload computes `C = AB`, with a per-entry bound from the dot-product length and the entry range, and no solve). A magic epsilon that "seemed to work" is a bug waiting
 to happen: too tight and it false-alarms, too loose and it misses real corruption. If
 you cannot derive the bound, that is a signal the check is not yet well understood.
 
@@ -241,7 +251,7 @@ And, since revision 2, the classification must also be right: a single-bit flip 
 Detecting a wrong result is half the job. The other half is telling the user what it
 means. On a verification failure that produced a **wrong result** —
 `ExactBitCorruption` or `NumericalVerificationFailure` — LoadForge automatically re-runs
-the failing unit of work:
+the failing unit of work (as built, 2026-10-23 00:45 UTC: up to 16 wrong results per worker are isolated, `kDefaultIsolationLimit`; `explore` never isolates):
 
 | Re-run | If it fails | If it passes |
 |---|---|---|
@@ -292,9 +302,10 @@ provenance — not discarded, and not escalated to a hardware verdict.
 This branch matters more than it looks: on marginal hardware it is a common outcome, and
 it is exactly the signature of a genuine single-event upset, a marginal timing path that
 only fails at a particular temperature, or a rare race. A tool that silently drops what
-it cannot reproduce would throw away its most interesting data. Transients are counted,
+it cannot reproduce would throw away its most interesting data. Transients are to be counted,
 rate-tracked across the run, and correlated with temperature, frequency and ECC events —
-a rising transient rate is itself a finding.
+a rising transient rate is itself a finding. *(As built, 2026-10-23 00:45 UTC: a non-reproducible transient is one
+isolation finding with the telemetry attached to it. There is no run-level transient count, rate or trend yet.)*
 
 The reproduction pattern is the *diagnosis input*. This is also why the determinism
 contract matters so much: without single-thread reproducibility, the most informative row
@@ -338,7 +349,11 @@ buffer address             offset within buffer       iteration index
 workload + version         RNG seed                   ISA dispatch path
 isolation result           confidence                 telemetry at time of error
 input-integrity status     verification duty cycle
+physical package           decomposition              footprint
 ```
+
+`physical core` is the core's id within its package, so a core is the pair (package, core);
+`decomposition` and `footprint` are what a re-run needs to compute the same bits again.
 
 **Every one of these fields is nullable, and absence is reported as absence.** That is
 the same rule §3 of [`PLAN.md`](PLAN.md) applies to telemetry, and it matters most for
@@ -346,8 +361,8 @@ the same rule §3 of [`PLAN.md`](PLAN.md) applies to telemetry, and it matters m
 buffer address, no offset, and possibly no iteration index. Filling those with zeros
 would manufacture provenance for an event that has none — and a triager reading
 `buffer address 0x0, offset 0` has been handed a fact, not a gap. The record states which
-fields do not apply and why, exactly as the bounded-failure type does for the bit fields
-below.
+fields do not apply and why, exactly as the bounded-failure type, which has no bit fields at
+all, does below.
 
 ### Three failure types, and only one of them has bits to compare
 
@@ -363,8 +378,16 @@ expected bytes    actual bytes    XOR delta    popcount of delta    bit classifi
 ```
 
 The XOR delta and its population count matter more than they look: a single-bit flip, a
-multi-bit error within one word, and whole-cache-line corruption implicate different
-hardware, and the delta is what distinguishes them.
+multi-bit error within one word, corruption within one cache line and corruption across
+cache lines implicate different hardware, and the delta is what distinguishes them. The four
+classes are `kSingleBit`, `kMultiBitInWord`, `kWithinCacheLine` and `kAcrossCacheLines`.
+
+*(As built, 2026-10-23 00:45 UTC: the record stores a window of at most 64 bytes of expected and actual, with the
+offsets of the first and last difference and a popcount over the whole comparison; the XOR delta
+and the classification are derived from those, never stored. The difference is optional: it is
+absent when the output could not be turned into bytes. For a derived-domain difference, `kDerived`,
+the "actual" bytes are decoded by the oracle, not the stored bytes, so the expected bits are
+known exactly only for `kStored`.)*
 
 **`NumericalVerificationFailure`** — a bounded check exceeded its tolerance. There is
 **no expected bit pattern**: the scalar oracle and the vectorized implementation
@@ -376,8 +399,8 @@ residual magnitude    derived tolerance    ratio (residual / tolerance)
 which invariant or norm failed             condition number, where meaningful
 ```
 
-For this type the XOR, popcount and bit-classification fields are **null and reported as
-not-applicable** — never zero, never fabricated. A tool that prints a bit classification
+For this type the XOR, popcount and bit-classification fields are **absent by construction**:
+the type has no such fields at all, not null ones — never zero, never fabricated. A tool that prints a bit classification
 derived from a floating-point tolerance breach is inventing evidence, and the whole
 credibility argument of §1 depends on not doing that.
 
@@ -403,7 +426,8 @@ from one without.
 
 ## 9. `loadforge selftest`
 
-> **Status, 2026-10-22 23:42 UTC: not built.** This section is the design. What exists is
+> **Status, 2026-10-22 23:42 UTC: not built; a 1.0 item, roadmap 34e** (a command built from the
+> existing golden digest and one short verified unit per workload with its oracle). This section is the design. What exists is
 > `loadforge --selftest-digest`, a hash over a fixed corpus that must be the same for one
 > version on x86-64 and ARM64, and `packaging/validate-machine.sh`
 > (`docs/hardware-validation.md` §4); the hardware-failure issue template asks about those.
