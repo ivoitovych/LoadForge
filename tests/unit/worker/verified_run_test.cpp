@@ -641,6 +641,17 @@ TEST(VerifiedRunLoop, AStaleControllerEndsTheRunTheSameWay) {
   EXPECT_EQ(rig.script.finishes, 0);
 }
 
+TEST(VerifiedRunLoop, ALeaveBecauseTheControllerIsGoneReportsTheWorkDone) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  rig.worker.pacing = Pacing{100'000 * kMs, 20 * kMs, 200 * kMs};  // the beat at 0 goes stale
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  ASSERT_EQ(outcome.value().outcome.reason, StopReason::kControllerStale);
+  EXPECT_GT(outcome.value().outcome.progress, 0U) << "units were computed before the controller went";
+  EXPECT_EQ(outcome.value().tally.units_computed, outcome.value().outcome.progress);
+}
+
 TEST(VerifiedRunLoop, ARunnerThatStoppedItselfIsAReasonToEndAndStillFinishes) {
   Rig rig;
   rig.script.slice_fails = true;
@@ -1105,6 +1116,24 @@ TEST(VerifiedRunControl, AWorkerThatCannotGoBackToWhatItWasRunningIsAFailureOfIt
             std::string::npos)
       << outcome.error().detail;
   EXPECT_NE(outcome.error().detail.find("scripted refusal"), std::string::npos);
+}
+
+TEST(VerifiedRunControl, ALeaveInTheMiddleOfAReplacementCountsTheClosedRunnerOnce) {
+  // The controller is gone when the old runner's tally is sent: that runner's
+  // work is in the carried tally already and is not added a second time.
+  Rig rig;
+  rig.script.slices = {slice_of(5)};
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({2, Rebind{{0}}});
+    }
+  };
+  rig.syscalls.script_writes({{kEverything, 0}, {kEverything, 0}, {0, EPIPE}});
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  ASSERT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
+  EXPECT_EQ(outcome.value().tally.units_computed, 5U);
+  EXPECT_EQ(outcome.value().outcome.progress, 5U);
 }
 
 TEST(VerifiedRunControl, AReplacedRunnerFailingToFinishOrToSayItsLastWordEndsTheRunOrTheListening) {

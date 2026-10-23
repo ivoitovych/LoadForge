@@ -336,6 +336,11 @@ class Ticker {
   }
   Step leave(StopReason reason) {
     result_.outcome.reason = reason;
+    // The worker leaves without a last word, but the controller that reads
+    // this outcome later (the line the entry prints) should be told what the
+    // worker did. A runner already closed has its total in carried_.
+    result_.tally = runner_counted_ ? carried_ : whole();
+    result_.outcome.progress = result_.tally.units_computed;
     return Step::kLeave;
   }
 
@@ -446,6 +451,7 @@ class Ticker {
       return error_at("runner", "finish: " + last.error().detail);
     }
     carried_ = carried_ + runner.total();
+    runner_counted_ = true;
     next_index_ = last.value().next_index;
     verification::SliceReport report = std::move(last).value();
     keep_true_statements(report, carried_, run_over);
@@ -476,6 +482,7 @@ class Ticker {
     auto fresh = prepare(*syscalls_, next, cpus, next_index_, *services_);
     if (fresh.has_value()) {
       prepared_ = std::move(fresh).value();
+      runner_counted_ = false;
       args_ = next;
       cpus_ = cpus;
       units_ = 1;
@@ -493,6 +500,7 @@ class Ticker {
         return error_at("restore", lost + ": " + describe(restored.error()));
       }
       prepared_ = std::move(restored).value();
+      runner_counted_ = false;
       units_ = 1;
     }
     auto told = after(tell_memory());
@@ -552,6 +560,8 @@ class Ticker {
   bool paused_ = false;
   DutyClock duty_;
   verification::Tally carried_;
+  /// The live runner's total is already in carried_ (it was closed and not yet replaced).
+  bool runner_counted_ = false;
   VerifiedOutcome result_;
 };
 
