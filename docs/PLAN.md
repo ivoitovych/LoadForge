@@ -440,7 +440,7 @@ when that telemetry is the most valuable output the tool will ever produce.
 ```text
         loadforge controller process
         ├── telemetry sampling + timeline
-        ├── safety limits, watchdog, emergency stop
+        ├── safety limits, watchdog, emergency stop   (see the status note below)
         ├── result aggregation and writing
         └── signal handling / child reaping
                     │
@@ -523,6 +523,8 @@ it, and asserts the heartbeat layer catches it.
 
 Documentation must state plainly that software thermal protection is a backstop
 *behind* the CPU's own throttling and thermal shutdown, never a substitute.
+
+  *(Status, 2026-10-23 08:01 UTC: what exists of this safety layer. A hard deadline for every run, a heartbeat watchdog, a memory check before the workers start, and workers that die with the controller are built. The temperature ceiling is built (roadmap 34a, #107) and is the user's to set: `limits.max_temperature_c` or `--max-temperature C`, no default; any one temperature sensor at or above it stops the run, exit code 7, and a ceiling that no sensor can hold is a refusal before the first worker. There is no "emergency stop" as a separate mechanism: an uncorrected hardware error is reported as a finding and ends the verdict, it does not stop the run. See `docs/safety.md`.)*
 
 ---
 
@@ -663,6 +665,7 @@ Requirements:
 - Sample corrected and uncorrected counts on the standard timeline; **report deltas**
   over the run, not just totals, and attribute them to the phase in which they occurred.
 - Surface **uncorrected** errors as an immediate finding and a candidate emergency stop.
+  *(Status, 2026-10-23 08:01 UTC: surfaced as a finding (verdict, exit code 5); not built as a stop. The run goes on to its deadline.)*
 - Correlate ECC events with workload phase — an error rate that rises specifically under
   the memory-bandwidth workload is a far more actionable finding than a bare count.
 - ECC counters are inherently a whole-machine signal, so record whether other
@@ -2019,7 +2022,7 @@ research-flavoured one and is correctly last.
 | Silent regression via untested SIMD paths | Medium | Medium | Per-ISA runners; golden vectors per ISA |
 | **100% coverage achieved with assertion-free tests** | Medium | **High if unmitigated** | §7.3: at 100% the coverage number carries no information, so mutation testing becomes the primary metric; exclusion count reported and ratcheted |
 | 100% gate makes exploratory work painful and gets circumvented | Low | Medium | §7.3: spikes live on throwaway branches; the rule is nothing untested reaches `main`, not that no untested code is ever written |
-| Damage to poorly-cooled user hardware | Medium | Low | Conservative defaults, controller safety, clear warnings |
+| Damage to poorly-cooled user hardware | Medium | Low | Conservative defaults, controller safety, clear warnings. *(2026-10-23 08:01 UTC: the temperature ceiling is built and opt-in, with no default, so a run with none is not stopped for heat; the deadline, the watchdog and the memory check are built; there is no emergency stop on an uncorrected error. `docs/safety.md` says it plainly.)* |
 | Memory-ordering bug indistinguishable from the hardware fault it "found" | **Fatal to credibility** | **Medium** *(rev. 4 wrongly lowered this to Low)* | §4.5: explicit memory orders; documented synchronization argument **and** a dedicated ordering test for anything weaker than `seq_cst`; a standing preference for not writing lock-free protocols at all. ARM CI and TSan are complementary evidence that *reduces* exposure — neither is proof |
 | ~~Portability seams rot, making "add ARM later" a rewrite~~ | — | **Retired** | ARM is a first-class target with CI, so the seams cannot rot unnoticed |
 | ARM adds telemetry surface with no free hardware to validate it | Medium | Medium | ARM CI validates correctness; real ARM telemetry stays a T11 manual item on a cheap physical board |

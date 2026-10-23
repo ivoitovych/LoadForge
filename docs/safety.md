@@ -165,7 +165,11 @@ not go on to the next candidate.
 Each worker beats on a shared-memory slot every 100 ms and the controller reads it. A
 worker whose beat is older than the staleness allowance (10 s for a verifying worker,
 2 s for the null workload) is called hung, sent `SIGTERM`, and escalated to `SIGKILL` the
-same way. Its fate is `timed out`; the run is not clean.
+same way. Its fate is `timed out`; the run is not clean. A worker that has been told to
+switch workload or to rebind is given 60 s more, counted from the write of the command until
+the worker answers it, because it cannot beat while it frees and makes its working set; past
+those 60 s the usual allowance judges it again, so a replacement that never ends is still
+stopped.
 
 ### The controller dying
 
@@ -204,7 +208,8 @@ A graceful early stop is not built; it is a candidate for a later release.
 ### Memory
 
 `limits.memory` and each workload's `memory` are checked **once, before any worker
-starts**. The budget is what the kernel says this process may use: `MemAvailable`, and
+starts**, for the largest total any step of a schedule can hold (for `mixed` and `cycling`
+the footprints change during the run, and the refusal names the step that is too large). The budget is what the kernel says this process may use: `MemAvailable`, and
 the memory limit that binds its cgroup (the lowest over the cgroup and its ancestors on
 v2, `hierarchical_memory_limit` on v1). A configuration whose workloads add up to more
 than the budget, or than `limits.memory`, is refused with exit code 1 and no worker is
@@ -214,11 +219,14 @@ started. If the budget cannot be read the run goes ahead and says
 The check is against a snapshot; it is not a watch. If something else on the machine
 takes the memory during the run, the kernel's OOM killer decides, not LoadForge. When it
 kills a worker, the controller reads the kernel's own OOM-kill count and reports
-`killed by the kernel for memory` (fate `oom killed`), not a hardware fault, and the
+`killed by the OOM killer` (fate `oom killed`), not a hardware fault, and the
 run is not clean. Where there is no readable count the death is reported as a kill of
 ambiguous origin.
 
-Each worker's working set is 32 MiB by default (`--footprint`), and the runner locks it
+Each worker's working set is 32 MiB by default for a single workload (`--footprint`); in
+`mixed` a dataset may be half of it. The default footprint and `--workers` are not
+checked against memory: the check runs against what the configuration or `--footprint`
+states, so `--workers 8` is your own limit. The runner locks the working set
 in memory when the process is allowed to (`--lock try`, the default). A run that cannot
 lock runs unlocked and says so on the worker's `working set` line; `--lock require`
 refuses instead.
@@ -226,7 +234,7 @@ refuses instead.
 ### What a run writes
 
 Only what you ask for: `run.json` / `run.csv` (`--output`, into `--output-dir`; written
-as `run.json.partial` and renamed, after a test file `.loadforge-write-test` has been
+as `run.json.partial`, fsynced, renamed, and the directory fsynced, after a test file `.loadforge-write-test` has been
 created and removed in that directory), and the crash journal (`--journal FILE`).
 Everything else is read: `/proc`, `/sys`, and `perf_event_open` for counters. The tool does not write to sysfs, does not touch model
 specific registers, does not load modules and does not change governors, fan curves or
@@ -243,7 +251,11 @@ be written after the run is exit 4.
 `--journal FILE` writes a small record every few seconds, each synced to disk. If the
 machine loses power, or the controller is killed, the journal says how far the run got.
 At the next start with the same file, the tool reports how the previous run ended and
-keeps it as `FILE.1`, `FILE.2` and so on. Measured, after a `SIGKILL` seven seconds in:
+keeps it as `FILE.1`, `FILE.2` and so on. A file at that path that is not a journal is
+refused (exit 1) and left where it is, not renamed; so is a journal that another run holds
+open (a run takes an exclusive lock on the file). The end mark ("ended cleanly") is written
+when the run returned a report and means only that; a run the controller failed (a refused
+start, an error in the loop) leaves no end mark and its journal replays as ended abnormally. Measured, after a `SIGKILL` seven seconds in:
 
 ```
 $ loadforge journal j
@@ -307,8 +319,9 @@ $ echo $?
 0
 ```
 
-The verdict is one of `clean`, `corrected errors`, `incomplete`, `findings`. Only `clean`
-exits 0. The exit codes are in the README and in `loadforge --help`.
+The verdict is one of `clean`, `corrected errors`, `incomplete`, `findings`. A run with a
+verified workload exits 0 only when the verdict is `clean`; a run of unverified (`null`)
+workloads can end `incomplete` and still exit 0. The exit codes are in the README and in `loadforge --help`.
 
 ## 7. What is not covered
 
