@@ -304,11 +304,10 @@ TEST(Run, OneCandidateIsRunToTheFinalReplicatesAndIsSole) {
   EXPECT_EQ(report.worst_case->replicates, 3U);
   EXPECT_DOUBLE_EQ(report.worst_case->mean, 52.0);
   EXPECT_DOUBLE_EQ(report.worst_case->stddev, 2.0);
-  // Three reference readings (the anchor's two and the closing one) estimate the
-  // reference's noise on one degree of freedom, and the interval's t is looked up
-  // at the smaller of that and the replicates' two.
-  EXPECT_NEAR(report.worst_case->half_width,
-              t_critical(reference_degrees(3)) * 2.0 / std::sqrt(3.0), 1e-9);
+  // The reference readings here are exact, so the reference adds no variance and the
+  // interval's t is at the replicates' two degrees; a t at the reference's one degree
+  // (12.706) for a variance of zero was what made the intervals too wide.
+  EXPECT_NEAR(report.worst_case->half_width, t_critical(2) * 2.0 / std::sqrt(3.0), 1e-9);
   EXPECT_EQ(report.references.size(), 3U);
   EXPECT_EQ(report.ranking, Ranking::kSole);
   EXPECT_EQ(find(report, "a").selection_replicates, 0U) << "nothing chose a sole candidate";

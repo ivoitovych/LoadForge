@@ -69,6 +69,8 @@ Moments moments(std::span<const double> samples) noexcept {
 // with the reference credited with the few degrees its estimate has (drift.cpp),
 // that made the interval about three times too wide and its coverage 99.8% where
 // the search claims 95% (the search property test).
+// The variance and the count it came from are named at the one call site.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::size_t combined_degrees(double sample_term, std::size_t n,
                              const Correction& correction) noexcept {
   if (correction.variance <= 0.0) {
