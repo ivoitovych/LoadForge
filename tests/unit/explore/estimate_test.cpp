@@ -141,16 +141,16 @@ TEST(EstimateOf, AReferenceThatIsAllTheVarianceGivesItsOwnDegrees) {
   EXPECT_NEAR(*e.half_width, 4.303 * 2.0, 1e-12);
 }
 
-TEST(EstimateOf, TwoEqualSharesGetDegreesBetweenEachAndTheirSum) {
-  // Equal shares of 0.2 on 4 and 2 degrees: (0.4)^2 / (0.04/4 + 0.04/2) = 5.33, floored
-  // to 5 (t 2.571).
+TEST(EstimateOf, TwoEqualSharesGetDegreesBetweenTheSmallerAndTheirSum) {
+  // Equal shares of 0.2 on 4 and 1 degrees: (0.4)^2 / (0.04/4 + 0.04/1) = 3.2, floored
+  // to 3 (t 3.182): between the reference's 1 and the sum of the two.
   const std::vector<double> samples = {9.0, 11.0, 9.0, 11.0, 10.0};  // n 5, variance 1
   Correction correction;
   correction.variance = 0.2;  // the sample term is 1 / 5
-  correction.max_degrees = 2;
+  correction.max_degrees = 1;
   const Estimate e = estimate(samples, correction);
   ASSERT_TRUE(e.half_width.has_value());
-  EXPECT_NEAR(*e.half_width, 2.571 * std::sqrt(0.4), 1e-12);
+  EXPECT_NEAR(*e.half_width, 3.182 * std::sqrt(0.4), 1e-12);
 }
 
 TEST(WorstCaseFormat, SaysCountSpreadAndLevel) {

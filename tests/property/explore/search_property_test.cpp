@@ -77,10 +77,12 @@ struct Machine {
   std::map<std::string, double> base;
   double drift_per_ms = 0.0;
   double noise = 0.0;
+  std::map<std::string, double> noise_of;  ///< a candidate's own noise, in place of `noise`
   Rng rng;
   explicit Machine(std::uint64_t seed) : rng(seed) {}
   double value(const Candidate& c, std::int64_t mid_ns) {
-    const double noise_draw = noise > 0.0 ? noise * rng.centred() : 0.0;
+    const double sd = noise_of.contains(c.id) ? noise_of.at(c.id) : noise;
+    const double noise_draw = sd > 0.0 ? sd * rng.centred() : 0.0;
     return base.at(c.id) + drift_per_ms * static_cast<double>(mid_ns) / 1.0e6 + noise_draw;
   }
 };
@@ -202,6 +204,10 @@ TEST(SearchProperty, MoreReplicatesNarrowTheInterval) {
       config.final_replicates = replicates;
       Machine machine(seed * 7919);
       machine.noise = 3.0;
+      // An exact reference: the property is about the replicates, whose part of the
+      // width shrinks as 1/sqrt(n). The reference's noise is shared by every replicate
+      // and does not shrink with more of them, so with it the ratio below is not 0.5.
+      machine.noise_of["ref"] = 0.0;
       machine.base["ref"] = 10.0;
       machine.base["c0"] = 60.0;
       const auto report = run(machine, config);
