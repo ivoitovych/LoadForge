@@ -184,14 +184,14 @@ TEST(ResultFilesTest, AFirstFileThatFailsHasNoWrittenFileToName) {
 
 TEST(ResultFilesTest, ARenderingThatFailsAfterTheFirstFileNamesTheFileThatWasWritten) {
   RecordingSink sink;
-  int made = 0;
-  static int* counter = nullptr;
-  counter = &made;
-  const auto written = write_results(
-      results::RunResult{}, {"json", "csv"}, "out", sink,
-      [](std::string_view format) -> std::unique_ptr<reporters::ResultWriter> {
-        return ++*counter == 1 ? make_writer(format) : std::make_unique<FailingWriter>();
-      });
+  // The factory is a plain function pointer, so it counts in a static.
+  static int made = 0;
+  made = 0;
+  const auto written =
+      write_results(results::RunResult{}, {"json", "csv"}, "out", sink,
+                    [](std::string_view format) -> std::unique_ptr<reporters::ResultWriter> {
+                      return ++made == 1 ? make_writer(format) : std::make_unique<FailingWriter>();
+                    });
   ASSERT_FALSE(written.has_value());
   EXPECT_NE(written.error().find("the csv rendering failed"), std::string::npos) << written.error();
   EXPECT_NE(written.error().find("written before it: out/run.json"), std::string::npos)

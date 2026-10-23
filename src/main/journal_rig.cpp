@@ -171,6 +171,38 @@ std::string render_replay(const journal::Replay& replay, std::string_view path, 
   return text;
 }
 
+namespace {
+
+/// Removes a previous journal that ended cleanly, or moves one that did not to the
+/// first free PATH.N and says so in `previous`; why not, if it could not.
+std::optional<std::string> set_aside(JournalFiles& files, const std::string& path,
+                                     journal::Ending ending, std::string& previous) {
+  if (ending == journal::Ending::kTerminated) {
+    if (auto removed = files.remove(path); !removed.has_value()) {
+      return removed.error();
+    }
+    return std::nullopt;
+  }
+  int number = 1;
+  while (number <= kMostKeptJournals) {
+    if (!files.exists(kept_name(path, number))) {
+      break;
+    }
+    ++number;
+  }
+  if (number > kMostKeptJournals) {
+    return too_many_kept(path);
+  }
+  const std::string kept = kept_name(path, number);
+  if (auto moved = files.rename(path, kept); !moved.has_value()) {
+    return moved.error();
+  }
+  previous += "; kept as " + kept;
+  return std::nullopt;
+}
+
+}  // namespace
+
 core::Result<RunJournal, std::string> open_run_journal(journal::FileOps& ops, JournalFiles& files,
                                                        const std::string& path) {
   auto first = journal::FileStorage::open(ops, path);
@@ -197,26 +229,9 @@ core::Result<RunJournal, std::string> open_run_journal(journal::FileOps& ops, Jo
       return not_a_journal(path);
     }
     opened.previous = "previous " + render_replay(replayed.value(), path, false);
-    if (replayed.value().ending == journal::Ending::kTerminated) {
-      if (auto removed = files.remove(path); !removed.has_value()) {
-        return removed.error();
-      }
-    } else {
-      int number = 1;
-      while (number <= kMostKeptJournals) {
-        if (!files.exists(kept_name(path, number))) {
-          break;
-        }
-        ++number;
-      }
-      if (number > kMostKeptJournals) {
-        return too_many_kept(path);
-      }
-      const std::string kept = kept_name(path, number);
-      if (auto moved = files.rename(path, kept); !moved.has_value()) {
-        return moved.error();
-      }
-      opened.previous += "; kept as " + kept;
+    if (auto refused = set_aside(files, path, replayed.value().ending, opened.previous);
+        refused.has_value()) {
+      return *refused;
     }
     auto fresh = journal::FileStorage::open(ops, path);
     if (!fresh.has_value()) {

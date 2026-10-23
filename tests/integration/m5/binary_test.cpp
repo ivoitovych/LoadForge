@@ -219,6 +219,7 @@ TEST(M5Binary, ARunStartedWithSigchldIgnoredStillReapsAndReports) {
                                          "--duration",     "1s",     "--workers", "2",
                                          "--footprint",    "1MiB"};
     std::vector<char*> argv;
+    argv.reserve(words.size() + 1);
     for (const std::string& word : words) {
       argv.push_back(const_cast<char*>(word.c_str()));
     }
