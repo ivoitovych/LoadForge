@@ -170,10 +170,17 @@ class TestRegistry final : public workloads::Registry {
   }
   [[nodiscard]] core::Result<workloads::Descriptor, workloads::WorkloadError> descriptor(
       std::string_view name) const override {
-    return inner_.descriptor(name);
+    auto described = inner_.descriptor(name);
+    if (!described.has_value() || !scalar_only) {
+      return described;
+    }
+    workloads::Descriptor narrowed = described.value();
+    narrowed.paths = IsaSet{IsaPath::kScalar};
+    return narrowed;
   }
 
   bool wrong = false;
+  bool scalar_only = false;
 
  private:
   std::vector<std::string> names_;
@@ -192,6 +199,12 @@ class Refusing final : public verification::SliceRunner {
   }
   [[nodiscard]] core::Result<verification::SliceReport, verification::RunnerError> finish()
       override {
+    if (finish_says_nothing_was_compared) {
+      verification::SliceReport report;
+      report.records.emplace_back(verification::VerificationNotPerformed{
+          {}, "oracle over compression units", "no block was compared", 0});
+      return report;
+    }
     return verification::RunnerError{verification::RunnerFault::kFinished, "finish refused"};
   }
   [[nodiscard]] const verification::Tally& total() const noexcept override { return tally_; }
@@ -200,6 +213,7 @@ class Refusing final : public verification::SliceRunner {
   }
 
   static inline bool fail_slice = false;
+  static inline bool finish_says_nothing_was_compared = false;
 
  private:
   verification::Tally tally_;
@@ -431,6 +445,57 @@ TEST(Selftest, ARunnerThatRefusesAFailsTheCheckWithItsWords) {
       << finish.out;
   EXPECT_EQ(slice.code, kExitSelftestFailed);
   EXPECT_EQ(finish.code, kExitSelftestFailed);
+}
+
+TEST(Selftest, ARunThatComparedNothingIsNotAPass) {
+  const worker::ProductionServices production;
+  worker::Services services = production.services();
+  const TestRegistry registry({"compression"});
+  services.workloads = &registry;
+  services.make_runner = &make_refusing;
+  SelftestOptions options;
+  options.isa = IsaPath::kScalar;
+  Refusing::finish_says_nothing_was_compared = true;
+  const Ran run = run_over(services, options, kRight);
+  Refusing::finish_says_nothing_was_compared = false;
+  EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
+  EXPECT_TRUE(has(run.out,
+                  "FAIL  compression [scalar]: 1 finding(s), the first: "
+                  "VerificationNotPerformed: "))
+      << run.out;
+}
+
+TEST(Selftest, ARequestedPathAWorkloadHasNoKernelForIsCheckedOnScalarAndTheLineSaysSo) {
+  constexpr IsaSet kCompiled = simd::compiled_paths();
+  IsaPath vector = IsaPath::kScalar;
+  for (const IsaPath path : {IsaPath::kAvx2, IsaPath::kAvx512, IsaPath::kNeon}) {
+    if (kCompiled.contains(path)) {
+      vector = path;
+      break;
+    }
+  }
+  if (vector == IsaPath::kScalar) {
+    GTEST_SKIP() << "this build holds no vector path";
+  }
+  const worker::ProductionServices production;
+  worker::Services services = production.services();
+  TestRegistry registry({"compression"});
+  registry.scalar_only = true;
+  services.workloads = &registry;
+  // The probe claims the path so that the request is not refused up front; the workload has no
+  // kernel for it, so nothing but its scalar kernel is ever run.
+  const FixedProbe claims{IsaSet{IsaPath::kScalar, vector}};
+  services.isa = &claims;
+  SelftestOptions options;
+  options.isa = vector;
+  const Ran run = run_over(services, options, kRight);
+  EXPECT_EQ(run.code, 0) << run.out;
+  EXPECT_FALSE(has(run.out, "compression [" + std::string{simd::describe(vector)} + "]"))
+      << run.out;
+  EXPECT_TRUE(has(run.out, "PASS  compression [scalar]: ")) << run.out;
+  EXPECT_TRUE(
+      has(run.out, "the workload has no " + std::string{simd::describe(vector)} + " kernel)"))
+      << run.out;
 }
 
 TEST(Selftest, ARequestedPathThisCpuCannotRunIsRefusedBeforeAnyCheck) {
