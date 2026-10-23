@@ -8,7 +8,6 @@
 #include <gtest/gtest.h>
 
 #include <csignal>
-
 #include <optional>
 #include <vector>
 

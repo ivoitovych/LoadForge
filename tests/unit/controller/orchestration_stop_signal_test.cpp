@@ -89,10 +89,9 @@ class Plant final : public Reporter {
   }
 
   [[nodiscard]] std::size_t count(std::string_view part) const {
-    return static_cast<std::size_t>(
-        std::ranges::count_if(events, [part](const std::string& event) {
-          return event.find(part) != std::string::npos;
-        }));
+    return static_cast<std::size_t>(std::ranges::count_if(events, [part](const std::string& event) {
+      return event.find(part) != std::string::npos;
+    }));
   }
   [[nodiscard]] bool told(std::string_view part) const { return count(part) > 0; }
 

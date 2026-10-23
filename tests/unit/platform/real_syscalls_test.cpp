@@ -1502,7 +1502,8 @@ TEST_F(DivertedSignalTest, ADivertedSignalWritesItsNumberToThePipeAndNothingElse
   ASSERT_TRUE(diverted.has_value()) << describe(diverted.error());
   struct sigaction installed {};
   ASSERT_EQ(::sigaction(SIGUSR1, nullptr, &installed), 0);
-  EXPECT_NE(installed.sa_flags & SA_RESTART, 0) << "no read or write of the controller is cut short";
+  EXPECT_NE(installed.sa_flags & SA_RESTART, 0)
+      << "no read or write of the controller is cut short";
   EXPECT_EQ(::sigismember(&installed.sa_mask, SIGTERM), 1)
       << "a second signal waits for the first one's byte to be written";
   EXPECT_EQ(::sigismember(&installed.sa_mask, SIGINT), 1);

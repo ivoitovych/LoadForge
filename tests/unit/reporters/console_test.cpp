@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 
 #include <csignal>
-
 #include <sstream>
 #include <string>
 

@@ -121,11 +121,10 @@ class RunningBinary {
       : console_(scratch.path() / "console.txt"),
         journal_((scratch.path() / "run.lfj").string()),
         results_(scratch.path() / "results") {
-    const std::vector<std::string> args = {LOADFORGE_BINARY, "stress", "--test", "sort",
-                                           "--duration",     "60s",    "--workers", "2",
-                                           "--footprint",    "8MiB",   "--journal", journal_,
-                                           "--output",       "json",   "--output-dir",
-                                           results_.string()};
+    const std::vector<std::string> args = {
+        LOADFORGE_BINARY, "stress", "--test",       "sort",           "--duration", "60s",
+        "--workers",      "2",      "--footprint",  "8MiB",           "--journal",  journal_,
+        "--output",       "json",   "--output-dir", results_.string()};
     fs::create_directories(results_);
     std::vector<char*> argv(args.size() + 1, nullptr);
     std::transform(args.begin(), args.end(), argv.begin(),
@@ -301,9 +300,8 @@ class Recorder final : public Reporter {
   void isolation_finished(const RunReport& /*report*/) override {}
 
   [[nodiscard]] bool told(std::string_view part) const {
-    return std::ranges::any_of(events, [part](const std::string& event) {
-      return event.find(part) != std::string::npos;
-    });
+    return std::ranges::any_of(
+        events, [part](const std::string& event) { return event.find(part) != std::string::npos; });
   }
 
   std::vector<std::string> events;

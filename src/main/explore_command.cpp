@@ -21,9 +21,9 @@
 #include <variant>
 #include <vector>
 
+#include "controller/stop_signals.hpp"
 #include "core/byte_size.hpp"
 #include "core/duration.hpp"
-#include "controller/stop_signals.hpp"
 #include "core/parse_number.hpp"
 #include "explore/estimate.hpp"
 #include "main/cli.hpp"

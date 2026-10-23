@@ -13,7 +13,9 @@ constexpr std::size_t kLookBytes = 16;
 
 }  // namespace
 
-std::string_view signal_name(int signal) noexcept { return signal == SIGINT ? "SIGINT" : "SIGTERM"; }
+std::string_view signal_name(int signal) noexcept {
+  return signal == SIGINT ? "SIGINT" : "SIGTERM";
+}
 
 core::Result<core::Ok, platform::SyscallError> StopSignals::install() {
   auto made = syscalls_->create_pipe();

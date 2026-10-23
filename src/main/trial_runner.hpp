@@ -52,12 +52,12 @@
 
 #include "config/config.hpp"
 #include "controller/orchestration.hpp"
+#include "controller/stop_signals.hpp"
 #include "core/result.hpp"
 #include "explore/trial.hpp"
 #include "main/telemetry_rig.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
-#include "controller/stop_signals.hpp"
 #include "primitives/simd/dispatch.hpp"
 #include "resources/cgroup_oom_record.hpp"
 #include "statistics/signature.hpp"

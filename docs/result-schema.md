@@ -173,7 +173,7 @@ VerificationNotPerformed       what  why  blocks_compared
 
 ### worker
 
-`{ slot, fate, cpu | null, termination }`; `fate` is `controller::describe(WorkerFate)`. `termination` is the controller's account of how the worker ended. When the temperature ceiling ended the run, every worker's ends with "; the run was ended by the temperature ceiling: <sensor> read <x> C, at or above the ceiling of <n> C, <t> s into the run": the schema has no run-level field for why a run ended (`docs/journal/34a-temperature-ceiling.md` D8).
+`{ slot, fate, cpu | null, termination }`; `fate` is `controller::describe(WorkerFate)`. `termination` is the controller's account of how the worker ended. When the temperature ceiling ended the run, every worker's ends with "; the run was ended by the temperature ceiling: <sensor> read <x> C, at or above the ceiling of <n> C, <t> s into the run": the schema has no run-level field for why a run ended (`docs/journal/34a-temperature-ceiling.md` D8). A run a signal stopped says the same in the same place: "; the run was stopped by SIGINT" (or SIGTERM), and "; a later signal killed the workers at once" when it did (`docs/journal/34b-graceful-stop.md`).
 
 ## JSON (`run.json`)
 

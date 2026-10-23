@@ -19,7 +19,7 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 | **Version** | The binary reports `0.0.0-m2` until the release commit sets the version; a release tag must equal what `loadforge --version` prints |
 | **Commands** | `stress` (eleven verified workloads and two scheduled runs), `explore` (worst-case search), `journal`, `--check-config`, `--version`, `--help`, `--selftest-digest` |
 | **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI; a per-module test-obligation ledger, also gated; mutation testing, weekly |
-| **Known gaps** | The temperature ceiling is yours to set and has no default: a run without one is not stopped for heat ([`docs/safety.md`](docs/safety.md) §1). An uncorrected hardware error is a finding, not an automatic stop. No `benchmark` mode and no `selftest` command. No graceful stop on Ctrl-C. No outside reviewer has seen the whole tree |
+| **Known gaps** | The temperature ceiling is yours to set and has no default: a run without one is not stopped for heat ([`docs/safety.md`](docs/safety.md) §1). An uncorrected hardware error is a finding, not an automatic stop. No `benchmark` mode and no `selftest` command. No outside reviewer has seen the whole tree |
 
 | Document | What it is |
 |---|---|
@@ -222,18 +222,24 @@ Result files are written to a `.partial`, fsynced, renamed, and the directory fs
 | 5 | a fault: a wrong result, or an error the hardware reported, corrected or not |
 | 6 | a check was not performed: a run with a verified workload that checked nothing is not clean |
 | 7 | the temperature ceiling ended the run: a sensor read at or above `max_temperature_c`, or no sensor could be read any more |
+| 130, 143 | `SIGINT` (Ctrl-C) or `SIGTERM` stopped the run: the shell's `128 +` the signal. The run was stopped as at its deadline and is reported, written and journalled like any other |
 
-When several apply, the first of 5, 7, 4, 3, 6 is the code: a fault is the finding and
-outranks everything; 7 outranks a failed write (4), the workers it killed (3) and the
-checks it cut short (6), because it is why they happened. A ceiling that cannot be read
-when the run starts is not 7: nothing started, and that is a refusal (1). `explore` uses
-0, 1, 2, 3, 5 and 6 for the same things: 3 is a trial that could not be run, one the ceiling
-ended included; 5 is a finding in a candidate's or the reference's trial, or a corrected
-hardware error in a scored trial (the trial is scored and flagged, the exit is 5 as for
-`stress`; a reference trial that finds something ends the search with a report of what was
-measured and no worst case); 6 is a candidate's or the reference's trial that did not
-finish, or one that held no reading of the objective. The verdict is one of `clean`, `corrected errors`,
-`incomplete`, `findings`.
+When several apply, the first of 5, 7, 4, 130/143, 3, 6 is the code: a fault is the finding
+and outranks everything; 7 outranks a failed write (4), the workers it killed (3) and the
+checks it cut short (6), because it is why they happened. 130 and 143 sit below a failed
+write, which a user who pressed Ctrl-C cannot know from the signal alone, and above 3 and 6,
+which the stop explains (a worker that had to be killed, checks cut short). A ceiling that
+cannot be read when the run starts is not 7: nothing started, and that is a refusal (1).
+A signal during the setup before the workers start, and one after the run has been reported,
+has its default action, as it always had. `explore` uses 0, 1, 2, 3, 5, 6, 130 and 143 for the same things: 3 is a trial
+that could not be run, one the ceiling ended included; 5 is a finding in a candidate's or the
+reference's trial, or a corrected hardware error in a scored trial (the trial is scored and
+flagged, the exit is 5 as for `stress`; a reference trial that finds something ends the
+search with a report of what was measured and no worst case); 6 is a candidate's or the
+reference's trial that did not finish, or one that held no reading of the objective; 130 or
+143 is a search a signal stopped: the trial under way is stopped, no more are run, and the
+report is what was measured, with no worst case (it outranks 6 and is outranked by 5). The
+verdict is one of `clean`, `corrected errors`, `incomplete`, `findings`.
 
 `explore` options worth knowing: `--elimination` is 1 to 1024; the settle window may not
 exceed `--settle-max`; for the statistics `rate`, `delta`, `stddev` and `slope` the duration
@@ -331,8 +337,8 @@ for).
 
 What it does **not** do: **it sets no ceiling for you.** A run with no `max_temperature_c`
 is not stopped for heat, and the ceiling is software, behind the CPU's own throttling and
-thermal shutdown and never instead of them. Ctrl-C ends the run at once and writes no
-report. Set a ceiling you have chosen, start short, and do not run it unattended on a
+thermal shutdown and never instead of them. Ctrl-C stops the run as its deadline does and
+reports it; a second one kills the workers at once. Set a ceiling you have chosen, start short, and do not run it unattended on a
 machine whose cooling you have not seen work. The full account is
 [`docs/safety.md`](docs/safety.md).
 

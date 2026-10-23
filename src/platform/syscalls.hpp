@@ -561,7 +561,7 @@ class RealSyscalls final : public Syscalls {
   [[nodiscard]] core::Result<core::Ok, SyscallError> ignore_signal(int signal) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> default_signal(int signal) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> divert_signal(int signal,
-                                                                  int write_fd) override;
+                                                                   int write_fd) override;
   [[nodiscard]] pid_t process_id() override;
   [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_any_nonblocking() override;
   [[nodiscard]] core::Result<int, SyscallError> open_perf_event(const PerfEventSpec& spec) override;

@@ -416,8 +416,7 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
   if (report.stop_signal.has_value()) {
     // As for the ceiling: a load cut short has no score. The search sees the
     // signal for itself, and reports what it measured before this trial.
-    return refuse(TrialFault::kRun,
-                  "the trial was " + controller::describe_stop_signal(report));
+    return refuse(TrialFault::kRun, "the trial was " + controller::describe_stop_signal(report));
   }
   if (report.temperature_stop.has_value()) {
     // A load cut short is not the load the candidate was asked to carry, so it

@@ -189,21 +189,57 @@ $ pgrep -x loadforge | wc -l
 
 ### Ctrl-C and `SIGTERM`
 
-The controller installs no handler for `SIGINT` or `SIGTERM`. They end it at once with
-the shell's usual status (130 and 143 here), its workers go with it by the same
-parent-death signal, and **no report and no result file is written** for that run. If
-you want a report, let the run reach its duration. Measured:
+`SIGINT` and `SIGTERM` stop the run as the deadline does. From the moment the workers are
+about to start until the run has ended, the controller catches both: the signal's handler
+does nothing but write its number to a pipe, and the controller reads it at its next
+tick (at once: the tick's wait is on that pipe). The first signal stops every worker
+exactly as at the deadline (the stop request, `SIGTERM` after the stop grace, `SIGKILL`
+after that: the table in "The duration"), and the run is then reported, its result files
+written and its journal ended, as for any run that returned. A verifying worker answers a
+stop between two units, so a stop by signal can take as long as one at the deadline: ordinarily a
+fraction of a second, up to about 11 s when a unit is very long.
+
+A **second signal while the workers are stopping** kills them at once, with `SIGKILL`, and
+the run still reports what it has: the user insisted, and the grace is not waited for.
+The workers that were killed are `stopped by the controller` in the report.
+
+The workers are session leaders, so the terminal's Ctrl-C (a `SIGINT` to the foreground process group)
+reaches the controller and not the workers; a worker is stopped only by what the
+controller does to it. Measured, with the real binary:
 
 ```
-$ loadforge stress --test sort --duration 60s & kill -INT $!   # after 3 s
-INT rc=130
-$ loadforge stress --test sort --duration 60s & kill -TERM $!
-TERM rc=143
-$ pgrep -x loadforge | wc -l
-0
+$ loadforge stress --test sort --duration 60s --journal j --output json --output-dir out &
+$ kill -INT $!         # after 4 s
+[3.966 s] SIGINT received: stop requested
+[4.002 s] worker 0 (pid 6719): exited with code 0
+[4.050 s] worker 1 (pid 6720): exited with code 0
+run ended after 4.050 s: 2 of 2 worker(s) completed
+  stopped by SIGINT
+verdict: clean
+the run was stopped by SIGINT: its exit code is 130
+result written: out/run.json
+$ loadforge journal j
+journal j: ended cleanly; 3 entries
+  t=4.0s phase "stopped by SIGINT" ...
 ```
 
-A graceful early stop is not built; it is a candidate for a later release.
+The exit code is **130** for `SIGINT` and **143** for `SIGTERM`, what the shell reports for a
+process that died of that signal (128 plus the number), so that a script that tests for an
+interrupt still sees one. When several things apply the first of 5, 7, 4, 130 or 143, 3, 6 is the
+code: a fault found before the stop (5) and the temperature ceiling (7) outrank it, and so does a
+result file that could not be written (4), which the signal does not tell; it outranks a worker
+that did not complete (3) and a check not made (6), which the stop causes. As for the ceiling, the
+`verdict:` line is the checks' alone (a stopped run can be `clean`), and the line under it, the exit
+code and every worker's `termination` in the result files say the run was cut short.
+`explore` stops the trial under way the same way, starts no other, and reports what it measured
+before it, with no worst case; its exit code is the same 130 or 143 (below a finding, 5, and above
+a trial that did not finish, 6).
+
+What is not caught: a signal before the workers are about to start (while the machine is being
+read and the telemetry probed) and one after the run has been reported (the isolation re-runs, the
+writing of the results) has the default action and ends the controller at once, with status 130 or 143, as
+it always did. `SIGKILL` cannot be caught and still leaves a journal that reads as ended
+abnormally; the workers go with it (above).
 
 ### Memory
 
@@ -329,7 +365,6 @@ workloads can end `incomplete` and still exit 0. The exit codes are in the READM
 - No thermal, power or fan control; no limit on package power. The ceiling stops a run; it
   does not throttle one.
 - No watch of memory after the start (section 2).
-- No graceful stop on a signal (section 2).
 - SSDs, discrete GPUs and PCIe bandwidth are out of scope; the tool minimises writes to
   persistent storage, and writes only the files named in section 2.
 - A virtual machine or container shows only what its host lets it see: sensors,

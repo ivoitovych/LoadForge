@@ -966,9 +966,8 @@ TEST(TrialRunnerSignal, ASignalDuringATrialEndsItWithNoScoreAndNamesTheSignal) {
 
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
-    EXPECT_EQ(outcome.error().detail,
-              std::string{"the trial was stopped by "} +
-                  std::string{controller::signal_name(signal)});
+    EXPECT_EQ(outcome.error().detail, std::string{"the trial was stopped by "} +
+                                          std::string{controller::signal_name(signal)});
     EXPECT_EQ(each.stop.first(), std::optional<int>{signal});
   }
 }
@@ -1041,7 +1040,8 @@ TEST_P(SettleLookPollFails, TheTrialFailsWithTheKernelsReason) {
   ASSERT_NE(runner, nullptr);
   Candidate candidate = a_candidate();
   candidate.settle = Settle{"level.reading", 0.05, 30 * kMs, 100 * kMs};
-  each.machine.syscalls.fail_poll_on(1, GetParam());  // The look at the pipe, before the first round.
+  each.machine.syscalls.fail_poll_on(1,
+                                     GetParam());  // The look at the pipe, before the first round.
 
   const auto outcome = runner->run(candidate);
 

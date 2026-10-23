@@ -45,7 +45,6 @@ std::string describe_event(const PerfEventSpec& spec) {
   return text;
 }
 
-
 /// The descriptor each diverted signal writes to, plus one (zero: none), by
 /// signal number; slot 0 takes every number out of range. Atomics because the
 /// handler reads them at any instruction of the process.
@@ -60,9 +59,7 @@ std::size_t slot_of(int signal) noexcept {
 
 }  // namespace
 
-bool diverts_here(int fd, pid_t owner, pid_t caller) noexcept {
-  return fd >= 0 && owner == caller;
-}
+bool diverts_here(int fd, pid_t owner, pid_t caller) noexcept { return fd >= 0 && owner == caller; }
 
 void note_diverted_signal(int signal) noexcept {
   const int saved = errno;
