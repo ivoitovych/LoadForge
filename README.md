@@ -19,7 +19,7 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 | **Version** | The binary reports `0.0.0-m2` until the release commit sets the version; a release tag must equal what `loadforge --version` prints |
 | **Commands** | `stress` (eleven verified workloads and two scheduled runs), `explore` (worst-case search), `journal`, `--check-config`, `--version`, `--help`, `--selftest-digest` |
 | **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI; a per-module test-obligation ledger, also gated; mutation testing, weekly |
-| **Known gaps** | No temperature limit is enforced ([`docs/safety.md`](docs/safety.md) §1). No `benchmark` mode and no `selftest` command. No graceful stop on Ctrl-C. No outside reviewer has seen the whole tree |
+| **Known gaps** | The temperature ceiling is yours to set and has no default: a run without one is not stopped for heat ([`docs/safety.md`](docs/safety.md) §1). An uncorrected hardware error is a finding, not an automatic stop. No `benchmark` mode and no `selftest` command. No graceful stop on Ctrl-C. No outside reviewer has seen the whole tree |
 
 | Document | What it is |
 |---|---|
@@ -82,9 +82,11 @@ invariants, exact checksums, and round-trip identities. The goal is to catch sil
 data corruption, not just crashes and hangs.
 
 **Load Signature, not a percentage.** Every test emits a multidimensional record of
-hardware pressure — power, energy, frequency, peak and equilibrium temperature,
-temperature rise rate, memory bandwidth, IPC, cache and branch miss rates,
-throttling time, verification errors.
+hardware pressure: a summary (minimum, maximum, mean, standard deviation, first, last and
+slope for a gauge; delta and rate for a counter) of power, energy, frequency, temperature,
+memory and the raw cycle, instruction, cache-miss and branch-miss counters, plus the
+verification errors. The derived figures (IPC, miss rates, memory bandwidth, throttling
+time, equilibrium temperature) are not computed yet; they are a known gap.
 
 **Deliberate workload diversity.** There is no single universal maximum-load program.
 A memory-latency workload leaves execution units idle; a compute-dense SIMD workload
@@ -136,7 +138,7 @@ ctest --preset debug -j"$(nproc)"
 build/debug/loadforge --version
 ```
 
-Presets: `debug`, `release`, `asan`, `tsan`, `coverage`, `simd-scalar`, `static`.
+Presets: `debug`, `release`, `asan`, `tsan`, `coverage`, `simd-scalar`, `static`, `static-headers`.
 
 **Install.** Release artifacts are built by `packaging/build-release.sh` (and, for a tag,
 by the `release` workflow) and come in two forms, with checksums, for x86-64 and ARM64:
@@ -201,10 +203,12 @@ memory  = "64MiB"
 
 `config/quick.toml` names the `null` workload, which exercises the supervision and
 verifies nothing: it exits 0 with the verdict `incomplete`. Name a real workload to verify.
-An unknown key is refused by name. `limits.max_temperature_c` (1 to 150) is a temperature
+An unknown key is refused by name. `run.duration` may be at most about 73 years. `limits.max_temperature_c` (1 to 150) is a temperature
 ceiling: the run stops when any sensor reads that much or more, and is refused if no sensor
 can be read (`docs/safety.md`). `stress --test` and `explore` take the same ceiling as
-`--max-temperature C`.
+`--max-temperature C`. With `--journal FILE` a file that is not a journal is refused and
+left where it is (not renamed), and so is a journal another run holds open.
+Result files are written to a `.partial`, fsynced, renamed, and the directory fsynced.
 
 **Exit codes** (`loadforge --help` has the same list):
 
@@ -216,15 +220,27 @@ can be read (`docs/safety.md`). `stress --test` and `explore` take the same ceil
 | 3 | the run ended with a worker that did not complete |
 | 4 | a result file could not be written |
 | 5 | a fault: a wrong result, or an error the hardware reported, corrected or not |
-| 6 | a check was not performed: a run that checked nothing is not clean |
+| 6 | a check was not performed: a run with a verified workload that checked nothing is not clean |
 | 7 | the temperature ceiling ended the run: a sensor read at or above `max_temperature_c`, or no sensor could be read any more |
 
 When several apply, the first of 5, 7, 4, 3, 6 is the code: a fault is the finding and
 outranks everything; 7 outranks a failed write (4), the workers it killed (3) and the
 checks it cut short (6), because it is why they happened. A ceiling that cannot be read
 when the run starts is not 7: nothing started, and that is a refusal (1). `explore` uses
-0, 1, 2, 3, 5 and 6 for the same things, per candidate; a trial the ceiling ends is 3. The verdict is one of `clean`, `corrected errors`,
+0, 1, 2, 3, 5 and 6 for the same things: 3 is a trial that could not be run, one the ceiling
+ended included; 5 is a finding in a candidate's or the reference's trial, or a corrected
+hardware error in a scored trial (the trial is scored and flagged, the exit is 5 as for
+`stress`; a reference trial that finds something ends the search with a report of what was
+measured and no worst case); 6 is a candidate's or the reference's trial that did not
+finish, or one that held no reading of the objective. The verdict is one of `clean`, `corrected errors`,
 `incomplete`, `findings`.
+
+`explore` options worth knowing: `--elimination` is 1 to 1024; the settle window may not
+exceed `--settle-max`; for the statistics `rate`, `delta`, `stddev` and `slope` the duration
+must be at least twice `--sample-interval`. The report says which trials did not settle,
+which had corrected hardware errors, which rivals are not compared by an interval, and which
+rival the ranking is against (the eliminated one with the worst mean, named in the ranking
+line); the winner's claim is from replicates run after it was chosen.
 
 `--selftest-digest` prints a hash over a fixed corpus; for one version it must be the same
 on x86-64 and ARM64 (`docs/determinism.md`).
@@ -305,7 +321,7 @@ inadequate cooling, a failing fan, degraded thermal paste, or an unstable overcl
 is exactly the condition most likely to expose the problem, which is the point, but it
 carries real risk.
 
-What it does: a hard deadline for every run; a memory check before the workers start; a
+What it does: a hard deadline for every run; a memory check, against what the configuration or `--footprint` states, before the workers start (the default footprint and `--workers` are not checked); a
 temperature ceiling you can set (`limits.max_temperature_c`, or `--max-temperature C`),
 which stops the run when any sensor the machine exposes reads that or more, and refuses to
 start if none can be read; a heartbeat watchdog that stops a hung worker; workers that die
@@ -338,7 +354,7 @@ vendored component is checked for GPL compatibility in CI.
 
 The most useful contribution right now is **review**: nothing here has had an outside
 reviewer yet. The current review request, the newest
-`reviews/review-request-*.md` ([this one](reviews/review-request-2026-10-20-0352-UTC.md)), lists what to look at,
+`reviews/review-request-*.md` ([this one](reviews/review-request-2026-10-20-1841-UTC.md)), lists what to look at,
 area by area, with the files and the questions, and how to report what you find.
 
 Two things worth knowing before you write code, because they are not obvious and are
