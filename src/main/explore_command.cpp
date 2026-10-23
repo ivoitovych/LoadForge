@@ -607,8 +607,10 @@ std::string render_report(const explore::SearchReport& report) {
   } else if (report.worst_case.has_value()) {
     text << "worst case: " << explore::format(*report.worst_case) << "\n";
   } else {
-    text << "worst case: none; every candidate left the search with findings or an "
-            "unfinished trial\n";
+    // Not "every candidate had findings": the survivor may have found something in its
+    // last trials while the others were only ranked out, with scores listed below.
+    text << "worst case: none; no candidate survived the search (each candidate's fate "
+            "follows)\n";
   }
   text << "ranking: " << explore::describe(report.ranking);
   if (!report.rival.empty()) {

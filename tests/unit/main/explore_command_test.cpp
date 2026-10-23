@@ -459,7 +459,11 @@ TEST(ExploreReport, WithoutAWorstCaseItSaysSoAndNeverAnInventedNumber) {
   report.worst_case.reset();
   report.ranking = explore::Ranking::kNone;
   const std::string text = render_report(report);
-  EXPECT_TRUE(contains(text, "worst case: none; every candidate left the search with findings"));
+  EXPECT_TRUE(contains(text, "worst case: none; no candidate survived the search"));
+  EXPECT_FALSE(contains(text, "every candidate left the search"))
+      << "false when others were only ranked out (review verdicts 2026-10-23, finding 12c)";
+  EXPECT_TRUE(contains(text, "candidate wide: survivor")) << "the fates follow";
+  EXPECT_TRUE(contains(text, "candidate narrow: eliminated"));
   EXPECT_TRUE(contains(text, "ranking: no worst case\n"));
 }
 
