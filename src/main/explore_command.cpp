@@ -527,6 +527,17 @@ std::string estimate_text(const explore::Estimate& estimate) {
   return text;
 }
 
+/// The 1-based replicates (or readings) the hardware reported a corrected error in.
+std::string corrected_list(const std::vector<explore::TrialNote>& notes) {
+  std::string text;
+  for (std::size_t i = 0; i < notes.size(); ++i) {
+    if (notes[i].corrected_errors) {
+      text += " " + std::to_string(i + 1);
+    }
+  }
+  return text;
+}
+
 std::string statistic_text(const explore::BoundObjective& objective) {
   return std::visit([](auto statistic) { return std::string{explore::describe(statistic)}; },
                     objective.statistic);
@@ -549,6 +560,11 @@ std::string render_report(const explore::SearchReport& report) {
             "unfinished trial\n";
   }
   text << "ranking: " << explore::describe(report.ranking) << "\n";
+  if (report.corrected_error_trials > 0) {
+    text << "corrected hardware errors: " << report.corrected_error_trials
+         << " scored trial(s) had the hardware report an error it corrected; the scores stand, "
+            "the exit code is 5 as for stress\n";
+  }
   for (const explore::CandidateReport& candidate : report.candidates) {
     text << "candidate " << candidate.id << ": " << explore::describe(candidate.fate)
          << ", ranked in " << candidate.rounds << " round(s), " << candidate.samples.size()
@@ -561,6 +577,9 @@ std::string render_report(const explore::SearchReport& report) {
         text << " " << number(sample);
       }
       text << "\n";
+      if (const std::string flagged = corrected_list(candidate.notes); !flagged.empty()) {
+        text << "  corrected hardware errors in replicate(s):" << flagged << "\n";
+      }
     }
   }
   text << "reference: anchor " << number(report.anchor) << ", drift " << number(report.drift)
@@ -570,6 +589,9 @@ std::string render_report(const explore::SearchReport& report) {
     text << " (" << point.at_ns << ", " << number(point.value) << ")";
   }
   text << "\n";
+  if (const std::string flagged = corrected_list(report.reference_notes); !flagged.empty()) {
+    text << "  corrected hardware errors in reference reading(s):" << flagged << "\n";
+  }
   return text.str();
 }
 
@@ -579,7 +601,7 @@ int exit_code_for(const explore::SearchReport& report) noexcept {
       return each.fate == fate;
     });
   };
-  if (fate_is(explore::Fate::kFindings)) {
+  if (fate_is(explore::Fate::kFindings) || report.corrected_error_trials > 0) {
     return kExitFault;
   }
   if (fate_is(explore::Fate::kIncomplete)) {

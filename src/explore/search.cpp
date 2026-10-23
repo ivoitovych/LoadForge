@@ -91,6 +91,7 @@ std::optional<ExploreError> settle_problem(const Candidate& candidate,
 
 struct Measured {
   Verdict verdict = Verdict::kIncomplete;
+  TrialNote note;
   std::int64_t at_ns = 0;
   double value = 0.0;
 };
@@ -98,6 +99,7 @@ struct Measured {
 struct Observation {
   std::int64_t at_ns = 0;
   double raw = 0.0;
+  TrialNote note;
 };
 
 struct State {
@@ -157,6 +159,7 @@ class Execution {
     const statistics::Window window = trial.signature.window;
     Measured measured;
     measured.verdict = trial.verdict;
+    measured.note.corrected_errors = trial.verdict == Verdict::kCorrectedErrors;
     measured.at_ns = window.start_ns + (window.end_ns - window.start_ns) / 2;
     if (unscored(trial.verdict)) {
       return measured;
@@ -180,6 +183,7 @@ class Execution {
                             std::string(results::describe(measured.value().verdict)));
     }
     references_.push_back({measured.value().at_ns, measured.value().value});
+    reference_notes_.push_back(measured.value().note);
     since_reference_ = 0;
     return core::Ok{};
   }
@@ -218,7 +222,7 @@ class Execution {
       state.fate = result.verdict == Verdict::kFindings ? Fate::kFindings : Fate::kIncomplete;
       return core::Ok{};
     }
-    state.observations.push_back({result.at_ns, result.value});
+    state.observations.push_back({result.at_ns, result.value, result.note});
     ++since_reference_;
     if (since_reference_ >= config_.interleave_every) {
       return reference_trial();
@@ -299,6 +303,10 @@ class Execution {
     SearchReport out;
     out.objective = bound_;
     out.references = references_;
+    out.reference_notes = reference_notes_;
+    out.corrected_error_trials = static_cast<std::size_t>(
+        std::count_if(reference_notes_.begin(), reference_notes_.end(),
+                      [](const TrialNote& note) { return note.corrected_errors; }));
     out.anchor = anchor_;
     out.trials = trials_;
     out.rounds = rounds_;
@@ -321,6 +329,8 @@ class Execution {
       raw.reserve(state.observations.size());
       for (const Observation& observation : state.observations) {
         raw.push_back(observation.raw);
+        entry.notes.push_back(observation.note);
+        out.corrected_error_trials += static_cast<std::size_t>(observation.note.corrected_errors);
       }
       entry.raw = estimate(raw);
       entry.corrected = estimate(entry.samples, correction_of(state));
@@ -369,6 +379,7 @@ class Execution {
   TrialRunner* runner_;
   std::vector<State> states_;
   std::vector<ReferencePoint> references_;
+  std::vector<TrialNote> reference_notes_;
   double anchor_ = 0.0;
   std::size_t pass_ = 0;
   std::size_t since_reference_ = 0;

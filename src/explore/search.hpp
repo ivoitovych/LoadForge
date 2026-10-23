@@ -117,14 +117,26 @@ enum class Ranking : std::uint8_t { kNone, kSole, kSeparated, kIndistinguishable
   return "unrecognised ranking";
 }
 
+/// What was noted of one scored trial besides its score.
+///
+///   corrected_errors  the hardware reported an error and corrected it
+///                     (verdict kCorrectedErrors). The trial is scored -- its
+///                     computation was right, so the number is a measurement --
+///                     and flagged, and the search exits 5 as `stress` does.
+struct TrialNote {
+  bool corrected_errors = false;
+};
+
 /// One candidate's account. `samples` are the drift-corrected scores, in
-/// replicate order, in the metric's unit; `raw` and `corrected` are the
-/// estimates of the scores before and after correction.
+/// replicate order, in the metric's unit; `notes` has one entry for each;
+/// `raw` and `corrected` are the estimates of the scores before and after
+/// correction.
 struct CandidateReport {
   std::string id;
   Fate fate = Fate::kEliminated;
   std::size_t rounds = 0;  ///< Rounds the candidate was ranked in.
   std::vector<double> samples;
+  std::vector<TrialNote> notes;
   Estimate raw;
   Estimate corrected;
 };
@@ -135,10 +147,13 @@ struct SearchReport {
   std::optional<WorstCase> worst_case;
   Ranking ranking = Ranking::kNone;
   std::vector<ReferencePoint> references;
-  double anchor = 0.0;     ///< The reference as it was at the start.
-  double drift = 0.0;      ///< The last reference reading less the anchor.
-  Estimate reference;      ///< All reference readings, raw.
-  std::size_t trials = 0;  ///< Every trial run, reference included.
+  std::vector<TrialNote> reference_notes;  ///< One for each reference reading.
+  double anchor = 0.0;                     ///< The reference as it was at the start.
+  double drift = 0.0;                      ///< The last reference reading less the anchor.
+  Estimate reference;                      ///< All reference readings, raw.
+  std::size_t trials = 0;                  ///< Every trial run, reference included.
+  /// Scored trials, candidates' and reference's, that had corrected errors.
+  std::size_t corrected_error_trials = 0;
   std::size_t rounds = 0;
 };
 

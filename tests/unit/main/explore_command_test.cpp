@@ -398,6 +398,19 @@ TEST(ExploreReport, WithoutAWorstCaseItSaysSoAndNeverAnInventedNumber) {
   EXPECT_TRUE(contains(text, "ranking: no worst case\n"));
 }
 
+TEST(ExploreReport, FlagsCorrectedHardwareErrorsPerCandidateAndForTheReference) {
+  explore::SearchReport clean = a_report();
+  EXPECT_FALSE(contains(render_report(clean), "corrected hardware errors"));
+  explore::SearchReport report = a_report();
+  report.candidates[0].notes = {{false}, {true}, {true}};
+  report.reference_notes = {{false}, {true}};
+  report.corrected_error_trials = 3;
+  const std::string text = render_report(report);
+  EXPECT_TRUE(contains(text, "corrected hardware errors: 3 scored trial(s)"));
+  EXPECT_TRUE(contains(text, "corrected hardware errors in replicate(s): 2 3"));
+  EXPECT_TRUE(contains(text, "corrected hardware errors in reference reading(s): 2"));
+}
+
 TEST(ExploreReport, ACounterObjectiveNamesItsStatistic) {
   explore::SearchReport report = a_report();
   report.objective.statistic = CounterStatistic::kRate;
@@ -416,6 +429,18 @@ TEST(ExploreExit, AFindingOutranksAnUnfinishedTrialWhichOutranksASearchThatScore
   report.candidates[2].fate = Fate::kFindings;
   report.candidates[1].fate = Fate::kIncomplete;
   EXPECT_EQ(exit_code_for(report), 5) << "both: the finding";
+}
+
+TEST(ExploreExit, CorrectedHardwareErrorsExitFiveAsStressDoes) {
+  explore::SearchReport report = a_report();
+  report.candidates[2].fate = Fate::kEliminated;
+  ASSERT_EQ(exit_code_for(report), 0);
+  report.corrected_error_trials = 1;
+  EXPECT_EQ(exit_code_for(report), 5);
+  EXPECT_EQ(exit_code_for(results::Verdict::kCorrectedErrors, true, true), 5)
+      << "stress's mapping of the same trial";
+  report.candidates[2].fate = Fate::kIncomplete;
+  EXPECT_EQ(exit_code_for(report), 5) << "5 outranks 6";
 }
 
 TEST(ExploreExit, ASearchThatDidNotEndIsRefusedFailedOrUnread) {

@@ -393,14 +393,53 @@ TEST(Run, AnIncompleteTrialRemovesItsCandidateToo) {
   EXPECT_EQ(result.value().ranking, Ranking::kSole);
 }
 
-TEST(Run, CorrectedErrorsAreScoredLikeAnyOtherCleanTrial) {
+// A trial the hardware reported a corrected error in computed the right thing, so
+// its number is a measurement and is scored; it is flagged, per trial, so that
+// the report and the exit code can say it (stress exits 5 for it too). Dropping the
+// trial would hide the candidate that stresses the hardware most, which is the
+// one explore is looking for. Review verdicts 2026-10-23, finding 1.
+TEST(Run, CorrectedErrorsAreScoredAndFlaggedPerTrial) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  std::size_t b_runs = 0;
+  lab.runner.verdict = [&](const Candidate& c, std::size_t) {
+    return c.id == "b" && ++b_runs == 2 ? Verdict::kCorrectedErrors : Verdict::kClean;
+  };
+  const auto result = explore(lab.runner, config_for({"a", "b"}));
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.worst_case->candidate, "b");
+  ASSERT_EQ(find(report, "b").notes.size(), find(report, "b").samples.size());
+  EXPECT_FALSE(find(report, "b").notes[0].corrected_errors);
+  EXPECT_TRUE(find(report, "b").notes[1].corrected_errors);
+  for (const TrialNote& note : find(report, "a").notes) {
+    EXPECT_FALSE(note.corrected_errors);
+  }
+  EXPECT_EQ(report.corrected_error_trials, 1U);
+  EXPECT_EQ(report.reference_notes.size(), report.references.size());
+}
+
+TEST(Run, CorrectedErrorsInTheEveryTrialAreAllCounted) {
   Lab lab;
   lab.script["a"] = {50.0};
   lab.script["b"] = {60.0};
   lab.runner.verdict = [](const Candidate&, std::size_t) { return Verdict::kCorrectedErrors; };
   const auto result = explore(lab.runner, config_for({"a", "b"}));
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result.value().worst_case->candidate, "b");
+  const SearchReport& report = result.value();
+  std::size_t flagged = 0;
+  for (const CandidateReport& entry : report.candidates) {
+    for (const TrialNote& note : entry.notes) {
+      flagged += static_cast<std::size_t>(note.corrected_errors);
+    }
+  }
+  for (const TrialNote& note : report.reference_notes) {
+    EXPECT_TRUE(note.corrected_errors);
+    ++flagged;
+  }
+  EXPECT_EQ(report.corrected_error_trials, flagged);
+  EXPECT_EQ(report.corrected_error_trials, report.trials);
 }
 
 TEST(Run, WhenEveryCandidateFindsSomethingThereIsNoWorstCase) {
