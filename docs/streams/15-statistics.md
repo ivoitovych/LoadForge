@@ -1,6 +1,6 @@
 # Stream 15 — Statistics: the Load Signature
 
-**State:** complete — 2026-10-20 12:56 UTC  
+**State:** merged, #52, 2026-10-20 16:51 UTC  
 **Written:** 2026-10-20 05:17 UTC  
 **Wave:** 2  
 **Tier:** Tier A — a bounded component built against a written contract  
@@ -115,8 +115,8 @@ journal fragment.
 6. **Decisions are recorded where they are made.** Research a decision to the depth it
    deserves, take the most defensible option, write the options and the reason in your
    journal fragment, and keep going. A decision that meets ADR 0001's test goes in
-   `docs/adr/proposed/<NN>-<slug>-<topic>.md` (`<NN>` is your stream's number); the
-   manager numbers it when it lands. Facts you establish by experiment go in the journal
+   `docs/adr/<NNNN>-<slug>.md` (the next free number, Status `proposed`); the
+   manager marks it accepted when it lands. Facts you establish by experiment go in the journal
    fragment too, with the evidence.
 7. **Commits:** `git commit -s`, author and committer
    `Iaroslav Voitovych <yaroslav.voytovych@gmail.com>`, no trailer but `Signed-off-by`, no
