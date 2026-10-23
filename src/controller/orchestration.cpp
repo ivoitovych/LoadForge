@@ -107,7 +107,8 @@ bool operator==(const RunOptions& lhs, const RunOptions& rhs) {
          lhs.journal_interval_ns == rhs.journal_interval_ns &&
          lhs.journal_notes == rhs.journal_notes && lhs.view == rhs.view &&
          lhs.temperature_unread == rhs.temperature_unread &&
-         lhs.temperature_blind_after_ns == rhs.temperature_blind_after_ns;
+         lhs.temperature_blind_after_ns == rhs.temperature_blind_after_ns &&
+         lhs.replacement_allowance_ns == rhs.replacement_allowance_ns;
 }
 
 std::string describe(const ControllerError& error) { return error.stage + ": " + error.detail; }
@@ -228,6 +229,7 @@ struct Tracked {
   struct Unanswered {
     std::uint32_t sequence = 0;
     worker::Command command;
+    std::int64_t sent_ns = 0;  ///< The controller's clock when it was written.
   };
   std::deque<Unanswered> unanswered;
   WorkerPlan plan;  ///< What it was told to run (null workload: no args).
@@ -289,6 +291,9 @@ class Run {
   void write_journal(std::int64_t elapsed_ns, bool force);
   [[nodiscard]] journal::Entry journal_entry(std::int64_t elapsed_ns) const;
   void journal_fault(const std::string& text, std::int64_t elapsed_ns);
+  /// What the staleness allowance grows by for `worker` now: the replacement
+  /// allowance while a Switch or Rebind written within it is unanswered.
+  [[nodiscard]] std::int64_t replacement_extra_ns(const Tracked& worker, std::int64_t now_ns) const;
   [[nodiscard]] core::Result<core::Ok, ControllerError> watch(Tracked& worker,
                                                               const platform::TimePoint& now);
   [[nodiscard]] core::Result<core::Ok, ControllerError> send(Tracked& worker, int signal,
@@ -696,7 +701,7 @@ core::Result<core::Ok, ControllerError> Run::command(Tracked& worker, const work
   }
   ++worker.next_sequence;
   ++worker.commands.sent;
-  worker.unanswered.push_back(Tracked::Unanswered{message.sequence, what});
+  worker.unanswered.push_back(Tracked::Unanswered{message.sequence, what, clock_running_ns_});
   if (const auto* change = std::get_if<worker::Switch>(&what)) {
     worker.told.push_back(change->workload);
   }
@@ -820,11 +825,21 @@ core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker,
   bool stale = false;
   auto observed = region_->observe(ipc::worker_slot(worker.slot));
   if (!observed.has_value()) {
-    stale = now.running_ns - worker.last_read_ns > options_->stale_after_ns;
+    stale = now.running_ns - worker.last_read_ns > stale_after_ns;
   } else {
+std::int64_t Run::replacement_extra_ns(const Tracked& worker, std::int64_t now_ns) const {
+  const bool replacing =
+      std::ranges::any_of(worker.unanswered, [&](const Tracked::Unanswered& each) {
+        const bool replaces = std::holds_alternative<worker::Switch>(each.command) ||
+                              std::holds_alternative<worker::Rebind>(each.command);
+        return replaces && now_ns - each.sent_ns <= options_->replacement_allowance_ns;
+      });
+  return replacing ? options_->replacement_allowance_ns : 0;
+}
+
     worker.last_read_ns = now.running_ns;
     const std::optional<ipc::Heartbeat> beat = observed.value();
-    const ipc::Liveness liveness = ipc::liveness(beat, now.running_ns, options_->stale_after_ns);
+    const ipc::Liveness liveness = ipc::liveness(beat, now.running_ns, stale_after_ns);
     if (beat.has_value() && beat->progress > worker.progress) {
       worker.progress = beat->progress;
       worker.progress_changed_ns = now.running_ns;
@@ -835,8 +850,16 @@ core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker,
     if (worker.paused) {
       worker.progress_changed_ns = now.running_ns;
     }
-    const bool stalled = now.running_ns - worker.progress_changed_ns >
-                         options_->stale_after_ns + worker.idle_allowance_ns;
+  //
+  // A worker told to replace its runner (a Switch or a Rebind) beats nothing
+  // while it does (review A5; it frees the old footprint, then makes and
+  // touches the new one, in one call that cannot beat), so for as long as such
+  // a message is unanswered, and for no more than replacement_allowance_ns
+  // after it was written, both judgements allow that much more.
+  const std::int64_t stale_after_ns =
+      options_->stale_after_ns + replacement_extra_ns(worker, now.running_ns);
+    const bool stalled =
+        now.running_ns - worker.progress_changed_ns > stale_after_ns + worker.idle_allowance_ns;
     if (liveness == ipc::Liveness::kStale) {
       stale = true;
     } else if (liveness == ipc::Liveness::kNeverBeat) {

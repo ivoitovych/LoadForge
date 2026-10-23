@@ -2326,6 +2326,76 @@ TEST(ControllerControl, ARefusedCommandChangesNothingAboutHowTheWorkerIsJudged) 
     } else if (line == "worker 1: sent signal 9 (heartbeat stale)") {
       rig.worker_exits(0, SIGKILL);
       rig.worker_exits(1, SIGKILL);
+// Review A5: the worker beats nothing while it replaces its runner, so the controller allows
+// that much longer, from the write of the Switch or Rebind until it is answered.
+class ReplacementAllowance : public ::testing::TestWithParam<worker::Command> {};
+
+TEST_P(ReplacementAllowance, ASlowReplacementIsNotAHangUntilTheAllowanceFromTheWriteIsSpent) {
+  Rig rig;
+  spin_both(rig);
+  rig.options.replacement_allowance_ns = 200 * kMs;
+  const mixed::Schedule schedule = schedule_of({step_of(0, "swap", {tell(0, {GetParam()})})});
+  rig.options.schedule = &schedule;
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 7, 10'000 * kMs);
+      rig.beat(1, 7, 10'000 * kMs);
+    } else if (line == "worker 0: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const auto& events = rig.reporter.events;
+  const auto plain =
+      std::find(events.begin(), events.end(), "worker 1: sent signal 15 (heartbeat stale)");
+  const auto replacing =
+      std::find(events.begin(), events.end(), "worker 0: sent signal 15 (heartbeat stale)");
+  ASSERT_NE(plain, events.end());
+  ASSERT_NE(replacing, events.end()) << "a replacement that never ends is still stopped";
+  EXPECT_LE(rig.reporter.elapsed[static_cast<std::size_t>(plain - events.begin())], 50 * kMs);
+  EXPECT_GE(rig.reporter.elapsed[static_cast<std::size_t>(replacing - events.begin())], 200 * kMs)
+      << "not before the 200 ms allowed for a replacement have passed";
+}
+
+TEST_P(ReplacementAllowance, AnAnsweredReplacementAllowsNothingMore) {
+  Rig rig;
+  spin_both(rig);
+  rig.options.replacement_allowance_ns = 5000 * kMs;
+  const mixed::Schedule schedule = schedule_of({step_of(0, "swap", {tell(0, {GetParam()})})});
+  rig.options.schedule = &schedule;
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 7, 10'000 * kMs);
+      rig.beat(1, 7, 10'000 * kMs);
+    } else if (starts_with(line, "phase swap")) {
+      answer(rig, 0, 1);
+    } else if (line == "worker 0: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  const auto& events = rig.reporter.events;
+  const auto answered =
+      std::find(events.begin(), events.end(), "worker 0: sent signal 15 (heartbeat stale)");
+  ASSERT_NE(answered, events.end());
+  EXPECT_LE(rig.reporter.elapsed[static_cast<std::size_t>(answered - events.begin())], 100 * kMs)
+      << "judged by the usual 30 ms again once the worker has answered";
+}
+
+worker::Command a_switch() {
+  worker::Switch change;
+  change.workload = "sort";
+  change.footprint_bytes = std::uint64_t{1} << 20U;
+  return change;
+}
+
+INSTANTIATE_TEST_SUITE_P(Replacements, ReplacementAllowance,
+                         ::testing::Values(a_switch(), worker::Command{worker::Rebind{{0}}}));
+
     }
   };
   auto result = rig.run();

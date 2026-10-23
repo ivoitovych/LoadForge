@@ -505,6 +505,10 @@ TEST(OrchestrationTemperatureTest, TheNewOptionsAndTheReportsStopTakePartInTheCo
   p.temperature_blind_after_ns = 1;
   EXPECT_NE(o, p);
   EXPECT_EQ(o.temperature_blind_after_ns, 10'000'000'000);
+  p = o;
+  p.replacement_allowance_ns = 1;
+  EXPECT_NE(o, p);
+  EXPECT_EQ(o.replacement_allowance_ns, 60'000'000'000);
 
   const RunReport r;
   RunReport s = r;
