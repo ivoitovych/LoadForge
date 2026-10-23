@@ -168,9 +168,10 @@ class Execution {
     return core::Ok{};
   }
 
-  /// Whether a signal has asked for the end: asked of the caller until one has.
+  /// Whether a signal has asked for the end. Not asked again once one has: the search
+  /// ends with the error that follows.
   bool asked_to_stop() {
-    if (!stopped_.has_value() && config_.stop_signal) {
+    if (config_.stop_signal) {
       stopped_ = config_.stop_signal();
     }
     return stopped_.has_value();

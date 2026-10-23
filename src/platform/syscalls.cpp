@@ -47,14 +47,21 @@ std::string describe_event(const PerfEventSpec& spec) {
 
 /// The descriptor each diverted signal writes to, plus one (zero: none), by
 /// signal number; slot 0 takes every number out of range. Atomics because the
-/// handler reads them at any instruction of the process.
+/// handler reads them at any instruction of the process. Global because a
+/// signal handler has nowhere else to find them.
 constexpr std::size_t kDivertedSlots = static_cast<std::size_t>(kMaxDivertedSignal) + 1;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::array<std::atomic<int>, kDivertedSlots> g_diverted{};
 /// The process that installed a diversion (diverts_here).
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<pid_t> g_diverter{0};
 
-std::size_t slot_of(int signal) noexcept {
-  return signal > 0 && signal <= kMaxDivertedSignal ? static_cast<std::size_t>(signal) : 0;
+std::atomic<int>& diverted_slot(int signal) noexcept {
+  const std::size_t slot =
+      signal > 0 && signal <= kMaxDivertedSignal ? static_cast<std::size_t>(signal) : 0;
+  // The index is held to the array's range by the line above.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
+  return g_diverted[slot];
 }
 
 }  // namespace
@@ -63,7 +70,7 @@ bool diverts_here(int fd, pid_t owner, pid_t caller) noexcept { return fd >= 0 &
 
 void note_diverted_signal(int signal) noexcept {
   const int saved = errno;
-  const int fd = g_diverted[slot_of(signal)].load(std::memory_order_relaxed) - 1;
+  const int fd = diverted_slot(signal).load(std::memory_order_relaxed) - 1;
   if (diverts_here(fd, g_diverter.load(std::memory_order_relaxed), ::getpid())) {
     const auto byte = static_cast<unsigned char>(signal);
     // A full pipe drops the byte: the signals already in it say the same.
@@ -542,7 +549,7 @@ core::Result<core::Ok, SyscallError> RealSyscalls::divert_signal(int signal, int
   }
   // The descriptor is known to the handler before the handler can run.
   g_diverter.store(::getpid(), std::memory_order_relaxed);
-  g_diverted[slot_of(signal)].store(write_fd + 1, std::memory_order_relaxed);
+  diverted_slot(signal).store(write_fd + 1, std::memory_order_relaxed);
   struct sigaction action {};
   action.sa_handler = note_diverted_signal;  // NOLINT(cppcoreguidelines-pro-type-union-access)
   // Every signal is held while the handler runs, so that two signals that arrive
@@ -553,7 +560,7 @@ core::Result<core::Ok, SyscallError> RealSyscalls::divert_signal(int signal, int
   const bool failed = ::sigaction(signal, &action, nullptr) != 0;
   const int number = errno;
   if (failed) {
-    g_diverted[slot_of(signal)].store(0, std::memory_order_relaxed);
+    diverted_slot(signal).store(0, std::memory_order_relaxed);
   }
   return result_or_error<core::Ok>(core::Ok{}, failed, number, "sigaction",
                                    "signal " + std::to_string(signal));
@@ -562,7 +569,7 @@ core::Result<core::Ok, SyscallError> RealSyscalls::divert_signal(int signal, int
 core::Result<core::Ok, SyscallError> RealSyscalls::default_signal(int signal) {
   // Before the disposition changes: a handler that runs after this finds no
   // descriptor, which the caller may be about to close.
-  g_diverted[slot_of(signal)].store(0, std::memory_order_relaxed);
+  diverted_slot(signal).store(0, std::memory_order_relaxed);
   struct sigaction action {};
   action.sa_handler = SIG_DFL;  // NOLINT(cppcoreguidelines-pro-type-union-access)
   ::sigemptyset(&action.sa_mask);

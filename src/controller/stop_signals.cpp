@@ -4,6 +4,7 @@
 #include <array>
 #include <csignal>
 #include <cstddef>
+#include <span>
 
 namespace loadforge::controller {
 namespace {
@@ -46,8 +47,8 @@ core::Result<std::size_t, platform::SyscallError> StopSignals::absorb() {
   if (!taken.has_value()) {
     return taken.error();
   }
-  for (std::size_t at = 0; at < taken.value(); ++at) {
-    received_.push_back(static_cast<unsigned char>(bytes[at]));
+  for (const char byte : std::span<const char>(bytes).first(taken.value())) {
+    received_.push_back(static_cast<unsigned char>(byte));
   }
   return taken.value();
 }

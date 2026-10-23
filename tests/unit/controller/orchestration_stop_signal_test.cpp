@@ -38,10 +38,8 @@ constexpr pid_t kFirstPid = 1001;
 constexpr pid_t kSecondPid = 1002;
 // The signals' pipe is made first (200, 201); then per worker a record pipe and
 // a control pipe.
-constexpr int kStopRead = 200;
 constexpr int kRecordWrite0 = 203;
 constexpr int kControlRead0 = 204;
-constexpr int kControlWrite0 = 205;
 constexpr int kRecordWrite1 = 207;
 constexpr int kControlRead1 = 208;
 
@@ -358,6 +356,74 @@ TEST(OrchestrationStopSignalTest, ARunNobodyInterruptedHasNoSignalAndWaitsOnTheP
   EXPECT_FALSE(result.value().stop_signal.has_value());
   EXPECT_TRUE(run.stop.received().empty());
   EXPECT_GT(run.syscalls.poll_count(), 0);
+}
+
+// ---- what the stop itself can fail at ---------------------------------------------------
+
+class StopWriteFails : public ::testing::TestWithParam<int> {};
+
+TEST_P(StopWriteFails, ASignalWhoseStopRequestCannotBeWrittenEndsTheRunWithTheKernelsError) {
+  Interrupted run;
+  run.signal_after_spawn(SIGINT);
+  run.syscalls.always_fail_write(GetParam());
+
+  auto result = run.go();
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().stage, "control pipe");
+  run.stop.release();
+  EXPECT_TRUE(run.syscalls.all_descriptors_closed());
+}
+
+// write(2): EBADF, EDQUOT, EFAULT, EFBIG, EINVAL, EIO, ENOSPC (EPIPE is a worker already gone,
+// and is not an error: AWorkerWhoseControlPipeHasNoReaderIsTolerated in orchestration_test).
+INSTANTIATE_TEST_SUITE_P(WriteErrors, StopWriteFails,
+                         ::testing::Values(EBADF, EDQUOT, EFAULT, EFBIG, EINVAL, EIO, ENOSPC));
+
+class KillFails : public ::testing::TestWithParam<int> {};
+
+TEST_P(KillFails, AKillTheKernelRefusesEndsTheRunWithItsError) {
+  Interrupted run;
+  run.reporter.on_event = [&run](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      EXPECT_TRUE(run.syscalls.raise_diverted(SIGINT));
+    }
+    if (starts_with(line, "SIGINT received")) {
+      EXPECT_TRUE(run.syscalls.raise_diverted(SIGINT));
+      run.syscalls.fail_signal_for(kFirstPid, GetParam());
+    }
+  };
+
+  auto result = run.go();
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().stage, "signal");
+  run.stop.release();
+  EXPECT_TRUE(run.syscalls.all_descriptors_closed());
+}
+
+// kill(2): EINVAL, EPERM (ESRCH is a worker already gone, and is not an error).
+INSTANTIATE_TEST_SUITE_P(KillErrors, KillFails, ::testing::Values(EINVAL, EPERM));
+
+TEST(OrchestrationStopSignalTest, AKillOfAWorkerThatJustDiedIsNotAnErrorButAnAbsentSignal) {
+  Interrupted run;
+  run.reporter.on_event = [&run](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      EXPECT_TRUE(run.syscalls.raise_diverted(SIGINT));
+    }
+    if (starts_with(line, "SIGINT received")) {
+      EXPECT_TRUE(run.syscalls.raise_diverted(SIGINT));
+      run.syscalls.fail_signal_for(kFirstPid, ESRCH);
+    }
+    if (starts_with(line, "worker 1: sent signal 9")) {
+      run.reporter.leave();
+    }
+  };
+
+  auto result = run.go();
+
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_TRUE(result.value().stop_forced);
 }
 
 // ---- the signals' own pipe failing --------------------------------------------------

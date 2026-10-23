@@ -466,6 +466,26 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
   return outcome;
 }
 
+namespace {
+
+/// A look at the signals, every round of the settling, which can last minutes: the
+/// error that ends the trial if one has asked for the end or the look failed.
+std::optional<TrialError> stop_asked(controller::StopSignals* stop) {
+  if (stop == nullptr) {
+    return std::nullopt;
+  }
+  if (auto absorbed = stop->absorb(); !absorbed.has_value()) {
+    return refuse(TrialFault::kRun, "settle: " + platform::describe(absorbed.error()));
+  }
+  if (const std::optional<int> signal = stop->first(); signal.has_value()) {
+    return refuse(TrialFault::kRun,
+                  "settle: stopped by " + std::string{controller::signal_name(*signal)});
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
 core::Result<ControllerTrialRunner::Settled, TrialError> ControllerTrialRunner::settle(
     Rig& rig, const statistics::Summarizer& summarizer, const Settle& phase,
     std::int64_t interval_ns) {
@@ -483,15 +503,8 @@ core::Result<ControllerTrialRunner::Settled, TrialError> ControllerTrialRunner::
     }
     const std::int64_t now_ns = now.value().running_ns;
     const std::int64_t elapsed_ns = now_ns - started_ns;
-    if (stop != nullptr) {
-      // A look, every round: a signal ends the settling, which can take minutes.
-      if (auto absorbed = stop->absorb(); !absorbed.has_value()) {
-        return refuse(TrialFault::kRun, "settle: " + platform::describe(absorbed.error()));
-      }
-      if (const std::optional<int> signal = stop->first(); signal.has_value()) {
-        return refuse(TrialFault::kRun,
-                      "settle: stopped by " + std::string{controller::signal_name(*signal)});
-      }
+    if (auto asked = stop_asked(stop); asked.has_value()) {
+      return std::move(*asked);
     }
     if (auto taken = rig.sampler().round(now_ns); !taken.has_value()) {
       std::string detail = "settle: sampling refused: ";

@@ -315,9 +315,8 @@ class Run {
   /// Reads the signals that came, and acts on each: the first stops the run, any
   /// later one kills the workers.
   [[nodiscard]] core::Result<core::Ok, ControllerError> take_stop_signals();
-  [[nodiscard]] core::Result<core::Ok, ControllerError> stop_for_signal(int signal,
-                                                                        std::int64_t now_ns);
-  [[nodiscard]] core::Result<core::Ok, ControllerError> kill_for_signal(std::int64_t now_ns);
+  [[nodiscard]] core::Result<core::Ok, ControllerError> stop_for_signal(int signal);
+  [[nodiscard]] core::Result<core::Ok, ControllerError> kill_for_signal();
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain(Tracked& worker);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_available(Tracked& worker);
   /// Takes one record a worker sent into the worker's account of itself, or
@@ -999,9 +998,8 @@ core::Result<core::Ok, ControllerError> Run::take_stop_signals() {
   }
   const std::vector<int>& received = signals.received();
   for (; signals_handled_ < received.size(); ++signals_handled_) {
-    const std::int64_t now_ns = clock_running_ns_;
-    auto handled = stop_signal_.has_value() ? kill_for_signal(now_ns)
-                                            : stop_for_signal(received[signals_handled_], now_ns);
+    auto handled =
+        stop_signal_.has_value() ? kill_for_signal() : stop_for_signal(received[signals_handled_]);
     if (!handled.has_value()) {
       return handled;
     }
@@ -1009,7 +1007,8 @@ core::Result<core::Ok, ControllerError> Run::take_stop_signals() {
   return core::Ok{};
 }
 
-core::Result<core::Ok, ControllerError> Run::stop_for_signal(int signal, std::int64_t now_ns) {
+core::Result<core::Ok, ControllerError> Run::stop_for_signal(int signal) {
+  const std::int64_t now_ns = clock_running_ns_;
   stop_signal_ = signal;
   if (!stop_requested_) {
     // As the deadline does it: the round that closes the phase the stop ends,
@@ -1027,7 +1026,8 @@ core::Result<core::Ok, ControllerError> Run::stop_for_signal(int signal, std::in
   return core::Ok{};
 }
 
-core::Result<core::Ok, ControllerError> Run::kill_for_signal(std::int64_t now_ns) {
+core::Result<core::Ok, ControllerError> Run::kill_for_signal() {
+  const std::int64_t now_ns = clock_running_ns_;
   // The user insists: no grace, no SIGTERM, the signal that cannot be ignored.
   // What each worker had sent stays in the report, and the fate says it was killed.
   stop_forced_ = true;
