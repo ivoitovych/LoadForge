@@ -123,7 +123,7 @@ observer inside the observed. Took (b), as `sampler.hpp` anticipates, with round
 the first fork (a counter's baseline before any worker can move it); every interval; at the
 deadline on the instant the next phase is marked; after the last reap (what the workers did,
 and left behind when they died). Proposed as an ADR:
-`docs/adr/proposed/21-m3-integration-sampling-points-and-phase-windows.md`.
+`docs/adr/0008-sampling-points-and-phase-windows.md`.
 
 A round that is not later than the last is skipped, not offered and refused, because two
 ticks can read the same clock tick and the fake clock does. A round the timeline refuses
@@ -185,7 +185,7 @@ run could not start".
 
 ### The disagreements are tests that are expected to fail
 
-ADR proposed: `docs/adr/proposed/21-m3-integration-contract-disagreements-as-expected-failures.md`.
+ADR proposed: `docs/adr/0009-contract-disagreements-as-expected-failures.md`.
 `loadforge_test_suite()` cannot say `WILL_FAIL`, so that executable repeats its body with the
 property added to the discovery. The caveat is in the ADR: a failure that is a sanitizer's
 report is also "expected", which the passing suite's identical code under the same
