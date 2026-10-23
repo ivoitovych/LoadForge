@@ -2563,6 +2563,34 @@ TEST(ControllerJournal, WithoutAScheduleThePhaseIsRunAndTheWorkloadIsWhatTheWork
   EXPECT_FALSE(journal.entries.front().temperature_c.has_value()) << "no notes, no readings";
 }
 
+TEST(ControllerJournal, ABacklogOfDueStepsForcesOneWriteAndNotOnePerStep) {
+  // Review C5: each forced write is an fsync, and a loop that makes one per due step kept the
+  // controller from its next beat. Five steps are due at the first tick (10 ms by the fake's
+  // clock); one entry is forced for them, naming the phase the run is in after the last.
+  Rig rig;
+  rig.config.run.duration = core::Duration{200};
+  controller_testing::RecordingWriter journal;
+  rig.options.journal = &journal;
+  rig.options.journal_interval_ns = 10'000 * kMs;
+  const mixed::Schedule schedule = schedule_of(
+      {step_of(1 * kMs, "p0", {}), step_of(2 * kMs, "p1", {}), step_of(3 * kMs, "p2", {}),
+       step_of(4 * kMs, "p3", {}), step_of(5 * kMs, "p4", {})});
+  rig.options.schedule = &schedule;
+  complete_at_deadline(rig);
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().steps_run, 5U);
+  const auto phase_count = [&journal](const std::string& phase) {
+    return std::ranges::count_if(
+        journal.entries, [&phase](const journal::Entry& entry) { return entry.phase == phase; });
+  };
+  for (const char* skipped : {"p0", "p1", "p2", "p3"}) {
+    EXPECT_EQ(phase_count(skipped), 0) << skipped << " was run through within the tick";
+  }
+  EXPECT_EQ(phase_count("p4"), 1) << "one forced write for the five steps";
+  EXPECT_EQ(journal.syncs, journal.appends);
+}
+
 TEST(ControllerJournal, TheMostAdvancedWorkersUnitsAndTheStaleOnesAreWhatAnEntrySays) {
   Rig rig;
   rig.config.run.duration = core::Duration{200};

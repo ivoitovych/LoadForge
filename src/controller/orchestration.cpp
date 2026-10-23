@@ -724,7 +724,9 @@ core::Result<core::Ok, ControllerError> Run::run_schedule(std::int64_t elapsed_n
     return core::Ok{};
   }
   const std::vector<mixed::Step>& steps = options_->schedule->steps;
+  bool stepped = false;
   while (next_step_ < steps.size() && steps[next_step_].at_ns <= elapsed_ns) {
+    stepped = true;
     const mixed::Step& step = steps[next_step_++];
     ++steps_run_;
     phase_ = step.phase;
@@ -747,6 +749,14 @@ core::Result<core::Ok, ControllerError> Run::run_schedule(std::int64_t elapsed_n
         }
       }
     }
+  }
+  // One forced write however many steps were due, after them: a write is an
+  // fsync, and a backlog of steps (a rotation shorter than a tick, a tick that
+  // came late) each forcing one kept the controller from its next beat for
+  // longer than the workers allow it (review C5). The entry names the phase the
+  // run is in now; the steps that were run through in one tick are all in the
+  // timeline's marks and the reporter's lines.
+  if (stepped) {
     write_journal(elapsed_ns, true);
   }
   return core::Ok{};
