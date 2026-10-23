@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <csignal>
+
 #include <sstream>
 #include <string>
 
@@ -247,6 +249,25 @@ TEST(ConsoleReporterTest, ARunTheCeilingEndedSaysWhichSensorWhatItReadAndWhen) {
             "run ended after 4.000 s: 0 of 0 worker(s) completed\n"
             "  ended by the temperature ceiling: thermal.core 3 (hwmon:coretemp) read 91.0 C, "
             "at or above the ceiling of 90 C, 3.500 s into the run\n");
+}
+
+TEST(ConsoleReporterTest, ARunASignalStoppedSaysWhichAndWhetherTheWorkersWereKilled) {
+  controller::RunReport report;
+  report.elapsed_ns = 4'000'000'000;
+  report.stop_signal = SIGTERM;
+  std::ostringstream stopped;
+  ConsoleReporter reporter(stopped);
+  reporter.run_finished(report);
+  EXPECT_EQ(stopped.str(),
+            "run ended after 4.000 s: 0 of 0 worker(s) completed\n"
+            "  stopped by SIGTERM\n");
+  report.stop_forced = true;
+  std::ostringstream forced;
+  ConsoleReporter again(forced);
+  again.run_finished(report);
+  EXPECT_EQ(forced.str(),
+            "run ended after 4.000 s: 0 of 0 worker(s) completed\n"
+            "  stopped by SIGTERM; a later signal killed the workers at once\n");
 }
 
 }  // namespace

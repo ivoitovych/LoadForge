@@ -62,6 +62,23 @@ struct Reaped {
 [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_result(pid_t pid, int status,
                                                                             int number);
 
+/// The highest signal number divert_signal can divert (the kernel's real-time
+/// range ends at 64).
+inline constexpr int kMaxDivertedSignal = 64;
+
+/// What the diverted signal's handler does, public so that a test reaches every
+/// arm without raising a signal: writes the signal's number, as one byte, to
+/// the descriptor divert_signal was given for it, in the process that gave it.
+/// Async-signal-safe (an atomic load, getpid, write), and it leaves errno as it
+/// found it. A signal nothing was diverted for is dropped; so is a byte the
+/// pipe has no room for.
+void note_diverted_signal(int signal) noexcept;
+
+/// Whether a diverted signal is written in this process: a descriptor was
+/// given (`fd` is not negative) and the process that gave it (`owner`) is
+/// `caller`, not a child that inherited the handler across a fork.
+[[nodiscard]] bool diverts_here(int fd, pid_t owner, pid_t caller) noexcept;
+
 /// What waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT)'s return value means: a
 /// negative return is the failure `number` names (ECHILD for a pid that is not
 /// an unreaped child); otherwise `reported_pid` is what the kernel wrote into
@@ -422,6 +439,9 @@ class Syscalls {
   /// (negative waits forever, zero does not wait). One Readiness per
   /// descriptor, in the order given. The timeout is the controller's
   /// heartbeat interval: this is the one blocking call in its loop.
+  /// A wait that a signal ends early (EINTR) is not an error: it answers with
+  /// every descriptor not ready, as an expired timeout does, and the caller's
+  /// next look finds what the signal left (divert_signal).
   [[nodiscard]] virtual core::Result<std::vector<Readiness>, SyscallError> poll_readable(
       const std::vector<int>& fds, int timeout_ms) = 0;
 
@@ -439,6 +459,26 @@ class Syscalls {
   /// gone fails with ECHILD and the run is aborted (review C2). The kernel
   /// refuses for SIGKILL and SIGSTOP (EINVAL).
   [[nodiscard]] virtual core::Result<core::Ok, SyscallError> default_signal(int signal) = 0;
+
+  /// Makes `signal` do one thing and nothing else when it arrives: write its
+  /// own number, as one byte, to `write_fd` (the self-pipe: the controller
+  /// polls the read end with the descriptors it already polls, and learns of a
+  /// Ctrl-C at its next tick, in its own code, never in a handler). The write
+  /// end is made non-blocking first (fcntl, EBADF for a descriptor that is not
+  /// open), so that a flood of signals fills the pipe and is dropped, and never
+  /// blocks the process inside the handler. The handler is installed with
+  /// SA_RESTART, so that no read or write of the controller's sees EINTR; poll
+  /// is never restarted, and RealSyscalls::poll_readable answers an
+  /// interrupted wait as a wait that ended with nothing ready.
+  ///
+  /// The handler writes only in the process that installed it: a worker forked
+  /// from the controller holds the handler until its exec, and a Ctrl-C that
+  /// reaches it there must not be counted as a second one. default_signal
+  /// undoes the diversion. One descriptor per signal; the last call wins.
+  /// Failures: EBADF (fcntl: `write_fd` is not open), EINVAL (sigaction: not a
+  /// signal that can be caught: SIGKILL, SIGSTOP, or none). ENOSYS by default.
+  [[nodiscard]] virtual core::Result<core::Ok, SyscallError> divert_signal(int signal,
+                                                                           int write_fd);
 
   /// getpid(2). Cannot fail. A worker stamps its beats with it so a reader
   /// can tell a slot's writer from a stale pid the controller remembers.
@@ -518,6 +558,8 @@ class RealSyscalls final : public Syscalls {
       const std::vector<int>& fds, int timeout_ms) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> ignore_signal(int signal) override;
   [[nodiscard]] core::Result<core::Ok, SyscallError> default_signal(int signal) override;
+  [[nodiscard]] core::Result<core::Ok, SyscallError> divert_signal(int signal,
+                                                                  int write_fd) override;
   [[nodiscard]] pid_t process_id() override;
   [[nodiscard]] core::Result<std::optional<Reaped>, SyscallError> reap_any_nonblocking() override;
   [[nodiscard]] core::Result<int, SyscallError> open_perf_event(const PerfEventSpec& spec) override;

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -22,6 +23,7 @@
 
 #include "core/byte_size.hpp"
 #include "core/duration.hpp"
+#include "controller/stop_signals.hpp"
 #include "core/parse_number.hpp"
 #include "explore/estimate.hpp"
 #include "main/cli.hpp"
@@ -596,7 +598,11 @@ namespace {
 
 /// The worst case, the ranking and what the search says of all its trials.
 void render_summary(std::ostringstream& text, const explore::SearchReport& report) {
-  if (report.reference_stop.has_value()) {
+  if (report.stop_signal.has_value()) {
+    text << "worst case: none; the search was stopped by "
+         << controller::signal_name(*report.stop_signal)
+         << ". What was measured before it follows; no candidate was ranked\n";
+  } else if (report.reference_stop.has_value()) {
     text << "worst case: none; the search ended early because a reference trial's verdict was "
          << results::describe(*report.reference_stop)
          << ". What was measured before it follows; no candidate was ranked\n";
@@ -717,6 +723,9 @@ int exit_code_for(const explore::SearchReport& report) noexcept {
   if (fate_is(explore::Fate::kFindings) || reference_found || report.corrected_error_trials > 0) {
     return kExitFault;
   }
+  if (report.stop_signal.has_value()) {
+    return kExitSignalBase + *report.stop_signal;
+  }
   if (fate_is(explore::Fate::kIncomplete) || report.reference_stop.has_value()) {
     return kExitNotVerified;
   }
@@ -758,6 +767,27 @@ int run_explore(ControllerTrialRunner& runner, explore::SearchConfig config, std
   return exit_code_for(searched.value());
 }
 
+int run_explore_stoppable(ControllerTrialRunner& runner, controller::StopSignals& stop,
+                          explore::SearchConfig config, std::ostream& out, std::ostream& err) {
+  // Ctrl-C and SIGTERM, caught from here to the end of the search: the trial
+  // under way is stopped as a deadline stops it, no more are started, and what
+  // was measured is reported (journal 34b).
+  if (auto installed = stop.install(); !installed.has_value()) {
+    err << "loadforge: explore: cannot catch SIGINT and SIGTERM: "
+        << platform::describe(installed.error()) << "\n";
+    return kRefused;
+  }
+  config.stop_signal = [&stop]() -> std::optional<int> {
+    // A failed look is no news: the next one tries again, and the trial's own
+    // run reports a failure of its own.
+    (void)stop.absorb();
+    return stop.first();
+  };
+  const int code = run_explore(runner, std::move(config), out, err);
+  stop.release();
+  return code;
+}
+
 int explore_command(std::span<const std::string_view> args, const std::string& self_link,
                     std::string_view sysfs_root, const TrialOptions& base, std::ostream& out,
                     std::ostream& err) {
@@ -773,7 +803,9 @@ int explore_command(std::span<const std::string_view> args, const std::string& s
     return kRefused;
   }
   const workloads::BuiltinRegistry registry;
+  controller::StopSignals stop(syscalls);
   TrialOptions options = base;
+  options.stop_signals = &stop;
   options.executable = launch->executable;
   options.isa = arguments.isa;
   options.seed = arguments.seed;
@@ -794,7 +826,7 @@ int explore_command(std::span<const std::string_view> args, const std::string& s
   // normally cannot replay buffered output.
   out.flush();
   err.flush();
-  return run_explore(*runner, search_config_of(arguments), out, err);
+  return run_explore_stoppable(*runner, stop, search_config_of(arguments), out, err);
 }
 
 }  // namespace loadforge::cli

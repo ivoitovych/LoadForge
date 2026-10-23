@@ -1472,6 +1472,165 @@ TEST_F(RealSyscallsTest, PutsASignalBackToItsDefaultAndIsRefusedForTheOneThatCan
   EXPECT_EQ(refused.error().subject, "signal 9");
 }
 
+// The handler of a diverted signal, driven by hand: the handler is one function, and a
+// test that raised the signal would test the kernel with it.
+class DivertedSignalTest : public RealSyscallsTest {
+ protected:
+  void SetUp() override {
+    RealSyscallsTest::SetUp();
+    auto created = syscalls.create_pipe();
+    ASSERT_TRUE(created.has_value());
+    pipe = created.value();
+  }
+  void TearDown() override {
+    (void)syscalls.default_signal(SIGUSR1);
+    (void)syscalls.default_signal(SIGUSR2);
+    (void)syscalls.close(pipe.read_fd);
+    (void)syscalls.close(pipe.write_fd);
+    RealSyscallsTest::TearDown();
+  }
+  [[nodiscard]] std::string pending() const {
+    std::array<char, 16> buffer{};
+    const ssize_t count = ::read(pipe.read_fd, buffer.data(), buffer.size());
+    return count > 0 ? std::string(buffer.data(), static_cast<std::size_t>(count)) : std::string{};
+  }
+  PipeEnds pipe;
+};
+
+TEST_F(DivertedSignalTest, ADivertedSignalWritesItsNumberToThePipeAndNothingElseHappens) {
+  auto diverted = syscalls.divert_signal(SIGUSR1, pipe.write_fd);
+  ASSERT_TRUE(diverted.has_value()) << describe(diverted.error());
+  struct sigaction installed {};
+  ASSERT_EQ(::sigaction(SIGUSR1, nullptr, &installed), 0);
+  EXPECT_NE(installed.sa_flags & SA_RESTART, 0) << "no read or write of the controller is cut short";
+
+  ASSERT_EQ(::raise(SIGUSR1), 0);  // The real kernel and the real handler: one byte.
+  EXPECT_EQ(pending(), std::string(1, static_cast<char>(SIGUSR1)));
+}
+
+TEST_F(DivertedSignalTest, TheWriteEndIsMadeNonBlockingSoAFloodOfSignalsIsDroppedNotWaitedOn) {
+  ASSERT_TRUE(syscalls.divert_signal(SIGUSR1, pipe.write_fd).has_value());
+  const int flags = ::fcntl(pipe.write_fd, F_GETFL);
+  ASSERT_GE(flags, 0);
+  EXPECT_NE(flags & O_NONBLOCK, 0);
+  // Far more signals than a pipe holds: the handler returns every time.
+  constexpr int kMoreThanThePipeHolds = 70'000;
+  for (int sent = 0; sent < kMoreThanThePipeHolds; ++sent) {
+    note_diverted_signal(SIGUSR1);
+  }
+  SUCCEED() << "the handler never blocked";
+}
+
+TEST_F(DivertedSignalTest, ASignalNothingWasDivertedForWritesNothing) {
+  ASSERT_TRUE(syscalls.divert_signal(SIGUSR1, pipe.write_fd).has_value());
+  note_diverted_signal(SIGUSR2);
+  note_diverted_signal(0);
+  note_diverted_signal(kMaxDivertedSignal + 1);
+  note_diverted_signal(-5);
+  const int flags = ::fcntl(pipe.read_fd, F_GETFL);
+  ASSERT_GE(flags, 0);
+  ASSERT_EQ(::fcntl(pipe.read_fd, F_SETFL, flags | O_NONBLOCK), 0);
+  EXPECT_EQ(pending(), "");
+}
+
+TEST_F(DivertedSignalTest, TheHandlerLeavesErrnoAsItFoundIt) {
+  ASSERT_TRUE(syscalls.divert_signal(SIGUSR1, pipe.write_fd).has_value());
+  errno = ERANGE;
+  note_diverted_signal(SIGUSR1);
+  EXPECT_EQ(errno, ERANGE);
+}
+
+TEST_F(DivertedSignalTest, PuttingTheSignalBackToItsDefaultEndsTheDiversion) {
+  ASSERT_TRUE(syscalls.divert_signal(SIGUSR1, pipe.write_fd).has_value());
+  ASSERT_TRUE(syscalls.default_signal(SIGUSR1).has_value());
+  note_diverted_signal(SIGUSR1);  // As a handler that ran after the pipe was closed would.
+  const int flags = ::fcntl(pipe.read_fd, F_GETFL);
+  ASSERT_EQ(::fcntl(pipe.read_fd, F_SETFL, flags | O_NONBLOCK), 0);
+  EXPECT_EQ(pending(), "");
+  struct sigaction after {};
+  ASSERT_EQ(::sigaction(SIGUSR1, nullptr, &after), 0);
+  EXPECT_EQ(after.sa_handler, SIG_DFL);  // NOLINT(cppcoreguidelines-pro-type-union-access)
+}
+
+TEST_F(DivertedSignalTest, TwoSignalsEachWriteToTheirOwnDescriptor) {
+  auto second = syscalls.create_pipe();
+  ASSERT_TRUE(second.has_value());
+  ASSERT_TRUE(syscalls.divert_signal(SIGUSR1, pipe.write_fd).has_value());
+  ASSERT_TRUE(syscalls.divert_signal(SIGUSR2, second.value().write_fd).has_value());
+  note_diverted_signal(SIGUSR2);
+  note_diverted_signal(SIGUSR1);
+  EXPECT_EQ(pending(), std::string(1, static_cast<char>(SIGUSR1)));
+  std::array<char, 4> buffer{};
+  EXPECT_EQ(::read(second.value().read_fd, buffer.data(), buffer.size()), 1);
+  EXPECT_EQ(buffer[0], static_cast<char>(SIGUSR2));
+  EXPECT_TRUE(syscalls.close(second.value().read_fd).has_value());
+  EXPECT_TRUE(syscalls.close(second.value().write_fd).has_value());
+}
+
+TEST_F(DivertedSignalTest, ADescriptorThatIsNotOpenIsEBADFAndNothingIsInstalled) {
+  const int closed = pipe.write_fd;
+  ASSERT_TRUE(syscalls.close(closed).has_value());
+  pipe.write_fd = -1;
+  auto refused = syscalls.divert_signal(SIGUSR1, closed);
+  ASSERT_FALSE(refused.has_value());
+  EXPECT_EQ(refused.error().number, EBADF);
+  EXPECT_EQ(refused.error().call, "fcntl");
+  struct sigaction after {};
+  ASSERT_EQ(::sigaction(SIGUSR1, nullptr, &after), 0);
+  EXPECT_EQ(after.sa_handler, SIG_DFL);  // NOLINT(cppcoreguidelines-pro-type-union-access)
+}
+
+TEST_F(DivertedSignalTest, ASignalThatCannotBeCaughtIsEINVALAndTheDescriptorIsForgotten) {
+  for (const int uncatchable : {SIGKILL, SIGSTOP, 0, kMaxDivertedSignal + 1, -1}) {
+    auto refused = syscalls.divert_signal(uncatchable, pipe.write_fd);
+    ASSERT_FALSE(refused.has_value()) << uncatchable;
+    EXPECT_EQ(refused.error().number, EINVAL) << uncatchable;
+    EXPECT_EQ(refused.error().call, "sigaction");
+    EXPECT_EQ(refused.error().subject, "signal " + std::to_string(uncatchable));
+  }
+  note_diverted_signal(SIGKILL);
+  note_diverted_signal(0);
+  const int flags = ::fcntl(pipe.read_fd, F_GETFL);
+  ASSERT_EQ(::fcntl(pipe.read_fd, F_SETFL, flags | O_NONBLOCK), 0);
+  EXPECT_EQ(pending(), "") << "a refused diversion leaves nothing for the handler to write to";
+}
+
+TEST(DivertsHere, ADescriptorAndTheProcessThatGaveItDecide) {
+  EXPECT_TRUE(diverts_here(5, 100, 100));
+  EXPECT_TRUE(diverts_here(0, 100, 100));
+  EXPECT_FALSE(diverts_here(-1, 100, 100)) << "nothing was given";
+  EXPECT_FALSE(diverts_here(5, 100, 101)) << "a child that inherited the handler";
+  EXPECT_FALSE(diverts_here(-1, 100, 101));
+}
+
+namespace {
+void do_nothing(int /*signal*/) {}
+}  // namespace
+
+TEST_F(RealSyscallsTest, AWaitThatASignalEndsIsNotAnErrorAndNothingIsReady) {
+  // A handler without SA_RESTART, so that poll is interrupted as it is by the
+  // controller's own: the alarm ends a ten-second wait.
+  struct sigaction handler {};
+  handler.sa_handler = do_nothing;  // NOLINT(cppcoreguidelines-pro-type-union-access)
+  ::sigemptyset(&handler.sa_mask);
+  struct sigaction before {};
+  ASSERT_EQ(::sigaction(SIGALRM, &handler, &before), 0);
+  auto created = syscalls.create_pipe();
+  ASSERT_TRUE(created.has_value());
+  const PipeEnds quiet = created.value();
+
+  ::alarm(1);
+  auto interrupted = syscalls.poll_readable({quiet.read_fd}, 10'000);
+  ::alarm(0);
+  ASSERT_EQ(::sigaction(SIGALRM, &before, nullptr), 0);
+
+  ASSERT_TRUE(interrupted.has_value()) << describe(interrupted.error());
+  ASSERT_EQ(interrupted.value().size(), 1U);
+  EXPECT_EQ(interrupted.value().front(), Readiness{});
+  EXPECT_TRUE(syscalls.close(quiet.read_fd).has_value());
+  EXPECT_TRUE(syscalls.close(quiet.write_fd).has_value());
+}
+
 TEST_F(RealSyscallsTest, ProcessIdIsTheKernelsAnswer) {
   EXPECT_EQ(syscalls.process_id(), ::getpid());
 }

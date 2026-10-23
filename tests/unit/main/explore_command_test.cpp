@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -537,6 +538,24 @@ TEST(ExploreReport, ASearchEndedByTheReferenceSaysSoAndKeepsWhatWasMeasured) {
   EXPECT_TRUE(contains(text, "replicates: 80.5 81 81.5")) << "what was measured is still listed";
 }
 
+TEST(ExploreReport, ASearchASignalStoppedSaysWhichAndKeepsWhatWasMeasured) {
+  explore::SearchReport report = a_report();
+  report.worst_case.reset();
+  report.ranking = explore::Ranking::kNone;
+  report.stop_signal = SIGINT;
+  report.candidates[0].fate = Fate::kStopped;
+  std::string text = render_report(report);
+  EXPECT_TRUE(contains(text,
+                       "worst case: none; the search was stopped by SIGINT. What was measured "
+                       "before it follows; no candidate was ranked\n"))
+      << text;
+  EXPECT_TRUE(contains(text, "candidate wide: stopped with the search"));
+  EXPECT_TRUE(contains(text, "replicates: 80.5 81 81.5")) << "what was measured is still listed";
+  report.stop_signal = SIGTERM;
+  text = render_report(report);
+  EXPECT_TRUE(contains(text, "the search was stopped by SIGTERM."));
+}
+
 TEST(ExploreReport, ACounterObjectiveNamesItsStatistic) {
   explore::SearchReport report = a_report();
   report.objective.statistic = CounterStatistic::kRate;
@@ -566,6 +585,24 @@ TEST(ExploreExit, AReferenceThatFoundSomethingIsAFindingAndOneThatDidNotFinishIs
   EXPECT_EQ(exit_code_for(report), 6);
   report.candidates[2].fate = Fate::kFindings;
   EXPECT_EQ(exit_code_for(report), 5) << "a finding outranks";
+}
+
+TEST(ExploreExit, ASignalIsTheShellsCodeBelowAFindingAndAboveATrialThatDidNotFinish) {
+  explore::SearchReport report = a_report();
+  report.candidates[2].fate = Fate::kEliminated;
+  ASSERT_EQ(exit_code_for(report), 0);
+  report.stop_signal = SIGINT;
+  EXPECT_EQ(exit_code_for(report), 130);
+  report.stop_signal = SIGTERM;
+  EXPECT_EQ(exit_code_for(report), 143);
+  report.candidates[1].fate = Fate::kIncomplete;
+  report.reference_stop = results::Verdict::kIncomplete;
+  EXPECT_EQ(exit_code_for(report), 143) << "above 6";
+  report.candidates[2].fate = Fate::kFindings;
+  EXPECT_EQ(exit_code_for(report), 5) << "a finding found before the signal still outranks it";
+  report.candidates[2].fate = Fate::kEliminated;
+  report.corrected_error_trials = 1;
+  EXPECT_EQ(exit_code_for(report), 5);
 }
 
 TEST(ExploreExit, CorrectedHardwareErrorsExitFiveAsStressDoes) {
@@ -601,6 +638,7 @@ TEST(ExploreExit, ASearchThatDidNotEndIsRefusedFailedOrUnread) {
 /// not finish: the real ones are tests/integration/m6.
 struct Searching {
   Searching() {
+    options.stop_signals = &stop;
     syscalls.advance_clocks_per_read(10'000'000);
     syscalls.add_tree(std::filesystem::path{LOADFORGE_SOURCE_DIR} / "tests" / "fixtures" /
                           "procfs" / "meminfo" / "present" / "proc",
@@ -630,10 +668,17 @@ struct Searching {
     return run_explore(*runner, std::move(search), out, err);
   }
 
+  int run_stoppable(explore::SearchConfig search) {
+    out.str("");
+    err.str("");
+    return run_explore_stoppable(*runner, stop, std::move(search), out, err);
+  }
+
   controller_testing::MachineTree tree{controller_testing::MachineShape{1, 64, true}};
   topology::Snapshot snapshot = tree.accepted();
   testing::FakeSyscalls syscalls;
   workloads::BuiltinRegistry registry;
+  controller::StopSignals stop{syscalls};
   TrialOptions options;
   std::unique_ptr<ControllerTrialRunner> runner;
   std::ostringstream out;
@@ -707,6 +752,81 @@ TEST(ExploreRun, ASettleMetricThisMachineCannotReadIsRefusedTheSameWay) {
   EXPECT_TRUE(contains(search.err.str(), "settle metric thermal.package")) << search.err.str();
   EXPECT_EQ(search.syscalls.fork_count(), 0);
 }
+
+// --- the signals
+// ---------------------------------------------------------------------------------
+
+TEST(ExploreSignals, ASignalDuringATrialStopsItAndTheSearchReportsWhatItHadAndExitsWithItsCode) {
+  for (const int signal : {SIGINT, SIGTERM}) {
+    Searching search;
+    search.syscalls.script_forks({{1001, 0}});
+    search.syscalls.script_nonblocking_reaps({{platform::Reaped{1001, 0}, 0}});
+    bool raised = false;
+    // From the first wait of a run, not from the search's own look between trials.
+    search.syscalls.on_poll([&](int) {
+      if (!raised && search.syscalls.fork_count() > 0 && search.syscalls.raise_diverted(signal)) {
+        raised = true;
+      }
+    });
+
+    const int code = search.run_stoppable(Searching::config("memory.available:min:lower"));
+
+    EXPECT_EQ(code, 128 + signal);
+    EXPECT_TRUE(raised);
+    EXPECT_TRUE(contains(search.out.str(), std::string{"the search was stopped by "} +
+                                               std::string{controller::signal_name(signal)}))
+        << search.out.str();
+    EXPECT_TRUE(contains(search.out.str(), "candidate a: stopped with the search"));
+    EXPECT_EQ(search.err.str(), "") << "a signal is not a fault of the search";
+    EXPECT_EQ(search.runner->trials_started(), 1U) << "no trial was started after it";
+    EXPECT_TRUE(search.syscalls.signals_diverted().empty()) << "released at the end";
+  }
+}
+
+TEST(ExploreSignals, ASearchNobodyInterruptsIsAsItWasAndLeavesTheSignalsAsItFoundThem) {
+  Searching search;
+  search.syscalls.script_forks({{1001, 0}});
+  search.syscalls.script_nonblocking_reaps({{platform::Reaped{1001, 0}, 0}});
+
+  EXPECT_EQ(search.run_stoppable(Searching::config("memory.available:min:lower")), 6)
+      << "the reference did not finish, as without the signals";
+  EXPECT_FALSE(contains(search.out.str(), "stopped by SIG"));
+  EXPECT_TRUE(search.syscalls.signals_diverted().empty());
+  EXPECT_EQ(search.syscalls.signals_defaulted(), (std::vector<int>{SIGCHLD, SIGINT, SIGTERM}));
+}
+
+class ExploreSignalsInstallPipe : public ::testing::TestWithParam<int> {};
+
+TEST_P(ExploreSignalsInstallPipe, ARefusalBeforeAnyTrialSayingWhy) {
+  Searching search;
+  search.syscalls.fail_create_pipe(GetParam());
+  EXPECT_EQ(search.run_stoppable(Searching::config("memory.available:min:lower")), 1);
+  EXPECT_TRUE(contains(search.err.str(), "loadforge: explore: cannot catch SIGINT and SIGTERM: "))
+      << search.err.str();
+  EXPECT_TRUE(contains(search.err.str(), "pipe2")) << search.err.str();
+  EXPECT_EQ(search.syscalls.fork_count(), 0);
+  EXPECT_TRUE(search.out.str().empty());
+}
+
+INSTANTIATE_TEST_SUITE_P(Pipe2Errors, ExploreSignalsInstallPipe,
+                         ::testing::Values(EFAULT, EINVAL, EMFILE, ENFILE));
+
+class ExploreSignalsInstallDivert : public ::testing::TestWithParam<std::pair<int, int>> {};
+
+TEST_P(ExploreSignalsInstallDivert, ARefusalBeforeAnyTrialSayingWhy) {
+  Searching search;
+  search.syscalls.fail_divert_signal_on(GetParam().first, GetParam().second);
+  EXPECT_EQ(search.run_stoppable(Searching::config("memory.available:min:lower")), 1);
+  EXPECT_TRUE(contains(search.err.str(), "loadforge: explore: cannot catch SIGINT and SIGTERM: "))
+      << search.err.str();
+  EXPECT_TRUE(contains(search.err.str(), "sigaction")) << search.err.str();
+  EXPECT_EQ(search.syscalls.fork_count(), 0);
+  EXPECT_TRUE(search.syscalls.signals_diverted().empty());
+}
+
+INSTANTIATE_TEST_SUITE_P(SigactionErrors, ExploreSignalsInstallDivert,
+                         ::testing::Values(std::pair{1, EFAULT}, std::pair{1, EINVAL},
+                                           std::pair{2, EFAULT}, std::pair{2, EINVAL}));
 
 // --- the command
 // ------------------------------------------------------------------------------------

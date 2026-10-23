@@ -825,7 +825,8 @@ int conclude_run(const Ending& ending, std::ostream& out, std::ostream& err) {
   }
   out << summary_text(result.value(), report, *ending.timeline, summarizer, reading.gaps);
   const int code = exit_code_for(result.value().verdict, controller::all_clean(report),
-                                 has_verified_worker(report), report.temperature_stop.has_value());
+                                 has_verified_worker(report), report.temperature_stop.has_value(),
+                                 report.stop_signal.value_or(0));
   if (stress_options.formats.empty()) {
     return code;
   }
@@ -999,6 +1000,19 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   TimelineNotes journal_notes(timeline);
   options.journal_notes = &journal_notes;
 
+  // Ctrl-C and SIGTERM, caught from here to the end of the run: they stop it as
+  // its deadline does, and what it measured is reported (journal 34b). Not
+  // earlier, so that the setup above, which can take a while on a slow machine,
+  // is ended by the signal's default action as it always was.
+  controller::StopSignals stop(syscalls);
+  if (auto installed = stop.install(); !installed.has_value()) {
+    err << "loadforge: cannot catch SIGINT and SIGTERM: " << platform::describe(installed.error())
+        << "\n";
+    end_journal(journal_open, err);
+    return kConfigRefused;
+  }
+  options.stop_signals = &stop;
+
   reporters::ConsoleReporter reporter(out);
   controller::Controller supervisor(syscalls, reporter);
   // Flushed before the controller forks, so a child that fails to exec and
@@ -1006,6 +1020,9 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   out.flush();
   err.flush();
   auto ran = supervisor.run(config, options);
+  // The run is over: a signal from here on has its default action again, which
+  // is what ends the re-runs and the writing of the results, as it always did.
+  stop.release();
   if (!ran.has_value()) {
     // No terminator: the controller failed, which is not an end the journal may
     // call clean. The next start replays this journal as ended abnormally and

@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -853,6 +854,158 @@ TEST(Run, ACandidateThatFoundSomethingBeforeTheReferenceDidKeepsItsFate) {
   EXPECT_EQ(find(result.value(), "a").fate, Fate::kFindings);
   EXPECT_EQ(find(result.value(), "b").fate, Fate::kStopped);
   EXPECT_EQ(result.value().reference_stop, Verdict::kIncomplete);
+}
+
+// ---- a signal asks for the end ---------------------------------------------------------------
+
+/// A stop signal that appears once `ran` trials have been run.
+std::function<std::optional<int>()> signal_after(const ModelRunner& runner, std::size_t trials,
+                                                 int signal) {
+  return [&runner, trials, signal]() -> std::optional<int> {
+    return runner.ran.size() >= trials ? std::optional<int>{signal} : std::nullopt;
+  };
+}
+
+TEST(Run, ASignalBeforeTheFirstTrialEndsTheSearchWithAReportAndNoTrial) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  SearchConfig config = config_for({"a"});
+  config.stop_signal = [] { return std::optional<int>{2}; };
+
+  const auto result = explore(lab.runner, config);
+
+  ASSERT_TRUE(result.has_value()) << result.error().detail;
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.stop_signal, std::optional<int>{2});
+  EXPECT_EQ(report.trials, 0U);
+  EXPECT_TRUE(lab.runner.ran.empty());
+  EXPECT_FALSE(report.worst_case.has_value());
+  EXPECT_EQ(report.ranking, Ranking::kNone);
+  EXPECT_EQ(find(report, "a").fate, Fate::kStopped);
+  EXPECT_DOUBLE_EQ(report.drift, 0.0);
+}
+
+TEST(Run, ASignalPartWayKeepsWhatWasMeasuredAndRanksNobody) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  config.interleave_every = 1;
+  // The reference twice, then a, ref, b, ref: six trials; the seventh is not run.
+  config.stop_signal = signal_after(lab.runner, 6, 15);
+
+  const auto result = explore(lab.runner, config);
+
+  ASSERT_TRUE(result.has_value()) << result.error().detail;
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.stop_signal, std::optional<int>{15});
+  EXPECT_EQ(report.trials, 6U);
+  EXPECT_EQ(find(report, "a").samples, std::vector<double>{50.0});
+  EXPECT_EQ(find(report, "b").samples, std::vector<double>{60.0});
+  EXPECT_EQ(find(report, "a").fate, Fate::kStopped);
+  EXPECT_EQ(find(report, "b").fate, Fate::kStopped);
+  EXPECT_FALSE(report.worst_case.has_value());
+  EXPECT_EQ(report.ranking, Ranking::kNone);
+  EXPECT_EQ(report.references.size(), 4U);
+}
+
+TEST(Run, ACandidateThatFoundSomethingBeforeTheSignalKeepsItsFate) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  config.interleave_every = 1;
+  lab.runner.verdict = [](const Candidate& c, std::size_t) {
+    return c.id == "a" ? Verdict::kFindings : Verdict::kClean;
+  };
+  config.stop_signal = signal_after(lab.runner, 5, 2);
+
+  const auto result = explore(lab.runner, config);
+
+  ASSERT_TRUE(result.has_value()) << result.error().detail;
+  EXPECT_EQ(find(result.value(), "a").fate, Fate::kFindings);
+  EXPECT_EQ(find(result.value(), "b").fate, Fate::kStopped);
+  EXPECT_EQ(result.value().stop_signal, std::optional<int>{2});
+}
+
+TEST(Run, ACandidateEliminatedBeforeTheSignalStaysEliminated) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  config.base_replicates = 1;
+  config.elimination_factor = 2;
+  config.interleave_every = 100;
+  // Two reference trials and one of each candidate, and the round ends: one is
+  // eliminated. The signal comes during the survivor's top-up.
+  config.stop_signal = signal_after(lab.runner, 6, 2);
+
+  const auto result = explore(lab.runner, config);
+
+  ASSERT_TRUE(result.has_value()) << result.error().detail;
+  const SearchReport& report = result.value();
+  const bool a_stays = find(report, "a").fate == Fate::kEliminated;
+  const bool b_stays = find(report, "b").fate == Fate::kEliminated;
+  EXPECT_NE(a_stays, b_stays) << "one of them was eliminated by the round";
+  EXPECT_FALSE(report.worst_case.has_value()) << "no claim is made of a search that did not finish";
+  EXPECT_EQ(report.rounds, 1U);
+}
+
+TEST(Run, ATrialThatFailsAfterTheSignalAskedIsTheSignalsNotAFault) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  SearchConfig config = config_for({"a"});
+  bool signalled = false;
+  config.stop_signal = [&signalled]() -> std::optional<int> {
+    return signalled ? std::optional<int>{2} : std::nullopt;
+  };
+  lab.runner.fault = [&signalled](const Candidate& c, std::size_t) -> std::optional<TrialError> {
+    if (c.id == "a") {
+      signalled = true;  // The signal arrives during the trial, and the trial fails of it.
+      return TrialError{TrialFault::kRun, "the trial was stopped by SIGINT"};
+    }
+    return std::nullopt;
+  };
+
+  const auto result = explore(lab.runner, config);
+
+  ASSERT_TRUE(result.has_value()) << result.error().detail;
+  EXPECT_EQ(result.value().stop_signal, std::optional<int>{2});
+  EXPECT_EQ(result.value().trials, 3U) << "two references and the trial that was stopped";
+}
+
+TEST(Run, ATrialThatFailsWithNoSignalIsAFaultAsEverWhateverTheCallbackSays) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  SearchConfig config = config_for({"a"});
+  config.stop_signal = [] { return std::optional<int>{}; };
+  lab.runner.fault = [](const Candidate& c, std::size_t) -> std::optional<TrialError> {
+    return c.id == "a" ? std::optional<TrialError>{TrialError{TrialFault::kRun, "broke"}}
+                       : std::nullopt;
+  };
+
+  const auto result = explore(lab.runner, config);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().fault, explore::ExploreFault::kTrial);
+}
+
+TEST(Run, ASearchNobodyAsksToStopRunsToItsEndWhateverTheCallbackIs) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  SearchConfig config = config_for({"a"});
+  std::size_t asked = 0;
+  config.stop_signal = [&asked]() -> std::optional<int> {
+    ++asked;
+    return std::nullopt;
+  };
+
+  const auto result = explore(lab.runner, config);
+
+  ASSERT_TRUE(result.has_value()) << result.error().detail;
+  EXPECT_FALSE(result.value().stop_signal.has_value());
+  EXPECT_TRUE(result.value().worst_case.has_value());
+  EXPECT_EQ(asked, result.value().trials) << "asked before every trial";
 }
 
 TEST(Run, ACandidateWithNoReadingOfTheObjectiveEndsTheSearchRatherThanScoreZero) {

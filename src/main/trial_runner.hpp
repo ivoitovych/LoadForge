@@ -57,6 +57,7 @@
 #include "main/telemetry_rig.hpp"
 #include "platform/fs.hpp"
 #include "platform/syscalls.hpp"
+#include "controller/stop_signals.hpp"
 #include "primitives/simd/dispatch.hpp"
 #include "resources/cgroup_oom_record.hpp"
 #include "statistics/signature.hpp"
@@ -79,6 +80,7 @@ namespace loadforge::cli {
 ///   seed, footprint_bytes, lock   as for a stress run (StressOptions).
 ///   sample_interval_ns   how often the sampler reads every source in the load.
 ///   log              where a line per trial goes; null: nowhere. Not owned.
+///   stop_signals     the signals that end a trial and the search; null: none.
 struct TrialOptions {
   std::string executable;
   MachineRoots roots;
@@ -94,6 +96,12 @@ struct TrialOptions {
   /// reaches it fails (run), because a run cut short is not a measurement.
   std::optional<std::int64_t> max_temperature_c;
   std::ostream* log = nullptr;
+  /// The signals that ask for the end (controller/stop_signals.hpp), installed
+  /// by the caller and kept for the search's own look between trials. Every
+  /// trial's run is given it, and the settle wait ends on it: a trial a signal
+  /// ended fails (kRun), as one the ceiling ended does, and has no score.
+  /// Not owned; it must outlive the runner. Null: no signal is caught.
+  controller::StopSignals* stop_signals = nullptr;
 };
 
 class ControllerTrialRunner final : public explore::TrialRunner {

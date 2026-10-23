@@ -226,12 +226,25 @@ struct RunReport {
   /// The workers were then stopped as at the deadline; their fates are theirs.
   // NOLINTNEXTLINE(readability-redundant-member-init)
   std::optional<TemperatureStop> temperature_stop{};
+  /// The signal that stopped the run (SIGINT or SIGTERM, the first of them),
+  /// when one did. The run was stopped as the deadline stops it, and what is in
+  /// this report is what it had measured when the workers were gone.
+  // NOLINTNEXTLINE(readability-redundant-member-init)
+  std::optional<int> stop_signal{};
+  /// A second signal came while the workers were being stopped, and they were
+  /// killed at once instead of being given their grace.
+  bool stop_forced = false;
 
   [[nodiscard]] friend bool operator==(const RunReport&, const RunReport&) = default;
 };
 
 /// How many workers completed, and whether every one did. Free functions so
 /// the report stays a plain aggregate.
+/// What stopped the run, in words, when a signal did: "stopped by SIGINT", and
+/// when a later signal killed the workers, "stopped by SIGINT; a later signal
+/// killed the workers at once". Empty when none did.
+[[nodiscard]] std::string describe_stop_signal(const RunReport& report);
+
 [[nodiscard]] std::size_t clean_count(const RunReport& report) noexcept;
 [[nodiscard]] bool all_clean(const RunReport& report) noexcept;
 

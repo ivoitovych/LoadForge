@@ -131,6 +131,11 @@ std::string summary_text(const results::RunResult& result, const controller::Run
     text << "ended by the temperature ceiling: " << controller::describe(*report.temperature_stop)
          << "\n";
   }
+  if (report.stop_signal.has_value()) {
+    // As the ceiling's: a run cut short is not a pass whatever its verdict says.
+    text << "the run was " << controller::describe_stop_signal(report) << ": its exit code is "
+         << (kExitSignalBase + *report.stop_signal) << "\n";
+  }
   const controller::SamplingReport& sampling = report.sampling;
   if (!sampling.enabled) {
     text << "telemetry: not sampled\n";

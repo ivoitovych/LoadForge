@@ -29,6 +29,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -75,6 +76,11 @@ struct SearchConfig {
   std::size_t final_replicates = 3;
   std::size_t interleave_every = 4;
   std::size_t reference_replicates = 2;
+  /// Asked before every trial and after every trial that failed: the signal
+  /// that has asked for the end, when one has. The search then runs no more
+  /// trials and reports what it has (SearchReport::stop_signal). Empty: the
+  /// search is never asked to stop.
+  std::function<std::optional<int>()> stop_signal;
 };
 
 /// What became of a candidate.
@@ -197,6 +203,11 @@ struct SearchReport {
   std::size_t settle_trials = 0;
   std::size_t unsettled_trials = 0;
   std::size_t rounds = 0;
+  /// The signal that ended the search before it was done, when one did. As for
+  /// a reference that found something, what was measured before it is the
+  /// report; no candidate is ranked, and those still in the search are
+  /// Fate::kStopped.
+  std::optional<int> stop_signal;
 };
 
 /// A search that has passed configuration.

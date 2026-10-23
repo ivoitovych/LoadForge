@@ -113,6 +113,9 @@ void ConsoleReporter::run_finished(const controller::RunReport& report) {
     *out_ << "  ended by the temperature ceiling: "
           << controller::describe(*report.temperature_stop) << "\n";
   }
+  if (report.stop_signal.has_value()) {
+    *out_ << "  " << controller::describe_stop_signal(report) << "\n";
+  }
   for (const controller::WorkerReport& worker : report.workers) {
     *out_ << "  worker " << worker.slot << " (pid " << worker.pid
           << "): " << controller::describe(worker.fate) << "; " << worker.termination

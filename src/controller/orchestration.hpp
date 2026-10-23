@@ -12,6 +12,7 @@
 #include "controller/plan.hpp"
 #include "controller/report.hpp"
 #include "controller/safety.hpp"
+#include "controller/stop_signals.hpp"
 #include "core/result.hpp"
 #include "platform/fpenv/fpenv.hpp"
 #include "platform/syscalls.hpp"
@@ -137,6 +138,15 @@ struct RunOptions {
   std::int64_t journal_interval_ns = 5'000'000'000;
   /// Fills the readings of an entry; null: those fields are absent.
   JournalNotes* journal_notes = nullptr;
+  /// The signals that ask for the end (controller/stop_signals.hpp), already
+  /// installed by the caller, which keeps it for as long as it needs to know
+  /// whether one came: a command that runs several runs (`explore`) asks it
+  /// between them. The tick's poll waits on its pipe with the workers' channels.
+  /// The first signal stops the run as the deadline does (request_stop, the
+  /// grace, the escalation), the report says which one did (`stop_signal`), and
+  /// the second kills the workers at once (`stop_forced`). Not owned; it must
+  /// outlive the run. Null: no signal is caught.
+  StopSignals* stop_signals = nullptr;
 };
 
 /// Every member alike (the pointers by identity). Defined in the one translation unit

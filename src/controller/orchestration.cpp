@@ -50,6 +50,18 @@
 
 namespace loadforge::controller {
 
+std::string describe_stop_signal(const RunReport& report) {
+  if (!report.stop_signal.has_value()) {
+    return {};
+  }
+  std::string text = "stopped by ";
+  text += signal_name(*report.stop_signal);
+  if (report.stop_forced) {
+    text += "; a later signal killed the workers at once";
+  }
+  return text;
+}
+
 std::size_t clean_count(const RunReport& report) noexcept {
   std::size_t clean = 0;
   for (const WorkerReport& worker : report.workers) {
@@ -108,7 +120,8 @@ bool operator==(const RunOptions& lhs, const RunOptions& rhs) {
          lhs.journal_notes == rhs.journal_notes && lhs.view == rhs.view &&
          lhs.temperature_unread == rhs.temperature_unread &&
          lhs.temperature_blind_after_ns == rhs.temperature_blind_after_ns &&
-         lhs.replacement_allowance_ns == rhs.replacement_allowance_ns;
+         lhs.replacement_allowance_ns == rhs.replacement_allowance_ns &&
+         lhs.stop_signals == rhs.stop_signals;
 }
 
 std::string describe(const ControllerError& error) { return error.stage + ": " + error.detail; }
@@ -299,6 +312,12 @@ class Run {
   [[nodiscard]] core::Result<core::Ok, ControllerError> send(Tracked& worker, int signal,
                                                              std::int64_t now_ns, bool stale);
   [[nodiscard]] core::Result<core::Ok, ControllerError> poll_and_drain(int timeout_ms);
+  /// Reads the signals that came, and acts on each: the first stops the run, any
+  /// later one kills the workers.
+  [[nodiscard]] core::Result<core::Ok, ControllerError> take_stop_signals();
+  [[nodiscard]] core::Result<core::Ok, ControllerError> stop_for_signal(int signal,
+                                                                        std::int64_t now_ns);
+  [[nodiscard]] core::Result<core::Ok, ControllerError> kill_for_signal(std::int64_t now_ns);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain(Tracked& worker);
   [[nodiscard]] core::Result<core::Ok, ControllerError> drain_available(Tracked& worker);
   /// Takes one record a worker sent into the worker's account of itself, or
@@ -364,6 +383,11 @@ class Run {
   std::optional<TemperatureWatch> temperature_;
   std::int64_t temperature_checked_ns_ = -1;
   std::optional<TemperatureStop> temperature_stop_;
+  /// What the stop signals have done: how many of those received were acted on,
+  /// the first one's number, and whether the workers were killed for a later.
+  std::size_t signals_handled_ = 0;
+  std::optional<int> stop_signal_;
+  bool stop_forced_ = false;
   /// The monotonic time of the latest clock reading the loop made, so that the
   /// sampling and the reaping use the reading the tick already took and add no
   /// read of their own.
@@ -944,6 +968,12 @@ core::Result<core::Ok, ControllerError> Run::poll_and_drain(int timeout_ms) {
       watched.push_back(&worker);
     }
   }
+  // The signals' pipe is polled with the channels, last, so that a Ctrl-C ends
+  // the wait at once; a run that catches none polls the channels alone.
+  StopSignals* const signals = options_->stop_signals;
+  if (signals != nullptr) {
+    fds.push_back(signals->fd());
+  }
   auto ready = syscalls_->poll_readable(fds, timeout_ms);
   if (!ready.has_value()) {
     return error_at("record channel", describe(ready.error()));
@@ -954,6 +984,60 @@ core::Result<core::Ok, ControllerError> Run::poll_and_drain(int timeout_ms) {
       if (auto drained = drain_available(*watched[index]); !drained.has_value()) {
         return drained;
       }
+    }
+  }
+  if (signals != nullptr && wakes(ready.value().back())) {
+    return take_stop_signals();
+  }
+  return core::Ok{};
+}
+
+core::Result<core::Ok, ControllerError> Run::take_stop_signals() {
+  StopSignals& signals = *options_->stop_signals;
+  if (auto absorbed = signals.absorb(); !absorbed.has_value()) {
+    return error_at("stop signal", describe(absorbed.error()));
+  }
+  const std::vector<int>& received = signals.received();
+  for (; signals_handled_ < received.size(); ++signals_handled_) {
+    const std::int64_t now_ns = clock_running_ns_;
+    auto handled = stop_signal_.has_value() ? kill_for_signal(now_ns)
+                                            : stop_for_signal(received[signals_handled_], now_ns);
+    if (!handled.has_value()) {
+      return handled;
+    }
+  }
+  return core::Ok{};
+}
+
+core::Result<core::Ok, ControllerError> Run::stop_for_signal(int signal, std::int64_t now_ns) {
+  stop_signal_ = signal;
+  if (!stop_requested_) {
+    // As the deadline does it: the round that closes the phase the stop ends,
+    // the mark that opens the next, the request.
+    take_round(now_ns, true);
+    mark_phase("stop", now_ns);
+    if (auto requested = request_stop(now_ns); !requested.has_value()) {
+      return requested;
+    }
+  }
+  const std::int64_t elapsed_ns = now_ns - started_.running_ns;
+  reporter_->event(elapsed_ns, std::string{signal_name(signal)} + " received: stop requested");
+  phase_ = mixed::bounded("stopped by " + std::string{signal_name(signal)});
+  write_journal(elapsed_ns, true);
+  return core::Ok{};
+}
+
+core::Result<core::Ok, ControllerError> Run::kill_for_signal(std::int64_t now_ns) {
+  // The user insists: no grace, no SIGTERM, the signal that cannot be ignored.
+  // What each worker had sent stays in the report, and the fate says it was killed.
+  stop_forced_ = true;
+  reporter_->event(now_ns - started_.running_ns, "another signal received: killing the workers");
+  for (Tracked& worker : workers_) {
+    if (worker.reaped || worker.step == StopStep::kKilled) {
+      continue;
+    }
+    if (auto sent = send(worker, SIGKILL, now_ns, false); !sent.has_value()) {
+      return sent;
     }
   }
   return core::Ok{};
@@ -1465,6 +1549,8 @@ core::Result<RunReport, ControllerError> Run::finish() {
   }
   report.steps_run = steps_run_;
   report.temperature_stop = temperature_stop_;
+  report.stop_signal = stop_signal_;
+  report.stop_forced = stop_forced_;
   // The last word of the journal: every worker is gone.
   phase_ = "done";
   write_journal(report.elapsed_ns, true);

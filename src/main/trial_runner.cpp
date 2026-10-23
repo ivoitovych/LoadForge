@@ -359,6 +359,7 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
   options.temperature_unread = unread_temperature(capabilities_);
   fpenv::RealFpControl fp;
   options.fp = &fp;
+  options.stop_signals = options_.stop_signals;
 
   const std::int64_t settle_interval_ns =
       candidate.settle.has_value()
@@ -412,6 +413,12 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
                   "this process is a worker whose exec failed: it must exit with " +
                       std::to_string(*report.worker_exit_code));
   }
+  if (report.stop_signal.has_value()) {
+    // As for the ceiling: a load cut short has no score. The search sees the
+    // signal for itself, and reports what it measured before this trial.
+    return refuse(TrialFault::kRun,
+                  "the trial was " + controller::describe_stop_signal(report));
+  }
   if (report.temperature_stop.has_value()) {
     // A load cut short is not the load the candidate was asked to carry, so it
     // has no score; and the machine is hot, so the search does not go on.
@@ -463,6 +470,7 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
 core::Result<ControllerTrialRunner::Settled, TrialError> ControllerTrialRunner::settle(
     Rig& rig, const statistics::Summarizer& summarizer, const Settle& phase,
     std::int64_t interval_ns) {
+  controller::StopSignals* const stop = options_.stop_signals;
   platform::Clock clock(*syscalls_);
   const auto begun = clock.now();
   if (!begun.has_value()) {
@@ -476,6 +484,16 @@ core::Result<ControllerTrialRunner::Settled, TrialError> ControllerTrialRunner::
     }
     const std::int64_t now_ns = now.value().running_ns;
     const std::int64_t elapsed_ns = now_ns - started_ns;
+    if (stop != nullptr) {
+      // A look, every round: a signal ends the settling, which can take minutes.
+      if (auto absorbed = stop->absorb(); !absorbed.has_value()) {
+        return refuse(TrialFault::kRun, "settle: " + platform::describe(absorbed.error()));
+      }
+      if (const std::optional<int> signal = stop->first(); signal.has_value()) {
+        return refuse(TrialFault::kRun,
+                      "settle: stopped by " + std::string{controller::signal_name(*signal)});
+      }
+    }
     if (auto taken = rig.sampler().round(now_ns); !taken.has_value()) {
       std::string detail = "settle: sampling refused: ";
       detail += telemetry::describe(taken.error().fault);
@@ -496,7 +514,12 @@ core::Result<ControllerTrialRunner::Settled, TrialError> ControllerTrialRunner::
     // Rounded up, so that a wait never returns before its instant.
     const auto wait_ms =
         static_cast<int>((wait_ns + kNanosecondsPerMillisecond - 1) / kNanosecondsPerMillisecond);
-    const auto slept = syscalls_->poll_readable({}, wait_ms);
+    // The signals' pipe is what the wait is on, so that a signal ends it at once.
+    std::vector<int> waited_on;
+    if (stop != nullptr) {
+      waited_on.push_back(stop->fd());
+    }
+    const auto slept = syscalls_->poll_readable(waited_on, wait_ms);
     if (!slept.has_value() && slept.error().number != EINTR) {
       return refuse(TrialFault::kRun, "settle: " + platform::describe(slept.error()));
     }

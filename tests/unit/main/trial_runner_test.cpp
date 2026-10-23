@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -936,6 +937,145 @@ TEST(TrialRunnerCeiling, ATrialTheCeilingEndsHasNoScoreAndStopsTheSearchWithTheR
                        "read 70.0 C, at or above the ceiling of 70 C, "))
       << outcome.error().detail;
 }
+
+// --- a signal asks for the end -------------------------------------------------------------------
+
+/// A machine whose runner is given the signals, installed.
+struct Signalled {
+  Signalled() {
+    EXPECT_TRUE(stop.install().has_value());
+    machine.options.stop_signals = &stop;
+    machine.options.sources = flat_level;
+  }
+  Machine machine;
+  controller::StopSignals stop{machine.syscalls};
+};
+
+TEST(TrialRunnerSignal, ASignalDuringATrialEndsItWithNoScoreAndNamesTheSignal) {
+  for (const int signal : {SIGINT, SIGTERM}) {
+    Signalled each;
+    each.machine.workers_that_exit_at_once(1);
+    bool raised = false;
+    each.machine.syscalls.on_poll([&each, &raised, signal](int) {
+      raised = raised || each.machine.syscalls.raise_diverted(signal);
+    });
+    auto runner = each.machine.runner();
+    ASSERT_NE(runner, nullptr);
+
+    const auto outcome = runner->run(a_candidate());
+
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
+    EXPECT_EQ(outcome.error().detail,
+              std::string{"the trial was stopped by "} +
+                  std::string{controller::signal_name(signal)});
+    EXPECT_EQ(each.stop.first(), std::optional<int>{signal});
+  }
+}
+
+TEST(TrialRunnerSignal, ATrialNobodyInterruptsIsScoredAsEverAndTheSignalsPipeIsWatchedAllTheSame) {
+  Signalled each;
+  each.machine.workers_that_exit_at_once(1);
+  auto runner = each.machine.runner();
+  ASSERT_NE(runner, nullptr);
+
+  const auto outcome = runner->run(a_candidate());
+
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  EXPECT_FALSE(each.stop.first().has_value());
+}
+
+TEST(TrialRunnerSignal, ASignalDuringTheSettlingEndsItAtOnceBeforeAnyWorkerStarts) {
+  Signalled each;
+  each.machine.syscalls.on_poll([&each](int) { each.machine.syscalls.raise_diverted(SIGINT); });
+  auto runner = each.machine.runner();
+  ASSERT_NE(runner, nullptr);
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 30 * kMs, 100 * kMs};
+
+  const auto outcome = runner->run(candidate);
+
+  ASSERT_FALSE(outcome.has_value());
+  EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
+  EXPECT_EQ(outcome.error().detail, "settle: stopped by SIGINT");
+  EXPECT_EQ(each.machine.syscalls.fork_count(), 0) << "no worker was started for it";
+}
+
+TEST(TrialRunnerSignal, TheSettleWaitIsOnTheSignalsPipeSoASignalEndsItAtOnce) {
+  Signalled each;
+  each.machine.workers_that_exit_at_once(1);
+  auto runner = each.machine.runner();
+  ASSERT_NE(runner, nullptr);
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 30 * kMs, 100 * kMs};
+
+  const auto outcome = runner->run(candidate);
+
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  const auto& polled = each.machine.syscalls.polled();
+  EXPECT_TRUE(std::ranges::any_of(polled, [&each](const std::vector<int>& fds) {
+    return fds == std::vector<int>{each.stop.fd()};
+  })) << "a wait on the signals' pipe alone";
+}
+
+TEST(TrialRunnerSignal, WithoutSignalsTheSettleWaitIsOnNothingAsItWas) {
+  Machine machine;
+  machine.options.sources = flat_level;
+  machine.workers_that_exit_at_once(1);
+  auto runner = machine.runner();
+  ASSERT_NE(runner, nullptr);
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 30 * kMs, 100 * kMs};
+
+  ASSERT_TRUE(runner->run(candidate).has_value());
+
+  EXPECT_TRUE(std::ranges::any_of(machine.syscalls.polled(),
+                                  [](const std::vector<int>& fds) { return fds.empty(); }));
+}
+
+class SettleLookPollFails : public ::testing::TestWithParam<int> {};
+
+TEST_P(SettleLookPollFails, TheTrialFailsWithTheKernelsReason) {
+  Signalled each;
+  auto runner = each.machine.runner();
+  ASSERT_NE(runner, nullptr);
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 30 * kMs, 100 * kMs};
+  each.machine.syscalls.fail_poll_on(1, GetParam());  // The look at the pipe, before the first round.
+
+  const auto outcome = runner->run(candidate);
+
+  ASSERT_FALSE(outcome.has_value());
+  EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
+  EXPECT_TRUE(contains(outcome.error().detail, "settle: poll")) << outcome.error().detail;
+}
+
+// poll(2): EFAULT, EINTR (the seam's own answer; RealSyscalls turns it into nothing ready),
+// EINVAL, ENOMEM.
+INSTANTIATE_TEST_SUITE_P(PollErrors, SettleLookPollFails,
+                         ::testing::Values(EFAULT, EINTR, EINVAL, ENOMEM));
+
+class SettleLookReadFails : public ::testing::TestWithParam<int> {};
+
+TEST_P(SettleLookReadFails, TheTrialFailsWithTheKernelsReason) {
+  Signalled each;
+  auto runner = each.machine.runner();
+  ASSERT_NE(runner, nullptr);
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 30 * kMs, 100 * kMs};
+  ASSERT_TRUE(each.machine.syscalls.raise_diverted(SIGINT));
+  each.machine.syscalls.script_reads({testing::FakeSyscalls::ReadStep{"", GetParam()}});
+
+  const auto outcome = runner->run(candidate);
+
+  ASSERT_FALSE(outcome.has_value());
+  EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
+  EXPECT_TRUE(contains(outcome.error().detail, "settle: read")) << outcome.error().detail;
+}
+
+// read(2): EAGAIN, EBADF, EFAULT, EINTR, EINVAL, EIO, EISDIR.
+INSTANTIATE_TEST_SUITE_P(ReadErrors, SettleLookReadFails,
+                         ::testing::Values(EAGAIN, EBADF, EFAULT, EINTR, EINVAL, EIO, EISDIR));
 
 // --- the contract -----------------------------------------------------------------------------
 

@@ -18,6 +18,7 @@ add_executable(loadforge_unit_tests
   unit/main/journal_rig_test.cpp
   unit/main/schedules_test.cpp
   unit/main/cli_schedule_test.cpp
+  unit/main/cli_stop_signal_test.cpp
   unit/main/explore_command_test.cpp
   unit/main/trial_runner_test.cpp
   unit/main/contract_mocks_test.cpp
@@ -58,6 +59,8 @@ add_executable(loadforge_unit_tests
   unit/controller/orchestration_verified_test.cpp
   unit/controller/supervision_test.cpp
   unit/controller/safety_test.cpp
+  unit/controller/stop_signals_test.cpp
+  unit/controller/orchestration_stop_signal_test.cpp
   unit/controller/temperature_test.cpp
   unit/controller/orchestration_temperature_test.cpp
   unit/controller/orchestration_test.cpp
