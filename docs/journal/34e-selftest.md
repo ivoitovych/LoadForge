@@ -45,3 +45,4 @@ None: no contract header and nothing under `tests/contracts/` was changed. `cont
 
 - The outside reviewer the project still needs.
 - `packaging/README.md` and `docs/hardware-validation.md` §4.4 quote `e0ff849ff34906de` for a `0.0.0-m2` build; it is the same value as `kExpectedDigest`, now committed.
+- `ControlOverRealWorkers.ADutyCycleMakesOneWorkerDoLessThanItsNeighbour` failed once in the full coverage run under `-j3` and passed alone and on the debug run; it is not touched by this change and was not investigated here.
