@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <map>
 #include <optional>
 #include <random>
@@ -395,6 +396,42 @@ TEST(Run, ASoleCandidateHasNoRivalAndNothingUncompared) {
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result.value().rival.empty());
   EXPECT_TRUE(result.value().uncompared.empty());
+}
+
+TEST(Run, AnEliminationFactorNearTheLargestSizeKeepsOneCandidateAndDoesNotWrap) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  lab.script["c"] = {55.0};
+  lab.script["d"] = {30.0};
+  SearchConfig config = config_for({"a", "b", "c", "d"});
+  config.elimination_factor = std::numeric_limits<std::size_t>::max();
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value().worst_case.has_value()) << "ceil(4 / huge) is 1, not 0";
+  EXPECT_EQ(result.value().worst_case->candidate, "b");
+  EXPECT_EQ(find(result.value(), "a").fate, Fate::kEliminated);
+}
+
+TEST(Run, TheKeepIsTheCeilingOfTheCandidatesOverTheFactor) {
+  for (const std::size_t factor : {2U, 3U, 4U}) {
+    Lab lab;
+    lab.script["a"] = {10.0};
+    lab.script["b"] = {20.0};
+    lab.script["c"] = {30.0};
+    lab.script["d"] = {40.0};
+    lab.script["e"] = {50.0};
+    SearchConfig config = config_for({"a", "b", "c", "d", "e"});
+    config.elimination_factor = factor;
+    config.base_replicates = 1;
+    const auto result = explore(lab.runner, config);
+    ASSERT_TRUE(result.has_value());
+    std::size_t second_round = 0;
+    for (const CandidateReport& entry : result.value().candidates) {
+      second_round += static_cast<std::size_t>(entry.rounds >= 2);
+    }
+    EXPECT_EQ(second_round, (5 + factor - 1) / factor) << "factor " << factor;
+  }
 }
 
 TEST(Run, AConstantObjectiveRanksNothing) {

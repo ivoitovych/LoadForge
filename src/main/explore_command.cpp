@@ -42,6 +42,9 @@ constexpr int kUsageError = 2;
 constexpr int kTrialFailed = 3;
 
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
+/// The largest elimination factor: a factor above the number of candidates keeps one,
+/// so a thousand is far beyond any search, and the arithmetic stays far from wrapping.
+constexpr std::uint64_t kMostElimination = 1024;
 /// Thirty days, as the trial runner's bound on a load.
 constexpr std::int64_t kLongestMilliseconds = std::int64_t{30} * 24 * 3600 * 1000;
 
@@ -297,6 +300,9 @@ std::optional<std::string> take_elimination(const Written& option, Parsing& out)
   auto count = at_least_one(option);
   if (!count.has_value()) {
     return count.error();
+  }
+  if (count.value() > kMostElimination) {
+    return refused(option.key, "must be at most " + std::to_string(kMostElimination));
   }
   out.args.elimination_factor = static_cast<std::size_t>(count.value());
   return std::nullopt;

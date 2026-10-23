@@ -310,6 +310,16 @@ TEST(ExploreArgs, ACountIsAWholeNumberOfAtLeastOne) {
   }
 }
 
+// (n + factor - 1) / factor wrapped to 0 for a factor near the largest size, so every
+// candidate was eliminated and the report said none had survived, exit 0. Review
+// verdicts 2026-10-23, finding 12a.
+TEST(ExploreArgs, AnEliminationFactorBeyondAnyRealSearchIsRefused) {
+  EXPECT_TRUE(contains(refusal_of(with_required({"--elimination", "18446744073709551615"})),
+                       "--elimination: must be at most 1024"));
+  EXPECT_TRUE(contains(refusal_of(with_required({"--elimination", "1025"})), "at most 1024"));
+  EXPECT_TRUE(parse(with_required({"--elimination", "1024"})).has_value());
+}
+
 TEST(ExploreArgs, TheMachineFacingOptionsAreRefusedByName) {
   EXPECT_TRUE(contains(refusal_of(with_required({"--seed", "-1"})), "expected a whole number"));
   EXPECT_TRUE(contains(refusal_of(with_required({"--footprint", "lots"})), "--footprint:"));

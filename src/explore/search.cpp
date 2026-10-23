@@ -344,8 +344,11 @@ class Execution {
     }
     std::stable_sort(ranked.begin(), ranked.end(),
                      [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
+    // ceil(n / factor), written so that no sum can wrap: with a factor near the largest
+    // size the usual (n + factor - 1) / factor came to 0 and eliminated everyone.
     const std::size_t keep =
-        (ranked.size() + config_.elimination_factor - 1) / config_.elimination_factor;
+        ranked.size() / config_.elimination_factor +
+        static_cast<std::size_t>(ranked.size() % config_.elimination_factor != 0);
     for (std::size_t rank = keep; rank < ranked.size(); ++rank) {
       State& out = states_[ranked[rank].second];
       out.alive = false;
