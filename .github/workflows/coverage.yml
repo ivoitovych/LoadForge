@@ -88,6 +88,9 @@ jobs:
         # arms are invisible to it. This gate proves the judgement was recorded
         # and is current (docs/IMPLEMENTATION.md §2.5).
         run: ./tools/check-test-obligations.py
+      # The report is for reading, not a gate: a timeout of GitHub's artifact service
+      # (2026-10-23, after every gate above had passed) must not turn the job red.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
+        continue-on-error: true
         with: { name: 'coverage-html-${{ matrix.runner }}', path: build/coverage/coverage.html* }
