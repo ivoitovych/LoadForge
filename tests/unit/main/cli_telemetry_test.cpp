@@ -231,6 +231,75 @@ TEST_F(StressTelemetry, TheFingerprintFieldsTheMachineWouldNotGiveAreNamedOnTheC
       << out.str();
 }
 
+// --- the temperature ceiling ---------------------------------------------------------------
+
+/// A machine with one coretemp chip whose package sensor reads `milli` millidegrees.
+void with_package_sensor(testing::FakeSyscalls& syscalls, const std::string& milli) {
+  syscalls.add_file("/sys/class/hwmon/hwmon0/name", "coretemp\n");
+  syscalls.add_file("/sys/class/hwmon/hwmon0/temp1_label", "Package id 0\n");
+  syscalls.add_file("/sys/class/hwmon/hwmon0/temp1_input", milli + "\n");
+}
+
+TEST_F(StressTelemetry, ACeilingOnAMachineWithNoSensorRefusesTheRunAndSaysWhyBeforeAnyWorker) {
+  config::Config config = two_workloads();
+  config.limits.max_temperature_c = 85;
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), options, out, err),
+            1);
+  EXPECT_EQ(syscalls.fork_count(), 0);
+  const std::string refusal = err.str();
+  EXPECT_NE(refusal.find("loadforge: temperature: the temperature ceiling is 85 C and no "
+                         "temperature can be read, so it could not be enforced: "
+                         "thermal.package: no hwmon chip with a temperature input and no "
+                         "thermal zone; this machine exposes no temperature sensor to read"),
+            std::string::npos)
+      << refusal;
+  EXPECT_NE(refusal.find("; remove the ceiling to run without one\n"), std::string::npos)
+      << "and what to do";
+  EXPECT_EQ(out.str().find("stress for"), std::string::npos) << "refused before the banner";
+  EXPECT_NE(out.str().find("thermal: 0 of 1 present"), std::string::npos)
+      << "the capability report was already told";
+}
+
+TEST_F(StressTelemetry, ACeilingAboveTheReadingIsEnforcedAndTheBannerNamesTheSensorsWatched) {
+  with_package_sensor(syscalls, "45000");
+  config::Config config = two_workloads();
+  config.limits.max_temperature_c = 85;
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), options, out, err),
+            3);
+  EXPECT_NE(out.str().find("  limit temperature: enforced (stops the run at 85 C; watching "
+                           "thermal.package 0)\n"),
+            std::string::npos)
+      << out.str();
+  EXPECT_EQ(out.str().find("NOT ENFORCED"), std::string::npos);
+  EXPECT_EQ(out.str().find("until telemetry lands"), std::string::npos);
+}
+
+TEST_F(StressTelemetry, AMachineAlreadyAtTheCeilingIsRefusedBeforeAnyWorkerStarts) {
+  with_package_sensor(syscalls, "90000");
+  config::Config config = two_workloads();
+  config.limits.max_temperature_c = 90;
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), options, out, err),
+            1);
+  EXPECT_EQ(syscalls.fork_count(), 0);
+  EXPECT_NE(err.str().find("the machine is already at its ceiling, before any worker started: "
+                           "thermal.package 0 (hwmon:coretemp) read 90.0 C"),
+            std::string::npos)
+      << err.str();
+}
+
+TEST_F(StressTelemetry, ARunThatSamplesNothingCannotHoldACeilingAndIsRefused) {
+  options.sample = false;
+  config::Config config = two_workloads();
+  config.limits.max_temperature_c = 85;
+  EXPECT_EQ(run_stress(syscalls, config, "/opt/loadforge", one_cpu_machine(), options, out, err),
+            1);
+  EXPECT_NE(err.str().find("loadforge: temperature: the temperature ceiling is 85 C and no "
+                           "temperature can be read"),
+            std::string::npos)
+      << err.str();
+  EXPECT_EQ(syscalls.fork_count(), 0);
+}
+
 TEST(ExitCodeTest, AFaultIsFiveWhateverTheWorkersDidAndOtherwiseTheWorkersDecide) {
   for (const bool clean : {true, false}) {
     EXPECT_EQ(exit_code_for(results::Verdict::kFindings, clean), 5);

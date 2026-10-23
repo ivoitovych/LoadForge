@@ -116,10 +116,13 @@ void print_usage(std::ostream& out) {
       << "                                  json, csv or json,csv, written to DIR/run.<format>\n"
       << "  loadforge stress --test NAME [--duration D] [--workers N] [--footprint SIZE]\n"
       << "                   [--isa scalar|avx2|avx512|neon] [--seed N]\n"
-      << "                   [--lock require|try|none] [--journal FILE]\n"
+      << "                   [--lock require|try|none] [--journal FILE] [--max-temperature C]\n"
       << "                   [--output FORMATS] [--output-dir DIR] [--sample-interval DURATION]\n"
       << "                                  stress with one verified workload, sampled and\n"
-      << "                                  written the same way; NAME is one of\n"
+      << "                                  written the same way; --max-temperature stops the\n"
+      << "                                  run when a sensor reads C degrees or more (a\n"
+      << "                                  configuration says it as limits.max_temperature_c);\n"
+      << "                                  NAME is one of\n"
       << "                                  adaptive_mesh, compression, dense_linear, fft, graph,\n"
       << "                                  monte_carlo, particles, raytrace, sort, sparse,\n"
       << "                                  stencil, or one of the two runs made of a schedule:\n"
@@ -136,7 +139,7 @@ void print_usage(std::ostream& out) {
       << "                   [--settle-max D]] [--replicates N] [--final-replicates N]\n"
       << "                   [--elimination N] [--interleave N] [--reference-replicates N]\n"
       << "                   [--seed N] [--footprint SIZE] [--isa PATH] [--lock POLICY]\n"
-      << "                   [--sample-interval D] [--verbose]\n"
+      << "                   [--sample-interval D] [--max-temperature C] [--verbose]\n"
       << "                                  search the candidates for the worst case of the\n"
       << "                                  objective, drift-corrected against a reference and\n"
       << "                                  reported with its replicates, spread and 95% "
@@ -160,10 +163,12 @@ void print_usage(std::ostream& out) {
       << "2 usage; 3 the run ended with a worker that did not complete; 4 a result file\n"
       << "could not be written; 5 the run found a fault (a wrong result, or an error the\n"
       << "hardware reported, corrected or not); 6 a check was not performed (a run that\n"
-      << "checked nothing is not clean). When several apply the first of 5, 4, 3, 6 is the\n"
-      << "code. explore: 0 every candidate scored; 1 refused before the first trial; 3 a trial\n"
-      << "could not be run; 5 a candidate's trial found a fault; 6 a candidate's trial did not\n"
-      << "finish, or a trial held no reading of the objective.\n"
+      << "checked nothing is not clean); 7 the temperature ceiling ended the run. When\n"
+      << "several apply the first of 5, 7, 4, 3, 6 is the code. A ceiling that cannot be\n"
+      << "read before the run starts is a refusal, 1. explore: 0 every candidate scored; 1\n"
+      << "refused before the first trial; 3 a trial could not be run, or the ceiling ended\n"
+      << "it; 5 a candidate's trial found a fault; 6 a candidate's trial did not finish, or\n"
+      << "a trial held no reading of the objective.\n"
       << "See docs/PLAN.md for what lands when.\n";
 }
 
@@ -180,10 +185,11 @@ struct TestArgs {
   std::optional<std::string> output_dir;
   std::optional<std::int64_t> sample_interval_ns;
   std::optional<std::string> journal;
-  std::optional<core::Duration> rotation;  ///< mixed only.
-  std::optional<core::Duration> dwell;     ///< cycling only.
-  std::optional<mixed::CycleKind> cycle;   ///< cycling only.
-  std::optional<std::string> on_workload;  ///< cycling only.
+  std::optional<std::int64_t> max_temperature;  ///< The ceiling, in degrees Celsius.
+  std::optional<core::Duration> rotation;       ///< mixed only.
+  std::optional<core::Duration> dwell;          ///< cycling only.
+  std::optional<mixed::CycleKind> cycle;        ///< cycling only.
+  std::optional<std::string> on_workload;       ///< cycling only.
 };
 
 /// The sample interval a flag names, in nanoseconds, or what is wrong with it.
@@ -312,6 +318,24 @@ std::optional<std::string> take_journal(const Written& option, TestArgs& out) {
   return std::nullopt;
 }
 
+/// The same range `limits.max_temperature_c` has in a configuration, for the
+/// same reasons (config.hpp).
+std::optional<std::string> take_max_temperature(const Written& option, TestArgs& out) {
+  auto celsius = whole_number(option.key, option.value);
+  if (!celsius.has_value()) {
+    return celsius.error();
+  }
+  if (celsius.value() < 1 ||
+      celsius.value() > static_cast<std::uint64_t>(config::kMaxTemperatureLimitC)) {
+    std::string range = "must be between 1 and ";
+    range += std::to_string(config::kMaxTemperatureLimitC);
+    range += " degrees Celsius";
+    return refused(option.key, range);
+  }
+  out.max_temperature = static_cast<std::int64_t>(celsius.value());
+  return std::nullopt;
+}
+
 /// A duration that is above zero and that a run can have.
 core::Result<core::Duration, std::string> positive_duration(const Written& option) {
   auto duration = core::parse_duration(option.value);
@@ -364,7 +388,7 @@ struct Option {
   bool (*given)(const TestArgs&);
 };
 
-constexpr std::array<Option, 14> kOptions{{
+constexpr std::array<Option, 15> kOptions{{
     {"--duration", &take_duration, [](const TestArgs& a) { return a.duration.has_value(); }},
     {"--workers", &take_workers, [](const TestArgs& a) { return a.workers.has_value(); }},
     {"--footprint", &take_footprint, [](const TestArgs& a) { return a.footprint.has_value(); }},
@@ -376,6 +400,8 @@ constexpr std::array<Option, 14> kOptions{{
     {"--sample-interval", &take_sample_interval,
      [](const TestArgs& a) { return a.sample_interval_ns.has_value(); }},
     {"--journal", &take_journal, [](const TestArgs& a) { return a.journal.has_value(); }},
+    {"--max-temperature", &take_max_temperature,
+     [](const TestArgs& a) { return a.max_temperature.has_value(); }},
     {"--rotation", &take_rotation, [](const TestArgs& a) { return a.rotation.has_value(); }},
     {"--dwell", &take_dwell, [](const TestArgs& a) { return a.dwell.has_value(); }},
     {"--cycle", &take_cycle, [](const TestArgs& a) { return a.cycle.has_value(); }},
@@ -738,6 +764,7 @@ int stress_test(std::span<const std::string_view> args, const std::string& self_
       config.workloads.emplace_back(workload, config::Threads::count(1), true, test.footprint);
     }
   }
+  config.limits.max_temperature_c = test.max_temperature;
   return run_stress(syscalls, config, launch->executable, launch->machine, options, out, err);
 }
 
@@ -797,7 +824,7 @@ int conclude_run(const Ending& ending, std::ostream& out, std::ostream& err) {
   }
   out << summary_text(result.value(), report, *ending.timeline, summarizer, reading.gaps);
   const int code = exit_code_for(result.value().verdict, controller::all_clean(report),
-                                 has_verified_worker(report));
+                                 has_verified_worker(report), report.temperature_stop.has_value());
   if (stress_options.formats.empty()) {
     return code;
   }
@@ -940,6 +967,13 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     rig = std::move(made).value();
     options.sampler = &rig->sampler();
     options.timeline = &rig->timeline();
+    // The reading side of the same timeline, for the temperature ceiling. Bound
+    // through a reference: the conversion of a pointer to the second base
+    // carries a test for null that no run can take (journal section 4.24).
+    const telemetry::BoundedTimeline& sampled = rig->timeline();
+    const telemetry::TimelineView& readings = sampled;
+    options.view = &readings;
+    options.temperature_unread = unread_temperature(rig->capabilities());
     out << telemetry::render_capabilities(rig->capabilities());
   } else if (stress_options.capabilities) {
     // A run that samples nothing still states what the machine offers, from a
@@ -957,6 +991,7 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
     }
     probe_only = std::move(made).value();
     options.capabilities = telemetry::render_capabilities(probe_only->capabilities());
+    options.temperature_unread = unread_temperature(probe_only->capabilities());
   }
   const telemetry::BoundedTimeline no_timeline(0);
   const telemetry::BoundedTimeline& timeline = rig != nullptr ? rig->timeline() : no_timeline;

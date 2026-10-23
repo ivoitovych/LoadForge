@@ -25,6 +25,12 @@ results::RunResult to_run_result(const controller::RunReport& report,
       entry.cpu = worker.work->cpu;
     }
     entry.termination = worker.termination;
+    if (report.temperature_stop.has_value()) {
+      // The result schema has no field for why a run ended, so the worker's own
+      // account says it: each was stopped because the ceiling ended the run.
+      entry.termination += "; the run was ended by the temperature ceiling: ";
+      entry.termination += controller::describe(*report.temperature_stop);
+    }
     result.workers.push_back(std::move(entry));
     if (!worker.work.has_value()) {
       continue;
@@ -51,9 +57,13 @@ results::RunResult to_run_result(const controller::RunReport& report,
   return result;
 }
 
-int exit_code_for(results::Verdict verdict, bool workers_clean, bool verified) noexcept {
+int exit_code_for(results::Verdict verdict, bool workers_clean, bool verified,
+                  bool temperature_stopped) noexcept {
   if (verdict == results::Verdict::kFindings || verdict == results::Verdict::kCorrectedErrors) {
     return kExitFault;
+  }
+  if (temperature_stopped) {
+    return kExitTemperature;
   }
   if (!workers_clean) {
     return kExitUnclean;
@@ -68,7 +78,7 @@ bool has_verified_worker(const controller::RunReport& report) noexcept {
 }
 
 int with_output_failure(int code) noexcept {
-  return code == kExitFault ? kExitFault : kExitOutputFailed;
+  return code == kExitFault || code == kExitTemperature ? code : kExitOutputFailed;
 }
 
 int exit_code_for(const controller::RunReport& report, const config::Config& config) {
@@ -77,7 +87,8 @@ int exit_code_for(const controller::RunReport& report, const config::Config& con
   if (verified) {
     verdict = to_run_result(report, config).verdict;
   }
-  return exit_code_for(verdict, controller::all_clean(report), verified);
+  return exit_code_for(verdict, controller::all_clean(report), verified,
+                       report.temperature_stop.has_value());
 }
 
 int after_isolation(controller::RunReport& report, const topology::Snapshot* machine,

@@ -1,6 +1,7 @@
 # Safety
 
-**Written:** 2026-10-22 22:09 UTC, against `main` at 97cf70e plus the release stream.
+**Written:** 2026-10-22 22:09 UTC, against `main` at 97cf70e plus the release stream.  
+**Revised:** 2026-10-22 22:40 UTC, for the temperature ceiling (roadmap 34a).
 
 LoadForge is built to drive a machine to sustained full load on every core and a large
 part of its memory, for as long as you ask. A machine with a failing fan, dried paste,
@@ -12,52 +13,33 @@ about behaviour was checked by running the binary, and the checks are shown.
 
 Read the first section before your first run.
 
-## 1. What is not protected: there is no temperature ceiling
+## 1. Heat: the ceiling is yours to set
 
-**LoadForge 1.0 does not stop a run because the machine is too hot.**
+**LoadForge stops a run because the machine is too hot only if you give it a ceiling.**
+There is no default. A configuration names `limits.max_temperature_c` (1 to 150, degrees
+Celsius), and `stress --test` and `explore` take `--max-temperature C`. With none, nothing
+watches the temperature and a run goes on at full load until its duration, whatever the
+sensors say.
 
-A configuration may name `limits.max_temperature_c`. The value is read, checked
-(1 to 150), and then reported as not enforced. Nothing watches it. Running the
-configuration below on this commit:
+- Choose the ceiling from your CPU's datasheet: a few degrees under the sustained junction
+  limit, and under what you are willing to see on a machine you want to keep. The tool
+  does not know your cooling.
+- The ceiling is a software backstop behind the CPU's own throttling and thermal shutdown,
+  never a substitute for them. A machine that throttles or powers off before the sampler
+  sees the ceiling ends the run without a report, and the crash journal (section 3) is what
+  survives.
+- Between the reading that crosses the ceiling and the last worker stopping there is time:
+  up to one sample interval (1 s by default, `--sample-interval`) before the reading is
+  taken, then the stop (section 2). The measured case is in section 2; plan for seconds,
+  not milliseconds.
+- On a machine with no temperature sensor to read (a virtual machine, a container, a board
+  without a thermal driver) a run with a ceiling is **refused**, not run unprotected
+  (section 2). Remove the ceiling to run there; nothing inside such a machine can see its
+  temperature.
 
-```toml
-schema_version = 1
-
-[run]
-mode     = "stress"
-duration = "3s"
-
-[limits]
-max_temperature_c = 85
-memory = "512MiB"
-
-[[workload]]
-name    = "sort"
-threads = 2
-memory  = "64MiB"
-```
-
-```
-$ loadforge stress --config limits.toml
-...
-  limit duration: enforced (3s)
-  limit memory: enforced (checked at start against a ceiling of 14005748KiB)
-  limit temperature: NOT ENFORCED (not enforced until telemetry lands (M3); configured 85 C)
-```
-
-The message is out of date (telemetry landed with M3) but the fact it states is current:
-the temperature sources are read and recorded on the timeline, and no part of the
-controller compares them with a limit. `loadforge stress --test NAME` has no temperature
-option at all. This is recorded as an open defect of the 1.0 candidate in
-`docs/journal/34-release-1-0.md`. Until it is built:
-
-- Watch the temperature yourself, with a tool of your own, on the first run on any
-  machine, and keep the first run short (`--duration 2m`).
-- Do not leave a run unattended on a machine whose cooling you have not seen work.
-- A machine's own protection still applies: every CPU this tool targets throttles and
-  then powers off at its junction limit. That protection is the platform's, not
-  LoadForge's, and a run that reaches it ends with the machine off and no report.
-  The crash journal (below) is what survives.
+Watch the temperature yourself on the first run on any machine, keep the first run short
+(`--duration 2m`), and do not leave a run unattended on a machine whose cooling you have not
+seen work.
 
 ## 2. What is enforced
 
@@ -77,6 +59,106 @@ A run can therefore end about 11 s after its duration on a machine where a unit 
 very long, and ordinarily ends within a fraction of a second of it (the two-second run
 in section 6 ended 0.24 s late). A worker running the null workload (a configured name
 that is not a workload of this build) is given 1 s for each step instead of 10 s.
+
+### The temperature ceiling
+
+`limits.max_temperature_c` is enforced from the telemetry the controller already takes. After
+every sampling round it looks at the point each temperature series received: every gauge in
+degrees Celsius that the machine exposes, which today means `thermal.package`,
+`thermal.core`, `thermal.sensor` and `thermal.zone` (`docs/telemetry-sources.md`). It does not
+choose "the" temperature, because nothing can know which sensor is the package on every
+board: **any one sensor at or above the ceiling stops the run**, a chipset or VRM sensor as
+well as the die. A reading equal to the ceiling counts. The sensors it watches are in the
+banner:
+
+```
+  limit temperature: enforced (stops the run at 90 C; watching thermal.package 0)
+```
+
+(`thermal.core x8` when a family has several.) What happens when one reads at or above the
+ceiling, measured on this build with a fake coretemp chip that went from 45 C to 93 C three
+seconds into a 60 s run of two `sort` workers:
+
+```
+[3.172 s] temperature ceiling: thermal.package 0 (hwmon:coretemp) read 93.0 C, at or above the ceiling of 90 C, 3.172 s into the run: stop requested
+[3.420 s] worker 1 (pid 17724): exited with code 0
+[3.452 s] worker 0 (pid 17723): exited with code 0
+run ended after 3.552 s: 2 of 2 worker(s) completed
+  ended by the temperature ceiling: thermal.package 0 (hwmon:coretemp) read 93.0 C, at or above the ceiling of 90 C, 3.172 s into the run
+...
+verdict: clean
+ended by the temperature ceiling: thermal.package 0 (hwmon:coretemp) read 93.0 C, at or above the ceiling of 90 C, 3.172 s into the run
+...
+$ echo $?
+7
+```
+
+- Every worker is stopped exactly as at the deadline: a stop request, then `SIGTERM` after
+  the stop grace, then `SIGKILL` (the table above). A worker answers between two units, so a
+  verifying worker can take up to 10 s to answer and the run up to about 11 s to end; the
+  ordinary case is a fraction of a second, as above. The ceiling does not shorten the
+  escalation: a worker killed in the middle of a unit is a worker that did not finish, and
+  the exit code says why (below).
+- The run ends with **exit code 7**, which outranks a failed write (4), a worker that did not
+  complete (3) and a check not made (6), because the stop is why they happened. Only a fault
+  (5) outranks it: a wrong result found before the stop is still the thing to read first.
+  The `verdict:` line is the checks' and says nothing of the stop (a stopped run can be
+  `clean` and exit 7); the line under it does, and so does the exit code.
+- The console says which sensor, what it read, the ceiling and when (above, twice: when it
+  happened and in the summary). The result files say it in every worker's `termination`
+  (the result schema has no field for a reason to end, so each worker's account of how it
+  ended carries it). The crash journal, when one is open, has an entry at the stop whose
+  phase is `ceiling 90 C reached: thermal.package 0 (hwmon:coretemp)` and whose temperature
+  is the reading:
+
+```
+$ loadforge journal j
+journal j: ended cleanly; 3 entries
+  t=0.0s phase "run" workload sort 45.0C workers 2 alive 0 stale
+  t=3.2s phase "ceiling 90 C reached: thermal.package 0 (hwmon:coretemp)" workload sort units 8 93.0C workers 2 alive 0 stale
+  t=3.6s phase "done" workload sort units 9 93.0C workers 0 alive 0 stale
+```
+
+**A ceiling nothing can hold is a refusal.** If no temperature can be read before the first
+worker starts (no sensor on the machine, every sensor unreadable, no telemetry), the run is
+refused with exit code 1 and no worker is started. The message carries the thermal source's
+own reason and remedy:
+
+```
+loadforge: temperature: the temperature ceiling is 85 C and no temperature can be read, so it could not be enforced: thermal.package: no hwmon chip with a temperature input and no thermal zone; this machine exposes no temperature sensor to read; in a virtual machine or a container that is the platform's choice and nothing inside it can change that, while on bare metal the platform's hwmon driver (coretemp on Intel, k10temp on AMD) may not be loaded; remove the ceiling to run without one
+$ echo $?
+1
+```
+
+This differs from the memory limit, which runs and says NOT ENFORCED when the budget cannot
+be read. The reason is what the failure costs: an unread memory budget leaves the kernel's
+OOM killer in charge, which ends one worker and says so; an unread temperature leaves the
+machine at full load with nothing to stop it, and a banner line is easy to miss in a
+capability report of two dozen lines. There is no option to run on with a ceiling that
+cannot be held: removing the ceiling from the configuration (or leaving out
+`--max-temperature`) is that option, and it is explicit. A machine already at or above the
+ceiling before the first worker starts is refused the same way (exit 1): the run would end
+at its first tick.
+
+**Sensors that go during a run.** A sensor that stops answering is told once on the console
+(`temperature: thermal.core 3 (hwmon:coretemp) can no longer be read: ...`, and again when it
+answers) and the others are still watched. If **no** sensor has answered for 10 s, or if
+sampling itself ends (the timeline refused a round), the ceiling can no longer be enforced
+and the run is stopped like a crossing, exit code 7, with the reason:
+
+```
+[13.210 s] temperature ceiling: no temperature could be read for 10.3 s (open(/sys/class/hwmon/hwmon0/temp1_input): No such file or directory (errno 2)), so the ceiling of 90 C can no longer be enforced, 13.210 s into the run: stop requested
+```
+
+(A run that stops at its crossing is 7; so is one stopped because nothing could hold the
+ceiling; the text says which.) Only the rounds taken while the workers run are watched; the
+round after the last worker is gone is not.
+
+`explore` honours `--max-temperature` in every trial. With no sensor it is refused before the
+first trial (exit 1). A trial in which a sensor reaches the ceiling is stopped as above and
+**fails the search** (exit 3, naming the sensor): a load cut short is not the load the
+candidate was asked to carry, so it has no score, and the machine is hot, so the search does
+not go on to the next candidate.
 
 ### Hangs
 
@@ -194,14 +276,16 @@ A hardware error counter that was blind for part of the run makes the verdict
 
 1. Look at the machine: fans turning, vents clear, the case closed, laptop on a hard
    surface and not on a bed.
-2. Know your limit: the sustained package temperature your CPU's datasheet gives, and a
-   tool that shows it. LoadForge will show the temperature in its report when the
-   machine exposes a sensor; the capability report at the top of every run says whether
-   it does (`thermal: N of M present`).
+2. Know your limit: the sustained package temperature your CPU's datasheet gives, and set
+   a ceiling a few degrees under it (`limits.max_temperature_c`, or `--max-temperature`).
+   The capability report at the top of every run says whether the machine exposes a
+   sensor to hold it (`thermal: N of M present`); if it says 0, a run with a ceiling is
+   refused (section 2) and a run without one is on your watch alone.
 3. Close what you need to keep. A power-off loses unsaved work.
 4. On a laptop, plug it in. The fingerprint records `power_source` and `battery_state`
    when the kernel offers them, because a run on battery is a different experiment.
-5. Start short: `loadforge stress --test dense_linear --duration 2m --journal run.journal`.
+5. Start short, with a ceiling:
+   `loadforge stress --test dense_linear --duration 2m --max-temperature 85 --journal run.journal`.
 6. On shared machines, remember that one worker is started per CPU you may use (at most
    64), pinned to its own CPU: the machine will be unusable for other work while it runs.
    `--workers N` starts fewer.
@@ -228,7 +312,9 @@ exits 0. The exit codes are in the README and in `loadforge --help`.
 
 ## 7. What is not covered
 
-- No thermal, power or fan control; no limit on package power.
+- No default ceiling: a run with none is not stopped for heat (section 1).
+- No thermal, power or fan control; no limit on package power. The ceiling stops a run; it
+  does not throttle one.
 - No watch of memory after the start (section 2).
 - No graceful stop on a signal (section 2).
 - SSDs, discrete GPUs and PCIe bandwidth are out of scope; the tool minimises writes to

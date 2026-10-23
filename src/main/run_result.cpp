@@ -126,6 +126,11 @@ std::string summary_text(const results::RunResult& result, const controller::Run
                          const std::vector<results::FingerprintGap>& gaps) {
   std::ostringstream text;
   text << "verdict: " << results::describe(result.verdict) << "\n";
+  if (report.temperature_stop.has_value()) {
+    // A run cut short is not a pass whatever its verdict says: its exit code is 7.
+    text << "ended by the temperature ceiling: " << controller::describe(*report.temperature_stop)
+         << "\n";
+  }
   const controller::SamplingReport& sampling = report.sampling;
   if (!sampling.enabled) {
     text << "telemetry: not sampled\n";

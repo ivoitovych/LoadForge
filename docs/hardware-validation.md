@@ -397,11 +397,10 @@ All of these, with the files as evidence:
 4. T11 is met on at least one machine with a readable temperature, or its failure is
    recorded as a result.
 5. The soak is clean on at least one machine of each architecture.
-6. No open issue is a correctness defect. **One known defect is open at the time of
-   writing:** the temperature limit in a configuration is not enforced
-   (`docs/safety.md` §1). It is a safety gap and not a wrong result, but "no known defect"
-   needs the owner's decision on it: build the enforcement, or declare it out of 1.0 and
-   say so in the release notes.
+6. No open issue is a correctness defect. The temperature limit in a configuration was
+   once not enforced; it is now (`docs/safety.md` §2), and the machine validation should
+   record, on a machine with a readable temperature, that a ceiling set below the idle
+   temperature refuses the run (exit 1) and one set just above it lets the run through.
 7. A reviewer other than the author has looked at the project. None has yet looked at the
    whole tree; the project still needs an outside reviewer.
 

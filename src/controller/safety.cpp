@@ -66,7 +66,7 @@ bool any_memory_configured(const config::Config& config) {
 
 std::vector<LimitStatus> limit_statuses(const config::Config& config,
                                         const std::optional<config::MemoryBudget>& budget,
-                                        std::string_view unread) {
+                                        std::string_view unread, std::string_view watching) {
   // Each status is built in a named local and moved in: a temporary with two
   // allocating members inside push_back leaves a cleanup edge no test can
   // take (journal §1.13).
@@ -90,13 +90,49 @@ std::vector<LimitStatus> limit_statuses(const config::Config& config,
     statuses.push_back(std::move(memory));
   }
   if (config.limits.max_temperature_c.has_value()) {
-    std::string temperature_note = "not enforced until telemetry lands (M3); configured ";
+    std::string temperature_note = "no temperature can be read; configured ";
     temperature_note += std::to_string(*config.limits.max_temperature_c);
     temperature_note += " C";
-    LimitStatus temperature{"temperature", false, std::move(temperature_note)};
+    if (!watching.empty()) {
+      temperature_note = "stops the run at ";
+      temperature_note += std::to_string(*config.limits.max_temperature_c);
+      temperature_note += " C; watching ";
+      temperature_note += watching;
+    }
+    LimitStatus temperature{"temperature", !watching.empty(), std::move(temperature_note)};
     statuses.push_back(std::move(temperature));
   }
   return statuses;
+}
+
+core::Result<core::Ok, std::string> check_temperature(const config::Config& config,
+                                                      const TemperatureWatch* watch,
+                                                      std::string_view unread) {
+  if (!config.limits.max_temperature_c.has_value()) {
+    return core::Ok{};
+  }
+  if (watch == nullptr || watch->readable() == 0) {
+    std::string refusal = "the temperature ceiling is ";
+    refusal += std::to_string(*config.limits.max_temperature_c);
+    refusal += " C and no temperature can be read, so it could not be enforced: ";
+    if (watch != nullptr && !watch->sensors().empty()) {
+      // Sensors were found and none answered the baseline round.
+      refusal += "none of the ";
+      refusal += std::to_string(watch->sensors().size());
+      refusal += " temperature sensor(s) answered: ";
+      refusal += watch->last_reason();
+    } else {
+      refusal += unread.empty() ? "no temperature sensor was offered" : unread;
+    }
+    refusal += "; remove the ceiling to run without one";
+    return refusal;
+  }
+  if (const std::optional<TemperatureStop>& hot = watch->hot_at_start(); hot.has_value()) {
+    std::string refusal = "the machine is already at its ceiling, before any worker started: ";
+    refusal += describe_reading(*hot);
+    return refusal;
+  }
+  return core::Ok{};
 }
 
 core::Result<core::Ok, std::string> check_memory(

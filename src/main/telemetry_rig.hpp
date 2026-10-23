@@ -62,6 +62,16 @@ struct RunShape {
 /// for the machine-wide metrics, and a few per online CPU.
 [[nodiscard]] std::size_t series_bound(std::size_t cpus) noexcept;
 
+/// Whether the report holds a temperature that can be read: a gauge in degrees
+/// Celsius that is present. What a ceiling (`limits.max_temperature_c`) needs
+/// before anything starts.
+[[nodiscard]] bool has_temperature(const telemetry::CapabilityReport& report);
+
+/// Why no temperature is offered, in the thermal source's own words: each of
+/// its metrics that is not present, with the detail and the remedy it gave.
+/// Empty when the report has no thermal source or all its metrics are present.
+[[nodiscard]] std::string unread_temperature(const telemetry::CapabilityReport& report);
+
 /// How the sources of a run are made. The command line uses make_sources; a
 /// test names one that makes sources it scripts.
 using SourceFactory = std::vector<std::unique_ptr<telemetry::Source>> (*)(platform::Syscalls&,

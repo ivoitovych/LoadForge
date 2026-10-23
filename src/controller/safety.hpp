@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "controller/temperature.hpp"
 #include "core/result.hpp"
 
 namespace loadforge::controller {
@@ -44,10 +45,9 @@ struct Grace {
 /// The step a worker is at once `signal` has been sent to it.
 [[nodiscard]] StopStep step_after(int signal) noexcept;
 
-/// One configured limit and whether this build enforces it. A limit the tool
+/// One configured limit and whether this run enforces it. A limit the tool
 /// cannot enforce is reported as such at the start of the run, never
-/// silently ignored: a user who configured a thermal ceiling must learn
-/// before the run that nothing is watching it (docs/PLAN.md F3).
+/// silently ignored (docs/PLAN.md F3).
 struct LimitStatus {
   std::string name;
   bool enforced = false;
@@ -62,11 +62,31 @@ struct LimitStatus {
 /// The limits a run states, each with its enforcement. The duration is always
 /// enforced (it is the controller's deadline); memory is enforced against a
 /// budget when one is known, and reported unenforced when none can be read,
-/// with `unread` -- the reader's reason -- when it gave one; temperature waits
-/// for telemetry.
+/// with `unread` -- the reader's reason -- when it gave one. The temperature
+/// ceiling is enforced when `watching` names the sensors that are watched (the
+/// controller's TemperatureWatch::describe_sensors), and reported unenforced
+/// when it is empty; a run does not get so far with a ceiling it cannot watch
+/// (check_temperature refuses it), so that arm states a fact and not a policy.
 [[nodiscard]] std::vector<LimitStatus> limit_statuses(
     const config::Config& config, const std::optional<config::MemoryBudget>& budget,
-    std::string_view unread);
+    std::string_view unread, std::string_view watching);
+
+/// Refuses a run that configured a temperature ceiling and cannot keep it,
+/// before any worker starts. `watch` is what the controller found to watch
+/// after the baseline round, null when nothing could be (no sampler, no
+/// timeline, a baseline round the timeline refused). Two refusals:
+///
+///   * no sensor answered in the baseline round. A ceiling the user asked for
+///     and cannot get is the dangerous silent case (docs/PLAN.md F3,
+///     docs/safety.md), so it is a refusal and not a banner line. `unread` is the
+///     reason in the sources' own words, when there is one.
+///   * a sensor is already at or above the ceiling. A run that would be stopped
+///     at its first tick has nothing to stop.
+///
+/// Without a configured ceiling there is nothing to refuse.
+[[nodiscard]] core::Result<core::Ok, std::string> check_temperature(const config::Config& config,
+                                                                    const TemperatureWatch* watch,
+                                                                    std::string_view unread);
 
 /// Refuses a run whose configured footprints exceed the budget, before any
 /// worker starts. With no budget there is nothing to check against, and the

@@ -226,5 +226,28 @@ TEST(ConsoleReporterTest, IsolationIsToldInTheLaddersWordsAndNeverAsAVerdict) {
       << "a check that was not made is not isolated and says nothing";
 }
 
+TEST(ConsoleReporterTest, ARunTheCeilingEndedSaysWhichSensorWhatItReadAndWhen) {
+  std::ostringstream out;
+  ConsoleReporter reporter(out);
+  controller::RunReport report;
+  report.elapsed_ns = 4'000'000'000;
+  EXPECT_EQ(out.str(), "");
+  reporter.run_finished(report);
+  EXPECT_EQ(out.str().find("temperature"), std::string::npos) << "no stop, no line";
+  controller::TemperatureStop stop;
+  stop.sensor = "thermal.core 3 (hwmon:coretemp)";
+  stop.celsius = 91.0;
+  stop.ceiling_c = 90;
+  stop.at_ns = 3'500'000'000;
+  report.temperature_stop = stop;
+  std::ostringstream stopped;
+  ConsoleReporter again(stopped);
+  again.run_finished(report);
+  EXPECT_EQ(stopped.str(),
+            "run ended after 4.000 s: 0 of 0 worker(s) completed\n"
+            "  ended by the temperature ceiling: thermal.core 3 (hwmon:coretemp) read 91.0 C, "
+            "at or above the ceiling of 90 C, 3.500 s into the run\n");
+}
+
 }  // namespace
 }  // namespace loadforge::reporters

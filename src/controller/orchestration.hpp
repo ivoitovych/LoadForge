@@ -94,6 +94,21 @@ struct RunOptions {
   /// reported per phase). Marks "run" at the first round and "stop" at the
   /// deadline. Not owned; may be null even with a sampler.
   telemetry::TimelineSink* timeline = nullptr;
+  /// Where the sampled readings are read back from, for the temperature ceiling
+  /// (`limits.max_temperature_c`, controller/temperature.hpp): the same timeline
+  /// the sampler writes, as a reading side. A ceiling is enforced from the
+  /// points each round puts on it, never from a read of its own, so a run with
+  /// a ceiling needs a sampler and this. A configured ceiling with neither, or
+  /// with no temperature among the series, or none that answers before the
+  /// first worker, refuses the run (check_temperature). Not owned; it must
+  /// outlive the run. Null: no temperature can be read.
+  const telemetry::TimelineView* view = nullptr;
+  /// Why no temperature can be read, in the sources' own words, for that
+  /// refusal. Empty: no reason is known.
+  std::string temperature_unread;
+  /// How long every temperature sensor may stay unread, once running, before
+  /// the ceiling is taken as no longer enforceable and the run is stopped.
+  std::int64_t temperature_blind_after_ns = 10'000'000'000;
   /// The interval between rounds. A tick comes at least this often (the poll
   /// interval above), so a value below `interval_ns` samples at that rate.
   std::int64_t sample_interval_ns = 100'000'000;

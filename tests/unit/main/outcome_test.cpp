@@ -238,6 +238,68 @@ TEST(ExitCodeComposed, TheCodesAreMainsAndTheOnesM2AddedFollowThem) {
   EXPECT_EQ(kExitFault, 5);
   EXPECT_EQ(kExitWrongResult, kExitFault) << "a wrong result is a fault, the verdict is findings";
   EXPECT_EQ(kExitNotVerified, 6);
+  EXPECT_EQ(kExitTemperature, 7);
+}
+
+// ---- the temperature ceiling: 5, then 7, then 4, 3, 6 ------------------------------------------
+
+controller::TemperatureStop reached() {
+  controller::TemperatureStop stop;
+  stop.sensor = "thermal.package 0 (hwmon:coretemp)";
+  stop.celsius = 91.0;
+  stop.ceiling_c = 90;
+  stop.at_ns = 12'345'000'000;
+  return stop;
+}
+
+TEST(ExitCodeTemperature, ARunTheCeilingEndedIsSevenWhateverElseItsStopCaused) {
+  // The stop kills workers that did not finish (3) and cuts the checks short (6): 7 says why.
+  EXPECT_EQ(exit_code_for(results::Verdict::kClean, true, true, true), kExitTemperature);
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, true, true, true), kExitTemperature);
+  EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, false, true, true), kExitTemperature);
+  EXPECT_EQ(exit_code_for(results::Verdict::kClean, false, false, true), kExitTemperature);
+}
+
+TEST(ExitCodeTemperature, OnlyAFaultOutranksIt) {
+  for (const bool clean : {true, false}) {
+    EXPECT_EQ(exit_code_for(results::Verdict::kFindings, clean, true, true), kExitFault);
+    EXPECT_EQ(exit_code_for(results::Verdict::kCorrectedErrors, clean, true, true), kExitFault);
+  }
+}
+
+TEST(ExitCodeTemperature, AResultThatCannotBeWrittenDoesNotHideIt) {
+  EXPECT_EQ(with_output_failure(kExitTemperature), kExitTemperature);
+  EXPECT_EQ(with_output_failure(kExitUnclean), kExitOutputFailed);
+}
+
+TEST(ExitCodeTemperature, TheReportsStopIsWhatMakesItSeven) {
+  controller::RunReport report;
+  report.workers = {checked_worker(), checked_worker()};
+  EXPECT_EQ(exit_code_for(report, a_config()), 0);
+  report.temperature_stop = reached();
+  EXPECT_EQ(exit_code_for(report, a_config()), kExitTemperature);
+  report.workers[0].findings = {wrong_result()};
+  report.workers[0].wrong_results = 1;
+  EXPECT_EQ(exit_code_for(report, a_config()), kExitFault) << "a wrong result found on the way";
+}
+
+TEST(ToRunResult, EveryWorkersAccountOfItsEndNamesTheCeilingThatEndedTheRun) {
+  controller::RunReport report;
+  WorkerReport first = null_worker();
+  first.termination = "exited with code 0";
+  WorkerReport second = null_worker(WorkerFate::kStoppedByController);
+  second.slot = 1;
+  second.termination = "killed by signal 9";
+  report.workers = {first, second};
+  EXPECT_EQ(to_run_result(report, a_config()).workers[0].termination, "exited with code 0")
+      << "no stop, no words";
+  report.temperature_stop = reached();
+  const results::RunResult result = to_run_result(report, a_config());
+  EXPECT_EQ(result.workers[0].termination,
+            "exited with code 0; the run was ended by the temperature ceiling: "
+            "thermal.package 0 (hwmon:coretemp) read 91.0 C, at or above the ceiling of 90 C, "
+            "12.345 s into the run");
+  EXPECT_EQ(result.workers[1].termination.find("killed by signal 9; the run was ended by"), 0U);
 }
 
 TEST(ExitCodeComposed, AFaultOutranksAWorkerThatDidNotCompleteAndAnIncompleteVerdict) {

@@ -89,6 +89,10 @@ struct TrialOptions {
   std::uint64_t footprint_bytes = std::uint64_t{32} << 20U;
   verification::LockPolicy lock = verification::LockPolicy::kTry;
   std::int64_t sample_interval_ns = 1'000'000'000;
+  /// The temperature ceiling of every trial, in degrees Celsius. A ceiling
+  /// that no sensor can be read for refuses the runner (create); a trial that
+  /// reaches it fails (run), because a run cut short is not a measurement.
+  std::optional<std::int64_t> max_temperature_c;
   std::ostream* log = nullptr;
 };
 

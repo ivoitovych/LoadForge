@@ -83,6 +83,8 @@ TEST(ExploreArgs, TheShortestSearchTakesTheDefaultsOfTheSearch) {
 
 TEST(ExploreArgs, EveryOptionIsTakenInAnyOrder) {
   const auto parsed = parse({"--verbose",
+                             "--max-temperature",
+                             "95",
                              "--lock",
                              "require",
                              "--isa",
@@ -124,6 +126,7 @@ TEST(ExploreArgs, EveryOptionIsTakenInAnyOrder) {
   ASSERT_TRUE(parsed.has_value()) << parsed.error();
   const ExploreArgs& args = parsed.value();
   EXPECT_TRUE(args.verbose);
+  EXPECT_EQ(args.max_temperature_c, 95);
   EXPECT_EQ(args.lock, verification::LockPolicy::kRequire);
   EXPECT_EQ(args.isa, simd::IsaPath::kScalar);
   EXPECT_EQ(args.footprint_bytes, std::uint64_t{2} << 20U);
@@ -263,6 +266,25 @@ TEST(ExploreArgs, TheMachineFacingOptionsAreRefusedByName) {
   for (const std::string_view policy : {"try", "none"}) {
     EXPECT_TRUE(parse(with_required({"--lock", policy})).has_value()) << policy;
   }
+}
+
+TEST(ExploreArgs, TheCeilingIsAWholeNumberOfDegreesInTheRangeAConfigurationHas) {
+  EXPECT_FALSE(parse(with_required({})).value().max_temperature_c.has_value())
+      << "no ceiling unless one is asked for";
+  EXPECT_EQ(parse(with_required({"--max-temperature", "1"})).value().max_temperature_c, 1);
+  EXPECT_EQ(parse(with_required({"--max-temperature", "150"})).value().max_temperature_c, 150);
+  for (const std::string_view bad : {"0", "151"}) {
+    EXPECT_TRUE(contains(refusal_of(with_required({"--max-temperature", bad})),
+                         "--max-temperature: must be between 1 and 150 degrees Celsius"))
+        << bad;
+  }
+  for (const std::string_view bad : {"hot", "90C", "-5"}) {
+    EXPECT_TRUE(
+        contains(refusal_of(with_required({"--max-temperature", bad})), "expected a whole number"))
+        << bad;
+  }
+  EXPECT_FALSE(
+      parse(with_required({"--max-temperature", "90", "--max-temperature", "95"})).has_value());
 }
 
 TEST(ExploreSearch, EveryCandidateAndTheReferenceShareTheDurationAndTheSettlePhase) {
@@ -608,6 +630,21 @@ TEST(ExploreCommand, AMachineWithNothingToReadStatesItAndRefusesTheObjectiveBefo
   EXPECT_EQ(ran.code, 1);
   EXPECT_TRUE(contains(ran.err, "objective metric unknown")) << ran.err;
   EXPECT_TRUE(contains(ran.out, "telemetry capability: 0 of 0 metric(s) present")) << ran.out;
+}
+
+TEST(ExploreCommand, ACeilingNothingCanBeReadForRefusesTheCommandBeforeTheFirstTrial) {
+  TrialOptions base;
+  base.sources = no_sources;
+  const Invoked ran = command({"--objective", "memory.available:min:lower", "--candidate",
+                               "a:sort:1", "--max-temperature", "85"},
+                              "/proc/self/exe", "/sys", base);
+  EXPECT_EQ(ran.code, 1);
+  EXPECT_TRUE(contains(ran.err,
+                       "loadforge: explore: --max-temperature is 85 C and no temperature "
+                       "can be read, so the ceiling could not be enforced: no "
+                       "temperature sensor was offered; leave the option out"))
+      << ran.err;
+  EXPECT_TRUE(ran.out.empty()) << "nothing was probed for the user to read, nothing ran";
 }
 
 }  // namespace

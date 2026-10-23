@@ -389,6 +389,25 @@ TEST(SummaryTextTest, ARunWithoutTelemetrySaysSoAndOneWithoutEdacSaysNothingOfIt
   EXPECT_EQ(text, "verdict: clean\ntelemetry: not sampled\n");
 }
 
+TEST(SummaryTextTest, ARunTheCeilingEndedSaysSoRightBelowItsVerdict) {
+  const mocks::MockTimeline timeline;
+  const mocks::MockSummarizer summarizer;
+  controller::RunReport report;
+  controller::TemperatureStop stop;
+  stop.sensor = "thermal.package 0 (hwmon:coretemp)";
+  stop.celsius = 96.5;
+  stop.ceiling_c = 95;
+  stop.at_ns = 2'250'000'000;
+  report.temperature_stop = stop;
+  results::RunResult result;
+  result.verdict = results::Verdict::kClean;
+  EXPECT_EQ(summary_text(result, report, timeline, summarizer, {}),
+            "verdict: clean\n"
+            "ended by the temperature ceiling: thermal.package 0 (hwmon:coretemp) read 96.5 C, "
+            "at or above the ceiling of 95 C, 2.250 s into the run\n"
+            "telemetry: not sampled\n");
+}
+
 TEST(SummaryTextTest, AnOverheadThatCouldNotBeComputedIsLeftOutAndAFaultIsStated) {
   const mocks::MockTimeline timeline;
   const mocks::MockSummarizer summarizer;
