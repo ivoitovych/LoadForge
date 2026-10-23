@@ -95,8 +95,8 @@ class ModelRunner final : public explore::TrialRunner {
       if (candidate.settle->metric != "thermal.package") {
         return TrialError{TrialFault::kMetricUnavailable, candidate.settle->metric};
       }
-      outcome.settled = true;
-      outcome.settle_ns = candidate.settle->window_ns;
+      outcome.settled = !settles || settles(candidate, call);
+      outcome.settle_ns = outcome.settled ? candidate.settle->window_ns : candidate.settle->max_ns;
     }
     if (fault) {
       if (auto error = fault(candidate, call)) {
@@ -114,6 +114,8 @@ class ModelRunner final : public explore::TrialRunner {
 
   std::function<std::optional<TrialError>(const Candidate&, std::size_t)> fault;
   std::function<results::Verdict(const Candidate&, std::size_t)> verdict;
+  /// Whether the settle phase of a trial meets its criterion; absent means it does.
+  std::function<bool(const Candidate&, std::size_t)> settles;
   std::function<Shape(const Candidate&)> shape_of = [](const Candidate&) { return Shape::kGauge; };
   std::vector<std::string> ran;
 

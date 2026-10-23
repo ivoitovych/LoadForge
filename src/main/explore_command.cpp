@@ -527,11 +527,12 @@ std::string estimate_text(const explore::Estimate& estimate) {
   return text;
 }
 
-/// The 1-based replicates (or readings) the hardware reported a corrected error in.
-std::string corrected_list(const std::vector<explore::TrialNote>& notes) {
+/// The 1-based replicates (or readings) that `which` of their note is true of.
+std::string noted_list(const std::vector<explore::TrialNote>& notes,
+                       bool explore::TrialNote::*which) {
   std::string text;
   for (std::size_t i = 0; i < notes.size(); ++i) {
-    if (notes[i].corrected_errors) {
+    if (notes[i].*which) {
       text += " " + std::to_string(i + 1);
     }
   }
@@ -560,6 +561,15 @@ std::string render_report(const explore::SearchReport& report) {
             "unfinished trial\n";
   }
   text << "ranking: " << explore::describe(report.ranking) << "\n";
+  if (report.unsettled_trials > 0) {
+    text << "settle: " << report.unsettled_trials << " of " << report.settle_trials
+         << " trial(s) did not settle before the settle maximum and started from an "
+            "uncontrolled state"
+         << (report.unsettled_trials == report.settle_trials
+                 ? "; no trial of this search started from a controlled state"
+                 : "")
+         << "\n";
+  }
   if (report.corrected_error_trials > 0) {
     text << "corrected hardware errors: " << report.corrected_error_trials
          << " scored trial(s) had the hardware report an error it corrected; the scores stand, "
@@ -577,8 +587,14 @@ std::string render_report(const explore::SearchReport& report) {
         text << " " << number(sample);
       }
       text << "\n";
-      if (const std::string flagged = corrected_list(candidate.notes); !flagged.empty()) {
+      if (const std::string flagged =
+              noted_list(candidate.notes, &explore::TrialNote::corrected_errors);
+          !flagged.empty()) {
         text << "  corrected hardware errors in replicate(s):" << flagged << "\n";
+      }
+      if (const std::string flagged = noted_list(candidate.notes, &explore::TrialNote::unsettled);
+          !flagged.empty()) {
+        text << "  replicate(s) that did not settle:" << flagged << "\n";
       }
     }
   }
@@ -589,8 +605,15 @@ std::string render_report(const explore::SearchReport& report) {
     text << " (" << point.at_ns << ", " << number(point.value) << ")";
   }
   text << "\n";
-  if (const std::string flagged = corrected_list(report.reference_notes); !flagged.empty()) {
+  if (const std::string flagged =
+          noted_list(report.reference_notes, &explore::TrialNote::corrected_errors);
+      !flagged.empty()) {
     text << "  corrected hardware errors in reference reading(s):" << flagged << "\n";
+  }
+  if (const std::string flagged =
+          noted_list(report.reference_notes, &explore::TrialNote::unsettled);
+      !flagged.empty()) {
+    text << "  reference reading(s) that did not settle:" << flagged << "\n";
   }
   return text.str();
 }

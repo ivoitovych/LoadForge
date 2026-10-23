@@ -442,6 +442,74 @@ TEST(Run, CorrectedErrorsInTheEveryTrialAreAllCounted) {
   EXPECT_EQ(report.corrected_error_trials, report.trials);
 }
 
+// A settle phase that ends at its maximum is documented as no error (a trial still
+// runs), but the controlled starting state the search promises is then missing for
+// that trial, and a report that said nothing would pass it off as settled.
+// Review verdicts 2026-10-23, finding 2.
+void ask_to_settle(SearchConfig& config) {
+  const Settle phase{"thermal.package", 0.05, 30'000'000'000, 300'000'000'000};
+  config.reference.settle = phase;
+  for (Candidate& candidate : config.candidates) {
+    candidate.settle = phase;
+  }
+}
+
+TEST(Run, ATrialThatDidNotSettleIsMarkedAndCounted) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  ask_to_settle(config);
+  std::size_t b_runs = 0;
+  lab.runner.settles = [&](const Candidate& c, std::size_t) {
+    return !(c.id == "b" && ++b_runs == 2);
+  };
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.settle_trials, report.trials);
+  EXPECT_EQ(report.unsettled_trials, 1U);
+  EXPECT_FALSE(find(report, "b").notes[0].unsettled);
+  EXPECT_TRUE(find(report, "b").notes[1].unsettled);
+  for (const TrialNote& note : find(report, "a").notes) {
+    EXPECT_FALSE(note.unsettled);
+  }
+  for (const TrialNote& note : report.reference_notes) {
+    EXPECT_FALSE(note.unsettled);
+  }
+}
+
+TEST(Run, EveryTrialUnsettledIsCountedIncludingTheReferenceAndUnscoredTrials) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  ask_to_settle(config);
+  lab.runner.settles = [](const Candidate&, std::size_t) { return false; };
+  lab.runner.verdict = [](const Candidate& c, std::size_t) {
+    return c.id == "a" ? Verdict::kFindings : Verdict::kClean;
+  };
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.unsettled_trials, report.trials);
+  for (const TrialNote& note : report.reference_notes) {
+    EXPECT_TRUE(note.unsettled);
+  }
+  EXPECT_TRUE(find(report, "b").notes.back().unsettled);
+}
+
+TEST(Run, ASearchWithNoSettlePhaseCountsNoSettleTrials) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  lab.runner.settles = [](const Candidate&, std::size_t) { return false; };
+  const auto result = explore(lab.runner, config_for({"a", "b"}));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().settle_trials, 0U);
+  EXPECT_EQ(result.value().unsettled_trials, 0U);
+}
+
 TEST(Run, WhenEveryCandidateFindsSomethingThereIsNoWorstCase) {
   Lab lab;
   lab.script["a"] = {50.0};

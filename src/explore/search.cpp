@@ -156,10 +156,14 @@ class Execution {
       return error;
     }
     const TrialOutcome& trial = outcome.value();
+    const bool asked = candidate.settle.has_value();
+    settle_trials_ += static_cast<std::size_t>(asked);
+    unsettled_trials_ += static_cast<std::size_t>(asked && !trial.settled);
     const statistics::Window window = trial.signature.window;
     Measured measured;
     measured.verdict = trial.verdict;
     measured.note.corrected_errors = trial.verdict == Verdict::kCorrectedErrors;
+    measured.note.unsettled = asked && !trial.settled;
     measured.at_ns = window.start_ns + (window.end_ns - window.start_ns) / 2;
     if (unscored(trial.verdict)) {
       return measured;
@@ -309,6 +313,8 @@ class Execution {
                       [](const TrialNote& note) { return note.corrected_errors; }));
     out.anchor = anchor_;
     out.trials = trials_;
+    out.settle_trials = settle_trials_;
+    out.unsettled_trials = unsettled_trials_;
     out.rounds = rounds_;
     std::vector<double> reference_values;
     reference_values.reserve(references_.size());
@@ -384,6 +390,8 @@ class Execution {
   std::size_t pass_ = 0;
   std::size_t since_reference_ = 0;
   std::size_t trials_ = 0;
+  std::size_t settle_trials_ = 0;
+  std::size_t unsettled_trials_ = 0;
   std::size_t rounds_ = 0;
 };
 

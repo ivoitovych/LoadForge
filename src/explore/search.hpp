@@ -123,8 +123,13 @@ enum class Ranking : std::uint8_t { kNone, kSole, kSeparated, kIndistinguishable
 ///                     (verdict kCorrectedErrors). The trial is scored -- its
 ///                     computation was right, so the number is a measurement --
 ///                     and flagged, and the search exits 5 as `stress` does.
+///   unsettled         the trial asked for a settle phase and it ended at its
+///                     maximum without meeting the criterion: the trial did not
+///                     start from a controlled state. It is scored (the settle
+///                     timeout is documented as no error) and marked.
 struct TrialNote {
   bool corrected_errors = false;
+  bool unsettled = false;
 };
 
 /// One candidate's account. `samples` are the drift-corrected scores, in
@@ -154,6 +159,10 @@ struct SearchReport {
   std::size_t trials = 0;                  ///< Every trial run, reference included.
   /// Scored trials, candidates' and reference's, that had corrected errors.
   std::size_t corrected_error_trials = 0;
+  /// Every trial run that asked for a settle phase, scored or not, and how many of
+  /// them ended without meeting its criterion.
+  std::size_t settle_trials = 0;
+  std::size_t unsettled_trials = 0;
   std::size_t rounds = 0;
 };
 

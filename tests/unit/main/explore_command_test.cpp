@@ -411,6 +411,24 @@ TEST(ExploreReport, FlagsCorrectedHardwareErrorsPerCandidateAndForTheReference) 
   EXPECT_TRUE(contains(text, "corrected hardware errors in reference reading(s): 2"));
 }
 
+TEST(ExploreReport, SaysWhichTrialsDidNotSettleAndWhenNoneDid) {
+  EXPECT_FALSE(contains(render_report(a_report()), "settle"));
+  explore::SearchReport report = a_report();
+  report.candidates[0].notes = {{false, false}, {false, true}, {false, true}};
+  report.reference_notes = {{false, true}, {false, false}};
+  report.settle_trials = 14;
+  report.unsettled_trials = 3;
+  std::string text = render_report(report);
+  EXPECT_TRUE(contains(text, "settle: 3 of 14 trial(s) did not settle"));
+  EXPECT_FALSE(contains(text, "no trial of this search started from a controlled state"));
+  EXPECT_TRUE(contains(text, "replicate(s) that did not settle: 2 3"));
+  EXPECT_TRUE(contains(text, "reference reading(s) that did not settle: 1"));
+  report.unsettled_trials = 14;
+  text = render_report(report);
+  EXPECT_TRUE(contains(text, "settle: 14 of 14 trial(s) did not settle"));
+  EXPECT_TRUE(contains(text, "no trial of this search started from a controlled state"));
+}
+
 TEST(ExploreReport, ACounterObjectiveNamesItsStatistic) {
   explore::SearchReport report = a_report();
   report.objective.statistic = CounterStatistic::kRate;
