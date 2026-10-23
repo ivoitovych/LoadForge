@@ -237,6 +237,24 @@ TEST(ExploreArgs, TheSettleSlopeIsANumberOfZeroOrMore) {
   EXPECT_TRUE(parse(with_required({"--settle", "t.x", "--settle-slope", "0"})).has_value());
 }
 
+TEST(ExploreArgs, ASettleWindowLongerThanTheSettleMaximumIsRefusedAtOnce) {
+  // The default window is 30 s: a smaller maximum alone can never settle.
+  const std::string by_default =
+      refusal_of(with_required({"--settle", "t.x", "--settle-max", "20s"}));
+  EXPECT_TRUE(
+      contains(by_default, "--settle-window (30000 ms) is longer than --settle-max (20000 ms)"))
+      << by_default;
+  EXPECT_TRUE(contains(refusal_of(with_required({"--settle", "t.x", "--settle-window", "301s"})),
+                       "longer than --settle-max (300000 ms)"))
+      << "the default maximum is 300 s";
+  EXPECT_TRUE(contains(
+      refusal_of(with_required({"--settle", "t.x", "--settle-window", "9s", "--settle-max", "8s"})),
+      "could never settle"));
+  EXPECT_TRUE(
+      parse(with_required({"--settle", "t.x", "--settle-window", "8s", "--settle-max", "8s"}))
+          .has_value());
+}
+
 TEST(ExploreArgs, TheSettleOptionsNeedTheSettleMetric) {
   for (const std::string_view key : {"--settle-slope", "--settle-window", "--settle-max"}) {
     EXPECT_TRUE(contains(refusal_of(with_required({key, key == "--settle-slope" ? "1" : "5s"})),

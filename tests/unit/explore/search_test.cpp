@@ -161,6 +161,23 @@ TEST_F(Configuration, ASettlePhaseOnAMetricThatCannotBeReadIsRefusedBeforeTheRun
   expect_refused(config, ExploreFault::kMetricUnavailable, "ref");
 }
 
+// The slope is judged only once a full window has been read and the phase ends at its
+// maximum, so a window longer than the maximum cannot settle. Review verdicts
+// 2026-10-23, finding 3.
+TEST_F(Configuration, ASettleWindowLongerThanTheSettleMaximumIsRefusedBeforeTheRun) {
+  SearchConfig config = config_for({"a", "b"});
+  config.candidates[1].settle = Settle{"thermal.package", 0.05, 2001, 2000};
+  expect_refused(config, ExploreFault::kConfiguration, "longer than its settle maximum");
+  config = config_for({"a"});
+  config.reference.settle = Settle{"thermal.package", 0.05, 2001, 2000};
+  expect_refused(config, ExploreFault::kConfiguration, "ref");
+  config = config_for({"a"});
+  config.reference.settle = config.candidates[0].settle =
+      Settle{"thermal.package", 0.05, 2000, 2000};
+  EXPECT_TRUE(Search::configure(config, lab.runner.capabilities()).has_value())
+      << "equal is allowed";
+}
+
 TEST_F(Configuration, ASettlePhaseOnAGaugeThatIsPresentIsAccepted) {
   SearchConfig config = config_for({"a", "b"});
   config.reference.settle = config.candidates[0].settle =

@@ -433,6 +433,14 @@ core::Result<std::optional<explore::Settle>, std::string> settle_of(const Parsin
   settle.max_slope_per_second = parsing.settle_slope.value_or(settle.max_slope_per_second);
   settle.window_ns = parsing.settle_window_ns.value_or(settle.window_ns);
   settle.max_ns = parsing.settle_max_ns.value_or(settle.max_ns);
+  if (settle.window_ns > settle.max_ns) {
+    // The slope is judged only once a full window has been read, and the phase ends at
+    // its maximum: a window longer than the maximum can never settle.
+    return "--settle-window (" + std::to_string(settle.window_ns / kNanosecondsPerMillisecond) +
+           " ms) is longer than --settle-max (" +
+           std::to_string(settle.max_ns / kNanosecondsPerMillisecond) +
+           " ms): the settle phase could never settle";
+  }
   return std::optional<explore::Settle>{std::move(settle)};
 }
 

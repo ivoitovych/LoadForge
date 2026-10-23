@@ -106,12 +106,13 @@ std::optional<TrialError> check_candidate(const Candidate& candidate,
     const Settle& settle = *candidate.settle;
     const bool formed = settle.window_ns > 0 && settle.window_ns <= kLongestNs &&
                         settle.max_ns > 0 && settle.max_ns <= kLongestNs &&
-                        settle.max_slope_per_second >= 0.0;
+                        settle.max_slope_per_second >= 0.0 && settle.window_ns <= settle.max_ns;
     if (!formed) {
       return refuse(TrialFault::kCandidate,
                     "candidate " + name +
                         ": the settle phase needs a window and a maximum "
-                        "above 0 (at most 30 days) and a slope bound of 0 or more");
+                        "above 0 (at most 30 days), the window no longer than the "
+                        "maximum, and a slope bound of 0 or more");
     }
   }
   return std::nullopt;

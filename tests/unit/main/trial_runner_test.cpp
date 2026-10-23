@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <filesystem>
@@ -273,6 +274,8 @@ TEST(TrialRunnerCandidate, EachWayACandidateCannotRunIsRefusedByName) {
                            std::int64_t{31} * 24 * 3600 * 1'000'000'000};
        },
        "settle phase needs a window"},
+      {[](Candidate& c) { c.settle = Settle{"memory.available", 0.05, 30 * kMs, 20 * kMs}; },
+       "the window no longer than the maximum"},
       {[](Candidate& c) { c.settle = Settle{"memory.available", -1.0, 10 * kMs, 10 * kMs}; },
        "settle phase needs a window"},
       {[](Candidate& c) {
@@ -613,13 +616,17 @@ TEST(TrialRunnerSettle, TheWaitIsAQuarterOfTheWindowBetweenAMillisecondAndTheSam
     std::int64_t window_ns;
     std::int64_t max_ns;
     int first_wait_ms;
+    int last_wait_ms;  // a wait of this length is among the polls; 0: not asserted
     const char* why;
   };
   for (const Case& each :
-       {Case{2 * kMs, 400 * kMs, 1, "a quarter is under the floor of a millisecond"},
-        Case{6 * kMs, 400 * kMs, 2, "1.5 ms is rounded up to a whole millisecond"},
-        Case{400 * kMs, 4000 * kMs, 30, "never longer than the sample interval"},
-        Case{400 * kMs, 15 * kMs, 5, "never past the end of the phase"}}) {
+       {Case{2 * kMs, 400 * kMs, 1, 0, "a quarter is under the floor of a millisecond"},
+        Case{6 * kMs, 400 * kMs, 2, 0, "1.5 ms is rounded up to a whole millisecond"},
+        Case{400 * kMs, 4000 * kMs, 30, 0, "never longer than the sample interval"},
+        // A quarter of 45 ms is 11.25 ms, so 12 ms; the clock moves 10 ms a read, so the
+        // last wait is what is left of the phase at 40 ms. The window is never above the
+        // maximum (it is refused), so the first wait is never the short one.
+        Case{45 * kMs, 45 * kMs, 12, 5, "never past the end of the phase"}}) {
     Machine machine;
     machine.options.sources = rising_level;
     machine.workers_that_exit_at_once(1);
@@ -630,6 +637,9 @@ TEST(TrialRunnerSettle, TheWaitIsAQuarterOfTheWindowBetweenAMillisecondAndTheSam
     const auto& waits = machine.syscalls.poll_timeouts();
     ASSERT_FALSE(waits.empty()) << each.why;
     EXPECT_EQ(waits.front(), each.first_wait_ms) << each.why;
+    if (each.last_wait_ms != 0) {
+      EXPECT_NE(std::ranges::find(waits, each.last_wait_ms), waits.end()) << each.why;
+    }
   }
 }
 

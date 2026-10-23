@@ -67,6 +67,12 @@ std::optional<ExploreError> settle_problem(const Candidate& candidate,
     return std::nullopt;
   }
   const std::string& name = candidate.settle->metric;
+  if (candidate.settle->window_ns > candidate.settle->max_ns) {
+    // The slope is judged once a full window has been read, and the phase ends at its
+    // maximum: such a phase can never settle.
+    return make_error(ExploreFault::kConfiguration,
+                      "settle window of " + candidate.id + " is longer than its settle maximum");
+  }
   for (const telemetry::SourceStatus& source : capabilities.sources) {
     for (const telemetry::MetricStatus& status : source.metrics) {
       if (status.metric.name != name) {
