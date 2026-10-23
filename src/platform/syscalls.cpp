@@ -73,8 +73,9 @@ void note_diverted_signal(int signal) noexcept {
   const int fd = diverted_slot(signal).load(std::memory_order_relaxed) - 1;
   if (diverts_here(fd, g_diverter.load(std::memory_order_relaxed), ::getpid())) {
     const auto byte = static_cast<unsigned char>(signal);
-    // A full pipe drops the byte: the signals already in it say the same.
-    (void)::write(fd, &byte, 1);
+    // A full pipe drops the byte: the signals already in it say the same. The result
+    // is held, not cast away: GCC's fortified headers ignore a (void) cast at -O3.
+    [[maybe_unused]] const ssize_t written = ::write(fd, &byte, 1);
   }
   errno = saved;
 }
