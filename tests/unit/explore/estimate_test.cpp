@@ -113,6 +113,46 @@ TEST(WorstCaseOf, CarriesTheCountTheSpreadAndTheInterval) {
   EXPECT_NEAR(claim->half_width, 4.303 * 2.0 / std::sqrt(3.0), 1e-12);
 }
 
+TEST(EstimateOf, AReferenceThatAddsAlmostNothingLeavesTheReplicatesDegrees) {
+  // Eight replicates; a reference that adds 1e-6 to the variance on one degree of
+  // freedom leaves the Welch-Satterthwaite degrees at 7 (t 2.365), where the smaller of
+  // the two would have taken t at one degree, 12.706.
+  const std::vector<double> samples = {80.0, 82.0, 84.0, 82.0, 80.0, 82.0, 84.0, 82.0};
+  const Estimate plain = estimate(samples);
+  Correction correction;
+  correction.variance = 1e-6;
+  correction.max_degrees = 1;
+  const Estimate corrected = estimate(samples, correction);
+  ASSERT_TRUE(plain.half_width.has_value());
+  ASSERT_TRUE(corrected.half_width.has_value());
+  const double se = *plain.stddev / std::sqrt(8.0);
+  EXPECT_NEAR(*plain.half_width, 2.365 * se, 1e-9);
+  EXPECT_NEAR(*corrected.half_width, 2.365 * std::sqrt((se * se) + 1e-6), 1e-9);
+}
+
+TEST(EstimateOf, AReferenceThatIsAllTheVarianceGivesItsOwnDegrees) {
+  // Identical replicates: all the uncertainty is the reference's, so its degrees set t.
+  const std::vector<double> samples = {50.0, 50.0, 50.0, 50.0, 50.0};
+  Correction correction;
+  correction.variance = 4.0;
+  correction.max_degrees = 2;
+  const Estimate e = estimate(samples, correction);
+  ASSERT_TRUE(e.half_width.has_value());
+  EXPECT_NEAR(*e.half_width, 4.303 * 2.0, 1e-12);
+}
+
+TEST(EstimateOf, TwoEqualSharesGetDegreesBetweenEachAndTheirSum) {
+  // Equal shares of 0.2 on 4 and 2 degrees: (0.4)^2 / (0.04/4 + 0.04/2) = 5.33, floored
+  // to 5 (t 2.571).
+  const std::vector<double> samples = {9.0, 11.0, 9.0, 11.0, 10.0};  // n 5, variance 1
+  Correction correction;
+  correction.variance = 0.2;  // the sample term is 1 / 5
+  correction.max_degrees = 2;
+  const Estimate e = estimate(samples, correction);
+  ASSERT_TRUE(e.half_width.has_value());
+  EXPECT_NEAR(*e.half_width, 2.571 * std::sqrt(0.4), 1e-12);
+}
+
 TEST(WorstCaseFormat, SaysCountSpreadAndLevel) {
   const WorstCase claim{"word_sum", 5, 81.25, 1.5, 1.25, 0.5};
   EXPECT_EQ(format(claim), "word_sum: 81.25 +/- 1.25 (95% CI, n=5, sd 1.5, correction sd 0.5)");
