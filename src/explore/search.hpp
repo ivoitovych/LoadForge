@@ -94,13 +94,20 @@ enum class Fate : std::uint8_t { kSurvivor, kEliminated, kFindings, kIncomplete 
 
 /// Whether the worst case can be told from the best rival.
 ///
-///   kNone                 there is no worst case (every candidate left the
-///                         search with findings or an incomplete trial).
+///   kNone                 there is no worst case: no candidate survived the
+///                         search (findings, an unfinished trial, or the
+///                         search ended at the reference).
 ///   kSole                 no rival: one candidate was searched.
-///   kSeparated            the winner's interval and the best rival's do not
+///   kSeparated            the winner's interval and the rival's do not
 ///                         overlap, in the winner's favour.
 ///   kIndistinguishable    they overlap, or the rival has too few replicates
 ///                         for an interval: the evidence does not rank them.
+///
+/// "The rival" is the eliminated candidate with the worst corrected mean, and
+/// only that one: an eliminated candidate with a single replicate has no
+/// interval, so it is not compared when another has the worse mean, and
+/// SearchReport::uncompared names it. "Separated" is a claim about the rival
+/// named there, never about every candidate that left the search.
 enum class Ranking : std::uint8_t { kNone, kSole, kSeparated, kIndistinguishable };
 
 [[nodiscard]] constexpr std::string_view describe(Ranking ranking) noexcept {
@@ -110,9 +117,9 @@ enum class Ranking : std::uint8_t { kNone, kSole, kSeparated, kIndistinguishable
     case Ranking::kSole:
       return "sole candidate";
     case Ranking::kSeparated:
-      return "separated from the best rival";
+      return "separated from the rival with the worst corrected mean";
     case Ranking::kIndistinguishable:
-      return "not distinguishable from the best rival";
+      return "not distinguishable from the rival with the worst corrected mean";
   }
   return "unrecognised ranking";
 }
@@ -151,6 +158,10 @@ struct SearchReport {
   std::vector<CandidateReport> candidates;  ///< In the order configured.
   std::optional<WorstCase> worst_case;
   Ranking ranking = Ranking::kNone;
+  std::string rival;  ///< The eliminated candidate the ranking compares with; empty if none.
+  /// Eliminated candidates with fewer than two replicates: no interval, so none of
+  /// them was compared by one.
+  std::vector<std::string> uncompared;
   std::vector<ReferencePoint> references;
   std::vector<TrialNote> reference_notes;  ///< One for each reference reading.
   double anchor = 0.0;                     ///< The reference as it was at the start.

@@ -89,8 +89,9 @@ struct ExploreArgs {
 [[nodiscard]] explore::SearchConfig search_config_of(const ExploreArgs& args);
 
 /// A finished search in words: the objective, the worst case with its replicate
-/// count, spread and interval, how it ranks against the best rival, every
-/// candidate's replicates and fate, and every reading of the reference.
+/// count, spread and interval, how it ranks against the eliminated rival with the worst mean, and
+/// who was not compared by an interval, every candidate's replicates and fate, and every reading of
+/// the reference.
 [[nodiscard]] std::string render_report(const explore::SearchReport& report);
 
 /// The exit code of a search that ended with a report.

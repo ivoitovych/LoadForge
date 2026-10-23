@@ -568,7 +568,18 @@ std::string render_report(const explore::SearchReport& report) {
     text << "worst case: none; every candidate left the search with findings or an "
             "unfinished trial\n";
   }
-  text << "ranking: " << explore::describe(report.ranking) << "\n";
+  text << "ranking: " << explore::describe(report.ranking);
+  if (!report.rival.empty()) {
+    text << " (" << report.rival << ")";
+  }
+  text << "\n";
+  if (!report.uncompared.empty()) {
+    text << "  not compared by an interval (eliminated with fewer than two replicates):";
+    for (const std::string& id : report.uncompared) {
+      text << " " << id;
+    }
+    text << "\n";
+  }
   if (report.unsettled_trials > 0) {
     text << "settle: " << report.unsettled_trials << " of " << report.settle_trials
          << " trial(s) did not settle before the settle maximum and started from an "

@@ -390,7 +390,8 @@ TEST(ExploreReport, SaysTheWorstCaseWithItsReplicatesSpreadAndInterval) {
   EXPECT_TRUE(contains(text, "explore: 14 trial(s) in 2 round(s)\n"));
   EXPECT_TRUE(contains(text, "worst case: wide: 81 +/- "));
   EXPECT_TRUE(contains(text, "(95% CI, n=3, sd 0.5"));
-  EXPECT_TRUE(contains(text, "ranking: separated from the best rival\n"));
+  EXPECT_TRUE(contains(text, "ranking: separated from the rival with the worst corrected mean\n"));
+  EXPECT_FALSE(contains(text, "not compared by an interval"));
 }
 
 TEST(ExploreReport, ListsEveryReplicateOfEveryCandidateAndEveryReferenceReading) {
@@ -445,6 +446,18 @@ TEST(ExploreReport, SaysWhichTrialsDidNotSettleAndWhenNoneDid) {
   text = render_report(report);
   EXPECT_TRUE(contains(text, "settle: 14 of 14 trial(s) did not settle"));
   EXPECT_TRUE(contains(text, "no trial of this search started from a controlled state"));
+}
+
+TEST(ExploreReport, NamesTheRivalAndWhoWasNotComparedByAnInterval) {
+  explore::SearchReport report = a_report();
+  report.rival = "narrow";
+  report.uncompared = {"odd", "tiny"};
+  const std::string text = render_report(report);
+  EXPECT_TRUE(
+      contains(text, "ranking: separated from the rival with the worst corrected mean (narrow)\n"));
+  EXPECT_TRUE(contains(text,
+                       "not compared by an interval (eliminated with fewer than two "
+                       "replicates): odd tiny\n"));
 }
 
 TEST(ExploreReport, ACounterObjectiveNamesItsStatistic) {

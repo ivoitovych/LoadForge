@@ -62,8 +62,10 @@ TEST(Describe, FatesAndRankingsHaveWords) {
   EXPECT_EQ(describe(static_cast<Fate>(200)), "unrecognised fate");
   EXPECT_EQ(describe(Ranking::kNone), "no worst case");
   EXPECT_EQ(describe(Ranking::kSole), "sole candidate");
-  EXPECT_EQ(describe(Ranking::kSeparated), "separated from the best rival");
-  EXPECT_EQ(describe(Ranking::kIndistinguishable), "not distinguishable from the best rival");
+  EXPECT_EQ(describe(Ranking::kSeparated),
+            "separated from the rival with the worst corrected mean");
+  EXPECT_EQ(describe(Ranking::kIndistinguishable),
+            "not distinguishable from the rival with the worst corrected mean");
   EXPECT_EQ(describe(static_cast<Ranking>(200)), "unrecognised ranking");
 }
 
@@ -312,6 +314,38 @@ TEST(Run, TheSurvivorIsToppedUpWhenHalvingEndsEarly) {
   EXPECT_EQ(find(result.value(), "a").corrected.replicates, 1U);
   EXPECT_FALSE(find(result.value(), "a").corrected.half_width.has_value());
   EXPECT_EQ(result.value().ranking, Ranking::kIndistinguishable);
+}
+
+// With one replicate in the first round a candidate can leave the search on a single
+// noisy reading and never get an interval. "Separated" is then a claim about the one
+// rival it was compared with, and the report names that rival and the candidates it
+// did not compare with an interval. Review verdicts 2026-10-23, finding 6.
+TEST(Run, SeparatedNamesTheRivalAndTheCandidatesNeverComparedByAnInterval) {
+  Lab lab;
+  lab.script["A"] = {70.0};  // the true worst case, unlucky on its one reading
+  lab.script["B"] = {90.0};
+  lab.script["C"] = {88.0};
+  lab.script["D"] = {60.0};
+  SearchConfig config = config_for({"A", "B", "C", "D"});
+  config.base_replicates = 1;
+  config.final_replicates = 2;
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.worst_case->candidate, "B");
+  EXPECT_EQ(report.ranking, Ranking::kSeparated);
+  EXPECT_EQ(report.rival, "C");
+  EXPECT_EQ(report.uncompared, (std::vector<std::string>{"A", "D"}));
+  EXPECT_EQ(find(report, "A").samples.size(), 1U);
+}
+
+TEST(Run, ASoleCandidateHasNoRivalAndNothingUncompared) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  const auto result = explore(lab.runner, config_for({"a"}));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result.value().rival.empty());
+  EXPECT_TRUE(result.value().uncompared.empty());
 }
 
 TEST(Run, AConstantObjectiveRanksNothing) {

@@ -361,12 +361,15 @@ class Execution {
 
   // The best eliminated rival -- worst by corrected mean, earlier on a tie --
   // against the winner, at the evidence each has.
-  [[nodiscard]] Ranking rank_against_rivals(const SearchReport& built, std::size_t winner) const {
+  [[nodiscard]] Ranking rank_against_rivals(SearchReport& built, std::size_t winner) const {
     const double direction = sign_of(bound_.direction);
     const CandidateReport* rival = nullptr;
     for (const CandidateReport& entry : built.candidates) {
       if (entry.fate != Fate::kEliminated) {
         continue;
+      }
+      if (entry.samples.size() < 2) {
+        built.uncompared.push_back(entry.id);
       }
       if (rival == nullptr ||
           direction * entry.corrected.mean > direction * rival->corrected.mean) {
@@ -376,6 +379,7 @@ class Execution {
     if (rival == nullptr) {
       return Ranking::kSole;
     }
+    built.rival = rival->id;
     const Estimate& best = built.candidates[winner].corrected;
     const Estimate& other = rival->corrected;
     const double best_width = best.half_width.value_or(0.0);
