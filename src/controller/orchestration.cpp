@@ -415,6 +415,14 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
   if (auto ignored = syscalls_->ignore_signal(SIGPIPE); !ignored.has_value()) {
     return error_at("signals", describe(ignored.error()));
   }
+  // SIGCHLD back to its default. A launcher that ignores SIGCHLD hands that to
+  // everything it execs, and with SIGCHLD ignored the kernel reaps each child
+  // at its exit: the controller's last waitpid then fails with ECHILD and the
+  // run is aborted with no report (review C2). A handler is never wanted here:
+  // the controller polls and reaps without blocking.
+  if (auto defaulted = syscalls_->default_signal(SIGCHLD); !defaulted.has_value()) {
+    return error_at("signals", describe(defaulted.error()));
+  }
   if (auto memory = check_memory(*config_, options_->budget); !memory.has_value()) {
     return error_at("memory", memory.error());
   }

@@ -6,15 +6,18 @@
 // no check not performed), and a journal an earlier run left behind abnormally
 // is kept and reported, never overwritten.
 
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace loadforge::m5 {
 namespace {
@@ -147,6 +150,40 @@ TEST(M5Binary, AnImpossibleScheduleIsRefusedBeforeAnyWorkerIsStarted) {
   EXPECT_NE(ran.code, 0) << ran.console;
   EXPECT_TRUE(contains(ran.console, "more than 100000 steps")) << ran.console;
   EXPECT_FALSE(contains(ran.console, "spawned")) << ran.console;
+}
+
+// Review C2: a launcher that ignores SIGCHLD hands that on, and the kernel then reaps every
+// worker at its exit. The binary is started with SIGCHLD ignored.
+TEST(M5Binary, ARunStartedWithSigchldIgnoredStillReapsAndReports) {
+  const Scratch scratch;
+  const fs::path console = scratch.path() / "ignored.txt";
+  const pid_t child = ::fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    struct sigaction ignore {};
+    ignore.sa_handler = SIG_IGN;  // NOLINT(cppcoreguidelines-pro-type-union-access)
+    ::sigemptyset(&ignore.sa_mask);
+    ::sigaction(SIGCHLD, &ignore, nullptr);
+    const int fd = ::open(console.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    ::dup2(fd, STDOUT_FILENO);
+    ::dup2(fd, STDERR_FILENO);
+    const std::vector<std::string> words{LOADFORGE_BINARY, "stress", "--test",    "compression",
+                                         "--duration",     "1s",     "--workers", "2",
+                                         "--footprint",    "1MiB"};
+    std::vector<char*> argv;
+    for (const std::string& word : words) {
+      argv.push_back(const_cast<char*>(word.c_str()));
+    }
+    argv.push_back(nullptr);
+    ::execv(argv[0], argv.data());
+    ::_exit(127);
+  }
+  int status = 0;
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0) << slurp(console);
+  EXPECT_TRUE(contains(slurp(console), "verdict: clean")) << slurp(console);
+  EXPECT_FALSE(contains(slurp(console), "waitpid")) << slurp(console);
 }
 
 }  // namespace

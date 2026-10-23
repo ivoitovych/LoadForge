@@ -106,6 +106,9 @@ class MinimalSyscalls final : public Syscalls {
   core::Result<core::Ok, SyscallError> ignore_signal(int /*signal*/) override {
     return SyscallError{ENOSYS, "stub", ""};
   }
+  core::Result<core::Ok, SyscallError> default_signal(int /*signal*/) override {
+    return SyscallError{ENOSYS, "stub", ""};
+  }
   pid_t process_id() override { return 0; }
   core::Result<std::optional<Reaped>, SyscallError> reap_any_nonblocking() override {
     return SyscallError{ENOSYS, "stub", ""};

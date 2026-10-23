@@ -497,6 +497,16 @@ core::Result<core::Ok, SyscallError> RealSyscalls::ignore_signal(int signal) {
                                    "signal " + std::to_string(signal));
 }
 
+core::Result<core::Ok, SyscallError> RealSyscalls::default_signal(int signal) {
+  struct sigaction action {};
+  action.sa_handler = SIG_DFL;  // NOLINT(cppcoreguidelines-pro-type-union-access)
+  ::sigemptyset(&action.sa_mask);
+  const bool failed = ::sigaction(signal, &action, nullptr) != 0;
+  const int number = errno;
+  return result_or_error<core::Ok>(core::Ok{}, failed, number, "sigaction",
+                                   "signal " + std::to_string(signal));
+}
+
 pid_t RealSyscalls::process_id() { return ::getpid(); }
 
 core::Result<std::optional<Reaped>, SyscallError> RealSyscalls::reap_any_nonblocking() {

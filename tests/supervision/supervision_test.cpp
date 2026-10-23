@@ -100,6 +100,32 @@ bool has_record(const WorkerReport& worker, std::string_view prefix) {
   });
 }
 
+// Review C2: a launcher that ignores SIGCHLD hands the disposition on across exec, and with
+// it the kernel reaps every child at its exit, so the controller's last waitpid failed with
+// ECHILD and the run was aborted with no report. The test process is that launcher.
+TEST(SupervisionTest, AnIgnoredSigchldDoesNotMakeTheKernelReapTheWorkers) {
+  struct sigaction ignore {};
+  ignore.sa_handler = SIG_IGN;  // NOLINT(cppcoreguidelines-pro-type-union-access)
+  ::sigemptyset(&ignore.sa_mask);
+  struct sigaction before {};
+  ASSERT_EQ(::sigaction(SIGCHLD, &ignore, &before), 0);
+  platform::RealSyscalls syscalls;
+  WatchingReporter reporter;
+  Controller controller(syscalls, reporter);
+  auto report = controller.run(two_null_workloads(core::Duration{300}), quick_options());
+  struct sigaction during {};
+  EXPECT_EQ(::sigaction(SIGCHLD, &before, &during), 0) << "restored for the other tests";
+  ASSERT_TRUE(report.has_value()) << describe(report.error());
+  ASSERT_EQ(report.value().workers.size(), 2U);
+  for (const WorkerReport& worker : report.value().workers) {
+    EXPECT_EQ(worker.fate, WorkerFate::kCompleted)
+        << describe(worker.fate) << ": " << worker.termination;
+    EXPECT_EQ(worker.termination, "exited with code 0");
+  }
+  EXPECT_EQ(during.sa_handler, SIG_DFL)  // NOLINT(cppcoreguidelines-pro-type-union-access)
+      << "the controller set the default itself";
+}
+
 TEST(SupervisionTest, TwoWorkersCompleteForTheConfiguredDuration) {
   platform::RealSyscalls syscalls;
   WatchingReporter reporter;

@@ -262,6 +262,8 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
   rig.reporter.on_event = [&rig](const std::string& line) {
     if (starts_with(line, "spawned")) {
+      // Review C2: SIGCHLD was put back to its default, once, before the workers existed.
+      EXPECT_EQ(rig.syscalls.signals_defaulted(), std::vector<int>{SIGCHLD});
       rig.beat(0, 7, 10 * kMs);
       rig.beat(1, 9, 10 * kMs);
     } else if (starts_with(line, "deadline")) {
@@ -296,6 +298,7 @@ TEST(ControllerTest, TwoWorkersRunToTheDeadlineAndAreAskedToStopAndComplete) {
   ASSERT_TRUE(result.has_value()) << describe(result.error());
   EXPECT_EQ(rig.syscalls.signals_ignored(), std::vector<int>{SIGPIPE})
       << "a stop to a worker that just died must be EPIPE, not signal 13";
+  EXPECT_EQ(rig.syscalls.signals_defaulted(), std::vector<int>{SIGCHLD});
   const RunReport& report = result.value();
   EXPECT_FALSE(report.worker_exit_code.has_value());
   ASSERT_EQ(report.workers.size(), 2U);
@@ -1506,6 +1509,18 @@ TEST(ControllerTest, EveryFailureBeforeTheLoopNamesItsStageAndLeavesNothingBehin
     EXPECT_EQ(result.error().stage, "signals");
     EXPECT_TRUE(rig.reporter.plans.empty()) << "refused before the run was announced";
     EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
+  }
+  {
+    // Review C2: SIGCHLD is put back to its default before anything is created.
+    Rig rig;
+    rig.syscalls.fail_default_signal(EINVAL);
+    auto result = rig.run();
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().stage, "signals");
+    EXPECT_NE(result.error().detail.find("signal " + std::to_string(SIGCHLD)), std::string::npos)
+        << result.error().detail;
+    EXPECT_EQ(rig.syscalls.fork_count(), 0);
+    EXPECT_TRUE(rig.reporter.plans.empty());
   }
   {
     Rig rig;
