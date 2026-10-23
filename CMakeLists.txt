@@ -140,6 +140,7 @@ loadforge_enable_coverage(loadforge_controller)
 add_library(loadforge_cli STATIC
   src/main/cli.cpp
   src/main/selftest.cpp
+  src/main/selftest_command.cpp
   src/main/outcome.cpp
   src/main/telemetry_rig.cpp
   src/main/run_result.cpp

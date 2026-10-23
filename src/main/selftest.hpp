@@ -16,11 +16,18 @@ namespace loadforge::selftest {
 /// computes this on both architectures and compares; a mismatch means the two
 /// disagree about something they are contractually obliged to agree on.
 ///
+/// It is `workloads_digest(corpus_digest())`: the two halves are separate functions so that
+/// `loadforge selftest` can compare each with its own expected value and say which differed.
+///
 /// The corpus grows with the project. At M0 it covers configuration parsing;
 /// as workloads land, their BitExact results join it.
 /// Not noexcept: it builds std::strings via to_string, so an allocation failure
 /// should propagate rather than terminate. The earlier noexcept was accidental.
 [[nodiscard]] std::uint64_t core_digest();
+
+/// The FNV-1a digest over the configuration-parsing corpus alone: the first half of
+/// core_digest(), before any workload is folded in.
+[[nodiscard]] std::uint64_t corpus_digest();
 
 /// `basis` folded with a digest over the SCALAR paths of the compression and dense-linear
 /// workloads: two units of each, generated and computed from a fixed seed on
@@ -44,6 +51,19 @@ namespace loadforge::selftest {
 /// (docs/verification.md §2) says never to verify an implementation by
 /// re-running it; the digest did exactly that until an outside reviewer noticed.
 [[nodiscard]] std::uint64_t fnv1a(std::string_view text, std::uint64_t basis) noexcept;
+
+/// The digests this source tree is expected to produce, committed here so that they are
+/// independent of the code that computes them: a build that computes something else is
+/// broken, or the machine running it is (`loadforge selftest`, docs/verification.md §9).
+/// They cannot drift silently: tests/unit/main/selftest_test.cpp recomputes both and fails,
+/// naming the new values, when the corpus or a scalar kernel changes on purpose. Regenerate
+/// with `loadforge --selftest-digest` (the final value) and the failing test's message (the
+/// corpus value). CI compares the final value across x86-64 and ARM64 as before.
+///
+///   kExpectedCorpusDigest    corpus_digest().
+///   kExpectedDigest          core_digest(), which is workloads_digest(kExpectedCorpusDigest).
+inline constexpr std::uint64_t kExpectedCorpusDigest = 0xa154e111368c537bULL;
+inline constexpr std::uint64_t kExpectedDigest = 0xe0ff849ff34906deULL;
 
 /// The canonical 64-bit FNV-1a parameters, 0xcbf29ce484222325 and
 /// 0x100000001b3.

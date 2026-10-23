@@ -133,6 +133,7 @@ lf="$binary"
 # ---- the scripted steps ---------------------------------------------------
 step version 0 "$lf" --version
 step help 0 "$lf" --help
+step selftest 0 "$lf" selftest
 step selftest-digest 0 "$lf" --selftest-digest
 step usage-error 2 "$lf" nonsense
 step unknown-workload 2 "$lf" stress --test nosuch --duration 1s
@@ -260,6 +261,7 @@ sha="$(sha256sum "$lf" | cut -d' ' -f1)"
   echo "**Machine label:** $label"
   echo "**Artifact:** $flavour, $version_text, sha256 $sha"
   echo "**Architecture:** $(uname -m)"
+  echo "**Selftest:** $(grep -E '^selftest (passed|FAILED)' "$logs/selftest.log" 2> /dev/null | cut -d. -f1 | head -1)"
   echo "**Selftest digest:** \`$digest\` (must be identical on x86-64 and ARM64 for one version)"
   echo "**Scripted steps:** $([ "$failures" -eq 0 ] && echo 'all passed' || echo "$failures FAILED")"
   echo

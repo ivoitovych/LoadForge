@@ -122,6 +122,20 @@ TEST(Cli, SelftestDigestPrintsAStableHexDigest) {
   EXPECT_EQ(second.out, first.out);
 }
 
+TEST(Cli, SelftestIsDispatchedToItsCommandAndItsUsageErrorIsTwo) {
+  const Outcome r = invoke({"selftest", "--wat"});
+  EXPECT_EQ(r.code, 2);
+  EXPECT_TRUE(r.out.empty());
+  EXPECT_EQ(r.err, "loadforge selftest: unknown argument '--wat'\n");
+}
+
+TEST(Cli, HelpListsSelftestAndItsExitCodes) {
+  const Outcome r = invoke({"--help"});
+  EXPECT_NE(r.out.find("loadforge selftest [--isa PATH] [--footprint SIZE] [--seed N] [--verbose]"),
+            std::string::npos);
+  EXPECT_NE(r.out.find("selftest: 0 every check passed; 8 a check failed"), std::string::npos);
+}
+
 TEST(Cli, UnknownArgumentFailsAndSuggestsHelp) {
   const Outcome r = invoke({"--wat"});
   EXPECT_EQ(r.code, 2);

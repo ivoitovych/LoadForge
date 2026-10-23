@@ -426,11 +426,33 @@ from one without.
 
 ## 9. `loadforge selftest`
 
-> **Status, 2026-10-22 23:42 UTC: not built; a 1.0 item, roadmap 34e** (a command built from the
-> existing golden digest and one short verified unit per workload with its oracle). This section is the design. What exists is
-> `loadforge --selftest-digest`, a hash over a fixed corpus that must be the same for one
-> version on x86-64 and ARM64, and `packaging/validate-machine.sh`
-> (`docs/hardware-validation.md` §4); the hardware-failure issue template asks about those.
+> **Status, 2026-10-23 UTC: built (roadmap 34e).** `loadforge selftest [--isa PATH]
+> [--footprint SIZE] [--seed N] [--verbose]` does what this section describes, as follows.
+>
+> 1. **The golden part.** The digest `loadforge --selftest-digest` prints (a hash over a fixed
+>    corpus and the scalar paths of the compression and dense-linear workloads, the same on
+>    x86-64 and ARM64) is compared with the value committed in `src/main/selftest.hpp`, in two
+>    checks so that a mismatch names what differed: the configuration-parsing corpus, or the
+>    scalar workload kernels. The expected values are committed, not computed at build time,
+>    because a value computed by the build under test would agree with a broken build; a unit
+>    test recomputes them and fails, printing the new values, when they change on purpose.
+>    (The files under `tests/fixtures/golden` are not shipped with the binary, so they are
+>    not what selftest compares with.)
+> 2. **The oracle part.** For every workload in the registry, three units at a footprint of
+>    3 MiB on the path this CPU would use for it (the requested `--isa`, or the widest the
+>    build, the CPU and the workload all have) and, when that is not scalar, on the scalar
+>    path as well. Each unit is bracketed for input integrity and checked by the workload's
+>    oracle, by `worker::prepare` and the input-integrity runner, which a stress run uses:
+>    there is no second implementation of either. Any record the runner makes is a failure of
+>    the check, including the record that says a check was not performed.
+> 3. **The output** is one line per check, `PASS` or `FAIL`, and a verdict line. Exit 0:
+>    every check passed. Exit 8: a check failed. Exit 1: an `--isa` this CPU or build cannot
+>    run (used or refused, never replaced). Exit 2: usage. `--verbose` adds the paths the build
+>    and the CPU have, each check's tally, and every finding in full.
+>
+> A debug build takes a few seconds. What exists besides it: `loadforge --selftest-digest`,
+> and `packaging/validate-machine.sh` (`docs/hardware-validation.md` §4), which runs `selftest`
+> first; the hardware-failure issue template asks whether `selftest` passed.
 
 Runs the golden vectors and a fast oracle comparison before any long run begins.
 

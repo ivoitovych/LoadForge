@@ -61,6 +61,12 @@ inline constexpr int kExitFault = 5;
 inline constexpr int kExitWrongResult = kExitFault;
 inline constexpr int kExitNotVerified = 6;
 inline constexpr int kExitTemperature = 7;
+/// `loadforge selftest` ran and at least one check failed: this environment is not
+/// trustworthy for a hardware verdict (verification.md §9). A code of its own because no stress
+/// code means it: 5 is a finding about the hardware, 6 a run that checked nothing, and a
+/// selftest failure is neither (the machine, the build or the platform may be the cause).
+/// Never returned by a stress run, so no precedence among the codes above applies.
+inline constexpr int kExitSelftestFailed = 8;
 /// A run a signal stopped exits with the shell's code for dying of that
 /// signal, 128 plus its number: 130 for SIGINT, 143 for SIGTERM (journal 34b).
 inline constexpr int kExitSignalBase = 128;

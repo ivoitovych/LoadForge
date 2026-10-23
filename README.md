@@ -17,9 +17,9 @@ power, temperature, frequency, throttling, bandwidth — on a single common time
 |---|---|
 | **Phase** | Everything through M6 is on `main`. M7 (this document set, packaging, the release workflow and the hardware-validation checklist) is built; its exit criterion, validation on real x86-64 and ARM64 machines and on live media, needs the owner's hardware and is not yet met. The queue is [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | **Version** | The binary reports `0.0.0-m2` until the release commit sets the version; a release tag must equal what `loadforge --version` prints |
-| **Commands** | `stress` (eleven verified workloads and two scheduled runs), `explore` (worst-case search), `journal`, `--check-config`, `--version`, `--help`, `--selftest-digest` |
+| **Commands** | `stress` (eleven verified workloads and two scheduled runs), `explore` (worst-case search), `journal`, `selftest` (check this build on this machine before a long run), `--check-config`, `--version`, `--help`, `--selftest-digest` |
 | **Tests** | 100% line, branch and function coverage with zero exclusions, gated in CI; a per-module test-obligation ledger, also gated; mutation testing, weekly |
-| **Known gaps** | The temperature ceiling is yours to set and has no default: a run without one is not stopped for heat ([`docs/safety.md`](docs/safety.md) §1). An uncorrected hardware error is a finding, not an automatic stop. No `benchmark` mode and no `selftest` command. No outside reviewer has seen the whole tree |
+| **Known gaps** | The temperature ceiling is yours to set and has no default: a run without one is not stopped for heat ([`docs/safety.md`](docs/safety.md) §1). An uncorrected hardware error is a finding, not an automatic stop. No `benchmark` mode. No outside reviewer has seen the whole tree |
 
 | Document | What it is |
 |---|---|
@@ -222,6 +222,7 @@ Result files are written to a `.partial`, fsynced, renamed, and the directory fs
 | 5 | a fault: a wrong result, or an error the hardware reported, corrected or not |
 | 6 | a check was not performed: a run with a verified workload that checked nothing is not clean |
 | 7 | the temperature ceiling ended the run: a sensor read at or above `max_temperature_c`, or no sensor could be read any more |
+| 8 | `loadforge selftest` only: a check failed, so this environment is not trustworthy for a hardware verdict |
 | 130, 143 | `SIGINT` (Ctrl-C) or `SIGTERM` stopped the run: the shell's `128 +` the signal. The run was stopped as at its deadline and is reported, written and journalled like any other |
 
 When several apply, the first of 5, 7, 4, 130/143, 3, 6 is the code: a fault is the finding
@@ -247,6 +248,17 @@ must be at least twice `--sample-interval`. The report says which trials did not
 which had corrected hardware errors, which rivals are not compared by an interval, and which
 rival the ranking is against (the eliminated one with the worst mean, named in the ranking
 line); the winner's claim is from replicates run after it was chosen.
+
+`loadforge selftest [--isa PATH] [--footprint SIZE] [--seed N] [--verbose]` is the command to
+run first, on a new machine, a new build, or before a long run. It compares the golden digest
+(below) with the one this source tree expects, then runs three units of every workload at
+3 MiB on the path this CPU would use (and on the scalar path too, when that is another), each
+unit checked by the workload's independent oracle through the code a stress run uses. It
+prints one line per check and a verdict, and takes a few seconds. Exit 0: every check passed.
+Exit 8: a check failed, and the environment is not trustworthy for a hardware verdict: the
+machine may be faulty, the build or the tool may be broken, or the platform may be
+unsupported, and selftest does not say which. Exit 1: an `--isa` this CPU or build cannot
+run. Exit 2: usage. A pass says a verdict is possible here, not that the hardware is sound.
 
 `--selftest-digest` prints a hash over a fixed corpus; for one version it must be the same
 on x86-64 and ARM64 (`docs/determinism.md`).
