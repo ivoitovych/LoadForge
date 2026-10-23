@@ -123,7 +123,7 @@ class RunningBinary {
         results_(scratch.path() / "results") {
     const std::vector<std::string> args = {LOADFORGE_BINARY, "stress", "--test", "sort",
                                            "--duration",     "60s",    "--workers", "2",
-                                           "--footprint",    "1MiB",   "--journal", journal_,
+                                           "--footprint",    "8MiB",   "--journal", journal_,
                                            "--output",       "json",   "--output-dir",
                                            results_.string()};
     fs::create_directories(results_);
@@ -136,7 +136,15 @@ class RunningBinary {
                                                  O_WRONLY | O_CREAT | O_TRUNC, 0600),
               0);
     EXPECT_EQ(::posix_spawn_file_actions_adddup2(&actions, 1, 2), 0);
-    EXPECT_EQ(::posix_spawn(&pid_, LOADFORGE_BINARY, &actions, nullptr, argv.data(), environ), 0);
+    // A process group of its own, as a job at a terminal has: Ctrl-C is a SIGINT to the whole
+    // group (send_to_group), and the workers, which lead sessions of their own, are not in it.
+    posix_spawnattr_t attributes;
+    EXPECT_EQ(::posix_spawnattr_init(&attributes), 0);
+    EXPECT_EQ(::posix_spawnattr_setpgroup(&attributes, 0), 0);
+    EXPECT_EQ(::posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP), 0);
+    EXPECT_EQ(::posix_spawn(&pid_, LOADFORGE_BINARY, &actions, &attributes, argv.data(), environ),
+              0);
+    ::posix_spawnattr_destroy(&attributes);
     ::posix_spawn_file_actions_destroy(&actions);
   }
   ~RunningBinary() {
@@ -153,12 +161,26 @@ class RunningBinary {
 
   /// Whether the console has said the workers exist, which is when the run is under way.
   [[nodiscard]] bool running() const { return contains(slurp(console_), "spawned 2 worker(s)"); }
+  /// Whether the process has ended already, before anything was sent to it: then there is
+  /// nothing to wait for, and its console says why. The status is kept for wait().
+  [[nodiscard]] bool gone() {
+    if (!early_.has_value()) {
+      int word = 0;
+      if (::waitpid(pid_, &word, WNOHANG) == pid_) {
+        early_ = word;
+        ended_ = true;
+      }
+    }
+    return early_.has_value();
+  }
   [[nodiscard]] bool said(std::string_view part) const { return contains(slurp(console_), part); }
   void send(int signal) const { EXPECT_EQ(::kill(pid_, signal), 0); }
+  /// What the terminal does with Ctrl-C: every process of the foreground group.
+  void send_to_group(int signal) const { EXPECT_EQ(::kill(-pid_, signal), 0); }
 
   /// The status word, once the process has ended on its own.
   [[nodiscard]] std::optional<int> wait() {
-    std::optional<int> status;
+    std::optional<int> status = early_;
     (void)wait_until([&] {
       int word = 0;
       if (::waitpid(pid_, &word, WNOHANG) == pid_) {
@@ -180,18 +202,20 @@ class RunningBinary {
   fs::path results_;
   pid_t pid_ = 0;
   bool ended_ = false;
+  std::optional<int> early_;
 };
 
 /// What every stopped run must show, whichever way it was stopped.
-void expect_a_run_that_reported(RunningBinary& run, std::optional<int> status) {
+void expect_a_run_that_reported(RunningBinary& run, std::optional<int> status,
+                                const std::string& name = "SIGINT", int code = 130) {
   ASSERT_TRUE(status.has_value()) << "the run did not end within the bound: " << run.console();
   ASSERT_TRUE(WIFEXITED(*status)) << "ended by a signal, not by itself: " << run.console();
-  EXPECT_EQ(WEXITSTATUS(*status), 130) << run.console();
+  EXPECT_EQ(WEXITSTATUS(*status), code) << run.console();
   const std::string console = run.console();
-  EXPECT_TRUE(contains(console, "SIGINT received: stop requested")) << console;
+  EXPECT_TRUE(contains(console, name + " received: stop requested")) << console;
   EXPECT_TRUE(contains(console, "run ended after")) << "the console report: " << console;
-  EXPECT_TRUE(contains(console, "stopped by SIGINT")) << console;
-  EXPECT_TRUE(contains(console, "its exit code is 130")) << console;
+  EXPECT_TRUE(contains(console, "stopped by " + name)) << console;
+  EXPECT_TRUE(contains(console, "its exit code is " + std::to_string(code))) << console;
   EXPECT_TRUE(contains(console, "result written: ")) << console;
   EXPECT_FALSE(contains(console, "ended abnormally")) << console;
 
@@ -200,29 +224,56 @@ void expect_a_run_that_reported(RunningBinary& run, std::optional<int> status) {
     written.push_back(entry.path());
   }
   ASSERT_EQ(written.size(), 1U) << "one result file";
-  EXPECT_TRUE(contains(slurp(written.front()), "the run was stopped by SIGINT"))
+  EXPECT_TRUE(contains(slurp(written.front()), "the run was stopped by " + name))
       << "and it says why the run is short";
 
   const std::string replayed = run_and_capture({LOADFORGE_BINARY, "journal", run.journal()});
   EXPECT_TRUE(contains(replayed, "ended cleanly")) << replayed;
-  EXPECT_TRUE(contains(replayed, "phase \"stopped by SIGINT\"")) << replayed;
+  EXPECT_TRUE(contains(replayed, "phase \"stopped by " + name + "\"")) << replayed;
   EXPECT_TRUE(contains(replayed, "phase \"done\"")) << replayed;
 }
 
 TEST(GracefulStop, SigintStopsTheShippedBinaryWhichReportsWritesItsResultAndEndsItsJournal) {
   const Scratch scratch;
   RunningBinary run(scratch);
-  ASSERT_TRUE(wait_until([&run] { return run.running(); })) << run.console();
+  ASSERT_TRUE(wait_until([&run] { return run.running() || run.gone(); })) << run.console();
+  ASSERT_FALSE(run.gone()) << "it ended before it was signalled: " << run.console();
 
   run.send(SIGINT);
 
   expect_a_run_that_reported(run, run.wait());
 }
 
+TEST(GracefulStop, ACtrlCToTheWholeGroupReachesTheControllerAndNotTheWorkersWhichLeadSessions) {
+  const Scratch scratch;
+  RunningBinary run(scratch);
+  ASSERT_TRUE(wait_until([&run] { return run.running() || run.gone(); })) << run.console();
+  ASSERT_FALSE(run.gone()) << "it ended before it was signalled: " << run.console();
+
+  run.send_to_group(SIGINT);
+
+  // A worker that had been given the terminal's SIGINT would have died of it, and its fate
+  // would not be "completed": the report is what shows it did not.
+  expect_a_run_that_reported(run, run.wait());
+  EXPECT_TRUE(contains(run.console(), "2 of 2 worker(s) completed")) << run.console();
+}
+
+TEST(GracefulStop, SigtermStopsItTooAndTheShellsCodeForItIs143) {
+  const Scratch scratch;
+  RunningBinary run(scratch);
+  ASSERT_TRUE(wait_until([&run] { return run.running() || run.gone(); })) << run.console();
+  ASSERT_FALSE(run.gone()) << "it ended before it was signalled: " << run.console();
+
+  run.send(SIGTERM);
+
+  expect_a_run_that_reported(run, run.wait(), "SIGTERM", 143);
+}
+
 TEST(GracefulStop, TwoSignalsInARowEndItTheSameWayWhetherOrNotTheSecondFoundTheWorkersStillThere) {
   const Scratch scratch;
   RunningBinary run(scratch);
-  ASSERT_TRUE(wait_until([&run] { return run.running(); })) << run.console();
+  ASSERT_TRUE(wait_until([&run] { return run.running() || run.gone(); })) << run.console();
+  ASSERT_FALSE(run.gone()) << "it ended before it was signalled: " << run.console();
 
   run.send(SIGINT);
   run.send(SIGTERM);

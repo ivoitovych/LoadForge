@@ -1503,6 +1503,9 @@ TEST_F(DivertedSignalTest, ADivertedSignalWritesItsNumberToThePipeAndNothingElse
   struct sigaction installed {};
   ASSERT_EQ(::sigaction(SIGUSR1, nullptr, &installed), 0);
   EXPECT_NE(installed.sa_flags & SA_RESTART, 0) << "no read or write of the controller is cut short";
+  EXPECT_EQ(::sigismember(&installed.sa_mask, SIGTERM), 1)
+      << "a second signal waits for the first one's byte to be written";
+  EXPECT_EQ(::sigismember(&installed.sa_mask, SIGINT), 1);
 
   ASSERT_EQ(::raise(SIGUSR1), 0);  // The real kernel and the real handler: one byte.
   EXPECT_EQ(pending(), std::string(1, static_cast<char>(SIGUSR1)));

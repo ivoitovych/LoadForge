@@ -548,7 +548,10 @@ core::Result<core::Ok, SyscallError> RealSyscalls::divert_signal(int signal, int
   g_diverted[slot_of(signal)].store(write_fd + 1, std::memory_order_relaxed);
   struct sigaction action {};
   action.sa_handler = note_diverted_signal;  // NOLINT(cppcoreguidelines-pro-type-union-access)
-  ::sigemptyset(&action.sa_mask);
+  // Every signal is held while the handler runs, so that two signals that arrive
+  // together write their bytes in the order the kernel delivered them, the lowest
+  // number first, and not the later one from inside the earlier one's handler.
+  ::sigfillset(&action.sa_mask);
   action.sa_flags = SA_RESTART;
   const bool failed = ::sigaction(signal, &action, nullptr) != 0;
   const int number = errno;

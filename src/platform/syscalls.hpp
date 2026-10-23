@@ -467,7 +467,9 @@ class Syscalls {
   /// end is made non-blocking first (fcntl, EBADF for a descriptor that is not
   /// open), so that a flood of signals fills the pipe and is dropped, and never
   /// blocks the process inside the handler. The handler is installed with
-  /// SA_RESTART, so that no read or write of the controller's sees EINTR; poll
+  /// SA_RESTART and every signal held while it runs (two that arrive together
+  /// are written in the order they are delivered), so that no read or write of
+  /// the controller's sees EINTR; poll
   /// is never restarted, and RealSyscalls::poll_readable answers an
   /// interrupted wait as a wait that ended with nothing ready.
   ///
