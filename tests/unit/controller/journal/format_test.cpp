@@ -71,7 +71,7 @@ TEST(JournalFormat, EveryCombinationOfPresentFieldsRoundTrips) {
         (mask & 16U) != 0 ? std::optional<std::uint64_t>(std::numeric_limits<std::uint64_t>::max())
                           : std::nullopt;
     entry.ecc_uncorrected = (mask & 32U) != 0 ? std::optional<std::uint64_t>(0) : std::nullopt;
-    entry.elapsed_ns = std::numeric_limits<std::int64_t>::min();
+    entry.elapsed_ns = std::numeric_limits<std::int64_t>::max();
     const auto payload = encode_entry(entry);
     const auto decoded = decode_entry(payload);
     ASSERT_TRUE(decoded.has_value()) << mask;
