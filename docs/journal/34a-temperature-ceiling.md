@@ -116,4 +116,6 @@ A second place to say it for `--config` would let the command line override the 
 
 ## Gates
 
-(Filled in at the end of the session; see the report.)
+The session that built this ended at a container restart (2026-10-23 00:18 UTC) before it reported its final
+gate runs; every commit was pushed. The gates for the merged tree are CI's, on both
+architectures, in the pull request that lands this.
