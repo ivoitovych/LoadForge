@@ -164,10 +164,11 @@ Two different things can go wrong, and the tool keeps them apart.
 
 **A worker dies.** The controller classifies how (`src/controller/supervision`), from
 evidence rather than a guess: completed; worker error (its own non-zero exit); startup
-failure; controller lost (the worker's view); fault signal; killed; killed by the kernel
-for memory (the OOM-kill count accounts for it); stopped by the controller; timed out (its
-beat went stale); channel corrupt (a frame that did not verify, reported over everything
-else: garbage in must never become a verdict out); truncated evidence; unrecognised. A
+failed; controller lost (the worker's view); fault signal; killed; killed by the OOM
+killer (the kernel's OOM-kill count accounts for it); stopped by the controller; timed out
+(its
+beat went stale); record channel corrupt (a frame that did not verify, reported over everything
+else: garbage in must never become a verdict out); evidence truncated; unrecognised. A
 fault signal says that the process died and never why. A `kill(2)` that succeeded proves
 nothing about the cause, because the kernel accepts a signal to a zombie
 (`JOURNAL.md` §1.27).
@@ -204,7 +205,10 @@ with its reason beside it. The verdict is one word: `clean`, `corrected errors`,
 
 **Crash journal** (`src/controller/journal`). A small record, appended and synced every
 few seconds when `--journal FILE` is given, with a length and a CRC-32 per record. A torn
-tail is reported, not repaired; `loadforge journal FILE` prints it in words and says how
+tail is reported, not repaired; the end mark is written when the run returned a report and
+means only that (a run the controller failed leaves none); a file that is not a journal,
+or a journal another run holds, is refused; `loadforge journal FILE` prints it in words
+and says how
 the run ended. The next start with the same file keeps the previous one as `FILE.1`.
 
 **Explore** (`src/explore`, `src/main/explore_command`, `src/main/trial_runner`). A search
@@ -212,7 +216,10 @@ over a curated list of candidates (workloads, thread counts, CPU lists) for the 
 case of one objective (a metric and a statistic). A *trial* is one controller run with a
 telemetry rig of its own. Candidates are compared by successive halving; an interleaved
 reference measures drift, which is subtracted and whose noise is added to the interval;
-every claim carries its replicate count, standard deviation and 95% interval. The search
+every claim carries its replicate count, standard deviation and 95% interval (the winner's
+claim is from replicates run after it was chosen); the report also says which trials did
+not settle, which had corrected hardware errors, and the rival the ranking is against. The
+search
 never uses a metric the machine cannot read: that is exit code 1 before anything starts.
 
 ## 7. Exit codes
@@ -220,10 +227,13 @@ never uses a metric the machine cannot read: that is exit code 1 before anything
 `0` clean; `1` refused (the configuration, or the run could not start); `2` usage; `3` a
 worker did not complete; `4` a result file could not be written; `5` a fault: a wrong
 result, an uncorrected error, or corrected errors; `6` a check was not performed (a run
-that checked nothing is not clean); `7` the temperature ceiling ended the run. When
+with a verified workload that checked nothing is not clean; a run of unverified workloads
+can end `incomplete` and exit 0); `7` the temperature ceiling ended the run. When
 several apply, the first of 5, 7, 4, 3, 6 is the code (`README.md` says why 7 sits where it
-does). Explore uses 0, 1, 2, 3, 5 and 6 with their meaning for a candidate's trial; a trial
-the ceiling ends is 3.
+does). Explore uses 0, 1, 2, 3, 5 and 6: 3 a trial that could not be run (one the ceiling
+ended included); 5 a finding in a candidate's or the reference's trial, or a corrected
+hardware error in a scored trial; 6 a candidate's or the reference's trial that did not
+finish, or one with no reading of the objective.
 `loadforge journal FILE` exits 0 whatever the ending and 1 for no journal.
 
 ## 8. The platform boundary and how it is tested
