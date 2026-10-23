@@ -67,8 +67,7 @@ constexpr std::int64_t kScheduledStopGraceNs = 5'000'000'000;
 /// The longest a run or an interval may be taken to be in nanoseconds-safe
 /// milliseconds: a quarter of what a signed 64-bit count of nanoseconds holds,
 /// about 73 years, so that sums of a few such lengths do not overflow.
-constexpr std::int64_t kLongestMilliseconds =
-    std::numeric_limits<std::int64_t>::max() / kNanosecondsPerMillisecond / 4;
+constexpr std::int64_t kLongestMilliseconds = config::kLongestRunMilliseconds;
 
 /// How long a `--test` runs when it is not told.
 constexpr std::int64_t kDefaultTestMilliseconds = 10'000;
