@@ -96,16 +96,21 @@ void keep_true_statements(verification::SliceReport& report, const verification:
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::uint64_t next_slice_units(std::uint64_t last_units, std::int64_t took_ns,
                                std::int64_t target_ns) noexcept {
-  const std::uint64_t doubled = std::min(last_units * 2, kMaxSliceUnits);
+  // Doubling is cut at the largest slice before it can wrap.
+  const std::uint64_t doubled =
+      std::min(std::min(last_units, kMaxSliceUnits / 2) * 2, kMaxSliceUnits);
   if (took_ns <= 0) {
     return doubled;
   }
   const auto took = static_cast<std::uint64_t>(took_ns);
   const auto target = static_cast<std::uint64_t>(std::max<std::int64_t>(target_ns, 1));
-  // last_units is at most kMaxSliceUnits (2^20) and a target is a heartbeat
-  // interval in nanoseconds, so the product stays far inside 64 bits.
-  const std::uint64_t wanted = last_units * target / took;
-  return std::clamp<std::uint64_t>(wanted, 1, doubled);
+  // last_units times a target in nanoseconds does not fit 64 bits for every
+  // interval the type allows: 2^20 units and a target past 2^44 ns (4.9 hours,
+  // an interval of 9.8 hours, the target being half of it) wrap. The product is
+  // made, and divided, in 128 bits; each factor is below 2^64, so it is below 2^128.
+  __extension__ using Wide = unsigned __int128;
+  const Wide wanted = Wide{last_units} * target / took;
+  return static_cast<std::uint64_t>(std::clamp<Wide>(wanted, 1, doubled));
 }
 
 core::Result<std::vector<ThreadPlacement>, std::string> placements_for(
@@ -226,7 +231,7 @@ class Ticker {
         clock_(syscalls),
         channel_(syscalls, session.control_fd, records),
         pid_(static_cast<std::uint32_t>(syscalls.process_id())),
-        interval_ms_(static_cast<int>(session.pacing.interval_ns / kNanosecondsPerMillisecond)),
+        interval_ms_(interval_milliseconds(session.pacing.interval_ns)),
         target_ns_(std::max(session.pacing.interval_ns / kTargetDivisor, kMinTargetNs)) {}
 
   /// Reads the clock for the first time and arms the watch on the controller.
@@ -336,6 +341,11 @@ class Ticker {
   }
   Step leave(StopReason reason) {
     result_.outcome.reason = reason;
+    // The worker leaves without a last word, but the controller that reads
+    // this outcome later (the line the entry prints) should be told what the
+    // worker did. A runner already closed has its total in carried_.
+    result_.tally = runner_counted_ ? carried_ : whole();
+    result_.outcome.progress = result_.tally.units_computed;
     return Step::kLeave;
   }
 
@@ -446,6 +456,7 @@ class Ticker {
       return error_at("runner", "finish: " + last.error().detail);
     }
     carried_ = carried_ + runner.total();
+    runner_counted_ = true;
     next_index_ = last.value().next_index;
     verification::SliceReport report = std::move(last).value();
     keep_true_statements(report, carried_, run_over);
@@ -476,6 +487,7 @@ class Ticker {
     auto fresh = prepare(*syscalls_, next, cpus, next_index_, *services_);
     if (fresh.has_value()) {
       prepared_ = std::move(fresh).value();
+      runner_counted_ = false;
       args_ = next;
       cpus_ = cpus;
       units_ = 1;
@@ -493,6 +505,7 @@ class Ticker {
         return error_at("restore", lost + ": " + describe(restored.error()));
       }
       prepared_ = std::move(restored).value();
+      runner_counted_ = false;
       units_ = 1;
     }
     auto told = after(tell_memory());
@@ -552,6 +565,8 @@ class Ticker {
   bool paused_ = false;
   DutyClock duty_;
   verification::Tally carried_;
+  /// The live runner's total is already in carried_ (it was closed and not yet replaced).
+  bool runner_counted_ = false;
   VerifiedOutcome result_;
 };
 

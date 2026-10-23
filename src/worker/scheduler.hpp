@@ -26,6 +26,12 @@ struct Pacing {
   [[nodiscard]] friend bool operator==(const Pacing&, const Pacing&) = default;
 };
 
+/// The heartbeat interval as a whole number of milliseconds for poll(2): at
+/// least one, so a wait is never zero and a clamp to it never has a low bound
+/// above its high one, and at most INT_MAX, so an interval the command line
+/// accepts (up to about 292 years) does not wrap in the conversion.
+[[nodiscard]] int interval_milliseconds(std::int64_t interval_ns) noexcept;
+
 /// Why the loop stopped.
 ///
 ///   kDurationElapsed      the work is done.

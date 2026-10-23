@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <ctime>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -57,6 +58,24 @@ TEST(NextSliceUnits, AimsAtTheTargetTimeButNeverMoreThanDoubles) {
   EXPECT_EQ(next_slice_units(10, 20 * kMs, 10 * kMs), 5U) << "twice too slow: half";
   EXPECT_EQ(next_slice_units(10, 1000 * kMs, 10 * kMs), 1U) << "never fewer than one";
   EXPECT_EQ(next_slice_units(1, 1000 * kMs, 10 * kMs), 1U);
+}
+
+TEST(NextSliceUnits, AnIntervalOfHoursDoesNotWrapTheProduct) {
+  // 2^20 units times a target of 2^44 ns is 2^64: it wrapped to zero, and the
+  // slice shrank to one unit instead of staying at the cap.
+  constexpr std::int64_t kWraps = std::int64_t{1} << 44U;
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, 1, kWraps), kMaxSliceUnits);
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, kWraps, kWraps), kMaxSliceUnits)
+      << "on target at the cap";
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, 2 * kWraps, kWraps), kMaxSliceUnits / 2);
+  // The largest target and measurement the type holds, and the largest last
+  // slice: the answer is the cap, not a wrapped number.
+  constexpr std::int64_t kLargest = std::numeric_limits<std::int64_t>::max();
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, 1, kLargest), kMaxSliceUnits);
+  EXPECT_EQ(next_slice_units(kMaxSliceUnits, kLargest, kLargest), kMaxSliceUnits);
+  EXPECT_EQ(next_slice_units(std::numeric_limits<std::uint64_t>::max(), 1, kLargest),
+            kMaxSliceUnits)
+      << "doubling a last slice past 2^63 does not wrap either";
 }
 
 TEST(NextSliceUnits, ASliceThatMeasuredNoTimeDoublesAndNothingExceedsTheCap) {
@@ -641,6 +660,18 @@ TEST(VerifiedRunLoop, AStaleControllerEndsTheRunTheSameWay) {
   EXPECT_EQ(rig.script.finishes, 0);
 }
 
+TEST(VerifiedRunLoop, ALeaveBecauseTheControllerIsGoneReportsTheWorkDone) {
+  Rig rig;
+  rig.script.slices = {slice_of(1)};
+  rig.worker.pacing = Pacing{100'000 * kMs, 20 * kMs, 200 * kMs};  // the beat at 0 goes stale
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  ASSERT_EQ(outcome.value().outcome.reason, StopReason::kControllerStale);
+  EXPECT_GT(outcome.value().outcome.progress, 0U)
+      << "units were computed before the controller went";
+  EXPECT_EQ(outcome.value().tally.units_computed, outcome.value().outcome.progress);
+}
+
 TEST(VerifiedRunLoop, ARunnerThatStoppedItselfIsAReasonToEndAndStillFinishes) {
   Rig rig;
   rig.script.slice_fails = true;
@@ -1105,6 +1136,24 @@ TEST(VerifiedRunControl, AWorkerThatCannotGoBackToWhatItWasRunningIsAFailureOfIt
             std::string::npos)
       << outcome.error().detail;
   EXPECT_NE(outcome.error().detail.find("scripted refusal"), std::string::npos);
+}
+
+TEST(VerifiedRunControl, ALeaveInTheMiddleOfAReplacementCountsTheClosedRunnerOnce) {
+  // The controller is gone when the old runner's tally is sent: that runner's
+  // work is in the carried tally already and is not added a second time.
+  Rig rig;
+  rig.script.slices = {slice_of(5)};
+  rig.script.on_slice = [&rig](int slice) {
+    if (slice == 1) {
+      rig.send({2, Rebind{{0}}});
+    }
+  };
+  rig.syscalls.script_writes({{kEverything, 0}, {kEverything, 0}, {0, EPIPE}});
+  auto outcome = rig.run();
+  ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
+  ASSERT_EQ(outcome.value().outcome.reason, StopReason::kControllerHungUp);
+  EXPECT_EQ(outcome.value().tally.units_computed, 5U);
+  EXPECT_EQ(outcome.value().outcome.progress, 5U);
 }
 
 TEST(VerifiedRunControl, AReplacedRunnerFailingToFinishOrToSayItsLastWordEndsTheRunOrTheListening) {

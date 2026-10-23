@@ -62,14 +62,7 @@ core::Result<ControlLook, WorkerError> ControlChannel::look(int wait_ms) {
   }
   auto drained = source_.drain();
   if (!drained.has_value()) {
-    const std::optional<ipc::FrameError>& frame = drained.error().frame;
-    if (!frame.has_value()) {
-      return error_at("control pipe", ipc::describe(drained.error()));
-    }
-    // The stream ended inside a frame: the controller died writing it.
-    found.lost = frame->fault == ipc::FrameFault::kTruncated ? StopReason::kControllerHungUp
-                                                             : StopReason::kControlChannelBroken;
-    return found;
+    return error_at("control pipe", ipc::describe(drained.error()));
   }
   for (const ipc::Record& record : drained.value().records) {
     if (record.type != kControlFrameType) {
@@ -82,6 +75,14 @@ core::Result<ControlLook, WorkerError> ControlChannel::look(int wait_ms) {
       return found;
     }
     found.messages.push_back(std::move(message).value());
+  }
+  // The messages that came whole before a framing fault are handled first; the
+  // fault is what is lost after them.
+  if (const std::optional<ipc::FrameError>& frame = drained.value().fault; frame.has_value()) {
+    // The stream ended inside a frame: the controller died writing it.
+    found.lost = frame->fault == ipc::FrameFault::kTruncated ? StopReason::kControllerHungUp
+                                                             : StopReason::kControlChannelBroken;
+    return found;
   }
   if (drained.value().end_of_stream) {
     found.lost = StopReason::kControllerHungUp;

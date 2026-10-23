@@ -19,19 +19,30 @@
 // and happens to end somewhere plausible. A length past kMaxPayloadBytes is
 // refused before any byte is trusted to it.
 //
+// A length that reaches past the bytes there are cannot be checked, because
+// the check needs every byte. What can be told is whether the bytes there
+// could be the start of a record of that length: a write cut short leaves
+// such bytes, and the ending is a torn tail. A flipped length bit that leaves
+// bytes no such record starts with (a type that is not an entry, a length
+// other than the one the entry's own label sizes give, one the entry cannot
+// have) is a failed check, and the ending is corrupt. A flipped bit in a
+// length that the bytes there do not contradict reads as a torn tail: no
+// reader can tell it from a cut, and a cut must never read as corrupt.
+//
 // A PAYLOAD
 // ---------
 // The first byte is the type. kTerminator is the whole payload of the record
 // that closes a journal. kEntry is followed by, all little-endian:
 //
-//   8   elapsed_ns
+//   8   elapsed_ns, not negative
 //   1   presence bits: 0 last_verified_unit, 1 temperature_c,
 //       2 package_power_w, 3 frequency_hz, 4 ecc_corrected, 5 ecc_uncorrected;
 //       the other two bits are zero
 //   1+n phase: its length, then its bytes
 //   1+n workload: likewise
 //   48  the six optionals in the order above, 8 bytes each, a double as its
-//       IEEE-754 bits; the bytes of an absent one are zero
+//       IEEE-754 bits; the bytes of an absent one are zero, and a payload
+//       with a non-zero byte there is not an entry
 //   4   workers_alive
 //   4   workers_stale
 //
@@ -64,7 +75,11 @@ inline constexpr std::byte kTerminator{2};
 [[nodiscard]] std::vector<std::byte> terminator_payload();
 
 /// The entry a kEntry payload carries, or nothing when the payload is not
-/// exactly one: short, long, a label past kMaxLabelBytes, a reserved bit set.
+/// exactly one: short, long, a label past kMaxLabelBytes, a reserved bit set,
+/// a non-zero byte behind a clear presence bit, a negative elapsed time.
+///
+/// The order of elapsed times from one entry to the next is not checked here
+/// or by scan(): this format promises none, and a record is checked alone.
 [[nodiscard]] std::optional<Entry> decode_entry(std::span<const std::byte> payload);
 
 /// What the bytes of a whole journal say. Never fails: damage is an Ending.
