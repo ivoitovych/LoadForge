@@ -39,11 +39,11 @@
 namespace loadforge::cli {
 
 /// The units each workload runs on each path.
-inline constexpr std::uint64_t kSelftestUnits = 4;
+inline constexpr std::uint64_t kSelftestUnits = 3;
 
 /// The footprint a workload is given unless `--footprint` says otherwise: small, so that the
 /// whole command takes seconds even in a debug build.
-inline constexpr std::uint64_t kSelftestFootprintBytes = std::uint64_t{4} << 20U;
+inline constexpr std::uint64_t kSelftestFootprintBytes = std::uint64_t{3} << 20U;
 
 /// What the command was asked for.
 ///

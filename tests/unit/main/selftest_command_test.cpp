@@ -54,10 +54,10 @@ TEST(SelftestArgs, NoneAreTheDefaults) {
 }
 
 TEST(SelftestArgs, EveryOptionInAnyOrder) {
-  const auto parsed = parse({"--verbose", "--seed", "77", "--footprint", "2MiB", "--isa", "scalar"});
+  const auto parsed = parse({"--verbose", "--seed", "77", "--footprint", "5MiB", "--isa", "scalar"});
   ASSERT_TRUE(parsed.has_value());
   EXPECT_EQ(parsed.value().isa, IsaPath::kScalar);
-  EXPECT_EQ(parsed.value().footprint_bytes, std::uint64_t{2} << 20U);
+  EXPECT_EQ(parsed.value().footprint_bytes, std::uint64_t{5} << 20U);
   EXPECT_EQ(parsed.value().seed, 77U);
   EXPECT_TRUE(parsed.value().verbose);
 }
@@ -72,7 +72,7 @@ TEST(SelftestArgs, EachRefusalNamesTheArgument) {
       {{"--isa", "sse9"}, "--isa: 'sse9' is none of scalar, avx2, avx512, neon"},
       {{"--footprint", "lots"}, "--footprint: "},
       {{"--footprint", "50%"}, "--footprint must be a size, not a share of memory"},
-      {{"--footprint", "512KiB"}, "--footprint must be at least 1MiB"},
+      {{"--footprint", "2MiB"}, "--footprint must be at least 3MiB"},
       {{"--seed", "x"}, "--seed: expected a whole number, got 'x'"},
       {{"--seed", "5s"}, "--seed: expected a whole number, got '5s'"},
   };
@@ -221,18 +221,18 @@ class FixedProbe final : public simd::IsaProbe {
 
 constexpr ExpectedDigests kRight{selftest::kExpectedCorpusDigest, selftest::kExpectedDigest};
 
-struct Run {
+struct Ran {
   int code = 0;
   std::string out;
   std::string err;
 };
 
-Run run_over(const worker::Services& services, const SelftestOptions& options,
+Ran run_over(const worker::Services& services, const SelftestOptions& options,
              const ExpectedDigests& expected) {
   platform::RealSyscalls syscalls;
   std::ostringstream out;
   std::ostringstream err;
-  Run run;
+  Ran run;
   run.code = run_selftest(syscalls, services, options, expected, out, err);
   run.out = out.str();
   run.err = err.str();
@@ -272,7 +272,7 @@ TEST(Selftest, GoldenMatchPassesBothHalves) {
   worker::Services services = production.services();
   const TestRegistry registry({});
   services.workloads = &registry;
-  const Run run = run_over(services, SelftestOptions{}, kRight);
+  const Ran run = run_over(services, SelftestOptions{}, kRight);
   EXPECT_EQ(run.code, 0) << run.out;
   EXPECT_TRUE(has(run.out, "PASS  golden corpus: the configuration-parsing digest")) << run.out;
   EXPECT_TRUE(has(run.out, "PASS  golden kernels: the scalar workload-kernel digest")) << run.out;
@@ -286,7 +286,7 @@ TEST(Selftest, AKernelDigestThatDiffersIsNamedAndFails) {
   const TestRegistry registry({});
   services.workloads = &registry;
   const ExpectedDigests wrong{selftest::kExpectedCorpusDigest, selftest::kExpectedDigest + 1};
-  const Run run = run_over(services, SelftestOptions{}, wrong);
+  const Ran run = run_over(services, SelftestOptions{}, wrong);
   EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
   EXPECT_TRUE(has(run.out, "PASS  golden corpus")) << run.out;
   EXPECT_TRUE(has(run.out, "FAIL  golden kernels: the scalar workload-kernel digest differ: "
@@ -303,7 +303,7 @@ TEST(Selftest, ACorpusDigestThatDiffersFailsOnlyTheCorpus) {
   services.workloads = &registry;
   const std::uint64_t basis = selftest::kExpectedCorpusDigest + 1;
   const ExpectedDigests wrong{basis, selftest::workloads_digest(basis)};
-  const Run run = run_over(services, SelftestOptions{}, wrong);
+  const Ran run = run_over(services, SelftestOptions{}, wrong);
   EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
   EXPECT_TRUE(has(run.out, "FAIL  golden corpus: the configuration-parsing digest differ: "))
       << run.out;
@@ -316,10 +316,10 @@ TEST(Selftest, EveryWorkloadIsCheckedAndPasses) {
   const worker::ProductionServices production;
   SelftestOptions options;
   options.isa = IsaPath::kScalar;
-  const Run run = run_over(production.services(), options, kRight);
+  const Ran run = run_over(production.services(), options, kRight);
   EXPECT_EQ(run.code, 0) << run.out;
   for (const std::string& name : workloads::BuiltinRegistry{}.names()) {
-    EXPECT_TRUE(has(run.out, "PASS  " + name + " [scalar]: 4 unit(s) computed, 4 checked by the oracle"))
+    EXPECT_TRUE(has(run.out, "PASS  " + name + " [scalar]: 3 unit(s) computed, 3 checked by the oracle"))
         << name << "\n"
         << run.out;
   }
@@ -334,11 +334,11 @@ TEST(Selftest, AWorkloadWhoseOracleFindsAFaultFailsTheCommand) {
   services.workloads = &registry;
   SelftestOptions options;
   options.isa = IsaPath::kScalar;
-  const Run run = run_over(services, options, kRight);
+  const Ran run = run_over(services, options, kRight);
   EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
   EXPECT_TRUE(has(run.out, "FAIL  compression [scalar]: ")) << run.out;
   EXPECT_TRUE(has(run.out, "finding(s), the first: ExactBitCorruption")) << run.out;
-  EXPECT_TRUE(has(run.out, "selftest FAILED: 4 of 4 checks failed")) << "golden checks pass too\n"
+  EXPECT_TRUE(has(run.out, "selftest FAILED: 2 of 4 checks failed")) << "the golden checks pass\n"
                                                                     << run.out;
 }
 
@@ -351,10 +351,10 @@ TEST(Selftest, VerboseShowsThePathsTheTallyAndEveryFindingInFull) {
   SelftestOptions options;
   options.isa = IsaPath::kScalar;
   options.verbose = true;
-  const Run run = run_over(services, options, kRight);
+  const Ran run = run_over(services, options, kRight);
   EXPECT_TRUE(has(run.out, "paths this build holds: scalar")) << run.out;
   EXPECT_TRUE(has(run.out, "paths this CPU can run: ")) << run.out;
-  EXPECT_TRUE(has(run.out, "4 unit(s) computed")) << run.out;
+  EXPECT_TRUE(has(run.out, "3 unit(s) computed")) << run.out;
   EXPECT_TRUE(has(run.out, "  check: ")) << "the record in full\n" << run.out;
 }
 
@@ -366,7 +366,7 @@ TEST(Selftest, WithoutVerboseTheTalliesAndRecordsAreNotPrinted) {
   services.workloads = &registry;
   SelftestOptions options;
   options.isa = IsaPath::kScalar;
-  const Run run = run_over(services, options, kRight);
+  const Ran run = run_over(services, options, kRight);
   EXPECT_FALSE(has(run.out, "paths this build holds")) << run.out;
   EXPECT_FALSE(has(run.out, "  check: ")) << run.out;
 }
@@ -379,7 +379,7 @@ TEST(Selftest, AWorkloadThatCannotBeSetUpFailsItsCheckNamingWhy) {
   SelftestOptions options;
   options.isa = IsaPath::kScalar;
   options.footprint_bytes = 1;
-  const Run run = run_over(services, options, kRight);
+  const Ran run = run_over(services, options, kRight);
   EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
   EXPECT_TRUE(has(run.out, "FAIL  compression [scalar]: could not be set up: ")) << run.out;
 }
@@ -402,7 +402,7 @@ TEST(Selftest, ANameTheRegistryWillNotDescribeFailsItsCheck) {
   worker::Services services = production.services();
   const Ghosts registry;
   services.workloads = &registry;
-  const Run run = run_over(services, SelftestOptions{}, kRight);
+  const Ran run = run_over(services, SelftestOptions{}, kRight);
   EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
   EXPECT_TRUE(has(run.out, "FAIL  ghost: the registry would not describe it: unknown workload: no ghosts"))
       << run.out;
@@ -417,9 +417,9 @@ TEST(Selftest, ARunnerThatRefusesAFailsTheCheckWithItsWords) {
   SelftestOptions options;
   options.isa = IsaPath::kScalar;
   Refusing::fail_slice = true;
-  const Run slice = run_over(services, options, kRight);
+  const Ran slice = run_over(services, options, kRight);
   Refusing::fail_slice = false;
-  const Run finish = run_over(services, options, kRight);
+  const Ran finish = run_over(services, options, kRight);
   EXPECT_TRUE(has(slice.out, "FAIL  compression [scalar]: the runner refused: slice refused"))
       << slice.out;
   EXPECT_TRUE(has(finish.out, "FAIL  compression [scalar]: the runner refused: finish refused"))
@@ -435,7 +435,7 @@ TEST(Selftest, ARequestedPathThisCpuCannotRunIsRefusedBeforeAnyCheck) {
   services.isa = &scalar_only;
   SelftestOptions options;
   options.isa = IsaPath::kAvx2;  // never compiled on ARM64, never supported by this probe
-  const Run run = run_over(services, options, kRight);
+  const Ran run = run_over(services, options, kRight);
   EXPECT_EQ(run.code, 1);
   EXPECT_TRUE(run.out.empty()) << run.out;
   EXPECT_TRUE(has(run.err, "loadforge selftest: --isa avx2: ")) << run.err;

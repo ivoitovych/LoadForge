@@ -60,11 +60,11 @@ TEST(SelftestBinary, PassesOnThisMachineAndSaysWhatItChecked) {
 }
 
 TEST(SelftestBinary, VerbosePrintsThePathsAndStillPasses) {
-  const Outcome ran = loadforge("selftest --verbose --seed 9 --footprint 2MiB --isa scalar");
+  const Outcome ran = loadforge("selftest --verbose --seed 9 --footprint 5MiB --isa scalar");
   ASSERT_EQ(ran.code, 0) << ran.console;
   EXPECT_TRUE(contains(ran.console, "paths this build holds: ")) << ran.console;
   EXPECT_TRUE(contains(ran.console, "seed 9")) << ran.console;
-  EXPECT_TRUE(contains(ran.console, "4 unit(s) computed")) << ran.console;
+  EXPECT_TRUE(contains(ran.console, "3 unit(s) computed")) << ran.console;
 }
 
 TEST(SelftestBinary, APathThisMachineCannotRunIsARefusal) {

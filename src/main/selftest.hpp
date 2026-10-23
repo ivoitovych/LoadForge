@@ -62,8 +62,8 @@ namespace loadforge::selftest {
 ///
 ///   kExpectedCorpusDigest    corpus_digest().
 ///   kExpectedDigest          core_digest(), which is workloads_digest(kExpectedCorpusDigest).
-inline constexpr std::uint64_t kExpectedCorpusDigest = 0;
-inline constexpr std::uint64_t kExpectedDigest = 0;
+inline constexpr std::uint64_t kExpectedCorpusDigest = 0xa154e111368c537bULL;
+inline constexpr std::uint64_t kExpectedDigest = 0xe0ff849ff34906deULL;
 
 /// The canonical 64-bit FNV-1a parameters, 0xcbf29ce484222325 and
 /// 0x100000001b3.

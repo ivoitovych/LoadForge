@@ -251,8 +251,8 @@ line); the winner's claim is from replicates run after it was chosen.
 
 `loadforge selftest [--isa PATH] [--footprint SIZE] [--seed N] [--verbose]` is the command to
 run first, on a new machine, a new build, or before a long run. It compares the golden digest
-(below) with the one this source tree expects, then runs four units of every workload at
-4 MiB on the path this CPU would use (and on the scalar path too, when that is another), each
+(below) with the one this source tree expects, then runs three units of every workload at
+3 MiB on the path this CPU would use (and on the scalar path too, when that is another), each
 unit checked by the workload's independent oracle through the code a stress run uses. It
 prints one line per check and a verdict, and takes a few seconds. Exit 0: every check passed.
 Exit 8: a check failed, and the environment is not trustworthy for a hardware verdict: the

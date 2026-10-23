@@ -279,7 +279,7 @@ answer, every report gets dismissed.
 
 Required, not optional:
 
-- **`loadforge selftest`** — reference vectors checked before any long run begins. *(Status, 2026-10-23 UTC: built, roadmap 34e. It checks the golden digest against the value this tree expects and runs four units of every workload on the path this CPU would use, and on scalar, each checked by its oracle; exit 0 passed, 8 a check failed, 1 refused, 2 usage. See `docs/verification.md` §9. `loadforge --selftest-digest` and `packaging/validate-machine.sh` remain as further evidence.)*
+- **`loadforge selftest`** — reference vectors checked before any long run begins. *(Status, 2026-10-23 UTC: built, roadmap 34e. It checks the golden digest against the value this tree expects and runs three units of every workload on the path this CPU would use, and on scalar, each checked by its oracle; exit 0 passed, 8 a check failed, 1 refused, 2 usage. See `docs/verification.md` §9. `loadforge --selftest-digest` and `packaging/validate-machine.sh` remain as further evidence.)*
 - **Fault isolation on failure.** Re-run the failing unit of work (a) on the same core,
   (b) on a different core, (c) single-threaded. The reproduction pattern *is* the
   diagnosis: core-local, thread-count-dependent, or fully reproducible are three very

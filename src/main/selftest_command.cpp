@@ -270,8 +270,8 @@ int run_selftest(platform::Syscalls& syscalls, const worker::Services& services,
 namespace {
 
 /// The footprints below this are the user's typo and not the machine's fault: a workload
-/// refuses one, and a refusal would be read as a failed environment.
-constexpr std::uint64_t kLeastFootprintBytes = std::uint64_t{1} << 20U;
+/// refuses one (sort's unit is 2.5 MiB), and a refusal would be read as a failed environment.
+constexpr std::uint64_t kLeastFootprintBytes = std::uint64_t{3} << 20U;
 
 core::Result<std::uint64_t, std::string> whole_number(std::string_view flag,
                                                       std::string_view text) {
@@ -299,7 +299,7 @@ core::Result<bool, std::string> take_value(SelftestOptions& options, std::string
       return std::string{"--footprint must be a size, not a share of memory"};
     }
     if (size.value().byte_count() < kLeastFootprintBytes) {
-      return std::string{"--footprint must be at least 1MiB"};
+      return std::string{"--footprint must be at least 3MiB"};
     }
     options.footprint_bytes = size.value().byte_count();
   } else {

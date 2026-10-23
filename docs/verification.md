@@ -438,8 +438,8 @@ from one without.
 >    test recomputes them and fails, printing the new values, when they change on purpose.
 >    (The files under `tests/fixtures/golden` are not shipped with the binary, so they are
 >    not what selftest compares with.)
-> 2. **The oracle part.** For every workload in the registry, four units at a footprint of
->    4 MiB on the path this CPU would use for it (the requested `--isa`, or the widest the
+> 2. **The oracle part.** For every workload in the registry, three units at a footprint of
+>    3 MiB on the path this CPU would use for it (the requested `--isa`, or the widest the
 >    build, the CPU and the workload all have) and, when that is not scalar, on the scalar
 >    path as well. Each unit is bracketed for input integrity and checked by the workload's
 >    oracle, by `worker::prepare` and the input-integrity runner, which a stress run uses:
