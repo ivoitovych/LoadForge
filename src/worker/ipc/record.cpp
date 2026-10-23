@@ -248,8 +248,8 @@ core::Result<Drained, ChannelError> RecordSource::drain() {
   if (reader_.faulted()) {
     // The fault already found is the answer, and nothing more is read: bytes
     // after a corrupt frame are not a stream this reader will interpret.
-    auto fault = reader_.finish();
-    return channel_error(fault.error());
+    drained.fault = reader_.finish().error();
+    return drained;
   }
   std::array<char, kChunkBytes> chunk{};
   int interrupts = 0;
@@ -267,18 +267,20 @@ core::Result<Drained, ChannelError> RecordSource::drain() {
   }
   if (count == 0) {
     ended_ = true;
-    auto finished = reader_.finish();
-    if (!finished.has_value()) {
-      return channel_error(finished.error());
-    }
     drained.end_of_stream = true;
+    if (auto finished = reader_.finish(); !finished.has_value()) {
+      drained.fault = finished.error();
+    }
     return drained;
   }
   reader_.feed(std::as_bytes(std::span<const char>{chunk.data(), count}));
   while (true) {
     auto next = reader_.next();
     if (!next.has_value()) {
-      return channel_error(next.error());
+      // The records completed before the fault are the worker's evidence and
+      // stay in the answer; the fault comes with them.
+      drained.fault = next.error();
+      return drained;
     }
     if (!next.value().has_value()) {
       return drained;

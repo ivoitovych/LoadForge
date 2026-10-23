@@ -906,21 +906,7 @@ core::Result<core::Ok, ControllerError> Run::drain_available(Tracked& worker) {
 core::Result<core::Ok, ControllerError> Run::drain(Tracked& worker) {
   auto drained = worker.source->drain();
   if (!drained.has_value()) {
-    const std::optional<ipc::FrameError> frame = drained.error().frame;
-    if (!frame.has_value()) {
-      return error_at("record channel", describe(drained.error()));
-    }
-    // A frame fault is the worker's, not the controller's: recorded as
-    // evidence, and the channel is closed, because nothing after a bad frame
-    // is a stream this controller will interpret.
-    if (frame->fault == ipc::FrameFault::kTruncated) {
-      worker.evidence.channel_truncated = true;
-    } else {
-      worker.evidence.channel_corrupt = true;
-    }
-    worker.notes.push_back("record channel: " + describe(*frame));
-    close_channel(worker);
-    return core::Ok{};
+    return error_at("record channel", describe(drained.error()));
   }
   for (const ipc::Record& record : drained.value().records) {
     if (const auto refusal = ingest(worker, record); refusal.has_value()) {
@@ -932,6 +918,20 @@ core::Result<core::Ok, ControllerError> Run::drain(Tracked& worker) {
       close_channel(worker);
       return core::Ok{};
     }
+  }
+  if (const std::optional<ipc::FrameError>& frame = drained.value().fault; frame.has_value()) {
+    // A frame fault is the worker's, not the controller's: recorded as
+    // evidence, after the records that came whole before it, and the channel is
+    // closed, because nothing after a bad frame is a stream this controller
+    // will interpret.
+    if (frame->fault == ipc::FrameFault::kTruncated) {
+      worker.evidence.channel_truncated = true;
+    } else {
+      worker.evidence.channel_corrupt = true;
+    }
+    worker.notes.push_back("record channel: " + describe(*frame));
+    close_channel(worker);
+    return core::Ok{};
   }
   if (drained.value().end_of_stream) {
     close_channel(worker);
