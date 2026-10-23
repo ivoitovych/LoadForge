@@ -355,7 +355,9 @@ TEST(CliJournal, AJournalThatCannotBeOpenedRefusesTheRunBeforeAFork) {
   EXPECT_EQ(syscalls.fork_count(), 0);
 }
 
-TEST(CliJournal, ARunThatIsReportedClosesItsJournalEvenWhenItCouldNotStartTheWorkers) {
+TEST(CliJournal, ARunTheControllerFailedLeavesItsJournalWithoutATerminator) {
+  // Review C4: a controller error is not a clean end. The journal is left as it is, so that
+  // the next start replays it as ended abnormally and keeps it, as it keeps a killed run's.
   testing::FakeSyscalls syscalls;
   syscalls.advance_clocks_per_read(10'000'000);
   syscalls.fail_fork(EAGAIN);
@@ -367,8 +369,10 @@ TEST(CliJournal, ARunThatIsReportedClosesItsJournalEvenWhenItCouldNotStartTheWor
             1);
   const auto shown = read_journal(files, files, "run.lfj");
   ASSERT_TRUE(shown.has_value()) << shown.error();
-  EXPECT_EQ(shown.value().ending, journal::Ending::kTerminated)
-      << "the controller came back and said it failed; that is an end";
+  EXPECT_NE(shown.value().ending, journal::Ending::kTerminated)
+      << "the controller failed; a journal that says the run ended cleanly would be deleted by "
+         "the next start";
+  EXPECT_EQ(err.str().find("could not be closed"), std::string::npos) << err.str();
 }
 
 TEST(CliJournal, TheChildOfAFailedExecDoesNotCloseTheJournalItSharesWithItsParent) {
