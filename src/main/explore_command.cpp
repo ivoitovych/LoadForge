@@ -592,14 +592,10 @@ std::string statistic_text(const explore::BoundObjective& objective) {
 
 }  // namespace
 
-std::string render_report(const explore::SearchReport& report) {
-  std::ostringstream text;
-  const telemetry::Metric& metric = report.objective.metric;
-  text << "explore: objective " << statistic_text(report.objective) << " of " << metric.name << " ("
-       << telemetry::describe(metric.scope) << " " << metric.scope_index << ", "
-       << telemetry::describe(metric.unit) << "), " << explore::describe(report.objective.direction)
-       << "\n"
-       << "explore: " << report.trials << " trial(s) in " << report.rounds << " round(s)\n";
+namespace {
+
+/// The worst case, the ranking and what the search says of all its trials.
+void render_summary(std::ostringstream& text, const explore::SearchReport& report) {
   if (report.reference_stop.has_value()) {
     text << "worst case: none; the search ended early because a reference trial's verdict was "
          << results::describe(*report.reference_stop)
@@ -638,41 +634,58 @@ std::string render_report(const explore::SearchReport& report) {
          << " scored trial(s) had the hardware report an error it corrected; the scores stand, "
             "the exit code is 5 as for stress\n";
   }
-  for (const explore::CandidateReport& candidate : report.candidates) {
-    text << "candidate " << candidate.id << ": " << explore::describe(candidate.fate)
-         << ", ranked in " << candidate.rounds << " round(s), " << candidate.samples.size()
-         << " replicate(s)\n";
-    if (!candidate.samples.empty()) {
-      // The survivor's estimates are from the replicates after the ones that chose it.
-      std::string basis;
-      if (candidate.selection_replicates > 0) {
-        basis = " of the " +
-                std::to_string(candidate.samples.size() - candidate.selection_replicates) +
-                " replicate(s) run after it was chosen";
-      }
-      text << "  corrected for drift" << basis << ": " << estimate_text(candidate.corrected)
-           << "\n";
-      text << "  raw" << basis << ": " << estimate_text(candidate.raw) << "\n";
-      text << "  replicates:";
-      for (std::size_t i = 0; i < candidate.samples.size(); ++i) {
-        text << (i == candidate.selection_replicates && i > 0 ? " |" : "") << " "
-             << number(candidate.samples[i]);
-      }
-      text << "\n";
-      if (candidate.selection_replicates > 0) {
-        text << "  (the " << candidate.selection_replicates
-             << " replicate(s) before the bar chose this candidate and are not in its estimates)\n";
-      }
-      if (const std::string flagged =
-              noted_list(candidate.notes, &explore::TrialNote::corrected_errors);
-          !flagged.empty()) {
-        text << "  corrected hardware errors in replicate(s):" << flagged << "\n";
-      }
-      if (const std::string flagged = noted_list(candidate.notes, &explore::TrialNote::unsettled);
-          !flagged.empty()) {
-        text << "  replicate(s) that did not settle:" << flagged << "\n";
-      }
+}
+
+/// One candidate's fate, estimates, replicates and the notes on its trials.
+void render_candidate(std::ostringstream& text, const explore::CandidateReport& candidate) {
+  text << "candidate " << candidate.id << ": " << explore::describe(candidate.fate)
+       << ", ranked in " << candidate.rounds << " round(s), " << candidate.samples.size()
+       << " replicate(s)\n";
+  if (!candidate.samples.empty()) {
+    // The survivor's estimates are from the replicates after the ones that chose it.
+    std::string basis;
+    if (candidate.selection_replicates > 0) {
+      basis = " of the " +
+              std::to_string(candidate.samples.size() - candidate.selection_replicates) +
+              " replicate(s) run after it was chosen";
     }
+    text << "  corrected for drift" << basis << ": " << estimate_text(candidate.corrected) << "\n";
+    text << "  raw" << basis << ": " << estimate_text(candidate.raw) << "\n";
+    text << "  replicates:";
+    for (std::size_t i = 0; i < candidate.samples.size(); ++i) {
+      text << (i == candidate.selection_replicates && i > 0 ? " |" : "") << " "
+           << number(candidate.samples[i]);
+    }
+    text << "\n";
+    if (candidate.selection_replicates > 0) {
+      text << "  (the " << candidate.selection_replicates
+           << " replicate(s) before the bar chose this candidate and are not in its estimates)\n";
+    }
+    if (const std::string flagged =
+            noted_list(candidate.notes, &explore::TrialNote::corrected_errors);
+        !flagged.empty()) {
+      text << "  corrected hardware errors in replicate(s):" << flagged << "\n";
+    }
+    if (const std::string flagged = noted_list(candidate.notes, &explore::TrialNote::unsettled);
+        !flagged.empty()) {
+      text << "  replicate(s) that did not settle:" << flagged << "\n";
+    }
+  }
+}
+
+}  // namespace
+
+std::string render_report(const explore::SearchReport& report) {
+  std::ostringstream text;
+  const telemetry::Metric& metric = report.objective.metric;
+  text << "explore: objective " << statistic_text(report.objective) << " of " << metric.name << " ("
+       << telemetry::describe(metric.scope) << " " << metric.scope_index << ", "
+       << telemetry::describe(metric.unit) << "), " << explore::describe(report.objective.direction)
+       << "\n"
+       << "explore: " << report.trials << " trial(s) in " << report.rounds << " round(s)\n";
+  render_summary(text, report);
+  for (const explore::CandidateReport& candidate : report.candidates) {
+    render_candidate(text, candidate);
   }
   text << "reference: anchor " << number(report.anchor) << ", drift " << number(report.drift)
        << " (the last reading less the anchor), " << estimate_text(report.reference) << "\n"

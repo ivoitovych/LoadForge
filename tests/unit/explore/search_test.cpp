@@ -599,7 +599,7 @@ TEST(Run, ATrialThatDidNotSettleIsMarkedAndCounted) {
   ask_to_settle(config);
   std::size_t b_runs = 0;
   lab.runner.settles = [&](const Candidate& c, std::size_t) {
-    return !(c.id == "b" && ++b_runs == 2);
+    return c.id != "b" || ++b_runs != 2;
   };
   const auto result = explore(lab.runner, config);
   ASSERT_TRUE(result.has_value());

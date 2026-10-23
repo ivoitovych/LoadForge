@@ -468,7 +468,7 @@ TEST(ExploreReport, WithoutAWorstCaseItSaysSoAndNeverAnInventedNumber) {
 }
 
 TEST(ExploreReport, FlagsCorrectedHardwareErrorsPerCandidateAndForTheReference) {
-  explore::SearchReport clean = a_report();
+  const explore::SearchReport clean = a_report();
   EXPECT_FALSE(contains(render_report(clean), "corrected hardware errors"));
   explore::SearchReport report = a_report();
   report.candidates[0].notes = {{false}, {true}, {true}};
