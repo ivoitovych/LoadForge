@@ -294,7 +294,12 @@ TEST(Run, OneCandidateIsRunToTheFinalReplicatesAndIsSole) {
   EXPECT_EQ(report.worst_case->replicates, 3U);
   EXPECT_DOUBLE_EQ(report.worst_case->mean, 52.0);
   EXPECT_DOUBLE_EQ(report.worst_case->stddev, 2.0);
-  EXPECT_NEAR(report.worst_case->half_width, 4.303 * 2.0 / std::sqrt(3.0), 1e-9);
+  // Three reference readings (the anchor's two and the closing one) estimate the
+  // reference's noise on one degree of freedom, and the interval's t is looked up
+  // at the smaller of that and the replicates' two.
+  EXPECT_NEAR(report.worst_case->half_width,
+              t_critical(reference_degrees(3)) * 2.0 / std::sqrt(3.0), 1e-9);
+  EXPECT_EQ(report.references.size(), 3U);
   EXPECT_EQ(report.ranking, Ranking::kSole);
   EXPECT_EQ(find(report, "a").fate, Fate::kSurvivor);
 }

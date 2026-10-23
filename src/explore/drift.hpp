@@ -55,6 +55,13 @@ struct Bracket {
 /// difference, d^2 / 2, which drift inflates and so errs high. Zero below two.
 [[nodiscard]] double reference_variance(std::span<const ReferencePoint> points) noexcept;
 
+/// The degrees of freedom to credit reference_variance() with when `readings`
+/// went into it: at least 1, and no more than the effective degrees of freedom
+/// of that estimate, so a t interval built on it errs wide. It is
+/// max(1, (readings - 2) / 2) in integer arithmetic; drift.cpp has the derivation
+/// and the measured values.
+[[nodiscard]] std::size_t reference_degrees(std::size_t readings) noexcept;
+
 /// How much of the reference's noise the mean of the corrected scores of
 /// trials at `trial_times` carries: the sum of squared weights of the
 /// readings in (mean baseline there less the anchor), the anchor being the mean

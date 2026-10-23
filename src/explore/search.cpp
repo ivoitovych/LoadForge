@@ -282,7 +282,7 @@ class Execution {
     Correction out;
     out.variance = correction_gain(references_, times, config_.reference_replicates) *
                    reference_variance(references_);
-    out.max_degrees = references_.size() - 1;
+    out.max_degrees = reference_degrees(references_.size());
     return out;
   }
 
