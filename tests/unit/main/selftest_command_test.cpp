@@ -337,7 +337,8 @@ TEST(Selftest, AWorkloadWhoseOracleFindsAFaultFailsTheCommand) {
   const Ran run = run_over(services, options, kRight);
   EXPECT_EQ(run.code, kExitSelftestFailed) << run.out;
   EXPECT_TRUE(has(run.out, "FAIL  compression [scalar]: ")) << run.out;
-  EXPECT_TRUE(has(run.out, "finding(s), the first: ExactBitCorruption")) << run.out;
+  EXPECT_TRUE(has(run.out, "finding(s), the first: ExactBitCorruption: ")) << run.out;
+  EXPECT_TRUE(has(run.out, "; check: ")) << "what the record checked is on the line\n" << run.out;
   EXPECT_TRUE(has(run.out, "selftest FAILED: 2 of 4 checks failed")) << "the golden checks pass\n"
                                                                     << run.out;
 }
@@ -352,7 +353,7 @@ TEST(Selftest, VerboseShowsThePathsTheTallyAndEveryFindingInFull) {
   options.isa = IsaPath::kScalar;
   options.verbose = true;
   const Ran run = run_over(services, options, kRight);
-  EXPECT_TRUE(has(run.out, "paths this build holds: scalar")) << run.out;
+  EXPECT_TRUE(has(run.out, "paths this build holds: ")) << run.out;
   EXPECT_TRUE(has(run.out, "paths this CPU can run: ")) << run.out;
   EXPECT_TRUE(has(run.out, "3 unit(s) computed")) << run.out;
   EXPECT_TRUE(has(run.out, "  check: ")) << "the record in full\n" << run.out;

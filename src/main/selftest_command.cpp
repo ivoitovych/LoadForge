@@ -79,12 +79,13 @@ std::vector<Check> golden_checks(const ExpectedDigests& expected) {
   return checks;
 }
 
-/// The record's first two lines on one line: its kind and what it checked.
+/// The record's first two lines on one line: its kind, and what it checked.
 std::string summary_of(const verification::ErrorRecord& record) {
   const std::string text = verification::render(record);
-  std::string head = text.substr(0, text.find('\n', text.find('\n') + 1));
-  std::ranges::replace(head, '\n', ' ');
-  return head;
+  const std::size_t end_of_first = text.find('\n');
+  const std::size_t second = text.find_first_not_of(' ', end_of_first + 1);
+  return text.substr(0, end_of_first) + "; " +
+         text.substr(second, text.find('\n', second) - second);
 }
 
 std::string tally_line(const verification::Tally& tally) {
