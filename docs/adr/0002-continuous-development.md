@@ -50,3 +50,7 @@ does not exist does not.
   still needs, and is still looking for, an outside reviewer.
 - `docs/ROADMAP.md` becomes a document that must stay true, like the status
   sections it summarises.
+
+> **Amended, 2026-10-23 00:15 UTC:** the dates in the Context carry no time. The period begins
+> at the first commit, 2026-08-24 20:35 UTC (the time of ADR 0001), and ends at the review
+> of 2026-10-19 04:49 UTC. The decision is unchanged.

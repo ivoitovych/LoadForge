@@ -1,8 +1,8 @@
-# ADR (proposed) — How vector kernels are built, tested and measured
+# ADR 0005 — How vector kernels are built, tested and measured
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20 11:20 UTC
-**Stream:** 06, workload: dense linear algebra (the manager numbers this when it lands)
+**Accepted:** 2026-10-20 17:27 UTC, with the merge of pull request #44 (stream 06, workload: dense linear algebra)
 
 ## Context
 
