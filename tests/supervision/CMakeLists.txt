@@ -8,7 +8,8 @@
 # a directory of tests and nothing else, and so these tests, which take seconds
 # each, are a tier a contributor can run on its own.
 add_executable(loadforge_supervision_tests supervision_test.cpp catalogue_test.cpp ladder_test.cpp
-               telemetry_death_test.cpp control_test.cpp journal_kill_test.cpp temperature_test.cpp)
+               telemetry_death_test.cpp control_test.cpp journal_kill_test.cpp temperature_test.cpp
+               graceful_stop_test.cpp)
 target_link_libraries(loadforge_supervision_tests PRIVATE
   loadforge_cli loadforge_controller loadforge_platform loadforge_workloads_registry
   loadforge_workloads_mixed

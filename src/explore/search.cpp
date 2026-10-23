@@ -132,8 +132,9 @@ class Execution {
     auto done = execute();
     if (!done) {
       // A reference that found something is a finding, as a candidate's trial is: what
-      // was measured before it is still the answer to "what was found so far".
-      if (done.error().fault == ExploreFault::kReference) {
+      // was measured before it is still the answer to "what was found so far". So is
+      // what was measured before a signal asked for the end.
+      if (done.error().fault == ExploreFault::kReference || stopped_.has_value()) {
         return report();
       }
       return done.error();
@@ -167,10 +168,26 @@ class Execution {
     return core::Ok{};
   }
 
+  /// Whether a signal has asked for the end. Not asked again once one has: the search
+  /// ends with the error that follows.
+  bool asked_to_stop() {
+    if (config_.stop_signal) {
+      stopped_ = config_.stop_signal();
+    }
+    return stopped_.has_value();
+  }
+
   core::Result<Measured, ExploreError> measure(const Candidate& candidate) {
+    if (asked_to_stop()) {
+      return make_error(ExploreFault::kTrial, "a signal asked for the end before " + candidate.id);
+    }
     auto outcome = runner_->run(candidate);
     ++trials_;
     if (!outcome) {
+      if (asked_to_stop()) {
+        // The trial the signal ended: not a fault of the trial.
+        return make_error(ExploreFault::kTrial, candidate.id + ": ended by the signal");
+      }
       std::string detail = candidate.id + ": " + outcome.error().detail;
       ExploreError error = make_error(ExploreFault::kTrial, std::move(detail));
       error.trial = outcome.error().fault;
@@ -376,13 +393,15 @@ class Execution {
     }
     out.reference = estimate(reference_values);
     out.reference_stop = reference_stop_;
+    out.stop_signal = stopped_;
+    const bool ended_early = reference_stop_.has_value() || stopped_.has_value();
     out.drift = anchored_ ? references_.back().value - anchor_ : 0.0;
     std::optional<std::size_t> winner;
     for (std::size_t which = 0; which < states_.size(); ++which) {
       const State& state = states_[which];
       CandidateReport entry;
       entry.id = config_.candidates[which].id;
-      entry.fate = state.alive && reference_stop_.has_value() ? Fate::kStopped : state.fate;
+      entry.fate = state.alive && ended_early ? Fate::kStopped : state.fate;
       entry.rounds = state.rounds;
       entry.samples = corrected_samples(state);
       // The survivor's estimates are from the replicates that did not choose it.
@@ -400,7 +419,7 @@ class Execution {
       }
       entry.raw = estimate(raw);
       entry.corrected = estimate(corrected_samples(state, from), correction_of(state, from));
-      if (state.alive && !reference_stop_.has_value()) {
+      if (state.alive && !ended_early) {
         winner = which;
       }
       out.candidates.push_back(std::move(entry));
@@ -456,6 +475,7 @@ class Execution {
   double anchor_ = 0.0;
   bool anchored_ = false;
   std::optional<Verdict> reference_stop_;
+  std::optional<int> stopped_;
   std::size_t pass_ = 0;
   std::size_t since_reference_ = 0;
   std::size_t trials_ = 0;

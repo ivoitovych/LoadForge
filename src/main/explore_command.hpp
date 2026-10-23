@@ -109,6 +109,17 @@ struct ExploreArgs {
 [[nodiscard]] int run_explore(ControllerTrialRunner& runner, explore::SearchConfig config,
                               std::ostream& out, std::ostream& err);
 
+/// run_explore with the signals caught: `stop` is installed (a failure to is a
+/// refusal, 1, before any trial), the search is asked after every trial whether
+/// one has come, and it is released when the search is over. The first signal
+/// stops the trial under way as a deadline does, no more are run, and the report
+/// is what was measured before it (exit 128 plus the signal, below a finding,
+/// above a trial that did not finish). `stop` must be the one the runner was
+/// given in TrialOptions::stop_signals.
+[[nodiscard]] int run_explore_stoppable(ControllerTrialRunner& runner,
+                                        controller::StopSignals& stop, explore::SearchConfig config,
+                                        std::ostream& out, std::ostream& err);
+
 /// The command: `args` start after "explore". `base` supplies what a test
 /// replaces (the machine's roots, the sources, the summarizer); the executable
 /// and the options the arguments name are set over it.

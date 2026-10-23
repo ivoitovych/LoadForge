@@ -679,10 +679,46 @@ class FakeSyscalls final : public platform::Syscalls {
 
   core::Result<core::Ok, platform::SyscallError> default_signal(int signal) override {
     signals_defaulted_.push_back(signal);
+    signals_diverted_.erase(signal);
     if (default_signal_error_ != 0) {
       return platform::SyscallError{default_signal_error_, "sigaction",
                                     "signal " + std::to_string(signal)};
     }
+    return core::Ok{};
+  }
+
+  /// divert_signal fails with this errno, always, or only at its Nth call (1-based).
+  void fail_divert_signal(int error) { divert_signal_error_ = error; }
+  void fail_divert_signal_on(int nth, int error) { divert_failure_at_ = std::pair{nth, error}; }
+  /// The signals now diverted, with the descriptor each writes to: one that
+  /// default_signal has put back is not here.
+  [[nodiscard]] const std::map<int, int>& signals_diverted() const { return signals_diverted_; }
+  [[nodiscard]] int divert_calls() const { return divert_calls_; }
+  /// What the kernel and the handler would do when `signal` arrives while it is
+  /// diverted: one byte, the signal's number, into the pipe. False when it is
+  /// not diverted (the default action would have ended the process).
+  bool raise_diverted(int signal) {
+    const auto found = signals_diverted_.find(signal);
+    if (found == signals_diverted_.end()) {
+      return false;
+    }
+    pipe_writers_.at(found->second)->queue.push_back(static_cast<char>(signal));
+    return true;
+  }
+
+  core::Result<core::Ok, platform::SyscallError> divert_signal(int signal, int write_fd) override {
+    ++divert_calls_;
+    const std::string subject = "signal " + std::to_string(signal);
+    if (!pipe_writers_.contains(write_fd)) {
+      return platform::SyscallError{EBADF, "fcntl", describe(write_fd)};
+    }
+    if (divert_signal_error_ != 0) {
+      return platform::SyscallError{divert_signal_error_, "sigaction", subject};
+    }
+    if (divert_failure_at_.has_value() && divert_failure_at_->first == divert_calls_) {
+      return platform::SyscallError{divert_failure_at_->second, "sigaction", subject};
+    }
+    signals_diverted_[signal] = write_fd;
     return core::Ok{};
   }
 
@@ -1006,6 +1042,10 @@ class FakeSyscalls final : public platform::Syscalls {
   /// per worker can be failed on either.
   void fail_create_pipe_on(int nth, int error) { pipe_failure_at_ = std::pair{nth, error}; }
   void fail_poll(int error) { poll_error_ = error; }
+  /// Called at the start of every poll, with its number (1-based), before the
+  /// answer is worked out: the one place a test can act while a loop is waiting,
+  /// as a signal does.
+  void on_poll(std::function<void(int)> hook) { poll_hook_ = std::move(hook); }
   /// Fail only the Nth poll (1-based): a loop's later poll, or the one after it.
   void fail_poll_on(int nth, int error) { poll_failure_at_ = std::pair{nth, error}; }
   /// Fail the close of one pipe end and no other.
@@ -1050,6 +1090,8 @@ class FakeSyscalls final : public platform::Syscalls {
   [[nodiscard]] int write_count() const { return write_count_; }
   [[nodiscard]] int poll_count() const { return poll_count_; }
   [[nodiscard]] const std::vector<int>& poll_timeouts() const { return poll_timeouts_; }
+  /// The descriptors each poll was given, in order.
+  [[nodiscard]] const std::vector<std::vector<int>>& polled() const { return polled_; }
   /// Everything written to this pipe's write end so far, in order.
   [[nodiscard]] std::string pipe_contents(int write_fd) const {
     const auto writer = pipe_writers_.find(write_fd);
@@ -1113,6 +1155,10 @@ class FakeSyscalls final : public platform::Syscalls {
       const std::vector<int>& fds, int timeout_ms) override {
     ++poll_count_;
     poll_timeouts_.push_back(timeout_ms);
+    polled_.push_back(fds);
+    if (poll_hook_) {
+      poll_hook_(poll_count_);
+    }
     if (poll_error_ != 0) {
       return platform::SyscallError{poll_error_, "poll",
                                     std::to_string(fds.size()) + " descriptors"};
@@ -1386,6 +1432,12 @@ class FakeSyscalls final : public platform::Syscalls {
   std::int64_t clock_step_ns_ = 0;
   int ignore_signal_error_ = 0;
   int default_signal_error_ = 0;
+  std::function<void(int)> poll_hook_;
+  std::vector<std::vector<int>> polled_;
+  int divert_signal_error_ = 0;
+  int divert_calls_ = 0;
+  std::optional<std::pair<int, int>> divert_failure_at_;
+  std::map<int, int> signals_diverted_;
   std::vector<int> signals_ignored_;
   std::vector<int> signals_defaulted_;
 

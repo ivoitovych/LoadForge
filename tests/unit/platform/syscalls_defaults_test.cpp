@@ -125,6 +125,16 @@ TEST(SyscallsDefaults, AskingWhetherAChildHasExitedIsNotImplemented) {
   EXPECT_EQ(result.error().call, "waitid");
 }
 
+TEST(SyscallsDefaults, DivertingASignalIsNotImplemented) {
+  MinimalSyscalls calls;
+
+  const auto result = calls.divert_signal(2, 3);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().number, ENOSYS);
+  EXPECT_EQ(result.error().call, "sigaction");
+}
+
 TEST(SyscallsDefaults, OpeningACounterIsNotImplemented) {
   MinimalSyscalls calls;
 

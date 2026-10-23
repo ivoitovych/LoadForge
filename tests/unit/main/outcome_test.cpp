@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <csignal>
 #include <optional>
 #include <vector>
 
@@ -300,6 +301,71 @@ TEST(ToRunResult, EveryWorkersAccountOfItsEndNamesTheCeilingThatEndedTheRun) {
             "thermal.package 0 (hwmon:coretemp) read 91.0 C, at or above the ceiling of 90 C, "
             "12.345 s into the run");
   EXPECT_EQ(result.workers[1].termination.find("killed by signal 9; the run was ended by"), 0U);
+}
+
+// ---- a signal: 5, 7, 4, then 130 or 143, then 3, 6 ---------------------------------------------
+
+TEST(ExitCodeSignal, ARunASignalStoppedIsTheShellsCodeForThatSignal) {
+  EXPECT_EQ(kExitSignalBase, 128);
+  EXPECT_EQ(exit_code_for(results::Verdict::kClean, true, true, false, SIGINT), 130);
+  EXPECT_EQ(exit_code_for(results::Verdict::kClean, true, true, false, SIGTERM), 143);
+}
+
+TEST(ExitCodeSignal, ItExplainsTheWorkersItHadToKillAndTheChecksItCutShort) {
+  for (const int signal : {SIGINT, SIGTERM}) {
+    EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, false, true, false, signal),
+              kExitSignalBase + signal);
+    EXPECT_EQ(exit_code_for(results::Verdict::kIncomplete, true, true, false, signal),
+              kExitSignalBase + signal);
+    EXPECT_EQ(exit_code_for(results::Verdict::kClean, false, false, false, signal),
+              kExitSignalBase + signal);
+  }
+}
+
+TEST(ExitCodeSignal, AFaultAndTheCeilingOutrankItAndNothingElseDoes) {
+  for (const bool clean : {true, false}) {
+    EXPECT_EQ(exit_code_for(results::Verdict::kFindings, clean, true, false, SIGINT), kExitFault);
+    EXPECT_EQ(exit_code_for(results::Verdict::kCorrectedErrors, clean, true, true, SIGINT),
+              kExitFault);
+    EXPECT_EQ(exit_code_for(results::Verdict::kClean, clean, true, true, SIGINT), kExitTemperature);
+  }
+}
+
+TEST(ExitCodeSignal, AResultThatCannotBeWrittenOutranksItButNotAFaultOrTheCeiling) {
+  EXPECT_EQ(with_output_failure(kExitSignalBase + SIGINT), kExitOutputFailed);
+  EXPECT_EQ(with_output_failure(kExitSignalBase + SIGTERM), kExitOutputFailed);
+  EXPECT_EQ(with_output_failure(kExitFault), kExitFault);
+  EXPECT_EQ(with_output_failure(kExitTemperature), kExitTemperature);
+}
+
+TEST(ExitCodeSignal, TheReportsSignalIsWhatMakesIt) {
+  controller::RunReport report;
+  report.workers = {checked_worker(), checked_worker()};
+  EXPECT_EQ(exit_code_for(report, a_config()), 0);
+  report.stop_signal = SIGINT;
+  EXPECT_EQ(exit_code_for(report, a_config()), 130);
+  report.stop_signal = SIGTERM;
+  EXPECT_EQ(exit_code_for(report, a_config()), 143);
+  report.temperature_stop = reached();
+  EXPECT_EQ(exit_code_for(report, a_config()), kExitTemperature);
+  report.temperature_stop.reset();
+  report.workers[0].findings = {wrong_result()};
+  report.workers[0].wrong_results = 1;
+  EXPECT_EQ(exit_code_for(report, a_config()), kExitFault) << "a wrong result found on the way";
+}
+
+TEST(ToRunResult, EveryWorkersAccountOfItsEndNamesTheSignalThatStoppedTheRun) {
+  controller::RunReport report;
+  WorkerReport first = null_worker();
+  first.termination = "exited with code 0";
+  report.workers = {first};
+  report.stop_signal = SIGINT;
+  EXPECT_EQ(to_run_result(report, a_config()).workers[0].termination,
+            "exited with code 0; the run was stopped by SIGINT");
+  report.stop_forced = true;
+  EXPECT_EQ(to_run_result(report, a_config()).workers[0].termination,
+            "exited with code 0; the run was stopped by SIGINT; a later signal killed the "
+            "workers at once");
 }
 
 TEST(ExitCodeComposed, AFaultOutranksAWorkerThatDidNotCompleteAndAnIncompleteVerdict) {

@@ -161,13 +161,20 @@ void print_usage(std::ostream& out) {
       << "Exit codes: 0 clean; 1 refused (configuration, or the run could not start);\n"
       << "2 usage; 3 the run ended with a worker that did not complete; 4 a result file\n"
       << "could not be written; 5 the run found a fault (a wrong result, or an error the\n"
-      << "hardware reported, corrected or not); 6 a check was not performed (a run that\n"
-      << "checked nothing is not clean); 7 the temperature ceiling ended the run. When\n"
-      << "several apply the first of 5, 7, 4, 3, 6 is the code. A ceiling that cannot be\n"
-      << "read before the run starts is a refusal, 1. explore: 0 every candidate scored; 1\n"
-      << "refused before the first trial; 3 a trial could not be run, or the ceiling ended\n"
-      << "it; 5 a candidate's trial found a fault; 6 a candidate's trial did not finish, or\n"
-      << "a trial held no reading of the objective.\n"
+      << "hardware reported, corrected or not); 6 a check was not performed (a run with a\n"
+      << "verified workload that checked nothing is not clean; a run of unverified\n"
+      << "workloads can end incomplete and exit 0);\n"
+      << "7 the temperature ceiling ended the run; 130 or 143 SIGINT (Ctrl-C) or SIGTERM\n"
+      << "stopped the run, which was reported and written as for any run (128 plus the\n"
+      << "signal). When several apply the first of 5, 7, 4, 130 or 143, 3, 6 is the code.\n"
+      << "A second signal while the workers are stopping kills them at once. A ceiling\n"
+      << "that cannot be read before the run starts is a refusal, 1.\n"
+      << "explore: 0 every candidate scored; 1 refused before the first trial; 3 a trial\n"
+      << "could not be run, or the ceiling ended it; 5 a candidate's or the reference's\n"
+      << "trial found a fault, or the hardware reported a corrected error in a scored\n"
+      << "trial; 6 a candidate's or the reference's trial did not finish, or a trial held\n"
+      << "no reading of the objective; 130 or 143 a signal stopped the search, which\n"
+      << "reports what it measured (above 6, below 5).\n"
       << "See docs/PLAN.md for what lands when.\n";
 }
 
@@ -825,7 +832,8 @@ int conclude_run(const Ending& ending, std::ostream& out, std::ostream& err) {
   }
   out << summary_text(result.value(), report, *ending.timeline, summarizer, reading.gaps);
   const int code = exit_code_for(result.value().verdict, controller::all_clean(report),
-                                 has_verified_worker(report), report.temperature_stop.has_value());
+                                 has_verified_worker(report), report.temperature_stop.has_value(),
+                                 report.stop_signal.value_or(0));
   if (stress_options.formats.empty()) {
     return code;
   }
@@ -999,6 +1007,19 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   TimelineNotes journal_notes(timeline);
   options.journal_notes = &journal_notes;
 
+  // Ctrl-C and SIGTERM, caught from here to the end of the run: they stop it as
+  // its deadline does, and what it measured is reported (journal 34b). Not
+  // earlier, so that the setup above, which can take a while on a slow machine,
+  // is ended by the signal's default action as it always was.
+  controller::StopSignals stop(syscalls);
+  if (auto installed = stop.install(); !installed.has_value()) {
+    err << "loadforge: cannot catch SIGINT and SIGTERM: " << platform::describe(installed.error())
+        << "\n";
+    end_journal(journal_open, err);
+    return kConfigRefused;
+  }
+  options.stop_signals = &stop;
+
   reporters::ConsoleReporter reporter(out);
   controller::Controller supervisor(syscalls, reporter);
   // Flushed before the controller forks, so a child that fails to exec and
@@ -1006,6 +1027,9 @@ int run_stress(platform::Syscalls& syscalls, const config::Config& config,
   out.flush();
   err.flush();
   auto ran = supervisor.run(config, options);
+  // The run is over: a signal from here on has its default action again, which
+  // is what ends the re-runs and the writing of the results, as it always did.
+  stop.release();
   if (!ran.has_value()) {
     // No terminator: the controller failed, which is not an end the journal may
     // call clean. The next start replays this journal as ended abnormally and

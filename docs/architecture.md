@@ -81,10 +81,16 @@ kills the worker's group, so nothing a worker forked outlives it (`JOURNAL.md` �
    (`src/controller/temperature`), reading back the timeline the sampler wrote and never
    the sensors themselves; a sensor at or above the ceiling ends the run as the deadline
    does (step 8), with its own exit code.
-8. **Stop** at the deadline, or when the temperature ceiling is reached: a stop request on
+8. **Stop** at the deadline, when the temperature ceiling is reached, or when `SIGINT` or
+   `SIGTERM` arrives: a stop request on
    the control pipe, then `SIGTERM`, then `SIGKILL`, each after its grace
    (`docs/safety.md` §2). It then reaps every worker and
-   takes a last telemetry round.
+   takes a last telemetry round. The two signals are caught for the run only
+   (`src/controller/stop_signals`): the handler writes the signal's number to a pipe that the
+   tick's poll waits on with the workers' record pipes, so the controller learns of a Ctrl-C
+   in its own code, at once. A second signal while the workers are stopping skips the grace
+   and sends `SIGKILL`. The workers lead sessions of their own, so the terminal's Ctrl-C
+   reaches the controller only.
 9. **Isolate** each wrong result found (§5), if any.
 10. **Report**: the console, and `run.json` / `run.csv` if asked. The exit code is derived
     from the verdict and the fates (§7).
@@ -228,12 +234,15 @@ never uses a metric the machine cannot read: that is exit code 1 before anything
 worker did not complete; `4` a result file could not be written; `5` a fault: a wrong
 result, an uncorrected error, or corrected errors; `6` a check was not performed (a run
 with a verified workload that checked nothing is not clean; a run of unverified workloads
-can end `incomplete` and exit 0); `7` the temperature ceiling ended the run. When
-several apply, the first of 5, 7, 4, 3, 6 is the code (`README.md` says why 7 sits where it
-does). Explore uses 0, 1, 2, 3, 5 and 6: 3 a trial that could not be run (one the ceiling
-ended included); 5 a finding in a candidate's or the reference's trial, or a corrected
-hardware error in a scored trial; 6 a candidate's or the reference's trial that did not
-finish, or one with no reading of the objective.
+can end `incomplete` and exit 0); `7` the temperature ceiling ended the run; `130` or `143`
+`SIGINT` or `SIGTERM` stopped the run (the shell's 128 plus the signal; the run was
+reported and written as any other). When several apply, the first of 5, 7, 4, 130 or 143,
+3, 6 is the code (`README.md` says why 7 and the signals sit where they do). Explore uses
+0, 1, 2, 3, 5, 6, 130 and 143: 3 a trial that could not be run (one the ceiling ended
+included); 5 a finding in a candidate's or the reference's trial, or a corrected hardware
+error in a scored trial; 6 a candidate's or the reference's trial that did not finish, or
+one with no reading of the objective; 130 or 143 a search a signal stopped, which reports
+what it measured (above 6, below 5).
 `loadforge journal FILE` exits 0 whatever the ending and 1 for no journal.
 
 ## 8. The platform boundary and how it is tested

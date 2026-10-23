@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <csignal>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -405,6 +406,26 @@ TEST(SummaryTextTest, ARunTheCeilingEndedSaysSoRightBelowItsVerdict) {
             "verdict: clean\n"
             "ended by the temperature ceiling: thermal.package 0 (hwmon:coretemp) read 96.5 C, "
             "at or above the ceiling of 95 C, 2.250 s into the run\n"
+            "telemetry: not sampled\n");
+}
+
+TEST(SummaryTextTest, ARunASignalStoppedSaysSoAndWhichExitCodeThatIs) {
+  const mocks::MockTimeline timeline;
+  const mocks::MockSummarizer summarizer;
+  controller::RunReport report;
+  report.stop_signal = SIGINT;
+  results::RunResult result;
+  result.verdict = results::Verdict::kClean;
+  EXPECT_EQ(summary_text(result, report, timeline, summarizer, {}),
+            "verdict: clean\n"
+            "the run was stopped by SIGINT: its exit code is 130\n"
+            "telemetry: not sampled\n");
+  report.stop_signal = SIGTERM;
+  report.stop_forced = true;
+  EXPECT_EQ(summary_text(result, report, timeline, summarizer, {}),
+            "verdict: clean\n"
+            "the run was stopped by SIGTERM; a later signal killed the workers at once: its "
+            "exit code is 143\n"
             "telemetry: not sampled\n");
 }
 

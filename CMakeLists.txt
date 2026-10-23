@@ -120,6 +120,7 @@ add_library(loadforge_controller STATIC
   src/controller/rerun.cpp
   src/controller/isolate.cpp
   src/controller/orchestration.cpp
+  src/controller/stop_signals.cpp
   src/reporters/console.cpp
 )
 target_link_libraries(loadforge_controller PUBLIC loadforge_worker loadforge_config loadforge_resources

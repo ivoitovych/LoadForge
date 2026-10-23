@@ -31,6 +31,10 @@ results::RunResult to_run_result(const controller::RunReport& report,
       entry.termination += "; the run was ended by the temperature ceiling: ";
       entry.termination += controller::describe(*report.temperature_stop);
     }
+    if (report.stop_signal.has_value()) {
+      // As for the ceiling: the result schema has no field for why a run ended.
+      entry.termination += "; the run was " + controller::describe_stop_signal(report);
+    }
     result.workers.push_back(std::move(entry));
     if (!worker.work.has_value()) {
       continue;
@@ -58,12 +62,15 @@ results::RunResult to_run_result(const controller::RunReport& report,
 }
 
 int exit_code_for(results::Verdict verdict, bool workers_clean, bool verified,
-                  bool temperature_stopped) noexcept {
+                  bool temperature_stopped, int stop_signal) noexcept {
   if (verdict == results::Verdict::kFindings || verdict == results::Verdict::kCorrectedErrors) {
     return kExitFault;
   }
   if (temperature_stopped) {
     return kExitTemperature;
+  }
+  if (stop_signal != 0) {
+    return kExitSignalBase + stop_signal;
   }
   if (!workers_clean) {
     return kExitUnclean;
@@ -88,7 +95,7 @@ int exit_code_for(const controller::RunReport& report, const config::Config& con
     verdict = to_run_result(report, config).verdict;
   }
   return exit_code_for(verdict, controller::all_clean(report), verified,
-                       report.temperature_stop.has_value());
+                       report.temperature_stop.has_value(), report.stop_signal.value_or(0));
 }
 
 int after_isolation(controller::RunReport& report, const topology::Snapshot* machine,

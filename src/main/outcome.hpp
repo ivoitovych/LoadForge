@@ -44,7 +44,14 @@ namespace loadforge::cli {
 ///      machine that a failed write (4) must not hide. Only a fault (5), the
 ///      finding, outranks it: a wrong result found on the way is still the thing
 ///      to read first.
-/// When several apply the first of 5, 7, 4, 3, 6 is the code. A run of nothing
+///   130 / 143  a signal (SIGINT, SIGTERM) asked for the end: the run was
+///      stopped as at its deadline, reported, and its result written. It ranks
+///      below a fault (5), the ceiling (7) and a failed write (4), which tell the
+///      user what the signal alone does not, and above 3 and 6, which it explains:
+///      a stopped worker that had to be killed, and checks cut short. The code is
+///      what the shell would have said had the signal ended the process, so that
+///      a script that tests for 130 still sees the interrupt.
+/// When several apply the first of 5, 7, 4, 130/143, 3, 6 is the code. A run of nothing
 /// but null workloads (M1) has nothing to verify and is 0 or 3 by its workers.
 /// (A configured ceiling that cannot be read before the run is not 7: nothing
 /// was started, and that is a refusal, 1.)
@@ -54,14 +61,18 @@ inline constexpr int kExitFault = 5;
 inline constexpr int kExitWrongResult = kExitFault;
 inline constexpr int kExitNotVerified = 6;
 inline constexpr int kExitTemperature = 7;
+/// A run a signal stopped exits with the shell's code for dying of that
+/// signal, 128 plus its number: 130 for SIGINT, 143 for SIGTERM (journal 34b).
+inline constexpr int kExitSignalBase = 128;
 
 /// The code of a run whose verdict is known. `verified` is whether any worker
 /// ran a verified workload: only then is an incomplete verdict a check not
 /// made, and only then 6. Without one (the null workload) an incomplete verdict
 /// is what a run with nothing to check always is. `temperature_stopped` is
-/// whether the ceiling ended the run.
+/// whether the ceiling ended the run; `stop_signal` is the signal that stopped
+/// it, or 0.
 [[nodiscard]] int exit_code_for(results::Verdict verdict, bool workers_clean, bool verified = false,
-                                bool temperature_stopped = false) noexcept;
+                                bool temperature_stopped = false, int stop_signal = 0) noexcept;
 
 /// Whether any worker of the report ran a verified workload.
 [[nodiscard]] bool has_verified_worker(const controller::RunReport& report) noexcept;

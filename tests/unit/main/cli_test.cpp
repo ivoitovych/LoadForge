@@ -95,7 +95,18 @@ TEST(Cli, HelpFlagPrintsUsage) {
     EXPECT_NE(r.out.find("[--max-temperature C]"), std::string::npos)
         << "stress --test and explore";
     EXPECT_NE(r.out.find("7 the temperature ceiling ended the run"), std::string::npos) << flag;
-    EXPECT_NE(r.out.find("the first of 5, 7, 4, 3, 6 is the code"), std::string::npos);
+    EXPECT_NE(r.out.find("the first of 5, 7, 4, 130 or 143, 3, 6 is the code"), std::string::npos);
+    EXPECT_NE(r.out.find("130 or 143 SIGINT (Ctrl-C) or SIGTERM\nstopped the run"),
+              std::string::npos);
+    EXPECT_NE(r.out.find("A second signal while the workers are stopping kills them at once"),
+              std::string::npos);
+    EXPECT_NE(r.out.find("a run of unverified\nworkloads can end incomplete and exit 0"),
+              std::string::npos)
+        << "6 is a verified run that checked nothing";
+    EXPECT_NE(r.out.find("5 a candidate's or the reference's\ntrial found a fault"),
+              std::string::npos)
+        << "explore's 5 and 6 cover the reference's trials too";
+    EXPECT_NE(r.out.find("130 or 143 a signal stopped the search"), std::string::npos);
   }
 }
 
