@@ -228,6 +228,42 @@ TEST(ExploreArgs, ALengthOfTimeIsRefusedWhenItIsNotOneATrialCanHave) {
   }
 }
 
+// A rate needs a span, a spread and a slope need two readings, a delta a pair; with the
+// duration at the sample interval the first trial ran in full and then ended "no
+// reading for the objective", exit 6, for what is a mistake in the options. Review
+// verdicts 2026-10-23, finding 11.
+TEST(ExploreArgs, ADurationThatCannotHoldTwoReadingsIsRefusedForTheStatisticsThatNeedTwo) {
+  for (const std::string_view statistic : {"rate", "delta", "stddev", "slope"}) {
+    const std::string objective = "thermal.package:" + std::string{statistic} + ":higher";
+    const std::vector<std::string_view> short_load{"--objective",       objective,    "--candidate",
+                                                   "a:sort:1",          "--duration", "1s",
+                                                   "--sample-interval", "1s"};
+    const std::string refusal = refusal_of(short_load);
+    EXPECT_TRUE(contains(refusal, "--duration: must be at least twice --sample-interval (1000 ms)"))
+        << refusal;
+    EXPECT_TRUE(contains(refusal, "needs two readings in the window, and the duration is 1000 ms"));
+    std::vector<std::string_view> twice = short_load;
+    twice[5] = "1999ms";
+    EXPECT_FALSE(parse(twice).has_value()) << statistic << ": just under two intervals";
+    twice[5] = "2s";
+    EXPECT_TRUE(parse(twice).has_value()) << statistic << ": two intervals hold two readings";
+  }
+  // The default duration is 10 s: a sample interval above 5 s is too long for it.
+  EXPECT_TRUE(contains(refusal_of({"--objective", "thermal.package:rate:higher", "--candidate",
+                                   "a:sort:1", "--sample-interval", "6s"}),
+                       "--duration: must be at least twice --sample-interval (6000 ms)"));
+}
+
+TEST(ExploreArgs, AStatisticOfOneReadingNeedsNoMoreThanOne) {
+  for (const std::string_view statistic : {"mean", "max", "min", "last"}) {
+    const std::string objective = "thermal.package:" + std::string{statistic} + ":higher";
+    EXPECT_TRUE(parse({"--objective", objective, "--candidate", "a:sort:1", "--duration", "1s",
+                       "--sample-interval", "1s"})
+                    .has_value())
+        << statistic;
+  }
+}
+
 TEST(ExploreArgs, TheSettleSlopeIsANumberOfZeroOrMore) {
   for (const std::string_view bad : {"", "fast", "-0.1", "nan", "inf", "0.5s"}) {
     EXPECT_TRUE(contains(refusal_of(with_required({"--settle", "t.x", "--settle-slope", bad})),

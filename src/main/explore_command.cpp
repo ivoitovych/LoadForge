@@ -444,6 +444,35 @@ core::Result<std::optional<explore::Settle>, std::string> settle_of(const Parsin
   return std::optional<explore::Settle>{std::move(settle)};
 }
 
+/// Whether the statistic is not defined by fewer than two readings of the window: a
+/// spread, a slope, a rate (a span) and a delta (a pair).
+bool needs_two_readings(
+    const std::variant<explore::GaugeStatistic, explore::CounterStatistic>& statistic) {
+  if (const auto* gauge = std::get_if<explore::GaugeStatistic>(&statistic)) {
+    return *gauge == explore::GaugeStatistic::kStddev || *gauge == explore::GaugeStatistic::kSlope;
+  }
+  return true;
+}
+
+/// The refusal of a load too short for the objective, or nothing: a trial of a
+/// duration that cannot hold two readings at the sample interval ends the search
+/// with "no reading for the objective" after a whole trial, exit 6, for what is a
+/// mistake in the options. Two sample intervals always hold two rounds.
+std::optional<std::string> short_load_refusal(const ExploreArgs& args) {
+  if (!needs_two_readings(args.objective.statistic) ||
+      args.duration_ns >= 2 * args.sample_interval_ns) {
+    return std::nullopt;
+  }
+  const std::string statistic = std::visit(
+      [](auto each) { return std::string{explore::describe(each)}; }, args.objective.statistic);
+  return refused("--duration",
+                 "must be at least twice --sample-interval (" +
+                     std::to_string(args.sample_interval_ns / kNanosecondsPerMillisecond) +
+                     " ms): " + statistic +
+                     " needs two readings in the window, and the duration is " +
+                     std::to_string(args.duration_ns / kNanosecondsPerMillisecond) + " ms");
+}
+
 }  // namespace
 
 core::Result<ExploreArgs, std::string> parse_explore_args(std::span<const std::string_view> args) {
@@ -485,6 +514,9 @@ core::Result<ExploreArgs, std::string> parse_explore_args(std::span<const std::s
     return settle.error();
   }
   parsing.args.settle = std::move(settle).value();
+  if (auto refusal = short_load_refusal(parsing.args); refusal.has_value()) {
+    return *refusal;
+  }
   return std::move(parsing.args);
 }
 
