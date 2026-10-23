@@ -446,6 +446,12 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
   duration_ns_ = config_->run.duration.count() * kNanosecondsPerMillisecond;
 
   auto region = ipc::HeartbeatRegion::create(*syscalls_, workers_.size());
+    // The memory budget holds for the largest total any step of the schedule
+    // can hold, and the schedule is known now (review A3).
+    if (auto memory = check_memory(*config_, options_->budget, options_->schedule);
+        !memory.has_value()) {
+      return error_at("memory", memory.error());
+    }
   if (!region.has_value()) {
     return error_at("heartbeat", describe(region.error()));
   }

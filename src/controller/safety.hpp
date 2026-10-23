@@ -11,6 +11,7 @@
 #include "config/config.hpp"
 #include "controller/temperature.hpp"
 #include "core/result.hpp"
+#include "workloads/mixed/schedule.hpp"
 
 namespace loadforge::controller {
 
@@ -91,8 +92,18 @@ struct LimitStatus {
 /// Refuses a run whose configured footprints exceed the budget, before any
 /// worker starts. With no budget there is nothing to check against, and the
 /// absence is reported through limit_statuses rather than treated as room.
+///
+/// With a `schedule` the check holds for the whole of it: the largest total of
+/// footprints any step leaves the workers holding (the starts, then every
+/// Switch replacing its worker's footprint) is checked against the ceiling and
+/// limits.memory, not only the start. A schedule is data made before the run,
+/// so the whole check is made before the first fork. The schedule is one that
+/// passed mixed::problem for the run's workers; a Switch naming a slot the run
+/// does not have changes nothing. The brief overlap of an old runner and its
+/// replacement is not counted (the worker releases before it prepares).
 [[nodiscard]] core::Result<core::Ok, std::string> check_memory(
-    const config::Config& config, const std::optional<config::MemoryBudget>& budget);
+    const config::Config& config, const std::optional<config::MemoryBudget>& budget,
+    const mixed::Schedule* schedule = nullptr);
 
 }  // namespace loadforge::controller
 

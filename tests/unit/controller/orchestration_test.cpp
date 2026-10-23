@@ -2045,6 +2045,29 @@ TEST(ControllerControl, AcknowledgementsAreCountedAndARefusalIsToldWithTheWorker
       answer(rig, 0, 1);
       answer(rig, 0, 2, worker::AckStatus::kRefused, "CPU 5 is not in this cpuset");
       answer(rig, 0, 3);
+TEST(ControllerControl, AScheduleThatOutgrowsTheMemoryBudgetIsRefusedBeforeTheFirstFork) {
+  // Review A3: the start fits (two workers at 100 MiB in a ceiling of 250 MiB);
+  // a later Switch makes one of them 160 MiB, which does not.
+  Rig rig;
+  const std::uint64_t mib = std::uint64_t{1} << 20U;
+  rig.config.workloads[0].memory = core::ByteSize::bytes(100 * mib);
+  rig.config.workloads[1].memory = core::ByteSize::bytes(100 * mib);
+  rig.options.budget = config::MemoryBudget{250 * mib, std::nullopt};
+  worker::Switch grow;
+  grow.workload = "sort";
+  grow.footprint_bytes = 160 * mib;
+  const mixed::Schedule schedule = schedule_of({step_of(10 * kMs, "r1", {tell(0, {grow})})});
+  rig.options.schedule = &schedule;
+  auto result = rig.run();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(
+      result.error(),
+      (ControllerError{
+          "memory",
+          "the schedule holds up to 260MiB (at the step \"r1\"), past the ceiling of 250MiB"}));
+  EXPECT_EQ(rig.syscalls.fork_count(), 0);
+}
+
       answer(rig, 1, 1);
     }
   };
