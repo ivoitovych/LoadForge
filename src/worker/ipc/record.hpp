@@ -172,12 +172,16 @@ class RecordWriter {
   int fd_;
 };
 
-/// One drain of a source: the records that one read completed, and whether
-/// the stream has ended. Records and the end can arrive together -- a writer
-/// that sent its last record and exited -- so this is a pair, not a choice.
+/// One drain of a source: the records that one read completed, whether the
+/// stream has ended, and the framing fault the read ran into, if any. Records
+/// and the end can arrive together -- a writer that sent its last record and
+/// exited -- and so can records and a fault: the records that came whole
+/// before a bad frame are returned with it, never dropped. A fault is final;
+/// a failed read is not a fault of the stream and is the error of drain().
 struct Drained {
   std::vector<Record> records;
   bool end_of_stream = false;
+  std::optional<FrameError> fault;
 
   [[nodiscard]] friend bool operator==(const Drained&, const Drained&) = default;
 };
@@ -196,7 +200,8 @@ class RecordSource {
   [[nodiscard]] int fd() const noexcept { return fd_; }
   [[nodiscard]] bool at_end() const noexcept { return ended_; }
 
-  /// One read(2), then every record it completed. Call after poll reports
+  /// One read(2), then every record it completed, with the framing fault
+  /// that stopped them, if one did. Call after poll reports
   /// the descriptor readable or hung up; a read of an open, empty pipe would
   /// block. After the end of the stream this reads nothing and says so.
   [[nodiscard]] core::Result<Drained, ChannelError> drain();

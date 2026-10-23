@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -70,6 +71,18 @@ TEST(Roster, ACeilingBelowTheSmallestTryIsAnEmptyRoster) {
   const StubRegistry registry({{"fits", 1, true}});
   EXPECT_TRUE(roster_of(registry, (std::uint64_t{64} << 10U) - 1).empty());
   EXPECT_EQ(roster_of(registry, std::uint64_t{64} << 10U).size(), 1U);
+}
+
+TEST(Roster, AHugeCeilingEndsTheDoublingsInsteadOfWrappingThem) {
+  // Doubling a footprint past 2^63 wrapped it to zero, and a zero is at or
+  // under any ceiling: the loop for a workload that is never made did not end.
+  const StubRegistry registry({{"never", 1, false}, {"fits", 70'000, true}});
+  constexpr std::uint64_t kLargest = std::numeric_limits<std::uint64_t>::max();
+  for (const std::uint64_t ceiling : {kLargest, kLargest / 2 + 1, kLargest / 2}) {
+    const std::vector<RosterEntry> roster = roster_of(registry, ceiling);
+    ASSERT_EQ(roster.size(), 1U) << ceiling;
+    EXPECT_EQ(roster[0].name, "fits");
+  }
 }
 
 TEST(Roster, EntriesCompareByBothFields) {

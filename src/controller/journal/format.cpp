@@ -13,6 +13,12 @@ namespace {
 constexpr unsigned kOptionalFields = 6;
 constexpr std::uint64_t kReservedBits = ~((std::uint64_t{1} << kOptionalFields) - 1);
 
+// An entry's payload without its two labels: the type, elapsed_ns, the
+// presence bits, the two label sizes, the six optionals, the two counts. The
+// phase's size byte follows the first ten.
+constexpr std::uint64_t kEntryFixedBytes = 1 + 8 + 1 + 1 + 1 + 8 * kOptionalFields + 4 + 4;
+constexpr std::size_t kPhaseSizeAt = 10;
+
 template <unsigned Bytes>
 void put(std::vector<std::byte>& out, std::uint64_t value) {
   for (unsigned at = 0; at < Bytes; ++at) {
@@ -78,6 +84,48 @@ class Cursor {
   bool failed_ = false;
 };
 
+/// Whether the payload bytes seen so far, fewer than the length claims, could
+/// be the start of a record the writer writes with that length. A write cut
+/// short leaves exactly such bytes, and a length bit flipped in a record that
+/// is whole (or whole but for its end) leaves bytes that cannot: the labels'
+/// sizes name the length the entry must have.
+bool could_be_cut_short(std::span<const std::byte> seen, std::uint64_t length) {
+  if (seen.empty()) {
+    return true;  // Nothing to compare the length with yet.
+  }
+  if (seen[0] != kEntry) {
+    return false;  // The terminator is one byte, which is not more than is seen.
+  }
+  std::uint64_t least = kEntryFixedBytes;
+  std::uint64_t most = kEntryFixedBytes + 2 * kMaxLabelBytes;
+  if (seen.size() > kPhaseSizeAt) {
+    const auto phase = std::to_integer<std::uint64_t>(seen[kPhaseSizeAt]);
+    if (phase > kMaxLabelBytes) {
+      return false;
+    }
+    least += phase;
+    most = least + kMaxLabelBytes;
+    if (seen.size() > kPhaseSizeAt + 1 + phase) {
+      const auto workload = std::to_integer<std::uint64_t>(seen[kPhaseSizeAt + 1 + phase]);
+      if (workload > kMaxLabelBytes) {
+        return false;
+      }
+      least += workload;
+      most = least;
+    }
+  }
+  return length >= least && length <= most;
+}
+
+/// The ending of bytes whose last record claims `length` payload bytes and has
+/// fewer: the check cannot be made on bytes that are not there. A tail is a cut
+/// write when what is there could be the start of a record of this length, and
+/// corrupt when it cannot be.
+Ending ending_of_short_record(std::span<const std::byte> rest, std::uint64_t length) {
+  return could_be_cut_short(rest.subspan(kHeaderBytes), length) ? Ending::kTornTail
+                                                                : Ending::kCorrupt;
+}
+
 }  // namespace
 
 std::vector<std::byte> frame(std::span<const std::byte> payload) {
@@ -117,6 +165,9 @@ std::optional<Entry> decode_entry(std::span<const std::byte> payload) {
   Entry entry;
   static_cast<void>(cursor.take(1));  // the type, which the caller has read
   entry.elapsed_ns = static_cast<std::int64_t>(cursor.number<8>());
+  if (entry.elapsed_ns < 0) {
+    return std::nullopt;
+  }
   const std::uint64_t present = cursor.number<1>();
   if ((present & kReservedBits) != 0) {
     return std::nullopt;
@@ -135,6 +186,8 @@ std::optional<Entry> decode_entry(std::span<const std::byte> payload) {
     const std::uint64_t value = cursor.number<8>();
     if (((present >> field) & 1U) != 0) {
       optionals.at(field) = value;
+    } else if (value != 0) {
+      return std::nullopt;  // The bytes of an absent field are zero.
     }
   }
   entry.workers_alive = static_cast<std::uint32_t>(cursor.number<4>());
@@ -179,7 +232,7 @@ Replay scan(std::span<const std::byte> bytes) {
       return replay;
     }
     if (rest.size() - kHeaderBytes < length) {
-      replay.ending = Ending::kTornTail;
+      replay.ending = ending_of_short_record(rest, length);
       return replay;
     }
     const std::span<const std::byte> payload = rest.subspan(kHeaderBytes, length);

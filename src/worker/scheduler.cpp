@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "worker/scheduler.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +21,13 @@
 #include "worker/ipc/heartbeat.hpp"
 
 namespace loadforge::worker {
+
+int interval_milliseconds(std::int64_t interval_ns) noexcept {
+  constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
+  constexpr std::int64_t kLargest = std::numeric_limits<int>::max();
+  return static_cast<int>(
+      std::clamp<std::int64_t>(interval_ns / kNanosecondsPerMillisecond, 1, kLargest));
+}
 
 std::string_view describe(StopReason reason) noexcept {
   switch (reason) {
@@ -48,8 +57,6 @@ bool controller_lost(StopReason reason) noexcept {
 std::string describe(const WorkerError& error) { return error.stage + ": " + error.detail; }
 
 namespace {
-
-constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
 
 WorkerError error_at(std::string_view stage, std::string detail) {
   return WorkerError{std::string{stage}, std::move(detail)};
@@ -125,8 +132,7 @@ core::Result<Outcome, WorkerError> NullWorkload::run() {
   }
   const auto pid = static_cast<std::uint32_t>(syscalls_->process_id());
   const std::size_t slot = ipc::worker_slot(session_.slot);
-  const auto interval_ms =
-      static_cast<int>(session_.pacing.interval_ns / kNanosecondsPerMillisecond);
+  const int interval_ms = interval_milliseconds(session_.pacing.interval_ns);
   std::uint64_t progress = 0;
   ControllerWatch watch(session_, started.value().running_ns);
   ControlChannel channel(*syscalls_, session_.control_fd, *session_.records);

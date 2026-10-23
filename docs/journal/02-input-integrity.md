@@ -119,7 +119,7 @@ by name rather than instantiating a registry it does not have.
   run (PLAN F7), and the runner has no field to record it in. Locked always, because a
   page swapped out and back is a different physical page and a round trip through
   storage, and a finding on it would be attributed to memory it never stayed in. The
-  cost is the experiment above. Written up as `docs/adr/proposed/02-input-integrity-working-set-memory.md`.
+  cost is the experiment above. Written up as `docs/adr/0006-the-slice-runners-working-set-memory.md`.
 - **What the control state protects**: the seed the records carry, the next unit's
   index, the duty cycle's two periods and the line size — each value whose silent
   corruption becomes a false finding (a wrong index regenerates another unit's input and

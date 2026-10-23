@@ -1,7 +1,8 @@
-# ADR — Worker granularity under a mixed workload: Q10 confirmed
+# ADR 0010 — Worker granularity under a mixed workload: Q10 confirmed
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-21 22:46 UTC
+**Accepted:** 2026-10-22 16:29 UTC, with the merge of pull request #96
 **Stream:** 29, the M5 integration (`feature/integration-m5`)
 
 ## Context
@@ -56,9 +57,10 @@ All of it is in the repository's tests and runs on every push:
 - A switch frees one working set and allocates another; the first units after
   it are cold. The schedule changes workloads on the order of seconds, not
   microseconds, and the cost is paid once per rotation.
-- The run's result names one workload per worker (`WorkerWork`, frozen in
-  `result.hpp`): the one it started as. A worker that rotated ran others, and
-  the findings carry their own provenance but the summary does not. That is a
+- The plan's `WorkerWork` (`src/controller/report.hpp`) records the workload a
+  worker started as, and the result's `WorkerResult`
+  (`src/controller/results/result.hpp`) does not carry the rotation. A worker that
+  rotated ran others, and the findings carry their own provenance but the summary does not. That is a
   contract question, written in the journal fragment, not a reason to change the
   granularity.
 - A `Rebind` moves the executor's threads, not the worker's own control

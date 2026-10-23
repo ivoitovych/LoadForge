@@ -174,7 +174,7 @@ without making one. The registries' tests that used "fft" as the unknown name no
 
 ### Q10 is confirmed
 
-See `docs/adr/proposed/29-q10-worker-granularity-under-a-mixed-workload.md`.
+See `docs/adr/0010-worker-granularity-under-a-mixed-workload.md`.
 
 ## Contract disagreements found
 
