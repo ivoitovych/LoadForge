@@ -460,6 +460,18 @@ TEST(ExploreReport, NamesTheRivalAndWhoWasNotComparedByAnInterval) {
                        "replicates): odd tiny\n"));
 }
 
+TEST(ExploreReport, SaysTheSurvivorsEstimateIsFromTheReplicatesAfterItWasChosen) {
+  explore::SearchReport report = a_report();
+  EXPECT_FALSE(contains(render_report(report), "run after it was chosen"));
+  report.candidates[0].selection_replicates = 1;
+  const std::string text = render_report(report);
+  EXPECT_TRUE(
+      contains(text, "corrected for drift of the 2 replicate(s) run after it was chosen: mean"));
+  EXPECT_TRUE(contains(text, "raw of the 2 replicate(s) run after it was chosen: mean"));
+  EXPECT_TRUE(contains(text, "replicates: 80.5 | 81 81.5\n"));
+  EXPECT_TRUE(contains(text, "the 1 replicate(s) before the bar chose this candidate"));
+}
+
 TEST(ExploreReport, ACounterObjectiveNamesItsStatistic) {
   explore::SearchReport report = a_report();
   report.objective.statistic = CounterStatistic::kRate;

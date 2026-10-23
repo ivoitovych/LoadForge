@@ -599,13 +599,26 @@ std::string render_report(const explore::SearchReport& report) {
          << ", ranked in " << candidate.rounds << " round(s), " << candidate.samples.size()
          << " replicate(s)\n";
     if (!candidate.samples.empty()) {
-      text << "  corrected for drift: " << estimate_text(candidate.corrected) << "\n";
-      text << "  raw: " << estimate_text(candidate.raw) << "\n";
+      // The survivor's estimates are from the replicates after the ones that chose it.
+      std::string basis;
+      if (candidate.selection_replicates > 0) {
+        basis = " of the " +
+                std::to_string(candidate.samples.size() - candidate.selection_replicates) +
+                " replicate(s) run after it was chosen";
+      }
+      text << "  corrected for drift" << basis << ": " << estimate_text(candidate.corrected)
+           << "\n";
+      text << "  raw" << basis << ": " << estimate_text(candidate.raw) << "\n";
       text << "  replicates:";
-      for (const double sample : candidate.samples) {
-        text << " " << number(sample);
+      for (std::size_t i = 0; i < candidate.samples.size(); ++i) {
+        text << (i == candidate.selection_replicates && i > 0 ? " |" : "") << " "
+             << number(candidate.samples[i]);
       }
       text << "\n";
+      if (candidate.selection_replicates > 0) {
+        text << "  (the " << candidate.selection_replicates
+             << " replicate(s) before the bar chose this candidate and are not in its estimates)\n";
+      }
       if (const std::string flagged =
               noted_list(candidate.notes, &explore::TrialNote::corrected_errors);
           !flagged.empty()) {

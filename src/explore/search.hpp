@@ -10,8 +10,9 @@
 //               surviving candidate is run to the round's replicate count,
 //               the reference is interleaved throughout and after the round,
 //               drift is taken out of every score, and the worse half (by
-//               1/elimination_factor) is kept. The survivor is run to
-//               final_replicates, so its claim has a variance behind it.
+//               1/elimination_factor) is kept. The survivor is then run
+//               final_replicates more times, replicates that took no part in
+//               choosing it, and its mean and interval are from those alone.
 //
 // What the report promises, and why:
 //   * a WorstCase carries replicates >= 2, the sample standard deviation and
@@ -51,7 +52,13 @@ namespace loadforge::explore {
 ///   base_replicates       replicates per candidate in the first round (>= 1);
 ///                         each later round multiplies it by elimination_factor.
 ///   elimination_factor    (>= 2) keep ceil(n / factor) candidates per round.
-///   final_replicates      the survivor is run to at least this many (>= 2).
+///   final_replicates      fresh replicates of the survivor, run after it has been
+///                         chosen (>= 2); its reported mean and interval are from
+///                         these alone, because the replicates that chose it are
+///                         biased towards the worst (winner's curse). A search
+///                         therefore adds final_replicates trials to those of its
+///                         rounds, where topping the survivor up to a total
+///                         added only what was missing.
 ///   interleave_every      a reference trial after this many candidate trials
 ///                         (>= 1).
 ///   reference_replicates  reference trials before the first candidate; their
@@ -149,6 +156,11 @@ struct CandidateReport {
   std::size_t rounds = 0;  ///< Rounds the candidate was ranked in.
   std::vector<double> samples;
   std::vector<TrialNote> notes;
+  /// The leading replicates of `samples` that took part in choosing this candidate
+  /// as the survivor. They are listed, and are not in `raw`, `corrected` or the
+  /// worst case, which come from the replicates after them. 0 for a candidate that
+  /// was not the survivor.
+  std::size_t selection_replicates = 0;
   Estimate raw;
   Estimate corrected;
 };

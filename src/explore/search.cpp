@@ -113,6 +113,8 @@ struct State {
   Fate fate = Fate::kSurvivor;
   std::size_t rounds = 0;
   std::vector<Observation> observations;
+  /// For the survivor: how many of its observations were taken before it was chosen.
+  std::size_t selection_observations = 0;
 };
 
 // One search in progress. Everything here is a plain sequence of trials on the
@@ -142,7 +144,7 @@ class Execution {
       target *= config_.elimination_factor;
       ++rounds_;
     }
-    if (auto ran = passes(config_.final_replicates); !ran) {
+    if (auto ran = fresh_replicates(); !ran) {
       return ran.error();
     }
     if (auto closed = close_reference(); !closed) {
@@ -256,15 +258,39 @@ class Execution {
     return core::Ok{};
   }
 
+  // The survivor, chosen on the replicates it has, is run final_replicates more times.
+  // A mean and an interval from the replicates that chose it would be biased towards
+  // the worst (the best of several noisy candidates is high by chance), so the
+  // reported claim comes from these fresh ones alone. With one candidate nothing
+  // chose it and they are all its replicates.
+  core::Result<core::Ok, ExploreError> fresh_replicates() {
+    const auto survivor =
+        std::ranges::find_if(states_, [](const State& state) { return state.alive; });
+    if (survivor == states_.end()) {
+      return core::Ok{};
+    }
+    survivor->selection_observations = survivor->observations.size();
+    const auto which = static_cast<std::size_t>(survivor - states_.begin());
+    for (std::size_t fresh = 0; fresh < config_.final_replicates && survivor->alive; ++fresh) {
+      if (auto ran = candidate_trial(which); !ran) {
+        return ran.error();
+      }
+    }
+    return core::Ok{};
+  }
+
   [[nodiscard]] std::size_t alive_count() const {
     return static_cast<std::size_t>(
         std::count_if(states_.begin(), states_.end(), [](const State& s) { return s.alive; }));
   }
 
-  [[nodiscard]] std::vector<double> corrected_samples(const State& state) const {
+  // The observations from index `from` on, drift-corrected.
+  [[nodiscard]] std::vector<double> corrected_samples(const State& state,
+                                                      std::size_t from = 0) const {
     std::vector<double> out;
-    out.reserve(state.observations.size());
-    for (const Observation& observation : state.observations) {
+    out.reserve(state.observations.size() - from);
+    for (std::size_t i = from; i < state.observations.size(); ++i) {
+      const Observation& observation = state.observations[i];
       out.push_back(
           corrected(observation.raw, baseline_at(references_, observation.at_ns), anchor_));
     }
@@ -273,11 +299,11 @@ class Execution {
 
   // What the reference's noise adds to the uncertainty of this candidate's
   // mean (drift.hpp): zero when the reference showed none.
-  [[nodiscard]] Correction correction_of(const State& state) const {
+  [[nodiscard]] Correction correction_of(const State& state, std::size_t from = 0) const {
     std::vector<std::int64_t> times;
-    times.reserve(state.observations.size());
-    for (const Observation& observation : state.observations) {
-      times.push_back(observation.at_ns);
+    times.reserve(state.observations.size() - from);
+    for (std::size_t i = from; i < state.observations.size(); ++i) {
+      times.push_back(state.observations[i].at_ns);
     }
     Correction out;
     out.variance = correction_gain(references_, times, config_.reference_replicates) *
@@ -337,15 +363,21 @@ class Execution {
       entry.fate = state.fate;
       entry.rounds = state.rounds;
       entry.samples = corrected_samples(state);
+      // The survivor's estimates are from the replicates that did not choose it.
+      const std::size_t from = state.alive ? state.selection_observations : 0;
+      entry.selection_replicates = from;
       std::vector<double> raw;
       raw.reserve(state.observations.size());
-      for (const Observation& observation : state.observations) {
-        raw.push_back(observation.raw);
+      for (std::size_t i = 0; i < state.observations.size(); ++i) {
+        const Observation& observation = state.observations[i];
+        if (i >= from) {
+          raw.push_back(observation.raw);
+        }
         entry.notes.push_back(observation.note);
         out.corrected_error_trials += static_cast<std::size_t>(observation.note.corrected_errors);
       }
       entry.raw = estimate(raw);
-      entry.corrected = estimate(entry.samples, correction_of(state));
+      entry.corrected = estimate(corrected_samples(state, from), correction_of(state, from));
       if (state.alive) {
         winner = which;
       }
@@ -353,7 +385,10 @@ class Execution {
     }
     if (winner.has_value()) {
       const CandidateReport& best = out.candidates[*winner];
-      out.worst_case = worst_case_of(best.id, best.samples, correction_of(states_[*winner]));
+      const State& chosen = states_[*winner];
+      out.worst_case =
+          worst_case_of(best.id, corrected_samples(chosen, chosen.selection_observations),
+                        correction_of(chosen, chosen.selection_observations));
       out.ranking = rank_against_rivals(out, *winner);
     }
     return out;

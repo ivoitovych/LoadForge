@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -205,16 +206,23 @@ TEST(Run, TheWorstCandidateWinsAndSaysHowSure) {
   const SearchReport& report = result.value();
   ASSERT_TRUE(report.worst_case.has_value());
   EXPECT_EQ(report.worst_case->candidate, "b");
-  EXPECT_EQ(report.worst_case->replicates, 4U);
+  // The worst case is from the three fresh replicates, run after b was chosen on its
+  // four earlier ones; those four are listed beside them.
+  EXPECT_EQ(report.worst_case->replicates, 3U);
+  EXPECT_EQ(find(report, "b").samples.size(), 7U);
+  EXPECT_EQ(find(report, "b").selection_replicates, 4U);
+  EXPECT_EQ(find(report, "b").corrected.replicates, 3U);
+  EXPECT_EQ(find(report, "b").raw.replicates, 3U);
   EXPECT_DOUBLE_EQ(report.worst_case->mean, 70.0);
   EXPECT_DOUBLE_EQ(report.worst_case->stddev, 0.0);
   EXPECT_DOUBLE_EQ(report.worst_case->half_width, 0.0);
   EXPECT_EQ(report.ranking, Ranking::kSeparated);
   EXPECT_EQ(report.rounds, 2U);
   // Anchor 2; pass 0 (4 trials) and a reference; pass 1 (4); round 1 with
-  // b and c: passes 2 and 3 (4 trials) and a reference after the fourth.
-  EXPECT_EQ(report.trials, 17U);
-  EXPECT_EQ(lab.runner.ran.size(), 17U);
+  // b and c: passes 2 and 3 (4 trials) and a reference after the fourth; then
+  // three fresh trials of b and a reference after the third.
+  EXPECT_EQ(report.trials, 21U);
+  EXPECT_EQ(lab.runner.ran.size(), 21U);
   EXPECT_EQ(find(report, "b").fate, Fate::kSurvivor);
   EXPECT_EQ(find(report, "b").rounds, 2U);
   EXPECT_EQ(find(report, "c").fate, Fate::kEliminated);
@@ -234,10 +242,10 @@ TEST(Run, TheReferenceIsRunBeforeAnyCandidateAndBetweenTrials) {
   const auto result = explore(lab.runner, config);
   ASSERT_TRUE(result.has_value());
   // The anchor; round 0 (two passes over a and b) with a reference after its
-  // third trial and a closing one after the fourth; b wins and is topped up to
-  // three replicates, which a closing reference follows.
-  const std::vector<std::string> expected = {"ref", "ref", "a",   "b", "a",
-                                             "ref", "b",   "ref", "b", "ref"};
+  // third trial and a closing one after the fourth; b wins and is run three more
+  // times, fresh, and a reference follows the third.
+  const std::vector<std::string> expected = {"ref", "ref", "a", "b", "a", "ref",
+                                             "b",   "ref", "b", "b", "b", "ref"};
   EXPECT_EQ(lab.runner.ran, expected);
 }
 
@@ -249,8 +257,8 @@ TEST(Run, TheClosingReferenceIsSkippedWhenOneJustRan) {
   config.interleave_every = 1;
   const auto result = explore(lab.runner, config);
   ASSERT_TRUE(result.has_value());
-  const std::vector<std::string> expected = {"ref", "ref", "a", "ref", "b", "ref",
-                                             "a",   "ref", "b", "ref", "b", "ref"};
+  const std::vector<std::string> expected = {"ref", "ref", "a", "ref", "b", "ref", "a", "ref",
+                                             "b",   "ref", "b", "ref", "b", "ref", "b", "ref"};
   EXPECT_EQ(lab.runner.ran, expected);
 }
 
@@ -301,10 +309,11 @@ TEST(Run, OneCandidateIsRunToTheFinalReplicatesAndIsSole) {
               t_critical(reference_degrees(3)) * 2.0 / std::sqrt(3.0), 1e-9);
   EXPECT_EQ(report.references.size(), 3U);
   EXPECT_EQ(report.ranking, Ranking::kSole);
+  EXPECT_EQ(find(report, "a").selection_replicates, 0U) << "nothing chose a sole candidate";
   EXPECT_EQ(find(report, "a").fate, Fate::kSurvivor);
 }
 
-TEST(Run, TheSurvivorIsToppedUpWhenHalvingEndsEarly) {
+TEST(Run, TheSurvivorGetsFreshReplicatesAfterHalvingEvenWhenItAlreadyHasThatMany) {
   Lab lab;
   lab.script["a"] = {50.0};
   lab.script["b"] = {60.0};
@@ -315,6 +324,9 @@ TEST(Run, TheSurvivorIsToppedUpWhenHalvingEndsEarly) {
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().worst_case->candidate, "b");
   EXPECT_EQ(result.value().worst_case->replicates, 5U);
+  EXPECT_EQ(find(result.value(), "b").selection_replicates, 1U);
+  EXPECT_EQ(find(result.value(), "b").samples.size(), 6U);
+  EXPECT_EQ(find(result.value(), "a").selection_replicates, 0U);
   // a was eliminated on one replicate: no interval, so no separation is claimed.
   EXPECT_EQ(find(result.value(), "a").corrected.replicates, 1U);
   EXPECT_FALSE(find(result.value(), "a").corrected.half_width.has_value());
@@ -325,6 +337,37 @@ TEST(Run, TheSurvivorIsToppedUpWhenHalvingEndsEarly) {
 // noisy reading and never get an interval. "Separated" is then a claim about the one
 // rival it was compared with, and the report names that rival and the candidates it
 // did not compare with an interval. Review verdicts 2026-10-23, finding 6.
+// Eight candidates that are the same, one replicate in the first round, three at the
+// end: the winner is the best of its noisy samples, so a mean and interval from the
+// samples that chose it are high and cover the true mean less often than they say
+// (a bias of 0.6 standard deviations and 87% coverage in 40000 searches before the
+// fix). The reported claim is from replicates run after the choice. Review verdicts
+// 2026-10-23, finding 7.
+TEST(Run, TheWinnersIntervalCoversTheTrueMeanBecauseItsReplicatesDidNotChooseIt) {
+  std::mt19937_64 rng(7);
+  std::normal_distribution<double> noise(0.0, 1.0);
+  constexpr int kSearches = 20'000;
+  int covered = 0;
+  double bias = 0.0;
+  for (int i = 0; i < kSearches; ++i) {
+    ModelRunner runner([&](const Candidate& c, std::int64_t, std::size_t) {
+      return c.id == "ref" ? 10.0 : 50.0 + noise(rng);
+    });
+    SearchConfig config = config_for({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"});
+    config.base_replicates = 1;
+    config.final_replicates = 3;
+    const auto result = explore(runner, config);
+    ASSERT_TRUE(result.has_value());
+    const WorstCase& claim = *result.value().worst_case;
+    ASSERT_EQ(claim.replicates, 3U);
+    bias += claim.mean - 50.0;
+    covered += std::abs(claim.mean - 50.0) <= claim.half_width ? 1 : 0;
+  }
+  EXPECT_LT(std::abs(bias / kSearches), 0.03) << "in units of the noise's standard deviation";
+  EXPECT_GE(static_cast<double>(covered) / kSearches, 0.94);
+  EXPECT_LE(static_cast<double>(covered) / kSearches, 0.97);
+}
+
 TEST(Run, SeparatedNamesTheRivalAndTheCandidatesNeverComparedByAnInterval) {
   Lab lab;
   lab.script["A"] = {70.0};  // the true worst case, unlucky on its one reading
@@ -393,8 +436,8 @@ TEST(Run, DriftIsMeasuredAgainstTheAnchorAndTakenOut) {
   // replicate of a candidate is the same number.
   EXPECT_NEAR(report.worst_case->stddev, 0.0, 1e-9);
   EXPECT_NEAR(find(report, "a").corrected.mean - find(report, "c").corrected.mean, -2.0, 1e-9);
-  // And the raw scores were not: the later replicates were far above the first.
-  EXPECT_GT(find(report, "b").raw.stddev.value_or(0.0), 1.0);
+  // And the raw scores were not: the later replicates were above the earlier ones.
+  EXPECT_GT(find(report, "b").raw.stddev.value_or(0.0), 0.5);
   EXPECT_DOUBLE_EQ(report.anchor, (report.references[0].value + report.references[1].value) / 2);
   EXPECT_EQ(report.reference.replicates, report.references.size());
 }
