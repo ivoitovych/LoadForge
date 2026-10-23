@@ -4,10 +4,13 @@
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <utility>
 #include <variant>
@@ -192,6 +195,41 @@ std::int64_t deadline_of(const telemetry::TimelineView& timeline,
     return stop->start_ns;
   }
   return report.sampling.last_round_ns;
+}
+
+/// The time of the last round taken before `start_ns`: the reading that opens the
+/// first interval of the window, which no reading inside the window can.
+std::optional<std::int64_t> reading_before(const telemetry::TimelineView& timeline,
+                                           std::int64_t start_ns) {
+  std::optional<std::int64_t> latest;
+  for (std::size_t index = 0; index < timeline.series_count(); ++index) {
+    const std::span<const telemetry::Point> all =
+        timeline.points(static_cast<telemetry::SeriesId>(index));
+    const auto first = std::ranges::lower_bound(all, start_ns, {}, &telemetry::Point::timestamp_ns);
+    if (first != all.begin()) {
+      const std::int64_t at_ns = std::prev(first)->timestamp_ns;
+      latest = std::max(latest.value_or(at_ns), at_ns);
+    }
+  }
+  return latest;
+}
+
+/// A counter's advance over the whole window. The summarizer counts only the pairs
+/// of readings that are both in the window, so the advance from the last reading
+/// before the window to the first one in it, up to a sample interval of the load,
+/// is not in `delta`, and a delta over a 3 s window sampled each second read 2 s of
+/// it. `widened` is the summary of a window that opens at that earlier reading;
+/// its delta replaces the window's own (the rate does not change: it divides by the
+/// span it counted). Review verdicts 2026-10-23, finding 5.
+void take_whole_window_deltas(statistics::LoadSignature& signature,
+                              const statistics::LoadSignature& widened) {
+  for (std::size_t index = 0; index < signature.metrics.size(); ++index) {
+    auto* counter = std::get_if<statistics::CounterSummary>(&signature.metrics[index].value);
+    const auto* wider = std::get_if<statistics::CounterSummary>(&widened.metrics[index].value);
+    if (counter != nullptr && wider != nullptr) {
+      counter->delta = wider->delta;
+    }
+  }
 }
 
 std::string describe_statistics(const statistics::StatisticsError& error) {
@@ -397,6 +435,15 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
                   "cannot summarise the load window: " + describe_statistics(signature.error()));
   }
   outcome.signature = std::move(signature).value();
+  if (const auto before = reading_before(rig->timeline(), end_ns - candidate.duration_ns)) {
+    auto widened = summarizer.summarize(rig->timeline(), statistics::Window{*before, end_ns});
+    if (!widened.has_value()) {
+      return refuse(TrialFault::kRun,
+                    "cannot summarise the load window from its opening reading: " +
+                        describe_statistics(widened.error()));
+    }
+    take_whole_window_deltas(outcome.signature, widened.value());
+  }
   log << "trial " << candidate.id << ": " << results::describe(outcome.verdict)
       << (outcome.settled ? ", settled" : ", not settled") << " after " << outcome.settle_ns
       << " ns\n";

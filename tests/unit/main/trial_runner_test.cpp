@@ -91,6 +91,32 @@ std::vector<std::unique_ptr<telemetry::Source>> blind_level(platform::Syscalls& 
   return sources;
 }
 
+/// A counter that advances by 100 on every reading.
+class TickSource final : public telemetry::Source {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override { return "tick"; }
+  std::vector<telemetry::MetricStatus> probe() override {
+    return {{telemetry::Metric{"tick.count", telemetry::Unit::kCount, telemetry::Kind::kCounter,
+                               telemetry::Scope::kMachine, 0, std::nullopt, "test"},
+             std::nullopt}};
+  }
+  void sample(std::vector<telemetry::Reading>& out) override {
+    raw_ += 100;
+    out.emplace_back(telemetry::Counter{raw_});
+  }
+
+ private:
+  std::uint64_t raw_ = 0;
+};
+
+std::vector<std::unique_ptr<telemetry::Source>> ticks(platform::Syscalls& /*s*/,
+                                                      platform::FileSystem& /*f*/,
+                                                      const MachineRoots& /*r*/) {
+  std::vector<std::unique_ptr<telemetry::Source>> sources;
+  sources.push_back(std::make_unique<TickSource>());
+  return sources;
+}
+
 /// More series than a timeline sized for a machine can take a few rounds of: with a
 /// sample interval of a thousand seconds it is built for eight rounds of 72 series, and
 /// a run takes three rounds of these 300.
@@ -352,6 +378,43 @@ TEST(TrialRunnerRun, AnUnfinishedRunStillHasTheWindowItsDurationAsksFor) {
   EXPECT_EQ(machine.syscalls.fork_count(), 1);
 }
 
+// A counter's advance is the difference of two readings, and the summarizer counts
+// only pairs that are both in the window, so the pair that opens the window (the
+// reading before it and the first one in it) was lost: a delta over a 3 s window
+// sampled each second read 2 s of it. The delta of a trial is the advance from the
+// last reading before the window to its end. Review verdicts 2026-10-23, finding 5.
+TEST(TrialRunnerRun, ACountersDeltaIncludesTheAdvanceFromTheReadingBeforeTheWindow) {
+  Machine machine;
+  machine.options.sources = ticks;
+  machine.workers_that_exit_at_once(1);
+  Candidate candidate = a_candidate();
+  candidate.duration_ns = 1'000'000;  // the window holds the last round alone
+  auto runner = machine.runner();
+  const auto outcome = runner->run(candidate);
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  const auto& summary = outcome.value().signature.metrics.at(0);
+  ASSERT_EQ(summary.metric.name, "tick.count");
+  const auto& counter = std::get<statistics::CounterSummary>(summary.value);
+  EXPECT_EQ(counter.samples, 1U) << "one reading is in the window";
+  EXPECT_FALSE(counter.rate_per_second.has_value()) << "so no pair of its own: no rate";
+  EXPECT_EQ(counter.delta, 100U) << "and the advance from the reading before it is counted";
+}
+
+TEST(TrialRunnerRun, ADeltaOfAWindowThatOpensBeforeEveryReadingIsTheWindowsOwn) {
+  Machine machine;
+  machine.options.sources = ticks;
+  machine.workers_that_exit_at_once(1);
+  Candidate candidate = a_candidate();
+  candidate.duration_ns = 10'000 * kMs;  // longer than the run: nothing precedes the window
+  auto runner = machine.runner();
+  const auto outcome = runner->run(candidate);
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  const auto& counter =
+      std::get<statistics::CounterSummary>(outcome.value().signature.metrics.at(0).value);
+  ASSERT_GE(counter.samples, 2U);
+  EXPECT_EQ(counter.delta, 100U * (counter.samples - 1)) << "every pair is in the window";
+}
+
 TEST(TrialRunnerRun, ADurationOfPartOfAMillisecondIsTheWindowsWidthExactly) {
   Machine machine;
   machine.workers_that_exit_at_once(2);
@@ -467,6 +530,21 @@ TEST(TrialRunnerRun, AResultThatCannotBeComputedIsAKRunAndSoIsAWindowThatCannotB
     ASSERT_FALSE(outcome.has_value());
     EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
     EXPECT_TRUE(contains(outcome.error().detail, "cannot compute the trial's result"))
+        << outcome.error().detail;
+  }
+  {
+    // The third window asked about opens at the reading before the load window.
+    Machine machine;
+    machine.workers_that_exit_at_once(1);
+    const FailingSummarizer failing(3);
+    machine.options.summarizer = &failing;
+    auto runner = machine.runner();
+    Candidate candidate = a_candidate();
+    candidate.duration_ns = 1'000'000;
+    const auto outcome = runner->run(candidate);
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
+    EXPECT_TRUE(contains(outcome.error().detail, "from its opening reading"))
         << outcome.error().detail;
   }
   {
