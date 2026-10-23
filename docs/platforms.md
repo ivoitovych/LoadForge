@@ -132,7 +132,7 @@ Every row is capability-probed. Absence is a reported state, never an error.
 | Package power — sysfs | `/sys/class/powercap/intel-rapl/.../energy_uj` | **root** (`0400` since CVE-2020-8694) | capability |
 | Package power — PMU | `power/energy-pkg/` via `perf_event_open` | `CAP_PERFMON` | capability |
 | PMU counters | `perf_event_open` | `CAP_PERFMON`, `perf_event_paranoid` | capability |
-| Memory bandwidth | uncore IMC counters | usually root; absent on many parts | capability |
+| Memory bandwidth | uncore IMC counters — **not built** (2026-10-23 00:55 UTC): no source reads them; only logical bandwidth is reported | usually root; absent on many parts | capability |
 | ECC / RAS | `/sys/devices/system/edac/` | unprivileged where present | capability |
 | Topology | `/sys/devices/system/cpu/`, `node/` | unprivileged | interface |
 

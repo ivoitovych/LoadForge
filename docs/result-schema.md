@@ -115,7 +115,7 @@ window    { start_ns, end_ns }
 metrics   [ { metric, unavailable_samples, summary } ]
 summary   { type: "gauge", samples, min, max, mean, stddev | null, first, last,
             slope_per_second | null }
-        | { type: "counter", samples, delta, rate_per_second | null }
+        | { type: "counter", samples, delta, rate_per_second | null, resets }
         | an absence
 ```
 
