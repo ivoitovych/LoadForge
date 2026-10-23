@@ -45,7 +45,8 @@ maintainer scripts. Removing it removes everything it installed.
 ## Build the artifacts by hand
 
 On a machine of the architecture you want, with `cmake` 3.28 or later, `ninja-build`,
-`g++-13`, `dpkg-dev`, `binutils` and `file`:
+`g++-13`, `dpkg-dev` and `binutils` (`file` is needed only by `validate-machine.sh`, for
+the validation run, not by the build):
 
 ```
 packaging/build-release.sh --out ~/artifacts

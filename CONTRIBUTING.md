@@ -94,7 +94,7 @@ They are complementary evidence, **not proof**. So:
 > Any atomic weaker than `seq_cst` needs a **documented synchronization argument** and a
 > **dedicated test exercising the intended ordering protocol**.
 
-**Across processes, add one more:** every process-shared lock is `PTHREAD_MUTEX_ROBUST`,
+**Across processes, add one more.** No such lock exists today (`docs/architecture.md`); the rule is for any that is added. Every process-shared lock is `PTHREAD_MUTEX_ROBUST`,
 and every acquisition handles `EOWNERDEAD` by making the protected state consistent. A
 worker can die holding a lock — that is not an edge case here, it is the expected event the
 process split exists to survive. Without robustness one dead worker deadlocks every
@@ -286,7 +286,7 @@ nothing about the order of two things that happened on the same day.
 ## Building
 
 ```bash
-cmake --preset debug        # or: release, asan, tsan, coverage, simd-scalar, static
+cmake --preset debug        # or: release, asan, tsan, coverage, simd-scalar, static, static-headers
 cmake --build --preset debug -j"$(nproc)"
 ctest --preset debug -j"$(nproc)"
 ```

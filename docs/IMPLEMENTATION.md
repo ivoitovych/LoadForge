@@ -1,7 +1,7 @@
 # LoadForge — Implementation Plan
 
-**Status:** revision 3 — the module ledger reconciled against the tree on `main`
-(§3, §10); revision 2 — Q10 closed (multiple worker processes); X1, X2 and the
+**Status:** revision 4 — the module ledger (§3) and the status (§10) reconciled against the tree on
+`main` as of 2026-10-23 00:30 UTC (M0 to M6 built); revision 3 — the ledger reconciled for M1; revision 2 — Q10 closed (multiple worker processes); X1, X2 and the
 obligation ledger landed
 **Covers:** what "complete" means, how per-path test coverage is made enforceable rather
 than aspirational, the module ledger, and the milestone-by-milestone build order to 1.0.
@@ -32,7 +32,7 @@ machine, run it for five hours, and act on what it says.** Concretely:
 
 | # | 1.0 requires | Milestone |
 |---|---|---|
-| 1 | Twelve integrated workloads, each with an independent oracle and a declared determinism class | M2a–M5 |
+| 1 | Eleven verified workloads, each with an independent oracle and a declared determinism class, and a twelfth run (mixed, with cycling) that schedules them | M2a–M5 |
 | 2 | Both verification contracts demonstrated — exact and bounded — plus `VerificationNotPerformed` | M2a, M2b |
 | 3 | A controller that survives every way a worker can die, and reports the telemetry leading up to it | M1, M5 |
 | 4 | Full Load Signature from every telemetry source, degrading correctly where a source is absent | M3 |
@@ -41,8 +41,9 @@ machine, run it for five hours, and act on what it says.** Concretely:
 | 7 | Evidence that survives the machine — crash journal | M5 |
 | 8 | Static and dynamic release artifacts, validated on real hardware on both architectures | M0, M7 |
 | 9 | **Every execution path covered to the standard in §2**, with the gates in §6 enforcing it | all |
+| 10 | `loadforge selftest`: a command that runs the golden digest and one short verified unit per workload with its oracle, and says whether this build and this machine can be trusted before a long run (PLAN F2; `verification.md` §9). Not built as of 2026-10-23 00:30 UTC | roadmap 34e |
 
-**Explicitly not in 1.0:** SSD and discrete-GPU testing, generic PCIe saturation, SVE
+**Explicitly not in 1.0:** benchmark mode (PLAN §4.4, F17, F18: settling to a defined idle band, repeats with variance, oracle work outside measurement windows; the configuration parses `mode = "benchmark"` and `stress --config` refuses it; decided 2026-10-23 00:30 UTC), SSD and discrete-GPU testing, generic PCIe saturation, SVE
 (runtime-variable vector length is a separate problem), Windows or macOS, and any
 distributed multi-machine mode. These are recorded so that "not yet" is never mistaken
 for "forgotten".
@@ -141,6 +142,8 @@ skipped under deadline. The mechanism, **in place since this plan was written**:
 **`tests/obligations.toml`** declares, per module, which path classes it contains and
 therefore which tiers it owes:
 
+An illustration of the form only (there is no `src/platform/sysfs`; the fixtures named here are examples, and the real fixture sets are under `tests/fixtures/`):
+
 ```toml
 [[module]]
 path    = "src/platform/sysfs"
@@ -227,16 +230,21 @@ The count is zero today. §6 keeps it visible at every milestone.
 ## 3. Module ledger
 
 Every module that will exist, the milestone that introduces it, the path classes it
-contains, and the tiers it therefore owes. This is the master list §2.5's gate is built
-from; adding a module without adding a row here is itself a gate failure.
+contains, and the tiers it therefore owes. This is the prose of the module list; the gate
+reads `tests/obligations.toml` and `tests/obligations.d/`, not this table (see below).
 
 **Ledger granularity follows the directory layout**, because that is what
 `tools/check-test-obligations.py` can check: one entry per directory under `src/` that
 holds source files. A row below may therefore merge with its neighbours or split as the
-tree grows — `platform` is one module today and becomes several once `sysfs`, `procfs`
-and the rest arrive. A planned row that does not match a shipped directory is a plan, not
-a discrepancy; a *shipped* directory that does not match its row is a defect, and the gate
-catches it.
+tree grows. A planned row that does not match a shipped directory is a plan, not
+a discrepancy; a *shipped* directory that does not match its row is a defect.
+
+**No gate reads this table (2026-10-23 00:30 UTC).** `tools/check-test-obligations.py` requires every
+directory under `src/` to appear in `tests/obligations.toml` or `tests/obligations.d/`, so a
+module with no ledger entry fails there; nothing compares the rows below with the tree or with
+that ledger, and the table drifted unobserved until it was reconciled by hand on that date.
+The rows are reconciled by hand at the end of each wave (`ROADMAP.md`). The M column's ✅
+means shipped and present in `src/`; a note says where a row departs from its plan.
 
 **T0 (static), T0b (gate tests) and T9 (sanitizers) are omitted from every row because
 they are universal** — T0 and T9 run over the whole tree on every push, and T0b covers
@@ -253,40 +261,42 @@ those, so a blank there means a real exemption and never an oversight.
 | `platform/process` | M1 ✅ | P1, P2, P6 | T1, T2, T8 | **Shipped** (JOURNAL §2.1): `WorkerLauncher` (fork, `PR_SET_PDEATHSIG`, the orphan race, a session of the worker's own, close-on-exec handover, exec) and `WorkerPool` (spawn N, reap, signal all, partial-spawn unwind, non-blocking reap). Corrected against what was built: the lifecycle paths are forced through the seam (T2) and real children are forked and reaped at T8; the T7 tier is the controller's, which is what a supervision test supervises. The session (JOURNAL §2.20) is what lets the controller kill what a dead worker left running |
 | `platform/affinity` | M1 ✅ | P1, P2, P7 | T1, T2, T8 | **Shipped.** The P7 state is a cpuset narrower than the topology, built in the fake (JOURNAL §2.12); the kernel's own answers are asserted at T8 against the calling thread only |
 | `platform/memory` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped.** mmap, huge pages, NUMA, mlock — each failure mode injected. Corrected against what was built: the huge-page pool is a P7 state (present, exhausted, unreserved) built in the fake, and T8 corroborates each kernel answer the fake models |
-| `platform/fpenv` | M2b | P1, P2, P3 | T1, T6 | MXCSR/FPCR assert and re-assert (F15) |
-| `platform/sysfs` | M3 | P1, P2, P7 | T1, T2 | |
-| `platform/procfs` | M3 | P1, P2, P7 | T1, T2 | |
-| `platform/perf_events` | M3 | P1, P2, P7 | T1, T2 | `perf_event_paranoid` is a first-class P7 state |
-| `platform/edac` | M3 | P1, P2, P7 | T1, T2 | F13 |
+| `platform/fpenv` | M2b ✅ | P1, P2, P3 | T1, T6 | MXCSR/FPCR assert and re-assert (F15) |
+| `platform/isa` | M2a ✅ | P1, P2, P7 | T1, T2, T8 | What the CPU and the kernel can execute (ADR 0004): the probe and its source. Not in the first plan |
 | `topology/` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped** (JOURNAL §2.6–§2.11): CPU lists, the capability-classifying `Source`, CPUs with their cross-checks, caches, NUMA. Corrected against what was built: T8 added, because the real `/sys` of every CI runner is read and checked against `sysconf` — a tree the tests wrote is still a tree the tests believe in (F21). The snapshot-before-fork rule is the controller's to honour |
 | `worker/scheduler` | M1 ✅ | P1, P2, P3, P6 | T1, T2, T8 | **Shipped** as `src/worker` (JOURNAL §2.17): the internal `--worker` switch, its argument parser, the null workload loop and four exit codes. Corrected against what was built: no barriers (nothing to synchronise in a null workload; they arrive with the first workload), no pool (the pool is `platform/process`); affinity placement and heartbeat emission as planned. T7 arrives with the controller, which is what runs this under supervision |
-| `worker/ipc` | M1 ✅ | P1, P2, P3, P4, P5 | T1, T2 | **Shipped** (JOURNAL §2.15, §2.16): the heartbeat region (seqlock slots, no lock, memfd across exec) and the record channel (CRC-32 frames, a reader that never resynchronises). Its own library, `loadforge_ipc`, so the test-only fake worker links the protocol without the real worker's loop (ADR 0003). No process-shared lock, and the ledger gate checks that on every run. Corrected against what was built: the boundary is fuzzed and every single-byte corruption of a multi-frame stream is tried, but at T1 (`tests/unit`), because `tests/fault_injection` (T5) does not exist until M2a creates it — the row claimed a tier before the tier; P4 added because the frame check is a verification with a classification per corruption |
-| `controller/orchestration` | M1 | P1, P2, P3, P6 | T1, T2, T7 | Run control: one loop, one blocking call; the deadline's stop request; spawn and teardown; each reaped worker's process group killed with it. T7 is the misbehaviour catalogue against `tests/support/fake_worker` (JOURNAL §2.19) |
-| `controller/safety` | M1 | P1, P3 | T1 | The escalation ladder as a function of time; the limits a run states and whether each is enforced |
-| `controller/temperature` | 34a | P1, P3, P6 | T1, T7 | The temperature ceiling (`limits.max_temperature_c`): which timeline series are temperatures, what a round showed, a sensor that goes, and what ends a run; `check_temperature` in `controller/safety` refuses a ceiling nothing can hold. Journal fragment `docs/journal/34a-temperature-ceiling.md` |
-| `controller/supervision` | M1 | P1, P3 | T1 | Crash classification: the table of fates. OOM is told from a fault and from a plain kill by the cgroup's OOM-kill count, read before the first fork and after the last reap, all or none (JOURNAL §2.19) |
+| `worker/ipc` | M1 ✅ | P1, P2, P3, P4, P5 | T1, T2 | **Shipped** (JOURNAL §2.15, §2.16): the heartbeat region (seqlock slots, no lock, memfd across exec) and the record channel (CRC-32 frames, a reader that never resynchronises). Its own library, `loadforge_ipc`, so the test-only fake worker links the protocol without the real worker's loop (ADR 0003). No process-shared lock, and the ledger gate checks that on every run. Corrected against what was built: the boundary is fuzzed and every single-byte corruption of a multi-frame stream is tried, but at T1 (`tests/unit`); P4 added because the frame check is a verification with a classification per corruption |
+| `worker/control` | M5 ✅ | P1, P3, P4 | T1, T5 | The encodings of the framed control messages the controller sends a worker and the acknowledgements it returns. Replaces the stop byte (JOURNAL §2.49). Not in the first plan |
+| `worker/executor` | M2a ✅ | P1, P2, P3, P5 | T1, T2, T8, T10 | A worker's thread pool, the only threads in the program today. Not in the first plan |
+| `controller/orchestration` | M1 ✅ | P1, P2, P3, P6 | T1, T2, T7 | **Shipped** (flat `orchestration.cpp`, `plan.cpp`). Run control: one loop, one blocking call; the deadline's stop request; spawn and teardown; each reaped worker's process group killed with it. T7 is the misbehaviour catalogue against `tests/support/fake_worker` (JOURNAL §2.19) |
+| `controller/safety` | M1 ✅ | P1, P3 | T1 | **Shipped** (`safety.cpp`). The escalation ladder as a function of time; the limits a run states and whether each is enforced |
+| `controller/temperature` | 34a ✅ | P1, P3, P6 | T1, T7 | The temperature ceiling (`limits.max_temperature_c`): which timeline series are temperatures, what a round showed, a sensor that goes, and what ends a run; `check_temperature` in `controller/safety` refuses a ceiling nothing can hold. Journal fragment `docs/journal/34a-temperature-ceiling.md` |
+| `controller/supervision` | M1 ✅ | P1, P3 | T1 | **Shipped** (`supervision.cpp`). Crash classification: the table of fates. OOM is told from a fault and from a plain kill by the cgroup's OOM-kill count, read before the first fork and after the last reap, all or none (JOURNAL §2.19) |
 | `resources/` | M1 ✅ | P1, P2, P3, P7 | T1, T2, T8 | **Shipped** (JOURNAL §1.23, §2.19): the memory budget (`MemAvailable`; the cgroup limit under v1 and v2, found through `/proc/self/cgroup` and `mountinfo`) and the cgroup's OOM-kill count, behind the contract the controller consults. Above `topology`, not inside `platform`, because every source is classified with topology's capability model. T8 checks the real machine against the kernel's other figures, including a child really OOM-killed where a v1 cgroup can be made |
-| `controller/results` | M3 | P1, P3 | T1, T8 | Schema, fingerprint, aggregation (F12) |
-| `controller/journal` | M5 | P1, P2, P6 | T1, T7, T10 | Append-only crash journal (F16) |
-| `verification/oracle` | M2a | P1, P3, P4 | T1, T3, T5, T5b | Written **before** the kernel it checks |
-| `verification/checksum` | M2a | P1, P3, P4 | T1, T4, T5, T5b | |
-| `verification/residual` | M2b | P1, P3, P4 | T1, T3, T5, T5b | Derived tolerances, never chosen |
-| `verification/invariant` | M2b | P1, P3, P4 | T1, T4, T5 | |
-| `verification/golden` | M2a | P1, P3 | T1, T6 | Regression tripwire, **not** an oracle |
-| `verification/isolation` | M2a | P1, P4, P6 | T1, T5, T7 | Re-run ladder; excludes `VerificationNotPerformed` |
-| `telemetry/capability` | M2a | P1, P7 | T1, T2 | Probe and report; minimal at M2a, full at M3 |
-| `telemetry/sources/*` | M3 | P1, P2, P7 | T1, T2 | One hostile-fixture set per source |
-| `telemetry/sampler` | M3 | P1, P3, P5 | T1, T2, T10 | |
-| `telemetry/timeline` | M3 | P1, P3 | T1, T4 | Common monotonic timeline |
-| `statistics/` | M3 | P1, P3 | T1, T4 | Load Signature, aggregation, ranking |
-| `reporters/console` | M1 | P1, P3 | T1, T8 | |
-| `reporters/csv`, `json` | M3 | P1, P3 | T1, T8 | Schema-versioned output |
-| `primitives/*` | M4 | P1, P3 | T1, T4, T6 | Calibration engine, not user-facing tests |
-| `workloads/compression` | M2a | P1, P3, P4, P5 | T1, T3, T4, T5, T5b, T6 | First workload (F14) — exact contract |
-| `workloads/dense_linear` | M2b | P1, P3, P4, P5 | T1, T3, T4, T5, T5b, T6 | Bounded contract; AVX2 and NEON together |
-| `workloads/*` (3–11) | M4 | P1, P3, P4, P5 | T1, T3, T4, T5, T5b, T6 | Each owes the full set; none is exempt |
-| `workloads/mixed` | M5 | P1, P3, P4, P5, P6 | all of the above + T7, T10 | The flagship |
-| `explore/` | M6 | P1, P3 | T1, T4, T8 | Search, objectives, drift correction (F5) |
+| `controller/results` | M3 ✅ | P1, P3 | T1, T8 | Schema, fingerprint, aggregation (F12) |
+| `controller/journal` | M5 ✅ | P1, P2, P6 | T1, T7, T10 | Append-only crash journal (F16) |
+| `verification/oracle` | M2a ✅ | P1, P3, P4 | T1, T3, T5, T5b | Written **before** the kernel it checks |
+| `verification/checksum` | M2a ✅ | P1, P3, P4 | T1, T4, T5, T5b | |
+| `verification/residual` | M2b ✅ | P1, P3, P4 | T1, T3, T5, T5b | Derived tolerances, never chosen |
+| `verification/invariant` | M2b ✅ | P1, P3, P4 | T1, T4, T5 | |
+| `verification/golden` | M2a ✅ | P1, P3 | T1, T6 | Regression tripwire, **not** an oracle |
+| `verification/integrity` | M2a ✅ | P1, P2, P3, P4 | T1, T2, T5, T5b | The slice runner and its F18 bracket (see the paragraph below the table) |
+| `verification/record` | M2a ✅ | P1, P3, P4 | T1, T5 | The record codec and its renderings |
+| `verification/isolation` | M2a ✅ | P1, P4, P6 | T1, T5, T7 | Re-run ladder; excludes `VerificationNotPerformed` |
+| `telemetry/capability` | M2a ✅ | P1, P7 | T1, T2 | Probe and report; minimal at M2a, full at M3 |
+| `telemetry/sources/*` | M3 ✅ | P1, P2, P7 | T1, T2 | One hostile-fixture set per source. Seven sources: thermal, fan, frequency, memory, power, counters, edac. These replaced the planned `platform/sysfs`, `procfs`, `perf_events` and `edac` rows: each source reads through `platform/fs` and none of those four directories exists |
+| `telemetry/sampler` | M3 ✅ | P1, P3, P5 | T1, T2, T10 | |
+| `telemetry/timeline` | M3 ✅ | P1, P3 | T1, T4 | Common monotonic timeline |
+| `statistics/` | M3 ✅ | P1, P3 | T1, T4 | Load Signature, aggregation, ranking |
+| `reporters/console` | M1 ✅ | P1, P3 | T1, T8 | |
+| `reporters/csv`, `json` | M3 ✅ | P1, P3 | T1, T8 | Schema-versioned output |
+| `primitives/*` | M4 ✅ | P1, P3 | T1, T4, T6 | Calibration engine, not user-facing tests |
+| `workloads/compression` | M2a ✅ | P1, P3, P4, P5 | T1, T3, T4, T5, T5b, T6 | First workload (F14) — exact contract |
+| `workloads/dense_linear` | M2b ✅ | P1, P3, P4, P5 | T1, T3, T4, T5, T5b, T6 | Bounded contract; AVX2 and NEON together |
+| `workloads/*` (3–11) | M4 ✅ | P1, P3, P4, P5 | T1, T3, T4, T5, T5b, T6 | Each owes the full set; none is exempt |
+| `workloads/registry` | M4 ✅ | P1, P3 | T1 | The eleven workloads by name. Not in the first plan |
+| `workloads/mixed` | M5 ✅ | P1, P3, P4, P5, P6 | all of the above + T7, T10 | The flagship |
+| `explore/` | M6 ✅ | P1, P3 | T1, T4, T8 | Search, objectives, drift correction (F5) |
 
 **The contracts between these modules are written (ADR 0004)**, as headers under the
 directories above with provider-side suites in `tests/contracts/`, and the modules are
@@ -411,7 +421,7 @@ The fake worker's **misbehaviour catalogue**, each entry a T7 test:
 | Spin without progress | Distinguish "working slowly" from "not progressing" |
 | Allocate until OOM-killed | Classify as OOM **distinctly** from a fault, by reading the kernel's own record |
 | Close the record pipe early | Report truncated evidence as truncated, never as clean |
-| Exit just before the deadline stop | Survive writing the stop byte to a pipe nobody reads: `EPIPE`, never death by `SIGPIPE` |
+| Exit just before the deadline stop | Survive writing a control frame to a pipe nobody reads: `EPIPE`, never death by `SIGPIPE` (the stop byte of the first design was retired, JOURNAL §2.49) |
 | Emit a truncated record | Reject it; a partial record is not a record |
 | Emit a record with a bad checksum | Reject and report — a corrupt worker is what this tool exists to detect |
 | Die holding a process-shared lock | Recover via `EOWNERDEAD`; survivors must not deadlock |
@@ -431,6 +441,13 @@ classifier depends on all of them, so the band is reserved as a whole:
 
 Codes 0–2 and 126–127 are never reserved, and nothing above 255 is used: `exit(2)` keeps
 eight bits.
+
+Two more sets exist and are not worker codes (stated 2026-10-23 00:30 UTC). The internal re-run switch
+(`--rerun`, `worker/entry.hpp`, `RerunExit`) exits 0 when the unit was clean, 20 when the wrong
+result reproduced, 21 when the re-run could not be made or could not check, 22 when the switch was used
+wrongly. A stress run that ended and was reported exits 0, 3 (a worker did not complete), 4 (the result
+file could not be written), 5 (a fault: a wrong result, or an error the hardware reported) or 6 (something
+was not checked); `src/main/outcome.hpp` is the table, and explore has codes of its own (JOURNAL §2.56).
 
 D-state (uninterruptible sleep) is deliberately absent: it cannot be produced reliably from
 userspace, and a test that cannot be made to fail is not a test. It is named here so its
@@ -502,7 +519,7 @@ which is F18, and why input re-verification lands here rather than later.
 
 | Class | Paths | Tests owed |
 |---|---|---|
-| P4 | pass; `ExactBitCorruption` with each bit-classification (single-bit, multi-bit in word, whole-cache-line); `VerificationNotPerformed` | T5 per classification; T5b for each way the check can fail to happen |
+| P4 | pass; `ExactBitCorruption` with each bit-classification (single bit, several bits in one word, within one cache line, across cache lines); `VerificationNotPerformed` | T5 per classification; T5b for each way the check can fail to happen |
 | P4 | Input corruption detected by regeneration, not by the round trip | A T5 test corrupting the *input* and asserting it is caught (F18) |
 | P3 | Empty input, single byte, incompressible input, maximum block, block boundary ± 1 | Boundary tests |
 | P5 | Verification concurrent with compute (duty cycle, F17) | Ordering test |
@@ -528,7 +545,7 @@ which is F18, and why input re-verification lands here rather than later.
 
 | Class | Paths | Tests owed |
 |---|---|---|
-| P4 | `NumericalVerificationFailure`; the bit fields reported **not-applicable**, never zero | T5 asserting the null fields are null |
+| P4 | `NumericalVerificationFailure`; the bit fields **absent by construction** (the type has no such fields, so none can be zero or null) | A test that the record and its rendering carry no bit fields |
 | P3 | Subnormals, NaN, infinities, the tolerance boundary from both sides | Boundary tests at `ratio = 1 ± ε` |
 | P1 | Each ISA dispatch arm: scalar, AVX2, NEON | The scalar path is always present and always tested |
 | P2 | `FpEnvironment` assertion failing — FTZ/DAZ set by something else | Injected test forcing a dirty MXCSR/FPCR |
@@ -566,8 +583,8 @@ The obligation is explicit and large:
    on one machine.
 6. The verification duty cycle is recorded, and expensive verification is demonstrably
    outside benchmark windows.
-7. Mutation gating extended beyond the M0 module set to `verification/`, `config/`,
-   `safety/` and `controller/supervision/`.
+7. Mutation gating extended beyond the M0 module set. As built (2026-10-23 00:30 UTC): every module under
+   `src/` is a shard (`tools/mutation-shard.py`, §4 M0), weekly, one job per module.
 
 ### M4 — Workload breadth
 
@@ -646,7 +663,7 @@ Two ordering constraints that are not obvious:
 
 ## 6. Gate evolution
 
-What CI enforces at each milestone. A gate, once added, is never removed.
+What CI enforces at each milestone. A gate, once added, is never removed. This table is a description of the gates, not an input to any of them: no tool reads it (2026-10-23 00:30 UTC). The workflows in `.github/workflows/` are what CI enforces.
 
 | Gate | M0 | M1 | M2a | M3 | M5 |
 |---|---|---|---|---|---|
@@ -703,7 +720,7 @@ done about each:
 Nothing in the cross-review contradicted a normative contract in `determinism.md` or
 `verification.md`. The findings are all of one kind — **documents that fell behind the
 repository** — which is the failure mode to expect from here on, and the reason §6's gate
-table and §3's ledger are written to be mechanically checkable rather than prose.
+table and §3's ledger are written to be mechanically checkable rather than prose. *(Intent only: as of 2026-10-23 00:30 UTC no tool reads either table; see §3.)*
 
 ### 7.1 How X1 and X2 were closed
 
@@ -737,9 +754,9 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 | The obligation ledger (§2.5) becomes a checkbox nobody reads | High — it is the mechanism the whole doctrine rests on | Medium | It is a gate, not a convention: unlisted module fails, missing fixture fails, stale entry fails |
 | M1's platform seam is built without injection, making P2 untestable everywhere downstream | **Very high** — retrofits into ten modules | Medium | M1 exit criterion 4 requires an injected test per error mode *before* M1 closes |
 | Mutation gate stays undemonstrated while becoming the primary metric | High | **Medium-high** — already carried once | Hard prerequisite for M2a (X9); M2a cannot close without it |
-| P7 fixture work at M3 is larger than it looks — six states × every source | Medium | High | Budgeted explicitly in §4; `tools/capture-sysfs.sh` lands with M3 so users can contribute fixtures |
+| P7 fixture work at M3 is larger than it looks — six states × every source | Medium | High | Budgeted explicitly in §4. `tools/capture-sysfs.sh` was planned to land with M3 so users could contribute fixtures; it did not, there is no queue item for it, and until it exists a contributor attaches the output of `find /sys ...` by hand (2026-10-23 00:30 UTC) |
 | M4 breadth invites weakened determinism classes to make tests pass | High | Medium | T6 enforces the declared class; the PR template requires a reviewed change to weaken one |
-| Documents fall behind the repository again (every X-finding above) | Medium | **High** | §3 and §6 are tables a gate can check; the prose is deliberately thin |
+| Documents fall behind the repository again (every X-finding above) | Medium | **High** | The prose is deliberately thin. No gate reads §3 or §6 (2026-10-23 00:30 UTC); the ledger gate reads `tests/obligations.toml` and `tests/obligations.d/`, and the two tables here are reconciled by hand at the end of each wave. This risk is open |
 
 ---
 
@@ -757,6 +774,14 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 ---
 
 ## 10. Status
+
+**Status on 2026-10-22 23:42 UTC: M0 to M6 are built and merged (M2 #90, M3 #87, M5 #96,
+M6 #99, with the contract corrections #92 and #95). M1's last condition, a first mutation
+sweep that reports clean, has not run yet. M6's thermal half and the whole of M7's hardware
+validation wait for the owner's machines (`docs/hardware-validation.md`); M7's remaining
+software items are 34a to 34e in `docs/ROADMAP.md`.**
+
+The paragraphs below were written while M1 was finishing and are kept as its record.
 
 **M0 complete. M1: every exit criterion met; complete once the first mutation sweep reports clean.
 The contracts for M2a to M7 are written and the work after M1 is planned as streams in
@@ -793,11 +818,12 @@ process-shared lock" has nothing to test, because there is no such lock (PLAN §
 ledger gate checks that on every run.
 
 **What remains of M1:** the mutation clause of the obligation every milestone exits under.
-Mull is pinned and scheduled, but has not yet swept `src/`. Its first full run, as one job,
+Mull is pinned and scheduled. Its first full run, as one job,
 reached GitHub's six-hour limit and was cancelled with no report; the sweep now runs one job
-per module against the tests that create no process (JOURNAL §1.26, §2.28), and five
-survivors are expected in `src/platform/syscalls.cpp`, where only a forking test reaches the
-decision on a returned pid. M1 is marked complete here and in §4 when a sweep reports zero
+per module against the tests that create no process (JOURNAL §1.26, §2.28). Its first sharded
+run found 56 survivors in six of nine shards (platform 23, controller 10, topology 10, worker 8,
+resources 4, config 1); all were later killed or removed and none is allowlisted (JOURNAL §2.28).
+No clean weekly sweep is recorded yet; the first is scheduled for 2026-10-26 03:17 UTC. M1 is marked complete here and in §4 when a sweep reports zero
 unexplained survivors; a survivor is a test to strengthen first. Recorded and not an exit criterion: a worker's grandchild outlives a controller that
 is itself `SIGKILL`ed (JOURNAL §2.20); the real worker forks nothing.
 

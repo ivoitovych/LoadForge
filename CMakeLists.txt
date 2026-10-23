@@ -28,9 +28,11 @@ set(LOADFORGE_SANITIZER "none" CACHE STRING "none|address|thread")
 set(LOADFORGE_SIMD "auto" CACHE STRING "auto|scalar -- 'scalar' proves no ISA intrinsic leaked into portable code (§4.5)")
 
 # One authoritative version, generated into a header rather than repeated in
-# source. LOADFORGE_MILESTONE is appended so a build identifies its milestone.
-set(LOADFORGE_MILESTONE "m2" CACHE STRING "Milestone suffix for the version string")
-set(LOADFORGE_VERSION_STRING "${PROJECT_VERSION}-${LOADFORGE_MILESTONE}")
+# source. LOADFORGE_MILESTONE is appended so a build identifies its milestone; a
+# release sets it empty and reports the bare project version (cmake/Version.cmake).
+set(LOADFORGE_MILESTONE "m2" CACHE STRING "Milestone suffix for the version string; empty for a release")
+include(cmake/Version.cmake)
+loadforge_version_string(LOADFORGE_VERSION_STRING "${PROJECT_VERSION}" "${LOADFORGE_MILESTONE}")
 configure_file(src/core/version.hpp.in "${CMAKE_BINARY_DIR}/generated/core/version.hpp" @ONLY)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

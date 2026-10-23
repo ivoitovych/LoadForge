@@ -1,6 +1,6 @@
 # LoadForge — Development Plan
 
-**Status:** revision 14 — Q10 closed: multiple worker processes, one executable (§4.6)
+**Status:** revision 15 — reconciled with the tree on 2026-10-23 00:15 UTC (M0 to M6 built; statements of present fact in §6, §8 and §11 follow the tree, and design text that is not built carries a dated mark). Revision 14: Q10 closed, multiple worker processes, one executable (§4.6)
 **Covers:** review of the project description, architecture, directory structure,
 testing strategy, milestones, risks, open questions.
 
@@ -88,7 +88,7 @@ ready for M0. One finding is fundamental; the rest correct or sharpen existing t
 | **F19 — the runtime-platform question is about ABI, not kernel.** A 24.04-linked binary demands `GLIBC_2.39`/`GLIBCXX_3.4.33` symbols absent on 22.04 and will not start there, whatever the kernel. Resolved with a fully static release artifact, verified buildable here. | Review — **new finding**, and it affects M0 |
 | **F17 generalized from verification to all observer activity** — telemetry sampling, `perf_event` reads, journal `fsync`, remote sink. The F16/F17 tension is resolved by mode, as §4.4 resolved the cool-down question. | Review — rev. 6 was too narrow |
 | **`PR_SET_PDEATHSIG` lifecycle.** It is not retroactive, and its "parent" is the creating *thread*, not the process. Both are races. Settled: `prctl` first, then verify `getppid()`; fork workers from a long-lived thread, before the controller starts background threads. | Review — closes a race in rev. 6 |
-| **Error records split into `ExactBitCorruption` and `NumericalVerificationFailure`.** XOR delta and popcount are meaningless for a bounded FP breach, where no expected bit pattern exists; those fields are now null and reported not-applicable rather than fabricated. | Review — **rev. 6 was internally inconsistent** with its own determinism scoping |
+| **Error records split into `ExactBitCorruption` and `NumericalVerificationFailure`.** XOR delta and popcount are meaningless for a bounded FP breach, where no expected bit pattern exists; those fields are now null and reported not-applicable rather than fabricated. *(Present state, 2026-10-23 00:15 UTC: the bounded-failure record has no such fields at all, null or otherwise; see `result-schema.md`.)* | Review — **rev. 6 was internally inconsistent** with its own determinism scoping |
 | **EOF does not detect a live-but-wedged controller** — a wedged process holds its descriptors open. Only the heartbeat does. Rev. 6 mis-attributed the coverage. | Review — **rev. 6 was wrong** |
 | **Cross-architecture bit-exactness scoped to a numerical domain**: `float`/`double`, finite, subnormals per contract, NaNs canonicalized, `long double` prohibited — x86-64's 80-bit x87 type and AArch64's binary128 are not comparable. | Review |
 
@@ -279,7 +279,7 @@ answer, every report gets dismissed.
 
 Required, not optional:
 
-- **`loadforge selftest`** — reference vectors checked before any long run begins.
+- **`loadforge selftest`** — reference vectors checked before any long run begins. *(Status, 2026-10-22 23:42 UTC: not built; a 1.0 item, roadmap 34e, to be built from the golden digest and one short verified unit per workload with its oracle. The self-checks that exist are `loadforge --selftest-digest` and `packaging/validate-machine.sh`; see CONTRIBUTING.)*
 - **Fault isolation on failure.** Re-run the failing unit of work (a) on the same core,
   (b) on a different core, (c) single-threaded. The reproduction pattern *is* the
   diagnosis: core-local, thread-count-dependent, or fully reproducible are three very
@@ -406,6 +406,8 @@ is in use and abort if swap-in begins mid-run — a swapping "memory test" measu
 disk. Huge-page strategy (THP vs explicit `hugetlbfs`) is an explicit recorded choice;
 it materially changes TLB behaviour and therefore the result.
 
+*(Status, 2026-10-23 00:15 UTC: the swap check and the huge-page choice are design, not built. The memory source samples `SwapTotal` and `SwapFree`, but nothing aborts on swap-in; the verified runner maps ordinary locked pages, and the fingerprint records the host's transparent-huge-page policy, not a choice made by the run.)*
+
 ---
 
 #### F8 — Reproducibility requires counter-based RNG *(medium)*
@@ -513,6 +515,7 @@ raised by the maintainer review and settled here rather than discovered at M1:
   outlive the run, and **workers are spawned before the controller starts any background
   threads**. That ordering also avoids the wider hazard of `fork()` from a multithreaded
   C++ process, where another thread may hold a lock the child can never see released.
+  *(Status, 2026-10-23 00:15 UTC: the controller is single-threaded today, one poll loop with the sampler driven in rounds; the only threads are the worker's pool. The rule stands for the day a controller thread is added.)*
 
 None of these are optional. Tier T7 kills the controller with `SIGKILL` and asserts every
 worker is gone within a bounded time; a second test wedges the controller without killing
@@ -575,16 +578,19 @@ Concrete pairings:
 
 | Workload | Stress implementation | Independent oracle |
 |---|---|---|
-| Dense linear | Blocked, vectorized GEMM / factorization | Naive scalar triple loop on sampled blocks; residual `‖Ax−b‖` |
-| FFT | Multi-threaded radix FFT | Direct O(n²) DFT on small blocks, **plus** Parseval, **plus** round-trip |
-| Sparse | Parallel CG with preconditioner | Scalar SpMV + explicit residual computation |
+| Dense linear | Blocked, vectorized GEMM, `C = AB` (no factorization or solve is built) | Scalar dot products on sampled entries of `C`, tolerance derived |
+| FFT | Multi-threaded radix FFT | Direct O(n²) DFT at sampled bins, **plus** Parseval (no round trip is checked) |
+| Sparse | Conjugate gradients, no preconditioner | Scalar SpMV + explicit residual computation |
 | Stencil | Vectorized blocked sweep | Scalar per-cell update on a sampled sub-region |
-| Particles | Barnes-Hut / neighbour lists | Direct O(n²) force summation on a small particle subset |
+| Particles | Neighbour search with a cutoff (Barnes-Hut was rejected: its error is not arithmetic) | Direct O(n²) force summation on a small particle subset |
 | Ray tracing | BVH traversal | Brute-force ray/primitive intersection for sampled pixels |
 | Sort | Parallel radix / merge | Permutation check + ordering check (no second sort) |
 | Compression | Optimized codec | Byte-exact round-trip identity **plus input re-verification** (F18 — the round trip alone validates the codec, not the input) |
-| Graph | Parallel BFS / PageRank | Scalar BFS on a subgraph; triangle-inequality invariant |
+| Graph | Parallel BFS / PageRank | Whole-output scalar recomputation of BFS and PageRank, exact under pinned arithmetic (no subgraph; the triangle inequality is a cross-check in tests only) |
 | Monte-Carlo | Vectorized batches | Scalar replay of a fixed seed subset |
+| Adaptive mesh | Shared-queue refinement | Plain recursion rebuilding the mesh: leaf counts per coarse cell and integrals of sampled cells, bounded residual |
+
+The mixed and cycling runs schedule these eleven workloads and have no oracle of their own.
 
 Note the layering that results: **round-trip identity (compression) is the strongest and
 cheapest verification available**, which is exactly why it should be built first — F14.
@@ -626,7 +632,7 @@ at.
 
 - **Logical bandwidth** — computed from the workload's own known algorithmic traffic.
   Always available, on every machine, with no privileges.
-- **Measured DRAM bandwidth** — from uncore IMC counters. Often unavailable (F3).
+- **Measured DRAM bandwidth** — from uncore IMC counters. Often unavailable (F3). *(Not built, 2026-10-23 00:15 UTC: no source reads uncore IMC counters; only logical bandwidth is reported.)*
 
 Reporting logical bandwidth always means the memory dimension of the Load Signature is
 never empty, while measured bandwidth remains the ground truth where it can be had.
@@ -742,7 +748,7 @@ realistic volumes:
   what the workloads themselves would generate if they touched storage.
 - Full telemetry stays in RAM and is written once at the end, exactly as the draft wants.
 - Optional **remote sink** (a socket) for the case where the machine may not come back at
-  all, or where storage itself is suspect.
+  all, or where storage itself is suspect. *(Status, 2026-10-23 00:15 UTC: not built. Nothing in `src/` opens a socket for the journal.)*
 - On startup, an unterminated journal from a previous run is detected and surfaced:
   *"previous run ended abnormally at t=4h12m, phase `stencil`, package 98 °C, 3 corrected
   ECC errors in the preceding minute"* — which is a finding in its own right.
@@ -780,6 +786,8 @@ lost to a panic is simply re-run: flush on window boundaries, not inside them.
 **Stress** runs are hours long and irreplaceable, so journal frequency wins and observer
 overhead is irrelevant against a workload saturating the machine. The modes want
 opposite things and each gets what it needs.
+
+*(Status, 2026-10-23 00:15 UTC: benchmark mode is design and is not built, and is not in 1.0. The configuration parses `mode = "benchmark"`, and `stress --config` refuses it. Everything below that is specific to benchmark runs, the settling, the repeats, the oracle work outside measurement windows, is the design it would follow.)*
 
 The original finding, unchanged: the independent-oracle doctrine (F11) has a cost the
 plan had not accounted for: a
@@ -837,7 +845,7 @@ the same buffer the workload read:
 | Workload | The silent failure |
 |---|---|
 | Compression | Source corrupted before compression; round trip agrees with itself |
-| Dense linear | `A` corrupted to `A′`; `x` now solves `A′x = b`, so the residual `‖A′x − b‖` is *small*. Corruption redefined the problem rather than failing the check |
+| Dense linear | An illustration of the general hazard for a solver, not of the built workload (which computes `C = AB` only): `A` corrupted to `A′`; `x` now solves `A′x = b`, so the residual `‖A′x − b‖` is *small*. Corruption redefined the problem rather than failing the check |
 | Stencil / particles | Corrupted initial state produces a self-consistent but wrong trajectory; invariants still hold |
 | Sort | Corrupted key sorts correctly into the wrong position; output is still a sorted permutation of the *corrupted* input |
 
@@ -880,7 +888,7 @@ counter-based RNG makes input data a pure function of `(seed, index)`, so truth 
    consumption window**, distinguishing "the input was already bad" from "the input went
    bad while the workload was reading it". Those implicate different hardware.
 
-   **The bracket is itself an observer (F17).** In benchmark mode the opening and closing
+   **The bracket is itself an observer (F17).** In benchmark mode (design, not built; 2026-10-23 00:15 UTC) the opening and closing
    checks sit *outside* the timed measurement window, while the input stays immutable
    across it — so the integrity guarantee holds without the verifier distorting the
    measurement it brackets. In stress mode the checks are simply part of the load.
@@ -888,11 +896,12 @@ counter-based RNG makes input data a pure function of `(seed, index)`, so truth 
    carries a checksum computed at generation time and re-verified before use. Note this
    is strictly weaker: a corrupted checksum yields a false alarm, which is the safe
    direction, but the covered window is narrower.
-3. **Control state is redundantly protected and controller-owned.** Seeds, indices,
+3. **Control state is redundantly protected.** Seeds, indices,
    tolerances, and expected checksums are small and catastrophic to lose: a corrupted
    seed makes regeneration produce different data and reports a hardware fault that never
-   happened. Store them triplicated with majority vote, in the controller's address space,
-   and re-validate on every use.
+   happened. Store them triplicated with majority vote, and re-validate on use.
+
+   *(As built, 2026-10-23 00:15 UTC: the three copies are owned by the runner, which runs in the worker process, not the controller. They cover the seed, the next index, the two duty periods and the line size; tolerances and expected checksums are not among them. The vote is taken once at the start of each unit, not at every use. The separation by more than one page below is not enforced: where the copies land is the kernel's choice.)*
 
    **Triplication only helps if the copies can fail independently**, and three adjacent
    copies cannot — they may share a cache line, a page, a DRAM row, or the same failing
@@ -1053,6 +1062,8 @@ Three things follow, and all three are now in place:
 3. The gate reads **two** renderings — IDE text and SARIF — and fails if they disagree, so
    a future format change surfaces as a contradiction rather than a wrong verdict.
 
+*(History: this is the limitation as it stood when F21 was written. Since then Mull 0.34.2 has been pinned by SHA-256 and the integration test and the gate are run in `mutation.yml`, weekly, one job per module; the first clean sweep over `src/` is still to be recorded. See `IMPLEMENTATION.md` §4 and `ROADMAP.md` item 11.)*
+
 The honest limitation, recorded because it is the whole point of the finding: **the
 integration test has not been run.** Mull is not pinned, and this environment cannot reach
 the package host. Everything above was derived from Mull 0.34.0's source, which is far
@@ -1124,6 +1135,8 @@ exactly what that distinction is worth.
   wrongly showed it inside the worker.)
 ```
 
+*(Status, 2026-10-23 00:15 UTC: the commands that exist are `stress`, `explore`, `journal` and the switches `--check-config`, `--rerun`, `--selftest-digest` and `--version`. `selftest` is a 1.0 item, roadmap 34e, and is not built; `benchmark` is not built and not in 1.0.)*
+
 **Topology is a shared, immutable snapshot** — not worker-owned. The controller needs it
 just as much as the worker does: to attribute telemetry to cores, to describe affinity in
 results, to build the run fingerprint, and to make sense of a crash ("worker on core 11,
@@ -1155,6 +1168,8 @@ code can be driven from fixtures — nothing more.
 
 ### 4.4 Benchmark, stress and explore are different experiments
 
+*(Status, 2026-10-23 00:15 UTC: only stress and explore are built. Benchmark mode is design, not in 1.0: the configuration parses `mode = "benchmark"`, and `stress --config` refuses it. Explore takes its settings from flags, not from a configuration file, and sets its mode internally.)*
+
 The three modes do not share experimental discipline, and revision 1 wrongly applied
 benchmark rigour to all of them.
 
@@ -1170,7 +1185,7 @@ benchmark rigour to all of them.
 
 This closes open question 7 from revision 1: comparable rise rates belong to benchmark
 and explore; the five-hour stress schedule should *not* squander time cooling between
-phases, and its recorded slopes are labelled contextual.
+phases, and its recorded slopes are labelled contextual. *(Not built, 2026-10-23 00:15 UTC: the result records `slope_per_second` and the `mode`, and nothing marks a slope as contextual or non-comparable; the label is design.)*
 
 ### 4.5 Dual-architecture support — x86-64 and ARM64
 
@@ -1231,8 +1246,8 @@ false-sharing and coherence primitives depend on getting it right. On x86 a hard
 
 | Area | x86-64 | ARM64 | Shared |
 |---|---|---|---|
-| SIMD | SSE2 / AVX2 / AVX-512 | NEON (SVE deferred — runtime-variable vector length is a separate problem) | Dispatch interface; **scalar reference path always present** |
-| Timing | `rdtsc` (platform layer only) | `cntvct_el0` (platform layer only) | `std::chrono::steady_clock` everywhere else |
+| SIMD | AVX2 (SSE2 and AVX-512 are not built: no workload has either kernel, and the AVX-512 path is refused; 2026-10-23 00:15 UTC) | NEON (SVE deferred — runtime-variable vector length is a separate problem) | Dispatch interface; **scalar reference path always present** |
+| Timing | `rdtsc` (design; not used. Clocks are `clock_gettime` through the platform layer) | `cntvct_el0` (design; not used) | `std::chrono::steady_clock` everywhere else |
 | Cache line | 64 B | 64 or 128 B | Read from topology at runtime; never assumed |
 | Memory model | TSO | Weakly ordered | Explicit memory order on every atomic |
 | Package power | RAPL / powercap (root-gated) | **No RAPL.** SoC-specific; many platforms expose nothing | Capability model (F3) — absence already first-class |
@@ -1300,8 +1315,8 @@ one file.
 the first two are correctness rather than taste:
 
 1. `fork()` in a multithreaded process may only call async-signal-safe functions until
-   `exec`, and the controller *is* multithreaded (F9's lifecycle rule already forces the
-   fork to happen from a long-lived thread before the controller's threads start).
+   `exec`, and the controller may be multithreaded (F9's lifecycle rule forces the
+   fork to happen from a long-lived thread before the controller's threads start; as built, 2026-10-23 00:15 UTC, the controller is single-threaded and the rule is the guard for the day that changes).
 2. A forked child inherits a copy of the parent's heap. For a tool whose job is to verify
    memory, beginning from pages the controller has already dirtied is backwards.
 3. `exec` re-randomizes ASLR, so N workers occupy N independent mappings.
@@ -1458,7 +1473,7 @@ important inbound report is "my machine failed your test", and such a report is 
 without provenance. The template must require:
 
 - Did `loadforge selftest` pass? *(This is the first triage question — it separates a
-  broken build or unsupported machine from a genuine finding.)*
+  broken build or unsupported machine from a genuine finding.)* *(Status, 2026-10-22 23:42 UTC: not built; a 1.0 item, roadmap 34e, to be built from the golden digest and one short verified unit per workload with its oracle. The self-checks that exist are `loadforge --selftest-digest` and `packaging/validate-machine.sh`; see CONTRIBUTING.)*
 - `run.json` (carries version, fingerprint, capability set — F12)
 - The error records with full provenance: core, NUMA node, offset, XOR delta (F2)
 - Fault-isolation output: did it reproduce on another core? single-threaded?
@@ -1487,6 +1502,9 @@ regardless of coverage numbers (§7.2).
 
 ## 6. Directory structure (proposed)
 
+The tree below was redrawn from the repository on 2026-10-23 00:15 UTC. Where a directory is drawn and
+the code is a flat pair of files, it says so; `○` marks what is planned and not present.
+
 ```text
 LoadForge/
 ├── README.md
@@ -1498,7 +1516,7 @@ LoadForge/
 ├── CMakePresets.json               # debug, release, asan, tsan, coverage, simd-scalar
 ├── .clang-format  .clang-tidy  .gitignore
 │
-├── .github/workflows/           # all eight present
+├── .github/workflows/           # all ten present
 │   ├── ci.yml                      # matrix {ubuntu-24.04, ubuntu-24.04-arm}
 │   │                               #   × {gcc-13, clang-18}; + trust-chain tooling
 │   ├── sanitizers.yml              # asan+ubsan, tsan — both arches (§4.5)
@@ -1507,14 +1525,16 @@ LoadForge/
 │   ├── canary-2604.yml             # Ubuntu 26.04 forward-compat, NON-blocking
 │   ├── licensing.yml               # SPDX, dep manifest, fetch centralization, DCO
 │   ├── coverage.yml                # 100% line/branch + reviewed-exclusion gate
-│   └── mutation.yml                # zero UNEXPLAINED SURVIVORS (§7.3) — not a score;
-│                                   #   weekly, pinned Mull, one job per src/ module
+│   ├── mutation.yml                # zero UNEXPLAINED SURVIVORS (§7.3) — not a score;
+│   │                               #   weekly, pinned Mull, one job per src/ module
+│   ├── release.yml                 # tag is the version; builds and publishes the artifacts
+│   └── soak.yml                    # hours-long runs, scheduled and on request (T10)
 │
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
 │   │   ├── hardware-failure.yml    # the high-value one — see §5.2
 │   │   ├── unsupported-platform.yml# telemetry missing/misidentified (F3)
-│   │   └── ○ bug-report.yml        # M1 — a bug in LoadForge itself
+│   │   └── ○ bug-report.yml        # not built; the two templates above are all there are
 │   └── PULL_REQUEST_TEMPLATE.md    # links the three non-obvious rules (§5.2)
 │
 ├── cmake/
@@ -1522,17 +1542,20 @@ LoadForge/
 │   ├── FloatingPoint.cmake         # -ffp-contract=off, ISA dispatch flags (F1)
 │   ├── Sanitizers.cmake  Coverage.cmake  Dependencies.cmake
 │
-├── docs/                            # ○ = planned, with the milestone that creates it
+├── docs/
 │   ├── PLAN.md                     # this document — the design of record
 │   ├── IMPLEMENTATION.md           # build order, per-path coverage doctrine, ledger
 │   ├── DESIGN-DRAFT.md             # the original 51-section working draft
 │   ├── determinism.md              # the F1 contract — required contributor reading
 │   ├── verification.md             # oracle vs golden vector doctrine (F11)
 │   ├── platforms.md                # supported components, adaptation policy
-│   ├── ○ architecture.md           # M1 — once the process split exists to describe
-│   ├── ○ telemetry-sources.md      # M3 — every source, its privilege, its fallback
-│   ├── ○ result-schema.md          # M3 — versioned schema + run fingerprint (F12)
-│   ├── ○ safety.md                 # M1 — limits, watchdog, e-stop
+│   ├── architecture.md             # the process split
+│   ├── telemetry-sources.md        # every source, its privilege, its fallback
+│   ├── result-schema.md            # versioned schema + run fingerprint (F12)
+│   ├── safety.md                   # limits, watchdog, stop escalation
+│   ├── hardware-validation.md      # the manual checklist for M7
+│   ├── ROADMAP.md  JOURNAL.md      # the work queue; what was learned
+│   ├── history/                    # one log per working session
 │   ├── adr/                        # 0001-0004; proposed/ for streams' proposals
 │   ├── streams/                    # one self-contained brief per stream (ADR 0004)
 │   └── journal/                    # one journal fragment per stream (ADR 0004)
@@ -1542,40 +1565,45 @@ LoadForge/
 │   ├── core/                       # Result/Error, units, duration, logging
 │   │
 │   ├── platform/                   # ►► Linux host introspection & control ONLY ◄◄
-│   │   ├── fs/                     #    fixture-swappable reader for sysfs/procfs
-│   │   ├── sysfs/  procfs/  perf_events/  edac/
+│   │   ├── fs.cpp                  #    fixture-swappable reader for sysfs/procfs
 │   │   ├── fpenv/                  #    rounding mode, MXCSR/FPCR assertion (F15)
 │   │   ├── isa/                    #    what the CPU and kernel can execute (ADR 0004)
-│   │   ├── affinity/  memory/      #    mmap, huge pages, NUMA, mlock
-│   │   ├── process/                #    fork/exec, signals, reaping (F9)
-│   │   └── clock/
+│   │   ├── affinity.cpp  memory.cpp#    CPU affinity; mmap, mlock
+│   │   ├── process.cpp  worker_pool.cpp  exit_status.cpp
+│   │   │                           #    fork/exec, signals, reaping (F9)
+│   │   └── clock.cpp  syscalls.cpp  syscall_error.cpp
 │   │
 │   ├── controller/                 # ── controller process (F9) ──
-│   │   ├── orchestration/          #    phase schedule, run control
-│   │   ├── safety/                 #    limits, watchdog, e-stop, child kill
-│   │   ├── supervision/            #    heartbeats, crash classification, OOM vs fault
+│   │   ├── orchestration.cpp  plan.cpp  #  phase schedule, run control (flat files)
+│   │   ├── safety.cpp              #    limits, stop escalation, child kill
+│   │   ├── supervision.cpp         #    heartbeats, crash classification, OOM vs fault
+│   │   ├── isolate.cpp  rerun.cpp  #    fault isolation ladder, the re-run switch
 │   │   ├── results/                #    schema, fingerprint, aggregation (F12)
 │   │   └── journal/                #    append-only crash journal (F16)
 │   │
 │   ├── worker/                     # ── worker process ──
-│   │   ├── scheduler/              #    pool, affinity, barriers, heartbeat emit
+│   │   ├── scheduler.cpp  duty.cpp #    pool, affinity, barriers, duty cycle (flat files)
+│   │   ├── verified_run.cpp        #    the verified run loop
+│   │   ├── control/  control_channel.cpp  frames.cpp
+│   │   │                           #    framed control messages from the controller
 │   │   ├── executor/               #    the thread pool behind worker/executor.hpp
 │   │   └── ipc/                    #    shared-memory status, record channel
 │   │
 │   ├── topology/                   # logical CPUs, cores, SMT, cache domains, NUMA, P/E
 │   ├── config/                     # TOML parse, schema validation, resolution
+│   ├── resources/                  # memory budget, cgroup limits, OOM records
 │   │
 │   ├── telemetry/
 │   │   ├── capability/             # probe + report availability (F3)
-│   │   ├── sources/                # cpu, thermal, fan, power, memory, counters, edac
+│   │   ├── sources/                # thermal, fan, frequency, power, memory, counters, edac
 │   │   ├── sampler/  timeline/
 │   │
 │   ├── verification/
 │   │   ├── oracle/                 # independent reference implementations (F11)
-│   │   ├── checksum/  residual/  invariant/
+│   │   ├── checksum/  residual/  invariant/  record/
 │   │   ├── golden/                 # regression tripwires, NOT correctness oracles
 │   │   ├── integrity/              # the slice runner and its F18 bracket (ADR 0004)
-│   │   └── isolation/              # failure re-run and classification (F2)
+│   │   └── isolation/              # failure classification (F2); the re-run is in controller/
 │   │
 │   ├── statistics/                 # load signature, aggregation, scoring, ranking
 │   ├── explore/                    # search, objectives, drift correction (F5)
@@ -1588,7 +1616,7 @@ LoadForge/
 │   │   ├── particles/  raytrace/  sort/  graph/  monte_carlo/  adaptive_mesh/
 │   │   └── mixed/                  #    flagship dynamic mixed test (§17)
 │   │
-│   └── reporters/console/  csv/  json/
+│   └── reporters/console.cpp  csv/  json/
 │
 ├── tests/
 │   ├── unit/                       # mirrors src/ one-to-one
@@ -1602,17 +1630,16 @@ LoadForge/
 │   ├── hardware/                   # needs real sensors; skipped in CI
 │   ├── support/                    # fakes, matchers, fixture loaders
 │   ├── tools/                      # tests OF the gates — trust-chain tooling (T0b)
-│   │   ├── test_tooling.sh  mutation_integration.sh
+│   │   ├── test_tooling.sh  mutation_integration.sh  and the other test_*.sh
 │   │   └── fixtures/mull/          # taken from Mull's own integration tests (F21)
 │   ├── obligations.toml            # the per-module path-class and tier ledger
 │   ├── obligations.d/              # one ledger fragment per module since ADR 0004
 │   ├── contracts/                  # each contract's provider-side suite and reference
 │   └── fixtures/
-│       ├── sysfs/                  # intel, amd, arm64, no-hwmon, eacces, edac, wrapping
-│       ├── procfs/
-│       └── golden/
+│       ├── sysfs/                  # edac, fan, frequency, powercap, thermal
+│       ├── procfs/                 # meminfo, stat
+│       └── golden/                 # and per-workload fixtures with their generators
 │
-├── benchmarks/
 ├── third_party/                    # vendored, pinned, digest-checked
 │   ├── MANIFEST.toml               # every component + files_sha256 over its tree
 │   └── tomlplusplus/               # toml++ v3.4.0, MIT, header-only (config/, M1)
@@ -1621,9 +1648,13 @@ LoadForge/
 │   ├── mutation-gate.py  mutation-allowlist.txt  mutation-shard.py
 │   ├── check-dependencies.py  check-fetch-centralization.sh
 │   ├── check-test-obligations.py   # the per-module path/tier ledger gate
-│   ├── capture-sysfs.sh  gen-golden/
+│   └── ○ capture-sysfs.sh          # not built (IMPLEMENTATION §8); golden vectors are
+│                                   #   regenerated by the make_golden.py scripts beside
+│                                   #   their fixtures, there is no tools/gen-golden/
+├── packaging/                      # release packaging and the machine validation script
 └── config/
-    ├── quick.toml  stress-5h.toml  explore-temperature.toml
+    └── quick.toml                  # stress-5h.toml and explore-temperature.toml are not built;
+                                    #   explore takes flags, not a file
 ```
 
 `tests/` has as much internal structure as `src/`, with whole categories
@@ -1796,7 +1827,7 @@ every line is covered either way. The only remaining signal is whether the tests
 
 So `mull` is promoted from stretch goal to a first-class metric, run nightly across the
 project and gating on `verification/`, `config/`, `safety/` and
-`controller/supervision/`.
+`controller/supervision/`. *(As built, 2026-10-23 00:15 UTC: weekly, not nightly, over every module under `src/`, one job per module; `tools/mutation-shard.py` makes each module a shard.)*
 
 **The gate is not a percentage.** A mutation-score threshold ("95% of mutants killed")
 has the same defect as a coverage threshold: it licenses a standing population of
@@ -1943,15 +1974,17 @@ for coverage.
 
 | # | Milestone | Contents | Exit criterion |
 |---|---|---|---|
-| **M0** ✅ | Foundation | Scaffolding, CMake + seven presets, eight CI workflows, **100% line/branch coverage gate**, **reviewed-exclusion gate**, **supply-chain manifest reconciliation**, **fetch centralization**, **cross-architecture determinism digest**, clang-tidy/format, ShellCheck/Ruff, SHA-pinned actions, ADR process, SPDX + licence + DCO checks, scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)**, `core` and `main` | **Met.** Green CI on **{x86-64, ARM64} × {GCC 13, Clang 18}**; 100% line and branch with zero exclusions; scalar build passing on both arches; static artifact built and verified. **Two items carried:** the mutation gate is specified but undemonstrated (F21) — now a prerequisite for M2a — and `main` is unprotected |
-| **M1** | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
-| **M2a** | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **input-integrity re-verification (F18)** + minimal telemetry capability probe | `loadforge stress --test compression` runs end to end; each `ExactBitCorruption` classification asserted by fault injection; a corrupted **input** caught as such; `VerificationNotPerformed` produced and kept out of fault isolation; capability set reported at start; **the mutation gate demonstrated against real Mull** (carried from M0 — M2a cannot close without it, since from here it is the primary quality signal) |
-| **M2b** | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **`FpEnvironment` contract (F15)**; first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
-| **M3** | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)**, **per-provider remediation (F3)**, **verification duty cycle (F17)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; 100% gate still passing; **mutation gating extended** beyond the M0 set |
-| **M4** | Workload breadth | Remaining workloads (3–11) + primitives layer | Each has an independent oracle, invariants, determinism and fault-injection tests |
-| **M5** | Dynamic mixed + cycling | Flagship mixed test (§17), thermal/power cycling (§35), **crash journal (F16)** — required before serious multi-hour runs | A five-hour schedule completes with continuous verification |
-| **M6** | Explore | Search strategy, objectives, drift correction, confidence reporting (F5) | Repeatable worst-case discovery with reported variance on real hardware |
-| **M7** | Hardening / 1.0 | Docs, packaging, manual hardware validation | Multi-machine validation; no known correctness defects |
+| **M0** ✅ | Foundation | Scaffolding, CMake + seven presets, CI workflows (ten today), **100% line/branch coverage gate**, **reviewed-exclusion gate**, **supply-chain manifest reconciliation**, **fetch centralization**, **cross-architecture determinism digest**, clang-tidy/format, ShellCheck/Ruff, SHA-pinned actions, ADR process, SPDX + licence + DCO checks, scalar-SIMD job, CONTRIBUTING + issue/PR templates, **static release build (F19)**, `core` and `main` | **Met.** Green CI on **{x86-64, ARM64} × {GCC 13, Clang 18}**; 100% line and branch with zero exclusions; scalar build passing on both arches; static artifact built and verified. *(Two items were carried at the time: the mutation gate, since pinned to Mull 0.34.2 and run weekly (F21); and `main` unprotected, which remains the owner's to set.)* |
+| **M1** ✅ (built; the first clean weekly mutation sweep is still to be recorded) | Core framework + supervision | `core`, `platform`, `topology`, `config`, `worker/scheduler`, **controller/worker process split with the `PR_SET_PDEATHSIG` lifecycle settled (F9)**, console reporter | Controller runs a null workload for a configured duration, honours limits, survives a deliberately crashed worker and reports it correctly |
+| **M2a** ✅ | First vertical slice — **exact** verification | Compression/integrity workload + `verification` (oracle, checksum, isolation) + **input-integrity re-verification (F18)** + minimal telemetry capability probe | `loadforge stress --test compression` runs end to end; each `ExactBitCorruption` classification asserted by fault injection; a corrupted **input** caught as such; `VerificationNotPerformed` produced and kept out of fault isolation; capability set reported at start; **the mutation gate demonstrated against real Mull** (carried from M0 — M2a cannot close without it, since from here it is the primary quality signal) |
+| **M2b** ✅ | Second slice — **bounded** verification | Dense linear algebra + residual verification + FP/SIMD/FMA policy (F1); **`FpEnvironment` contract (F15)**; first vectorized kernel, so AVX2 and NEON land together behind one dispatch seam | Both verification contracts demonstrated; determinism class enforced on both arches; first meaningful thermal result |
+| **M3** ✅ | Full telemetry + Load Signature | All sources incl. **EDAC (F13)**, sampler, timeline, CSV/JSON reporters, statistics, **versioned schema + run fingerprint (F12)**, **per-provider remediation (F3)**, **verification duty cycle (F17)** | Full Load Signature from fixtures; correct degradation on every hostile fixture; 100% gate still passing; **mutation gating extended** to every module under `src/` (one job per module, weekly) |
+| **M4** ✅ | Workload breadth | Remaining workloads (3–11) + primitives layer | Each has an independent oracle, invariants, determinism and fault-injection tests |
+| **M5** ✅ | Dynamic mixed + cycling | Flagship mixed test (§17), thermal/power cycling (§35), **crash journal (F16)** — required before serious multi-hour runs | A five-hour schedule completes with continuous verification |
+| **M6** ✅ | Explore | Search strategy, objectives, drift correction, confidence reporting (F5) | Repeatable worst-case discovery with reported variance on real hardware |
+| **M7** (in progress: ROADMAP items 34a to 34e) | Hardening / 1.0 | Docs, packaging, manual hardware validation | Multi-machine validation; no known correctness defects |
+
+*(Status, 2026-10-23 00:15 UTC: a tick means built and merged. Exit criteria that need real hardware, the "real hardware" clause of M6 among them, are carried by the hardware half of M7, ROADMAP item 34d, which waits for the owner's machines.)*
 
 **Every milestone carries the same standing coverage obligation**, stated once rather
 than repeated per row: it exits at 100% line and branch coverage with zero unexplained
@@ -1993,11 +2026,11 @@ research-flavoured one and is correctly last.
 | Outside contribution weakens a determinism or verification contract | Medium | Medium | §5.2: PR template, CONTRIBUTING rules, and T3/T5/T6 tiers that fail loudly |
 | A dependency sets FTZ/DAZ process-wide, silently changing every FP result | High | Medium | F15: `FpEnvironment` asserted at startup and re-asserted after library load |
 | Golden vectors diverge across machines via libm transcendentals | Medium | **High if unaddressed** | F15: no libm transcendentals on bit-compared paths; deterministic in-project routines or committed tables |
-| Kernel panic destroys the evidence of the most valuable run | **High** | Medium | F16: compact append-only crash journal, ~150 KB/hour, optional remote sink |
+| Kernel panic destroys the evidence of the most valuable run | **High** | Medium | F16: compact append-only crash journal, ~150 KB/hour (built); the optional remote sink is not built (2026-10-23 00:15 UTC) |
 | Oracle cost distorts the Load Signature it is measured alongside | Medium | Medium | F17: cheap/expensive split, duty cycle recorded, expensive work outside benchmark windows |
 | Fault-isolation output overstates certainty and is confidently wrong in public | Medium | Medium | `verification.md`: evidence-and-confidence reporting, never bare verdicts |
-| **Corrupted input silently becomes the expected answer, so real corruption passes** | **Fatal to purpose** | **High if unaddressed** | F18: regenerate-and-compare input verification; redundant controller-owned control state |
-| Corrupted seed or tolerance reports a hardware fault that never happened | High | Low | F18: control state triplicated with majority vote, re-validated on use |
+| **Corrupted input silently becomes the expected answer, so real corruption passes** | **Fatal to purpose** | **High if unaddressed** | F18: regenerate-and-compare input verification; redundant control state (triplicated in the runner, in the worker process) |
+| Corrupted seed or tolerance reports a hardware fault that never happened | High | Low | F18: control state triplicated with majority vote, voted at the start of each unit |
 | Release binary will not start on the user's live/rescue medium | Medium | **High if dynamic-only** | F19: fully static release artifact, built and smoke-tested in CI |
 | Orphaned worker from a `PR_SET_PDEATHSIG` race holds the machine at full load | High | Medium | F9: `prctl` first then `getppid()` check; fork from a long-lived thread before controller threads start |
 | Vendored dependency turns out GPL-incompatible | Medium | Low | §5.1: licence compatibility to be checked in CI, not assumed |
@@ -2043,6 +2076,10 @@ research-flavoured one and is correctly last.
 ---
 
 ## 11. Status and next step
+
+**State on 2026-10-23 00:15 UTC.** M0 to M6 are built and merged: all eleven workloads with their oracles, the mixed and cycling runs, the crash journal, the telemetry sources, the reporters and explore. Ten CI workflows run. Mull 0.34.2 is pinned by SHA-256 and the mutation gate runs weekly, one job per module (the first clean sweep over `src/` is scheduled for 2026-10-26 03:17 UTC and is not yet recorded). M7 is in progress: the remaining items are 34a to 34e in [`ROADMAP.md`](ROADMAP.md), which is the work queue and holds the current state. `loadforge selftest` (34e) and benchmark mode are not built; benchmark mode is not in 1.0.
+
+The rest of this section is the status as written when M0 landed, kept as its record.
 
 **M0 (foundation) has landed.** The build system, seven presets, eight CI
 workflows, the 100% line-and-branch coverage gate, the coverage-exclusion gate,

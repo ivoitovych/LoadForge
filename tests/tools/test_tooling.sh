@@ -1445,5 +1445,17 @@ hooks
 expect "no argument FAILS"                                     1 $? "usage" "$out"
 rm -rf "$th"
 
+# ---- the version string ------------------------------------------------------
+# A release sets the milestone empty and must report the bare version: the release
+# workflow refuses a tag that differs from what `loadforge --version` prints, and
+# the string once came out as "1.0.0-" with a trailing hyphen.
+ver() { out="$(cmake -DVERSION="$1" -DMILESTONE="$2" -P "$ROOT/cmake/Version.cmake" 2>&1)"; }
+ver 1.0.0 ""
+expect "an empty milestone gives the bare version"             0 "$([ "$out" = "1.0.0" ]; echo $?)" "1.0.0" "$out"
+ver 1.0.0 rc1
+expect "a milestone is appended after a hyphen"                0 "$([ "$out" = "1.0.0-rc1" ]; echo $?)" "1.0.0-rc1" "$out"
+ver 0.0.0 m2
+expect "the development milestone is kept"                     0 "$([ "$out" = "0.0.0-m2" ]; echo $?)" "0.0.0-m2" "$out"
+
 echo; echo "  tooling tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

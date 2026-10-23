@@ -168,5 +168,5 @@ Found by stream 34's preparation (`docs/journal/34-release-1-0.md`); each lands 
 |---|------|--------|-------|
 | 34a | Enforce `limits.max_temperature_c` from the sampled telemetry: a reading at or above the ceiling stops every worker, the run ends with its own exit code and says which sensor and what it read; the banner stops saying NOT ENFORCED where a temperature can be read, and says why where it cannot | PLAN (safety limits, emergency stop); `src/controller/safety.cpp` | done, this change |
 | 34b | SIGINT and SIGTERM stop the run gracefully: workers stopped, the report and the journal written, exit code stated | stream 34 finding 2 | after 34a |
-| 34c | Documents that disagree with the tree: the hardware-failure issue template's `loadforge selftest`, `benchmark`/`selftest` in PLAN and verification.md, ShellCheck over `packaging/`, IMPLEMENTATION §10's M1 state | stream 34 finding 3 | after 34b |
+| 34c | Documents that disagree with the tree: the hardware-failure issue template's `loadforge selftest`, `benchmark`/`selftest` in PLAN and verification.md, ShellCheck over `packaging/`, IMPLEMENTATION §10's M1 state | stream 34 finding 3 | done, this change |
 | 34d | The hardware half of M7: the checklist run on the owner's machines, both architectures, live media | stream 34 brief | waits for the owner |

@@ -16,15 +16,19 @@ body:
   - type: dropdown
     id: selftest
     attributes:
-      label: Did `loadforge selftest` pass?
+      label: Did the self-checks pass?
       description: >
         This is the first triage question. It separates a broken build or an
-        unsupported machine from a genuine hardware finding. Please run it before
-        filing.
+        unsupported machine from a genuine hardware finding. There is no
+        `loadforge selftest` command; the self-checks are `loadforge --selftest-digest`
+        (it must print the digest published for your version, the same on x86-64 and
+        ARM64) and `validate-machine.sh` from the release tarball
+        (docs/hardware-validation.md §4). Please run both before filing and attach the
+        results file.
       options:
-        - "Yes — selftest passed, the failure came during a real run"
-        - "No — selftest itself failed"
-        - "I have not run selftest yet"
+        - "Yes — both passed, the failure came during a real run"
+        - "No — a self-check itself failed"
+        - "I have not run them yet"
     validations:
       required: true
 
