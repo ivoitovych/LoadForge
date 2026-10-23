@@ -137,7 +137,7 @@ defensible reading, tests it in its own tree, and continues.
 | `tests/obligations.toml` | `tests/obligations.d/<module path below src>.toml` | `tools/check-test-obligations.py` reads both; a fragment declares exactly the module it is named after |
 | `docs/JOURNAL.md` | `docs/journal/<NN>-<slug>.md` | folded in by the manager at the end of a wave |
 | `docs/ROADMAP.md` | the `State` line of `docs/streams/<NN>-<slug>.md` | the roadmap links to the briefs; the manager updates it per wave |
-| `docs/adr/` | `docs/adr/<NNNN>-<slug>.md` | marked accepted by the manager when it lands (see the amendment at the end) |
+| `docs/adr/` | `docs/adr/proposed/<NN>-<slug>-<topic>.md` | numbered by the manager when it lands |
 
 `loadforge_component()` and `loadforge_test_suite()` apply the warnings, the
 floating-point contract, the sanitizers and coverage instrumentation, so a fragment
@@ -223,5 +223,6 @@ exit and took the slot).
 > **Amended, 2026-10-23 00:15 UTC (numbering of ADRs):** a decision record is written
 > directly as `docs/adr/<NNNN>-<slug>.md` with the next free number and Status `proposed`;
 > the manager marks it accepted when it lands. The table row above, which sent proposals to
-> a `proposed/` subdirectory to be numbered later, is replaced by this; ADRs 0005 to 0010 were
+> a `proposed/` subdirectory to be numbered later, is superseded by this (the row is left as
+> written: an accepted ADR changes only by amendment); ADRs 0005 to 0010 were
 > numbered from that subdirectory on this date.
