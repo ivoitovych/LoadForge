@@ -55,15 +55,25 @@ std::string hex16(std::uint64_t value) {
   return text;
 }
 
-/// A digest compared with the one expected: the line says both when they differ.
-Check digest_check(std::string name, std::string what, std::uint64_t got, std::uint64_t expected) {
+/// A digest compared with the one expected: what it is, and the two values.
+struct DigestCompared {
+  std::string_view name;
+  std::string_view what;
+  std::uint64_t got = 0;
+  std::uint64_t expected = 0;
+};
+
+/// The line says both values when they differ.
+Check digest_check(const DigestCompared& compared) {
   Check check;
-  check.name = std::move(name);
-  check.passed = got == expected;
+  check.name = std::string{compared.name};
+  check.passed = compared.got == compared.expected;
   if (check.passed) {
-    check.detail = what + " " + hex16(got) + " is the one this build expects";
+    check.detail =
+        std::string{compared.what} + " " + hex16(compared.got) + " is the one this build expects";
   } else {
-    check.detail = what + " differ: expected " + hex16(expected) + ", computed " + hex16(got);
+    check.detail = std::string{compared.what} + " differ: expected " + hex16(compared.expected) +
+                   ", computed " + hex16(compared.got);
   }
   return check;
 }
@@ -72,10 +82,10 @@ Check digest_check(std::string name, std::string what, std::uint64_t got, std::u
 /// that a corpus mismatch cannot also be reported as a kernel mismatch.
 std::vector<Check> golden_checks(const ExpectedDigests& expected) {
   std::vector<Check> checks;
-  checks.push_back(digest_check("golden corpus", "the configuration-parsing digest",
-                                selftest::corpus_digest(), expected.corpus));
-  checks.push_back(digest_check("golden kernels", "the scalar workload-kernel digest",
-                                selftest::workloads_digest(expected.corpus), expected.full));
+  checks.push_back(digest_check({"golden corpus", "the configuration-parsing digest",
+                                 selftest::corpus_digest(), expected.corpus}));
+  checks.push_back(digest_check({"golden kernels", "the scalar workload-kernel digest",
+                                 selftest::workloads_digest(expected.corpus), expected.full}));
   return checks;
 }
 
