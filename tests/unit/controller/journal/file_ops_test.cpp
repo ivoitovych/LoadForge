@@ -114,6 +114,25 @@ TEST_F(RealFileOpsTest, ReadWriteFsyncAndCloseFailuresCarryTheKernelsErrno) {
   ::close(pipe_ends[1]);
 }
 
+TEST_F(RealFileOpsTest, LockIsExclusiveBetweenOpenFilesAndFollowsTheDescriptor) {
+  // Review C6. Two descriptors of one process are two open file descriptions: flock
+  // excludes them from one another, as it excludes two processes.
+  const auto first = ops_.open(path("a"), FileOps::Mode::kAppend);
+  const auto second = ops_.open(path("a"), FileOps::Mode::kAppend);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  EXPECT_TRUE(ops_.lock(first.value()).has_value());
+  EXPECT_TRUE(ops_.lock(first.value()).has_value()) << "its own lock again is no conflict";
+  const auto refused = ops_.lock(second.value());
+  ASSERT_FALSE(refused.has_value());
+  EXPECT_EQ(refused.error().number, EWOULDBLOCK);
+  EXPECT_EQ(refused.error().call, "flock");
+  EXPECT_TRUE(ops_.close(first.value()).has_value());
+  EXPECT_TRUE(ops_.lock(second.value()).has_value()) << "released with the descriptor";
+  EXPECT_TRUE(ops_.close(second.value()).has_value());
+  EXPECT_EQ(ops_.lock(second.value()).error().number, EBADF);
+}
+
 TEST_F(RealFileOpsTest, AFileStorageOverTheKernelHoldsAJournal) {
   auto storage = FileStorage::open(ops_, path("run.journal"));
   ASSERT_TRUE(storage.has_value());

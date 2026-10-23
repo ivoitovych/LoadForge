@@ -8,6 +8,7 @@
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
+#include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -150,6 +151,53 @@ TEST(M5Binary, AnImpossibleScheduleIsRefusedBeforeAnyWorkerIsStarted) {
   EXPECT_NE(ran.code, 0) << ran.console;
   EXPECT_TRUE(contains(ran.console, "more than 100000 steps")) << ran.console;
   EXPECT_FALSE(contains(ran.console, "spawned")) << ran.console;
+}
+
+// Review C6: a file that is not a journal is not the evidence of a crash.
+TEST(M5Binary, AFileThatIsNotAJournalIsRefusedAndNotMovedAway) {
+  const Scratch scratch;
+  const std::string path = (scratch.path() / "config.toml").string();
+  const std::string text = "[run]\nmode = \"stress\"\nduration = \"10s\"\n";
+  {
+    std::ofstream out(path, std::ios::binary);
+    out << text;
+  }
+  const Outcome refused = loadforge(
+      scratch, "stress --test compression --duration 1s --workers 1 --footprint 1MiB --journal '" +
+                   path + "'");
+  EXPECT_EQ(refused.code, 1) << refused.console;
+  EXPECT_TRUE(contains(refused.console, "is not a journal")) << refused.console;
+  EXPECT_EQ(slurp(path), text) << "left exactly as it was";
+  EXPECT_FALSE(fs::exists(path + ".1"));
+}
+
+// Review C6: two runs on one journal path are excluded by a lock on the file.
+TEST(M5Binary, ARunOnAJournalAnotherRunHoldsIsRefusedAndTouchesNothing) {
+  const Scratch scratch;
+  const std::string path = (scratch.path() / "run.lfj").string();
+  ASSERT_EQ(loadforge(scratch,
+                      "stress --test compression --duration 1s --workers 1 --footprint 1MiB "
+                      "--journal '" +
+                          path + "'")
+                .code,
+            0);
+  const std::string before = slurp(path);
+  ASSERT_FALSE(before.empty());
+  const int holder = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  ASSERT_GE(holder, 0);
+  ASSERT_EQ(::flock(holder, LOCK_EX | LOCK_NB), 0);
+  const Outcome refused = loadforge(
+      scratch, "stress --test compression --duration 1s --workers 1 --footprint 1MiB --journal '" +
+                   path + "'");
+  EXPECT_EQ(refused.code, 1) << refused.console;
+  EXPECT_TRUE(contains(refused.console, "in use by another run")) << refused.console;
+  EXPECT_EQ(slurp(path), before) << "the holder's journal is neither moved nor removed";
+  EXPECT_FALSE(fs::exists(path + ".1"));
+  ASSERT_EQ(::close(holder), 0);
+  const Outcome free_again = loadforge(
+      scratch, "stress --test compression --duration 1s --workers 1 --footprint 1MiB --journal '" +
+                   path + "'");
+  EXPECT_EQ(free_again.code, 0) << free_again.console;
 }
 
 // Review C2: a launcher that ignores SIGCHLD hands that on, and the kernel then reaps every

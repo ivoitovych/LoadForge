@@ -68,6 +68,10 @@ FileStorage::FileStorage(FileOps& ops, std::string path, int fd)
 
 FileStorage::~FileStorage() { static_cast<void>(ops_->close(fd_)); }
 
+core::Result<core::Ok, platform::SyscallError> FileStorage::lock() {
+  return retry_interrupted([&] { return ops_->lock(fd_); });
+}
+
 core::Result<core::Ok, JournalError> FileStorage::append(std::span<const std::byte> bytes) {
   while (!bytes.empty()) {
     const auto written = retry_interrupted([&] { return ops_->write(fd_, bytes); });

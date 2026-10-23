@@ -23,7 +23,7 @@ namespace loadforge::testing {
 
 class FakeFileOps final : public journal::FileOps {
  public:
-  enum class Call : std::uint8_t { kOpen, kWrite, kRead, kFsync, kClose };
+  enum class Call : std::uint8_t { kOpen, kWrite, kRead, kFsync, kClose, kLock };
 
   /// One scripted outcome. `error` non-zero fails the call with that errno;
   /// otherwise `limit` caps the bytes a write takes or a read gives.
@@ -96,6 +96,14 @@ class FakeFileOps final : public journal::FileOps {
     return core::Ok{};
   }
 
+  core::Result<core::Ok, platform::SyscallError> lock(int fd) override {
+    locked_fds.push_back(fd);
+    if (const auto step = next(Call::kLock); step.error != 0) {
+      return platform::SyscallError{step.error, "flock", "fd"};
+    }
+    return core::Ok{};
+  }
+
   struct Handle {
     std::string path;
     Mode mode = Mode::kRead;
@@ -108,6 +116,7 @@ class FakeFileOps final : public journal::FileOps {
   std::vector<std::size_t> write_sizes;
   std::vector<int> synced_fds;
   std::vector<int> closed_fds;
+  std::vector<int> locked_fds;
 
  private:
   Step next(Call call) {
@@ -120,7 +129,7 @@ class FakeFileOps final : public journal::FileOps {
     return step;
   }
 
-  std::array<std::deque<Step>, 5> scripts_;
+  std::array<std::deque<Step>, 6> scripts_;
   int next_fd_ = 10;
 };
 

@@ -341,6 +341,43 @@ TEST(FileStorageRead, AnEmptyFileIsNoBytes) {
   EXPECT_TRUE(opened(ops)->read_all().value().empty());
 }
 
+// --- lock (review C6) ------------------------------------------------------------------------
+
+// What flock(2) documents, less what the kernel cannot be made to say here (ENOMEM).
+const std::vector<int> kLockErrors{EWOULDBLOCK, EBADF, EINVAL, ENOLCK};
+
+class LockFailure : public ::testing::TestWithParam<int> {};
+INSTANTIATE_TEST_SUITE_P(Errno, LockFailure, ::testing::ValuesIn(kLockErrors));
+
+TEST_P(LockFailure, IsReportedWithTheKernelsErrno) {
+  FakeFileOps ops;
+  const auto storage = opened(ops);
+  ops.script(Call::kLock, GetParam());
+  const auto locked = storage->lock();
+  ASSERT_FALSE(locked.has_value());
+  EXPECT_EQ(locked.error().number, GetParam());
+  EXPECT_EQ(locked.error().call, "flock");
+}
+
+TEST(FileStorageLock, LocksTheJournalDescriptorAndRetriesAnInterruptedCall) {
+  FakeFileOps ops;
+  const auto storage = opened(ops);
+  ops.script(Call::kLock, EINTR, 2);
+  ASSERT_TRUE(storage->lock().has_value());
+  EXPECT_EQ(ops.locked_fds.size(), 3U);
+  EXPECT_EQ(ops.locked_fds.front(), ops.locked_fds.back());
+  EXPECT_EQ(ops.opens.size(), 2U);
+}
+
+TEST(FileStorageLock, GivesUpOnLocksInterruptedWithoutEnd) {
+  FakeFileOps ops;
+  const auto storage = opened(ops);
+  ops.script(Call::kLock, EINTR, FileStorage::kMaxConsecutiveInterrupts + 1);
+  const auto locked = storage->lock();
+  ASSERT_FALSE(locked.has_value());
+  EXPECT_EQ(locked.error().number, EINTR);
+}
+
 TEST(FileStorageJournal, AWriterOverFileStorageSurvivesAReplay) {
   FakeFileOps ops;
   const auto storage = opened(ops);

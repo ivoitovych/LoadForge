@@ -2,6 +2,7 @@
 #include "main/journal_rig.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -17,6 +18,7 @@
 
 #include "controller/journal/file_storage.hpp"
 #include "core/result.hpp"
+#include "platform/syscall_error.hpp"
 #include "telemetry/sample.hpp"
 
 namespace loadforge::cli {
@@ -62,6 +64,30 @@ std::string kept_name(const std::string& path, int number) {
   name += '.';
   name += std::to_string(number);
   return name;
+}
+
+/// Why a run is refused when the journal is held by another.
+std::string unlocked(const std::string& path, const platform::SyscallError& error) {
+  std::string text;
+  if (error.number == EWOULDBLOCK) {
+    text = "the journal ";
+    text += path;
+    text += " is in use by another run; give this run a journal of its own, or wait for that one";
+    return text;
+  }
+  text = "cannot lock the journal ";
+  text += path;
+  text += ": ";
+  text += platform::describe(error);
+  return text;
+}
+
+/// Why a run is refused when the file at the journal's path is not a journal.
+std::string not_a_journal(const std::string& path) {
+  std::string text = path;
+  text += " exists and is not a journal (its first record does not verify); it is left as it is. ";
+  text += "Give --journal a path of its own, or move that file away";
+  return text;
 }
 
 /// Why a run is refused when every name for a kept journal is taken.
@@ -131,6 +157,11 @@ core::Result<RunJournal, std::string> open_run_journal(journal::FileOps& ops, Jo
   if (!first.has_value()) {
     return "cannot open the journal " + path + ": " + first.error().detail;
   }
+  // Before anything is read, moved or removed: a second run on this path is
+  // refused here and touches nothing (review C6).
+  if (auto locked = first.value()->lock(); !locked.has_value()) {
+    return unlocked(path, locked.error());
+  }
   auto replayed = journal::replay(*first.value());
   if (!replayed.has_value()) {
     return "cannot read the journal " + path + ": " + replayed.error().detail;
@@ -138,8 +169,14 @@ core::Result<RunJournal, std::string> open_run_journal(journal::FileOps& ops, Jo
   RunJournal opened;
   std::unique_ptr<journal::FileStorage> storage = std::move(first).value();
   if (replayed.value().ending != journal::Ending::kEmpty) {
+    // A file whose first record does not verify was not written by a run: the
+    // format has no magic, and a record that fails its check before any entry
+    // is as near to one as it has. It is not renamed to a name of its own as if
+    // it were the evidence of a crash (review C6).
+    if (replayed.value().ending == journal::Ending::kCorrupt && replayed.value().entries.empty()) {
+      return not_a_journal(path);
+    }
     opened.previous = "previous " + render_replay(replayed.value(), path, false);
-    storage.reset();  // Closed before the file is moved or removed.
     if (replayed.value().ending == journal::Ending::kTerminated) {
       if (auto removed = files.remove(path); !removed.has_value()) {
         return removed.error();
@@ -164,6 +201,12 @@ core::Result<RunJournal, std::string> open_run_journal(journal::FileOps& ops, Jo
     auto fresh = journal::FileStorage::open(ops, path);
     if (!fresh.has_value()) {
       return "cannot open the journal " + path + ": " + fresh.error().detail;
+    }
+    // The previous file's descriptor, and its lock, are kept until the new
+    // file is open and locked, so that no second run can take the old file's
+    // lock in between and then move the new journal away.
+    if (auto locked = fresh.value()->lock(); !locked.has_value()) {
+      return unlocked(path, locked.error());
     }
     storage = std::move(fresh).value();
   }

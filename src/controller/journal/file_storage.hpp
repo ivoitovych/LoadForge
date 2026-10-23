@@ -57,6 +57,12 @@ class FileStorage final : public Storage {
   [[nodiscard]] core::Result<core::Ok, JournalError> sync() override;
   [[nodiscard]] core::Result<std::vector<std::byte>, JournalError> read_all() const override;
 
+  /// An exclusive advisory lock on the file, taken without waiting and held
+  /// until the storage is destroyed or closed (review C6: two runs on one
+  /// journal path). EWOULDBLOCK in the error says another holds it; EINTR is
+  /// retried as everywhere here.
+  [[nodiscard]] core::Result<core::Ok, platform::SyscallError> lock();
+
  private:
   FileOps* ops_;
   std::string path_;
