@@ -2597,7 +2597,7 @@ that has the feature, GitHub's x86 runners are a mix (AMD EPYC Zen 3 has none), 
 coverage runner that guarantees the feature. Tests of a path the machine cannot run fail,
 they do not skip: a skipped path is a path no test ran. The scalar kernel does not fuse
 (`std::fma` without `-mfma` is a library call per multiply-add, the one thing a stress kernel
-must not be). Proposed ADR: `docs/adr/proposed/06-workload-dense-linear-vector-kernels.md`.
+must not be). Proposed ADR: `docs/adr/0005-how-vector-kernels-are-built-tested-and-measured.md`.
 
 ### 2.36 Where a workload's vector kernels live
 
@@ -2849,7 +2849,7 @@ loop, no branch a particular index must reach); a sample shared between two unit
 collision, not a defect. A plan is held to the specification even where the oracle does not use
 it: a wrong decomposition is a wiring mistake the registry should see at once. Oracles allocate
 nothing where they can avoid it, and take one scratch through a factory seam where they cannot
-(`docs/adr/proposed/27-oracles-wave3-scratch-and-sampling.md`).
+(`docs/adr/0007-oracle-scratch-memory-and-sampling.md`).
 
 ### 2.48 The crash journal and the timeline: what is stored, and what is not retried
 
@@ -2919,7 +2919,7 @@ adaptive_mesh, graph, sort, sparse, stencil; compression and anything unknown: b
 function to change when a measurement says otherwise. Cycling: load (idle, heavy, moderate, heavy at
 0, 1000, 500, 1000 per mille) or cores (shares 125, 500, 1000, 250, 1000 of the workers, at least one),
 with only the commands that change a worker's state. Q10 (worker granularity under a mixed workload)
-is confirmed: `docs/adr/proposed/29-q10-worker-granularity-under-a-mixed-workload.md`.
+is confirmed: `docs/adr/0010-worker-granularity-under-a-mixed-workload.md`.
 
 ### 2.53 The journal in the controller, the command line of M5, and the registries
 
@@ -3868,8 +3868,8 @@ Kept short and current; move an item to the relevant document once it is settled
     (stream 21).
 
 - **Contract questions from the M5 and M6 integrations, folded 2026-10-22 21:45 UTC.** None was answered
-  by a contract change; the tree holds no decision file for them. *Stream 29 (M5):* `result.hpp` names
-  one workload per worker (`WorkerWork`), so a worker rotated by Switch is reported as what it started as
+  by a contract change; the tree holds no decision file for them. *Stream 29 (M5):* the plan's `WorkerWork`
+  (`src/controller/report.hpp`) records one workload per worker and the result's `WorkerResult` does not carry the rotation, so a worker rotated by Switch is reported as what it started as
   (reading taken: the initial workload, with the count of Switch commands done in the story; a field
   for the workloads run, in order, is wanted); `control.hpp` is silent on how often a worker states its
   working set (frame 18; a Switch changes it, so it is sent again and the controller keeps the weakest;

@@ -71,7 +71,7 @@ TEST(JournalFormat, EveryCombinationOfPresentFieldsRoundTrips) {
         (mask & 16U) != 0 ? std::optional<std::uint64_t>(std::numeric_limits<std::uint64_t>::max())
                           : std::nullopt;
     entry.ecc_uncorrected = (mask & 32U) != 0 ? std::optional<std::uint64_t>(0) : std::nullopt;
-    entry.elapsed_ns = std::numeric_limits<std::int64_t>::min();
+    entry.elapsed_ns = std::numeric_limits<std::int64_t>::max();
     const auto payload = encode_entry(entry);
     const auto decoded = decode_entry(payload);
     ASSERT_TRUE(decoded.has_value()) << mask;
@@ -110,6 +110,28 @@ TEST(JournalFormat, AReservedPresenceBitIsNotAnEntry) {
     payload[9] |= static_cast<std::byte>(1U << bit);
     EXPECT_FALSE(decode_entry(payload).has_value()) << bit;
   }
+}
+
+TEST(JournalFormat, ANonZeroByteBehindAClearPresenceBitIsNotAnEntry) {
+  // sample() has the unit and the temperature; the optionals start at 15 (the
+  // type, time, presence bits, a label of one byte and one of two). The third,
+  // package power, is absent: any one of its eight bytes set is no entry.
+  const std::size_t absent = 15 + 2 * 8;
+  for (std::size_t byte = 0; byte < 8; ++byte) {
+    auto payload = encode_entry(sample());
+    payload[absent + byte] = std::byte{1};
+    EXPECT_FALSE(decode_entry(payload).has_value()) << byte;
+  }
+}
+
+TEST(JournalFormat, ANegativeElapsedTimeIsNotAnEntry) {
+  Entry entry = sample();
+  entry.elapsed_ns = -1;
+  EXPECT_FALSE(decode_entry(encode_entry(entry)).has_value());
+  entry.elapsed_ns = std::numeric_limits<std::int64_t>::min();
+  EXPECT_FALSE(decode_entry(encode_entry(entry)).has_value());
+  entry.elapsed_ns = 0;
+  EXPECT_TRUE(decode_entry(encode_entry(entry)).has_value());
 }
 
 TEST(JournalFormat, ALabelPastTheLimitIsNotAnEntry) {
@@ -163,10 +185,107 @@ TEST(JournalScan, ALengthOfZeroOrPastTheMaximumIsCorrupt) {
   }
 }
 
-TEST(JournalScan, TheMaximumLengthIsTornWhenTheBytesRunOut) {
-  auto bytes = record_of(sample());
-  set_length(bytes, static_cast<std::uint32_t>(format::kMaxPayloadBytes));
-  EXPECT_EQ(scan(bytes).ending, Ending::kTornTail);
+// A record cut after `prefix` bytes of its payload, whatever its length field
+// claims: the header's check bytes are not looked at before the bytes are all
+// there.
+std::vector<std::byte> cut_record(std::uint32_t length, const std::vector<std::byte>& prefix) {
+  std::vector<std::byte> bytes(format::kHeaderBytes, std::byte{0});
+  set_length(bytes, length);
+  bytes.insert(bytes.end(), prefix.begin(), prefix.end());
+  return bytes;
+}
+
+// The start of an entry's payload up to and including the byte after the
+// presence bits: the type, eight bytes of time, the presence bits.
+std::vector<std::byte> entry_start() {
+  std::vector<std::byte> start{format::kEntry};
+  start.insert(start.end(), 9, std::byte{0});
+  return start;
+}
+
+TEST(JournalScan, AHeaderAloneWithAnyLengthIsATornTail) {
+  EXPECT_EQ(scan(cut_record(100, {})).ending, Ending::kTornTail);
+  EXPECT_EQ(scan(cut_record(static_cast<std::uint32_t>(format::kMaxPayloadBytes), {})).ending,
+            Ending::kTornTail);
+}
+
+TEST(JournalScan, ALengthPastTheBytesOnATypeThatIsNoEntryIsCorrupt) {
+  EXPECT_EQ(scan(cut_record(5, {format::kTerminator})).ending, Ending::kCorrupt)
+      << "the terminator is one byte";
+  EXPECT_EQ(scan(cut_record(5, {std::byte{9}})).ending, Ending::kCorrupt);
+}
+
+TEST(JournalScan, ALengthPastTheBytesIsTornOnlyWhereAnEntryCouldHaveIt) {
+  // Before the labels' sizes are in the bytes, any length an entry can have.
+  const std::vector<std::byte> start = entry_start();
+  EXPECT_EQ(scan(cut_record(67, start)).ending, Ending::kCorrupt);
+  EXPECT_EQ(scan(cut_record(68, start)).ending, Ending::kTornTail);
+  EXPECT_EQ(scan(cut_record(196, start)).ending, Ending::kTornTail);
+  EXPECT_EQ(scan(cut_record(197, start)).ending, Ending::kCorrupt);
+  EXPECT_EQ(scan(cut_record(static_cast<std::uint32_t>(format::kMaxPayloadBytes), start)).ending,
+            Ending::kCorrupt);
+}
+
+TEST(JournalScan, ALengthPastTheBytesFollowsWhatTheLabelSizesAlreadySeenAllow) {
+  std::vector<std::byte> with_phase = entry_start();
+  with_phase.push_back(std::byte{3});  // The phase is three bytes: at least 71 in all.
+  EXPECT_EQ(scan(cut_record(70, with_phase)).ending, Ending::kCorrupt);
+  EXPECT_EQ(scan(cut_record(71, with_phase)).ending, Ending::kTornTail);
+  EXPECT_EQ(scan(cut_record(135, with_phase)).ending, Ending::kTornTail);
+  EXPECT_EQ(scan(cut_record(136, with_phase)).ending, Ending::kCorrupt);
+
+  std::vector<std::byte> too_long = entry_start();
+  too_long.push_back(std::byte{65});
+  EXPECT_EQ(scan(cut_record(200, too_long)).ending, Ending::kCorrupt)
+      << "a phase past kMaxLabelBytes is no entry";
+
+  // Both sizes seen: the length is the one they give, and no other.
+  std::vector<std::byte> with_both = with_phase;
+  with_both.insert(with_both.end(), 3, std::byte{'p'});
+  with_both.push_back(std::byte{2});  // The workload is two bytes: 73 in all.
+  EXPECT_EQ(scan(cut_record(72, with_both)).ending, Ending::kCorrupt);
+  EXPECT_EQ(scan(cut_record(73, with_both)).ending, Ending::kTornTail);
+  EXPECT_EQ(scan(cut_record(74, with_both)).ending, Ending::kCorrupt);
+
+  std::vector<std::byte> workload_too_long = with_phase;
+  workload_too_long.insert(workload_too_long.end(), 3, std::byte{'p'});
+  workload_too_long.push_back(std::byte{65});
+  EXPECT_EQ(scan(cut_record(200, workload_too_long)).ending, Ending::kCorrupt);
+}
+
+TEST(JournalScan, AFlippedLengthBitInTheLastRecordIsAFailedCheckNotATornTail) {
+  // The length of the last record grown by 256: past the bytes there, and not
+  // the length its own label sizes give.
+  auto second = record_of(sample());
+  second[1] ^= std::byte{1};
+  const Replay replay = scan(concat(record_of(sample()), second));
+  EXPECT_EQ(replay.entries.size(), 1U);
+  EXPECT_EQ(replay.ending, Ending::kCorrupt);
+}
+
+TEST(JournalScan, EveryCutOfARecordIsStillATornTailAndNeverCorrupt) {
+  const auto whole = record_of(sample());
+  for (std::size_t cut = 1; cut < whole.size(); ++cut) {
+    EXPECT_EQ(scan(std::span(whole).first(cut)).ending, Ending::kTornTail) << cut;
+  }
+}
+
+TEST(JournalScan, ARecordThatDecodesToNoEntryEndsTheReplayAsCorrupt) {
+  Entry backwards = sample();
+  backwards.elapsed_ns = -5;
+  const Replay replay = scan(concat(record_of(sample()), record_of(backwards)));
+  EXPECT_EQ(replay.entries.size(), 1U);
+  EXPECT_EQ(replay.ending, Ending::kCorrupt);
+}
+
+TEST(JournalScan, AnEntryOlderThanTheOneBeforeItIsKeptBecauseTheFormatPromisesNoOrder) {
+  Entry later = sample();
+  later.elapsed_ns = 9'000'000'000;
+  Entry earlier = sample();
+  earlier.elapsed_ns = 5;
+  const Replay replay = scan(concat(record_of(later), record_of(earlier)));
+  EXPECT_EQ(replay.entries.size(), 2U);
+  EXPECT_EQ(replay.ending, Ending::kUnterminated);
 }
 
 TEST(JournalScan, AFailedCheckIsCorruptAndKeepsEarlierEntries) {

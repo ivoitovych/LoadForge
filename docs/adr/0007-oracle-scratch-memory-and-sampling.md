@@ -1,7 +1,8 @@
-# ADR — How an oracle gets its working memory, and how it samples
+# ADR 0007 — How an oracle gets its working memory, and how it samples
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20 17:40 UTC
+**Accepted:** 2026-10-21 08:28 UTC, with the merge of pull request #74
 **Stream:** 27, the wave-3 oracles (FFT, stencil, sparse, graph, particles)
 
 ## Context

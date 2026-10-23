@@ -39,6 +39,9 @@ std::vector<RosterEntry> roster_of(const workloads::Registry& registry,
         roster.push_back(std::move(entry));
         break;
       }
+      if (footprint > ceiling_bytes / 2) {
+        break;  // The next doubling is past the ceiling, and past 64 bits for a huge one.
+      }
     }
   }
   return roster;

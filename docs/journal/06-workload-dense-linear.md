@@ -241,7 +241,7 @@ the other architecture (clang-tidy in the format job) sees an empty unit.
 The way vector kernels are built, guarded, tested and measured is what every later workload
 will copy, and three parts of it look removable to someone who was not here (the target
 attribute, the explicit `vzeroupper`, the per-architecture coverage expectation):
-`docs/adr/proposed/06-workload-dense-linear-vector-kernels.md`.
+`docs/adr/0005-how-vector-kernels-are-built-tested-and-measured.md`.
 
 ## Contract questions
 

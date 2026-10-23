@@ -1,7 +1,18 @@
-# ADR (proposed) — The slice runner's working set is populated, locked, and of ordinary pages
+# ADR 0006 — The slice runner's working set is populated, locked, and of ordinary pages
 
-**Status:** proposed by stream 02 (input integrity); numbered by the manager when it lands
+**Status:** accepted; amended 2026-10-21 18:02 UTC (see the note below)
 **Date:** 2026-10-20 11:25 UTC
+**Accepted:** 2026-10-20 18:03 UTC, with the merge of pull request #40 (stream 02, input integrity)
+
+> **Amended, 2026-10-21 18:02 UTC (the M2 contract corrections):** locking is now a
+> controller-chosen policy. `LockPolicy { kRequire, kTry, kNone }` in
+> `src/verification/runner.hpp` is carried by `RunnerSetup::lock` (default `kRequire`); the
+> command line defaults to `try`, which falls back to unlocked memory and says so, and the
+> result records the choice (`WorkloadResult::lock_policy`, `memory_lock`). So "there is no
+> fallback" below holds for `kRequire` only, and the 6.6 MB consequence applies to `kRequire`
+> only: an unprivileged run under the 8 MiB allowance uses `kTry` or `kNone`. The "superseded
+> when" condition is met for locking. What still holds: ordinary pages, populated with
+> `MADV_POPULATE_WRITE`, bound to the worker's NUMA node, and no huge-page policy.
 
 ## Context
 

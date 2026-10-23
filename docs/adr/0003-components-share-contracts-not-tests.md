@@ -64,3 +64,7 @@ re-running it. A shared mock is that mistake made at the level of a contract.
 - The roadmap gains a contracts-first step after M1: the workload, verifier and
   telemetry-source contracts, written before any of their implementations, so
   M2a to M4 can proceed in parallel streams.
+
+> **Amended, 2026-10-23 00:15 UTC:** "the review of 2026-10-19" in the Context is the review
+> of 2026-10-19 04:49 UTC (`reviews/comprehensive-project-review-2026-10-19-0449-UTC.md`). The
+> decision is unchanged.
