@@ -100,6 +100,24 @@ std::optional<std::string> start_problem(const Schedule& schedule) {
   return std::nullopt;
 }
 
+/// What is wrong with the commands of a step: a worker the run does not have,
+/// or a command that breaks the rules of its kind.
+std::optional<std::string> commands_problem(const Step& step, std::size_t workers) {
+  for (const WorkerCommands& each : step.workers) {
+    if (each.slot >= workers) {
+      return "the step \"" + step.phase + "\" names worker " + std::to_string(each.slot) + " of " +
+             std::to_string(workers);
+    }
+    for (const worker::Command& command : each.commands) {
+      if (!worker::is_valid(worker::ControlMessage{0, command})) {
+        return "the step \"" + step.phase + "\" sends worker " + std::to_string(each.slot) + " a " +
+               std::string{worker::command_name(command)} + " that breaks the rules of its command";
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 std::optional<std::string> problem(const Schedule& schedule, std::size_t workers) {
@@ -129,18 +147,8 @@ std::optional<std::string> problem(const Schedule& schedule, std::size_t workers
     if (step.phase.size() > kMaxLabelBytes || step.workload.size() > kMaxLabelBytes) {
       return "the step \"" + step.phase + "\" has a label past the journal's limit";
     }
-    for (const WorkerCommands& each : step.workers) {
-      if (each.slot >= workers) {
-        return "the step \"" + step.phase + "\" names worker " + std::to_string(each.slot) +
-               " of " + std::to_string(workers);
-      }
-      for (const worker::Command& command : each.commands) {
-        if (!worker::is_valid(worker::ControlMessage{0, command})) {
-          return "the step \"" + step.phase + "\" sends worker " + std::to_string(each.slot) +
-                 " a " + std::string{worker::command_name(command)} +
-                 " that breaks the rules of its command";
-        }
-      }
+    if (auto bad = commands_problem(step, workers); bad.has_value()) {
+      return bad;
     }
   }
   return std::nullopt;
