@@ -85,6 +85,23 @@ void add_command(std::string& text, const worker::Command& command) {
 
 }  // namespace
 
+namespace {
+
+/// What is wrong with the starts: each is a workload the worker is launched
+/// with, held to the rules of the Switch that would make the same change.
+std::optional<std::string> start_problem(const Schedule& schedule) {
+  for (std::size_t slot = 0; slot < schedule.start.size(); ++slot) {
+    const Start& start = schedule.start[slot];
+    if (!workloads::is_valid_name(start.workload) || start.footprint_bytes == 0) {
+      return "the start of worker " + std::to_string(slot) +
+             " names no workload of a valid name or no footprint";
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
 std::optional<std::string> problem(const Schedule& schedule, std::size_t workers) {
   if (schedule.workers != workers) {
     return "the schedule is for " + std::to_string(schedule.workers) +
@@ -96,14 +113,8 @@ std::optional<std::string> problem(const Schedule& schedule, std::size_t workers
   if (schedule.phase.size() > kMaxLabelBytes || schedule.workload.size() > kMaxLabelBytes) {
     return std::string{"the schedule's first phase or workload label is past the journal's limit"};
   }
-  for (std::size_t slot = 0; slot < schedule.start.size(); ++slot) {
-    // A start is a workload the worker is launched with: held to the rules of
-    // the Switch that would make the same change.
-    const Start& start = schedule.start[slot];
-    if (!workloads::is_valid_name(start.workload) || start.footprint_bytes == 0) {
-      return "the start of worker " + std::to_string(slot) +
-             " names no workload of a valid name or no footprint";
-    }
+  if (auto bad = start_problem(schedule); bad.has_value()) {
+    return bad;
   }
   std::set<std::string_view> seen;
   std::int64_t before = 0;

@@ -58,8 +58,6 @@ std::string describe(const WorkerError& error) { return error.stage + ": " + err
 
 namespace {
 
-constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
-
 WorkerError error_at(std::string_view stage, std::string detail) {
   return WorkerError{std::string{stage}, std::move(detail)};
 }

@@ -99,14 +99,14 @@ bool could_be_cut_short(std::span<const std::byte> seen, std::uint64_t length) {
   std::uint64_t least = kEntryFixedBytes;
   std::uint64_t most = kEntryFixedBytes + 2 * kMaxLabelBytes;
   if (seen.size() > kPhaseSizeAt) {
-    const std::uint64_t phase = std::to_integer<std::uint64_t>(seen[kPhaseSizeAt]);
+    const auto phase = std::to_integer<std::uint64_t>(seen[kPhaseSizeAt]);
     if (phase > kMaxLabelBytes) {
       return false;
     }
     least += phase;
     most = least + kMaxLabelBytes;
     if (seen.size() > kPhaseSizeAt + 1 + phase) {
-      const std::uint64_t workload = std::to_integer<std::uint64_t>(seen[kPhaseSizeAt + 1 + phase]);
+      const auto workload = std::to_integer<std::uint64_t>(seen[kPhaseSizeAt + 1 + phase]);
       if (workload > kMaxLabelBytes) {
         return false;
       }
@@ -115,6 +115,15 @@ bool could_be_cut_short(std::span<const std::byte> seen, std::uint64_t length) {
     }
   }
   return length >= least && length <= most;
+}
+
+/// The ending of bytes whose last record claims `length` payload bytes and has
+/// fewer: the check cannot be made on bytes that are not there. A tail is a cut
+/// write when what is there could be the start of a record of this length, and
+/// corrupt when it cannot be.
+Ending ending_of_short_record(std::span<const std::byte> rest, std::uint64_t length) {
+  return could_be_cut_short(rest.subspan(kHeaderBytes), length) ? Ending::kTornTail
+                                                                : Ending::kCorrupt;
 }
 
 }  // namespace
@@ -223,11 +232,7 @@ Replay scan(std::span<const std::byte> bytes) {
       return replay;
     }
     if (rest.size() - kHeaderBytes < length) {
-      // The check cannot be made on bytes that are not there. A tail is a cut
-      // write when what is there could be the start of a record of this
-      // length, and corrupt when it cannot be.
-      replay.ending = could_be_cut_short(rest.subspan(kHeaderBytes), length) ? Ending::kTornTail
-                                                                             : Ending::kCorrupt;
+      replay.ending = ending_of_short_record(rest, length);
       return replay;
     }
     const std::span<const std::byte> payload = rest.subspan(kHeaderBytes, length);
