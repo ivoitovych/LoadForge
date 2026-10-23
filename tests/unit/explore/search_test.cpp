@@ -5,8 +5,10 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <map>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -59,11 +61,14 @@ TEST(Describe, FatesAndRankingsHaveWords) {
   EXPECT_EQ(describe(Fate::kEliminated), "eliminated");
   EXPECT_EQ(describe(Fate::kFindings), "findings");
   EXPECT_EQ(describe(Fate::kIncomplete), "incomplete");
+  EXPECT_EQ(describe(Fate::kStopped), "stopped with the search");
   EXPECT_EQ(describe(static_cast<Fate>(200)), "unrecognised fate");
   EXPECT_EQ(describe(Ranking::kNone), "no worst case");
   EXPECT_EQ(describe(Ranking::kSole), "sole candidate");
-  EXPECT_EQ(describe(Ranking::kSeparated), "separated from the best rival");
-  EXPECT_EQ(describe(Ranking::kIndistinguishable), "not distinguishable from the best rival");
+  EXPECT_EQ(describe(Ranking::kSeparated),
+            "separated from the rival with the worst corrected mean");
+  EXPECT_EQ(describe(Ranking::kIndistinguishable),
+            "not distinguishable from the rival with the worst corrected mean");
   EXPECT_EQ(describe(static_cast<Ranking>(200)), "unrecognised ranking");
 }
 
@@ -161,6 +166,23 @@ TEST_F(Configuration, ASettlePhaseOnAMetricThatCannotBeReadIsRefusedBeforeTheRun
   expect_refused(config, ExploreFault::kMetricUnavailable, "ref");
 }
 
+// The slope is judged only once a full window has been read and the phase ends at its
+// maximum, so a window longer than the maximum cannot settle. Review verdicts
+// 2026-10-23, finding 3.
+TEST_F(Configuration, ASettleWindowLongerThanTheSettleMaximumIsRefusedBeforeTheRun) {
+  SearchConfig config = config_for({"a", "b"});
+  config.candidates[1].settle = Settle{"thermal.package", 0.05, 2001, 2000};
+  expect_refused(config, ExploreFault::kConfiguration, "longer than its settle maximum");
+  config = config_for({"a"});
+  config.reference.settle = Settle{"thermal.package", 0.05, 2001, 2000};
+  expect_refused(config, ExploreFault::kConfiguration, "ref");
+  config = config_for({"a"});
+  config.reference.settle = config.candidates[0].settle =
+      Settle{"thermal.package", 0.05, 2000, 2000};
+  EXPECT_TRUE(Search::configure(config, lab.runner.capabilities()).has_value())
+      << "equal is allowed";
+}
+
 TEST_F(Configuration, ASettlePhaseOnAGaugeThatIsPresentIsAccepted) {
   SearchConfig config = config_for({"a", "b"});
   config.reference.settle = config.candidates[0].settle =
@@ -186,16 +208,23 @@ TEST(Run, TheWorstCandidateWinsAndSaysHowSure) {
   const SearchReport& report = result.value();
   ASSERT_TRUE(report.worst_case.has_value());
   EXPECT_EQ(report.worst_case->candidate, "b");
-  EXPECT_EQ(report.worst_case->replicates, 4U);
+  // The worst case is from the three fresh replicates, run after b was chosen on its
+  // four earlier ones; those four are listed beside them.
+  EXPECT_EQ(report.worst_case->replicates, 3U);
+  EXPECT_EQ(find(report, "b").samples.size(), 7U);
+  EXPECT_EQ(find(report, "b").selection_replicates, 4U);
+  EXPECT_EQ(find(report, "b").corrected.replicates, 3U);
+  EXPECT_EQ(find(report, "b").raw.replicates, 3U);
   EXPECT_DOUBLE_EQ(report.worst_case->mean, 70.0);
   EXPECT_DOUBLE_EQ(report.worst_case->stddev, 0.0);
   EXPECT_DOUBLE_EQ(report.worst_case->half_width, 0.0);
   EXPECT_EQ(report.ranking, Ranking::kSeparated);
   EXPECT_EQ(report.rounds, 2U);
   // Anchor 2; pass 0 (4 trials) and a reference; pass 1 (4); round 1 with
-  // b and c: passes 2 and 3 (4 trials) and a reference after the fourth.
-  EXPECT_EQ(report.trials, 17U);
-  EXPECT_EQ(lab.runner.ran.size(), 17U);
+  // b and c: passes 2 and 3 (4 trials) and a reference after the fourth; then
+  // three fresh trials of b and a reference after the third.
+  EXPECT_EQ(report.trials, 21U);
+  EXPECT_EQ(lab.runner.ran.size(), 21U);
   EXPECT_EQ(find(report, "b").fate, Fate::kSurvivor);
   EXPECT_EQ(find(report, "b").rounds, 2U);
   EXPECT_EQ(find(report, "c").fate, Fate::kEliminated);
@@ -215,10 +244,10 @@ TEST(Run, TheReferenceIsRunBeforeAnyCandidateAndBetweenTrials) {
   const auto result = explore(lab.runner, config);
   ASSERT_TRUE(result.has_value());
   // The anchor; round 0 (two passes over a and b) with a reference after its
-  // third trial and a closing one after the fourth; b wins and is topped up to
-  // three replicates, which a closing reference follows.
-  const std::vector<std::string> expected = {"ref", "ref", "a",   "b", "a",
-                                             "ref", "b",   "ref", "b", "ref"};
+  // third trial and a closing one after the fourth; b wins and is run three more
+  // times, fresh, and a reference follows the third.
+  const std::vector<std::string> expected = {"ref", "ref", "a", "b", "a", "ref",
+                                             "b",   "ref", "b", "b", "b", "ref"};
   EXPECT_EQ(lab.runner.ran, expected);
 }
 
@@ -230,8 +259,8 @@ TEST(Run, TheClosingReferenceIsSkippedWhenOneJustRan) {
   config.interleave_every = 1;
   const auto result = explore(lab.runner, config);
   ASSERT_TRUE(result.has_value());
-  const std::vector<std::string> expected = {"ref", "ref", "a", "ref", "b", "ref",
-                                             "a",   "ref", "b", "ref", "b", "ref"};
+  const std::vector<std::string> expected = {"ref", "ref", "a", "ref", "b", "ref", "a", "ref",
+                                             "b",   "ref", "b", "ref", "b", "ref", "b", "ref"};
   EXPECT_EQ(lab.runner.ran, expected);
 }
 
@@ -275,12 +304,17 @@ TEST(Run, OneCandidateIsRunToTheFinalReplicatesAndIsSole) {
   EXPECT_EQ(report.worst_case->replicates, 3U);
   EXPECT_DOUBLE_EQ(report.worst_case->mean, 52.0);
   EXPECT_DOUBLE_EQ(report.worst_case->stddev, 2.0);
-  EXPECT_NEAR(report.worst_case->half_width, 4.303 * 2.0 / std::sqrt(3.0), 1e-9);
+  // The reference readings here are exact, so the reference adds no variance and the
+  // interval's t is at the replicates' two degrees; a t at the reference's one degree
+  // (12.706) for a variance of zero was what made the intervals too wide.
+  EXPECT_NEAR(report.worst_case->half_width, t_critical(2) * 2.0 / std::sqrt(3.0), 1e-9);
+  EXPECT_EQ(report.references.size(), 3U);
   EXPECT_EQ(report.ranking, Ranking::kSole);
+  EXPECT_EQ(find(report, "a").selection_replicates, 0U) << "nothing chose a sole candidate";
   EXPECT_EQ(find(report, "a").fate, Fate::kSurvivor);
 }
 
-TEST(Run, TheSurvivorIsToppedUpWhenHalvingEndsEarly) {
+TEST(Run, TheSurvivorGetsFreshReplicatesAfterHalvingEvenWhenItAlreadyHasThatMany) {
   Lab lab;
   lab.script["a"] = {50.0};
   lab.script["b"] = {60.0};
@@ -291,10 +325,112 @@ TEST(Run, TheSurvivorIsToppedUpWhenHalvingEndsEarly) {
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().worst_case->candidate, "b");
   EXPECT_EQ(result.value().worst_case->replicates, 5U);
+  EXPECT_EQ(find(result.value(), "b").selection_replicates, 1U);
+  EXPECT_EQ(find(result.value(), "b").samples.size(), 6U);
+  EXPECT_EQ(find(result.value(), "a").selection_replicates, 0U);
   // a was eliminated on one replicate: no interval, so no separation is claimed.
   EXPECT_EQ(find(result.value(), "a").corrected.replicates, 1U);
   EXPECT_FALSE(find(result.value(), "a").corrected.half_width.has_value());
   EXPECT_EQ(result.value().ranking, Ranking::kIndistinguishable);
+}
+
+// With one replicate in the first round a candidate can leave the search on a single
+// noisy reading and never get an interval. "Separated" is then a claim about the one
+// rival it was compared with, and the report names that rival and the candidates it
+// did not compare with an interval. Review verdicts 2026-10-23, finding 6.
+// Eight candidates that are the same, one replicate in the first round, three at the
+// end: the winner is the best of its noisy samples, so a mean and interval from the
+// samples that chose it are high and cover the true mean less often than they say
+// (a bias of 0.6 standard deviations and 87% coverage in 40000 searches before the
+// fix). The reported claim is from replicates run after the choice. Review verdicts
+// 2026-10-23, finding 7.
+TEST(Run, TheWinnersIntervalCoversTheTrueMeanBecauseItsReplicatesDidNotChooseIt) {
+  std::mt19937_64 rng(7);
+  std::normal_distribution<double> noise(0.0, 1.0);
+  constexpr int kSearches = 20'000;
+  int covered = 0;
+  double bias = 0.0;
+  for (int i = 0; i < kSearches; ++i) {
+    ModelRunner runner([&](const Candidate& c, std::int64_t, std::size_t) {
+      return c.id == "ref" ? 10.0 : 50.0 + noise(rng);
+    });
+    SearchConfig config = config_for({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"});
+    config.base_replicates = 1;
+    config.final_replicates = 3;
+    const auto result = explore(runner, config);
+    ASSERT_TRUE(result.has_value());
+    const WorstCase& claim = *result.value().worst_case;
+    ASSERT_EQ(claim.replicates, 3U);
+    bias += claim.mean - 50.0;
+    covered += std::abs(claim.mean - 50.0) <= claim.half_width ? 1 : 0;
+  }
+  EXPECT_LT(std::abs(bias / kSearches), 0.03) << "in units of the noise's standard deviation";
+  EXPECT_GE(static_cast<double>(covered) / kSearches, 0.94);
+  EXPECT_LE(static_cast<double>(covered) / kSearches, 0.97);
+}
+
+TEST(Run, SeparatedNamesTheRivalAndTheCandidatesNeverComparedByAnInterval) {
+  Lab lab;
+  lab.script["A"] = {70.0};  // the true worst case, unlucky on its one reading
+  lab.script["B"] = {90.0};
+  lab.script["C"] = {88.0};
+  lab.script["D"] = {60.0};
+  SearchConfig config = config_for({"A", "B", "C", "D"});
+  config.base_replicates = 1;
+  config.final_replicates = 2;
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.worst_case->candidate, "B");
+  EXPECT_EQ(report.ranking, Ranking::kSeparated);
+  EXPECT_EQ(report.rival, "C");
+  EXPECT_EQ(report.uncompared, (std::vector<std::string>{"A", "D"}));
+  EXPECT_EQ(find(report, "A").samples.size(), 1U);
+}
+
+TEST(Run, ASoleCandidateHasNoRivalAndNothingUncompared) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  const auto result = explore(lab.runner, config_for({"a"}));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result.value().rival.empty());
+  EXPECT_TRUE(result.value().uncompared.empty());
+}
+
+TEST(Run, AnEliminationFactorNearTheLargestSizeKeepsOneCandidateAndDoesNotWrap) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  lab.script["c"] = {55.0};
+  lab.script["d"] = {30.0};
+  SearchConfig config = config_for({"a", "b", "c", "d"});
+  config.elimination_factor = std::numeric_limits<std::size_t>::max();
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value().worst_case.has_value()) << "ceil(4 / huge) is 1, not 0";
+  EXPECT_EQ(result.value().worst_case->candidate, "b");
+  EXPECT_EQ(find(result.value(), "a").fate, Fate::kEliminated);
+}
+
+TEST(Run, TheKeepIsTheCeilingOfTheCandidatesOverTheFactor) {
+  for (const std::size_t factor : {2U, 3U, 4U}) {
+    Lab lab;
+    lab.script["a"] = {10.0};
+    lab.script["b"] = {20.0};
+    lab.script["c"] = {30.0};
+    lab.script["d"] = {40.0};
+    lab.script["e"] = {50.0};
+    SearchConfig config = config_for({"a", "b", "c", "d", "e"});
+    config.elimination_factor = factor;
+    config.base_replicates = 1;
+    const auto result = explore(lab.runner, config);
+    ASSERT_TRUE(result.has_value());
+    std::size_t second_round = 0;
+    for (const CandidateReport& entry : result.value().candidates) {
+      second_round += static_cast<std::size_t>(entry.rounds >= 2);
+    }
+    EXPECT_EQ(second_round, (5 + factor - 1) / factor) << "factor " << factor;
+  }
 }
 
 TEST(Run, AConstantObjectiveRanksNothing) {
@@ -337,8 +473,8 @@ TEST(Run, DriftIsMeasuredAgainstTheAnchorAndTakenOut) {
   // replicate of a candidate is the same number.
   EXPECT_NEAR(report.worst_case->stddev, 0.0, 1e-9);
   EXPECT_NEAR(find(report, "a").corrected.mean - find(report, "c").corrected.mean, -2.0, 1e-9);
-  // And the raw scores were not: the later replicates were far above the first.
-  EXPECT_GT(find(report, "b").raw.stddev.value_or(0.0), 1.0);
+  // And the raw scores were not: the later replicates were above the earlier ones.
+  EXPECT_GT(find(report, "b").raw.stddev.value_or(0.0), 0.5);
   EXPECT_DOUBLE_EQ(report.anchor, (report.references[0].value + report.references[1].value) / 2);
   EXPECT_EQ(report.reference.replicates, report.references.size());
 }
@@ -393,14 +529,121 @@ TEST(Run, AnIncompleteTrialRemovesItsCandidateToo) {
   EXPECT_EQ(result.value().ranking, Ranking::kSole);
 }
 
-TEST(Run, CorrectedErrorsAreScoredLikeAnyOtherCleanTrial) {
+// A trial the hardware reported a corrected error in computed the right thing, so
+// its number is a measurement and is scored; it is flagged, per trial, so that
+// the report and the exit code can say it (stress exits 5 for it too). Dropping the
+// trial would hide the candidate that stresses the hardware most, which is the
+// one explore is looking for. Review verdicts 2026-10-23, finding 1.
+TEST(Run, CorrectedErrorsAreScoredAndFlaggedPerTrial) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  std::size_t b_runs = 0;
+  lab.runner.verdict = [&](const Candidate& c, std::size_t) {
+    return c.id == "b" && ++b_runs == 2 ? Verdict::kCorrectedErrors : Verdict::kClean;
+  };
+  const auto result = explore(lab.runner, config_for({"a", "b"}));
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.worst_case->candidate, "b");
+  ASSERT_EQ(find(report, "b").notes.size(), find(report, "b").samples.size());
+  EXPECT_FALSE(find(report, "b").notes[0].corrected_errors);
+  EXPECT_TRUE(find(report, "b").notes[1].corrected_errors);
+  for (const TrialNote& note : find(report, "a").notes) {
+    EXPECT_FALSE(note.corrected_errors);
+  }
+  EXPECT_EQ(report.corrected_error_trials, 1U);
+  EXPECT_EQ(report.reference_notes.size(), report.references.size());
+}
+
+TEST(Run, CorrectedErrorsInTheEveryTrialAreAllCounted) {
   Lab lab;
   lab.script["a"] = {50.0};
   lab.script["b"] = {60.0};
   lab.runner.verdict = [](const Candidate&, std::size_t) { return Verdict::kCorrectedErrors; };
   const auto result = explore(lab.runner, config_for({"a", "b"}));
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result.value().worst_case->candidate, "b");
+  const SearchReport& report = result.value();
+  std::size_t flagged = 0;
+  for (const CandidateReport& entry : report.candidates) {
+    for (const TrialNote& note : entry.notes) {
+      flagged += static_cast<std::size_t>(note.corrected_errors);
+    }
+  }
+  for (const TrialNote& note : report.reference_notes) {
+    EXPECT_TRUE(note.corrected_errors);
+    ++flagged;
+  }
+  EXPECT_EQ(report.corrected_error_trials, flagged);
+  EXPECT_EQ(report.corrected_error_trials, report.trials);
+}
+
+// A settle phase that ends at its maximum is documented as no error (a trial still
+// runs), but the controlled starting state the search promises is then missing for
+// that trial, and a report that said nothing would pass it off as settled.
+// Review verdicts 2026-10-23, finding 2.
+void ask_to_settle(SearchConfig& config) {
+  const Settle phase{"thermal.package", 0.05, 30'000'000'000, 300'000'000'000};
+  config.reference.settle = phase;
+  for (Candidate& candidate : config.candidates) {
+    candidate.settle = phase;
+  }
+}
+
+TEST(Run, ATrialThatDidNotSettleIsMarkedAndCounted) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  ask_to_settle(config);
+  std::size_t b_runs = 0;
+  lab.runner.settles = [&](const Candidate& c, std::size_t) {
+    return c.id != "b" || ++b_runs != 2;
+  };
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.settle_trials, report.trials);
+  EXPECT_EQ(report.unsettled_trials, 1U);
+  EXPECT_FALSE(find(report, "b").notes[0].unsettled);
+  EXPECT_TRUE(find(report, "b").notes[1].unsettled);
+  for (const TrialNote& note : find(report, "a").notes) {
+    EXPECT_FALSE(note.unsettled);
+  }
+  for (const TrialNote& note : report.reference_notes) {
+    EXPECT_FALSE(note.unsettled);
+  }
+}
+
+TEST(Run, EveryTrialUnsettledIsCountedIncludingTheReferenceAndUnscoredTrials) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  ask_to_settle(config);
+  lab.runner.settles = [](const Candidate&, std::size_t) { return false; };
+  lab.runner.verdict = [](const Candidate& c, std::size_t) {
+    return c.id == "a" ? Verdict::kFindings : Verdict::kClean;
+  };
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.unsettled_trials, report.trials);
+  for (const TrialNote& note : report.reference_notes) {
+    EXPECT_TRUE(note.unsettled);
+  }
+  EXPECT_TRUE(find(report, "b").notes.back().unsettled);
+}
+
+TEST(Run, ASearchWithNoSettlePhaseCountsNoSettleTrials) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  lab.runner.settles = [](const Candidate&, std::size_t) { return false; };
+  const auto result = explore(lab.runner, config_for({"a", "b"}));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().settle_trials, 0U);
+  EXPECT_EQ(result.value().unsettled_trials, 0U);
 }
 
 TEST(Run, WhenEveryCandidateFindsSomethingThereIsNoWorstCase) {
@@ -532,7 +775,10 @@ TEST(Run, ARunnerFaultOnTheFinalClosingReferenceStopsTheSearch) {
   EXPECT_EQ(result.error().fault, ExploreFault::kTrial);
 }
 
-TEST(Run, AReferenceThatFindsSomethingOrDoesNotFinishEndsTheSearch) {
+// A reference that finds something is a finding, as a candidate's trial is (README: 5
+// "for the same things" as stress): it ends the search, and the report still holds
+// everything measured before it. Review verdicts 2026-10-23, finding 10.
+TEST(Run, AReferenceThatFindsSomethingOrDoesNotFinishEndsTheSearchWithAReport) {
   for (const Verdict verdict : {Verdict::kFindings, Verdict::kIncomplete}) {
     Lab lab;
     lab.script["a"] = {50.0};
@@ -540,14 +786,36 @@ TEST(Run, AReferenceThatFindsSomethingOrDoesNotFinishEndsTheSearch) {
       return c.id == "ref" ? verdict : Verdict::kClean;
     };
     const auto result = explore(lab.runner, config_for({"a"}));
-    ASSERT_FALSE(result.has_value());
-    EXPECT_EQ(result.error().fault, ExploreFault::kReference);
-    EXPECT_NE(result.error().detail.find(std::string(results::describe(verdict))),
-              std::string::npos);
+    ASSERT_TRUE(result.has_value()) << result.error().detail;
+    const SearchReport& report = result.value();
+    EXPECT_EQ(report.reference_stop, verdict);
+    EXPECT_EQ(report.trials, 1U) << "the first reference trial ended it";
+    EXPECT_FALSE(report.worst_case.has_value());
+    EXPECT_EQ(report.ranking, Ranking::kNone);
+    EXPECT_TRUE(report.references.empty());
+    EXPECT_DOUBLE_EQ(report.drift, 0.0);
+    EXPECT_EQ(find(report, "a").fate, Fate::kStopped);
+    EXPECT_TRUE(find(report, "a").samples.empty());
   }
 }
 
-TEST(Run, AReferenceReadingLostPartWayStillEndsTheSearch) {
+TEST(Run, AReferenceThatFailsAfterAPartOfTheAnchorLeavesTheAnchorUnsaid) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  SearchConfig config = config_for({"a"});
+  config.reference_replicates = 2;
+  lab.runner.verdict = [](const Candidate& c, std::size_t call) {
+    return c.id == "ref" && call == 1 ? Verdict::kFindings : Verdict::kClean;
+  };
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().references.size(), 1U);
+  EXPECT_EQ(result.value().reference_stop, Verdict::kFindings);
+  EXPECT_DOUBLE_EQ(result.value().drift, 0.0) << "no anchor was completed to drift from";
+  EXPECT_EQ(find(result.value(), "a").fate, Fate::kStopped);
+}
+
+TEST(Run, AReferenceThatFindsSomethingPartWayKeepsWhatWasMeasured) {
   Lab lab;
   lab.script["a"] = {50.0};
   lab.script["b"] = {60.0};
@@ -557,8 +825,34 @@ TEST(Run, AReferenceReadingLostPartWayStillEndsTheSearch) {
     return c.id == "ref" && call > 3 ? Verdict::kFindings : Verdict::kClean;
   };
   const auto result = explore(lab.runner, config);
-  ASSERT_FALSE(result.has_value());
-  EXPECT_EQ(result.error().fault, ExploreFault::kReference);
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.reference_stop, Verdict::kFindings);
+  EXPECT_EQ(find(report, "a").samples, std::vector<double>{50.0});
+  EXPECT_EQ(find(report, "b").samples, std::vector<double>{60.0});
+  EXPECT_EQ(find(report, "a").fate, Fate::kStopped);
+  EXPECT_EQ(find(report, "b").fate, Fate::kStopped);
+  EXPECT_FALSE(report.worst_case.has_value());
+  EXPECT_EQ(report.references.size(), 3U);
+}
+
+TEST(Run, ACandidateThatFoundSomethingBeforeTheReferenceDidKeepsItsFate) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  config.interleave_every = 1;
+  lab.runner.verdict = [](const Candidate& c, std::size_t call) {
+    if (c.id == "a") {
+      return Verdict::kFindings;
+    }
+    return c.id == "ref" && call > 4 ? Verdict::kIncomplete : Verdict::kClean;
+  };
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(find(result.value(), "a").fate, Fate::kFindings);
+  EXPECT_EQ(find(result.value(), "b").fate, Fate::kStopped);
+  EXPECT_EQ(result.value().reference_stop, Verdict::kIncomplete);
 }
 
 TEST(Run, ACandidateWithNoReadingOfTheObjectiveEndsTheSearchRatherThanScoreZero) {

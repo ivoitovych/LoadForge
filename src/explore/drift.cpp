@@ -55,6 +55,32 @@ double reference_variance(std::span<const ReferencePoint> points) noexcept {
   return total / static_cast<double>(n - 2);
 }
 
+// The variance reference_variance() returns averages the n - 2 squared, scaled
+// residuals of the interior readings, but those residuals are not independent: two
+// neighbouring residuals share a reading. Its effective degrees of freedom (the df
+// of the chi-square with the same mean and variance, Satterthwaite) is therefore
+// below n - 2, and below the n - 1 a sample of n readings would have.
+//
+// For readings that are equally spaced, with noise of variance s^2 and no
+// drift, the residual e_i = x_i - (x_(i-1) + x_(i+1)) / 2 has variance 3/2 s^2,
+// correlation -2/3 with its neighbour and 1/6 two places away. For m = n - 2
+// residuals, the variance of their mean square is 2 (s^2)^2 / m^2 times
+// the sum of their squared correlations, m + 2 (m - 1) 4/9 + 2 (m - 2) 1/36, so
+//
+//     df_eff = m^2 / (m + 8 (m - 1) / 9 + (m - 2) / 18)   which is  about 0.51 m.
+//
+// That gives 1.00, 1.38, 1.86, 2.36, 3.38 for 3, 4, 5, 6, 8 readings, and
+// simulations of 400000 draws measured 0.997, 1.38, 1.87, 2.34 and 3.38 (the review
+// verdicts of 2026-10-23, finding 8; the code had used n - 1:
+// 2, 3, 4, 5 and 7, which gave a 95% interval a coverage of 86% for three readings).
+// Half of m, rounded down and at least 1, is below that for every n: 1, 1, 1, 2, 2,
+// 3 for 3 to 8 readings (two readings give one: d^2 / 2 is a chi-square of 1).
+// Unequal spacing changes the correlations a little; the margin absorbs it.
+std::size_t reference_degrees(std::size_t readings) noexcept {
+  constexpr std::size_t kMostReadingsOnOneDegree = 3;  // (3 - 2) / 2 would be 0
+  return readings <= kMostReadingsOnOneDegree ? 1 : (readings - 2) / 2;
+}
+
 double correction_gain(std::span<const ReferencePoint> points,
                        std::span<const std::int64_t> trial_times, std::size_t anchor_count) {
   std::vector<double> weight(points.size(), 0.0);

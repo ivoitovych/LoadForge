@@ -228,6 +228,42 @@ TEST(ExploreArgs, ALengthOfTimeIsRefusedWhenItIsNotOneATrialCanHave) {
   }
 }
 
+// A rate needs a span, a spread and a slope need two readings, a delta a pair; with the
+// duration at the sample interval the first trial ran in full and then ended "no
+// reading for the objective", exit 6, for what is a mistake in the options. Review
+// verdicts 2026-10-23, finding 11.
+TEST(ExploreArgs, ADurationThatCannotHoldTwoReadingsIsRefusedForTheStatisticsThatNeedTwo) {
+  for (const std::string_view statistic : {"rate", "delta", "stddev", "slope"}) {
+    const std::string objective = "thermal.package:" + std::string{statistic} + ":higher";
+    const std::vector<std::string_view> short_load{"--objective",       objective,    "--candidate",
+                                                   "a:sort:1",          "--duration", "1s",
+                                                   "--sample-interval", "1s"};
+    const std::string refusal = refusal_of(short_load);
+    EXPECT_TRUE(contains(refusal, "--duration: must be at least twice --sample-interval (1000 ms)"))
+        << refusal;
+    EXPECT_TRUE(contains(refusal, "needs two readings in the window, and the duration is 1000 ms"));
+    std::vector<std::string_view> twice = short_load;
+    twice[5] = "1999ms";
+    EXPECT_FALSE(parse(twice).has_value()) << statistic << ": just under two intervals";
+    twice[5] = "2s";
+    EXPECT_TRUE(parse(twice).has_value()) << statistic << ": two intervals hold two readings";
+  }
+  // The default duration is 10 s: a sample interval above 5 s is too long for it.
+  EXPECT_TRUE(contains(refusal_of({"--objective", "thermal.package:rate:higher", "--candidate",
+                                   "a:sort:1", "--sample-interval", "6s"}),
+                       "--duration: must be at least twice --sample-interval (6000 ms)"));
+}
+
+TEST(ExploreArgs, AStatisticOfOneReadingNeedsNoMoreThanOne) {
+  for (const std::string_view statistic : {"mean", "max", "min", "last"}) {
+    const std::string objective = "thermal.package:" + std::string{statistic} + ":higher";
+    EXPECT_TRUE(parse({"--objective", objective, "--candidate", "a:sort:1", "--duration", "1s",
+                       "--sample-interval", "1s"})
+                    .has_value())
+        << statistic;
+  }
+}
+
 TEST(ExploreArgs, TheSettleSlopeIsANumberOfZeroOrMore) {
   for (const std::string_view bad : {"", "fast", "-0.1", "nan", "inf", "0.5s"}) {
     EXPECT_TRUE(contains(refusal_of(with_required({"--settle", "t.x", "--settle-slope", bad})),
@@ -235,6 +271,24 @@ TEST(ExploreArgs, TheSettleSlopeIsANumberOfZeroOrMore) {
         << bad;
   }
   EXPECT_TRUE(parse(with_required({"--settle", "t.x", "--settle-slope", "0"})).has_value());
+}
+
+TEST(ExploreArgs, ASettleWindowLongerThanTheSettleMaximumIsRefusedAtOnce) {
+  // The default window is 30 s: a smaller maximum alone can never settle.
+  const std::string by_default =
+      refusal_of(with_required({"--settle", "t.x", "--settle-max", "20s"}));
+  EXPECT_TRUE(
+      contains(by_default, "--settle-window (30000 ms) is longer than --settle-max (20000 ms)"))
+      << by_default;
+  EXPECT_TRUE(contains(refusal_of(with_required({"--settle", "t.x", "--settle-window", "301s"})),
+                       "longer than --settle-max (300000 ms)"))
+      << "the default maximum is 300 s";
+  EXPECT_TRUE(contains(
+      refusal_of(with_required({"--settle", "t.x", "--settle-window", "9s", "--settle-max", "8s"})),
+      "could never settle"));
+  EXPECT_TRUE(
+      parse(with_required({"--settle", "t.x", "--settle-window", "8s", "--settle-max", "8s"}))
+          .has_value());
 }
 
 TEST(ExploreArgs, TheSettleOptionsNeedTheSettleMetric) {
@@ -254,6 +308,16 @@ TEST(ExploreArgs, ACountIsAWholeNumberOfAtLeastOne) {
     EXPECT_TRUE(contains(refusal_of(with_required({key, "5x"})), "expected a whole number"))
         << "a number with a unit is not a count: " << key;
   }
+}
+
+// (n + factor - 1) / factor wrapped to 0 for a factor near the largest size, so every
+// candidate was eliminated and the report said none had survived, exit 0. Review
+// verdicts 2026-10-23, finding 12a.
+TEST(ExploreArgs, AnEliminationFactorBeyondAnyRealSearchIsRefused) {
+  EXPECT_TRUE(contains(refusal_of(with_required({"--elimination", "18446744073709551615"})),
+                       "--elimination: must be at most 1024"));
+  EXPECT_TRUE(contains(refusal_of(with_required({"--elimination", "1025"})), "at most 1024"));
+  EXPECT_TRUE(parse(with_required({"--elimination", "1024"})).has_value());
 }
 
 TEST(ExploreArgs, TheMachineFacingOptionsAreRefusedByName) {
@@ -372,7 +436,8 @@ TEST(ExploreReport, SaysTheWorstCaseWithItsReplicatesSpreadAndInterval) {
   EXPECT_TRUE(contains(text, "explore: 14 trial(s) in 2 round(s)\n"));
   EXPECT_TRUE(contains(text, "worst case: wide: 81 +/- "));
   EXPECT_TRUE(contains(text, "(95% CI, n=3, sd 0.5"));
-  EXPECT_TRUE(contains(text, "ranking: separated from the best rival\n"));
+  EXPECT_TRUE(contains(text, "ranking: separated from the rival with the worst corrected mean\n"));
+  EXPECT_FALSE(contains(text, "not compared by an interval"));
 }
 
 TEST(ExploreReport, ListsEveryReplicateOfEveryCandidateAndEveryReferenceReading) {
@@ -394,8 +459,82 @@ TEST(ExploreReport, WithoutAWorstCaseItSaysSoAndNeverAnInventedNumber) {
   report.worst_case.reset();
   report.ranking = explore::Ranking::kNone;
   const std::string text = render_report(report);
-  EXPECT_TRUE(contains(text, "worst case: none; every candidate left the search with findings"));
+  EXPECT_TRUE(contains(text, "worst case: none; no candidate survived the search"));
+  EXPECT_FALSE(contains(text, "every candidate left the search"))
+      << "false when others were only ranked out (review verdicts 2026-10-23, finding 12c)";
+  EXPECT_TRUE(contains(text, "candidate wide: survivor")) << "the fates follow";
+  EXPECT_TRUE(contains(text, "candidate narrow: eliminated"));
   EXPECT_TRUE(contains(text, "ranking: no worst case\n"));
+}
+
+TEST(ExploreReport, FlagsCorrectedHardwareErrorsPerCandidateAndForTheReference) {
+  const explore::SearchReport clean = a_report();
+  EXPECT_FALSE(contains(render_report(clean), "corrected hardware errors"));
+  explore::SearchReport report = a_report();
+  report.candidates[0].notes = {{false}, {true}, {true}};
+  report.reference_notes = {{false}, {true}};
+  report.corrected_error_trials = 3;
+  const std::string text = render_report(report);
+  EXPECT_TRUE(contains(text, "corrected hardware errors: 3 scored trial(s)"));
+  EXPECT_TRUE(contains(text, "corrected hardware errors in replicate(s): 2 3"));
+  EXPECT_TRUE(contains(text, "corrected hardware errors in reference reading(s): 2"));
+}
+
+TEST(ExploreReport, SaysWhichTrialsDidNotSettleAndWhenNoneDid) {
+  EXPECT_FALSE(contains(render_report(a_report()), "settle"));
+  explore::SearchReport report = a_report();
+  report.candidates[0].notes = {{false, false}, {false, true}, {false, true}};
+  report.reference_notes = {{false, true}, {false, false}};
+  report.settle_trials = 14;
+  report.unsettled_trials = 3;
+  std::string text = render_report(report);
+  EXPECT_TRUE(contains(text, "settle: 3 of 14 trial(s) did not settle"));
+  EXPECT_FALSE(contains(text, "no trial of this search started from a controlled state"));
+  EXPECT_TRUE(contains(text, "replicate(s) that did not settle: 2 3"));
+  EXPECT_TRUE(contains(text, "reference reading(s) that did not settle: 1"));
+  report.unsettled_trials = 14;
+  text = render_report(report);
+  EXPECT_TRUE(contains(text, "settle: 14 of 14 trial(s) did not settle"));
+  EXPECT_TRUE(contains(text, "no trial of this search started from a controlled state"));
+}
+
+TEST(ExploreReport, NamesTheRivalAndWhoWasNotComparedByAnInterval) {
+  explore::SearchReport report = a_report();
+  report.rival = "narrow";
+  report.uncompared = {"odd", "tiny"};
+  const std::string text = render_report(report);
+  EXPECT_TRUE(
+      contains(text, "ranking: separated from the rival with the worst corrected mean (narrow)\n"));
+  EXPECT_TRUE(contains(text,
+                       "not compared by an interval (eliminated with fewer than two "
+                       "replicates): odd tiny\n"));
+}
+
+TEST(ExploreReport, SaysTheSurvivorsEstimateIsFromTheReplicatesAfterItWasChosen) {
+  explore::SearchReport report = a_report();
+  EXPECT_FALSE(contains(render_report(report), "run after it was chosen"));
+  report.candidates[0].selection_replicates = 1;
+  const std::string text = render_report(report);
+  EXPECT_TRUE(
+      contains(text, "corrected for drift of the 2 replicate(s) run after it was chosen: mean"));
+  EXPECT_TRUE(contains(text, "raw of the 2 replicate(s) run after it was chosen: mean"));
+  EXPECT_TRUE(contains(text, "replicates: 80.5 | 81 81.5\n"));
+  EXPECT_TRUE(contains(text, "the 1 replicate(s) before the bar chose this candidate"));
+}
+
+TEST(ExploreReport, ASearchEndedByTheReferenceSaysSoAndKeepsWhatWasMeasured) {
+  explore::SearchReport report = a_report();
+  report.worst_case.reset();
+  report.ranking = explore::Ranking::kNone;
+  report.reference_stop = results::Verdict::kFindings;
+  report.candidates[0].fate = Fate::kStopped;
+  const std::string text = render_report(report);
+  EXPECT_TRUE(contains(text,
+                       "worst case: none; the search ended early because a reference "
+                       "trial's verdict was findings"))
+      << text;
+  EXPECT_TRUE(contains(text, "candidate wide: stopped with the search"));
+  EXPECT_TRUE(contains(text, "replicates: 80.5 81 81.5")) << "what was measured is still listed";
 }
 
 TEST(ExploreReport, ACounterObjectiveNamesItsStatistic) {
@@ -416,6 +555,29 @@ TEST(ExploreExit, AFindingOutranksAnUnfinishedTrialWhichOutranksASearchThatScore
   report.candidates[2].fate = Fate::kFindings;
   report.candidates[1].fate = Fate::kIncomplete;
   EXPECT_EQ(exit_code_for(report), 5) << "both: the finding";
+}
+
+TEST(ExploreExit, AReferenceThatFoundSomethingIsAFindingAndOneThatDidNotFinishIsUnread) {
+  explore::SearchReport report = a_report();
+  report.candidates[2].fate = Fate::kEliminated;
+  report.reference_stop = results::Verdict::kFindings;
+  EXPECT_EQ(exit_code_for(report), 5);
+  report.reference_stop = results::Verdict::kIncomplete;
+  EXPECT_EQ(exit_code_for(report), 6);
+  report.candidates[2].fate = Fate::kFindings;
+  EXPECT_EQ(exit_code_for(report), 5) << "a finding outranks";
+}
+
+TEST(ExploreExit, CorrectedHardwareErrorsExitFiveAsStressDoes) {
+  explore::SearchReport report = a_report();
+  report.candidates[2].fate = Fate::kEliminated;
+  ASSERT_EQ(exit_code_for(report), 0);
+  report.corrected_error_trials = 1;
+  EXPECT_EQ(exit_code_for(report), 5);
+  EXPECT_EQ(exit_code_for(results::Verdict::kCorrectedErrors, true, true), 5)
+      << "stress's mapping of the same trial";
+  report.candidates[2].fate = Fate::kIncomplete;
+  EXPECT_EQ(exit_code_for(report), 5) << "5 outranks 6";
 }
 
 TEST(ExploreExit, ASearchThatDidNotEndIsRefusedFailedOrUnread) {
@@ -497,12 +659,16 @@ TEST(ExploreRun, AnUnrunnableTrialEndsTheSearchNamingTheCandidateAndWhy) {
   EXPECT_EQ(search.syscalls.fork_count(), 0);
 }
 
-TEST(ExploreRun, AReferenceThatDidNotFinishCannotMeasureDriftAndEndsTheSearch) {
+TEST(ExploreRun, AReferenceThatDidNotFinishCannotMeasureDriftAndEndsTheSearchWithAReport) {
   Searching search;
   search.syscalls.script_forks({{1001, 0}});
   search.syscalls.script_nonblocking_reaps({{platform::Reaped{1001, 0}, 0}});
-  EXPECT_EQ(search.run(Searching::config("memory.available:min:lower")), 3);
-  EXPECT_TRUE(contains(search.err.str(), "reference unusable")) << search.err.str();
+  EXPECT_EQ(search.run(Searching::config("memory.available:min:lower")), 6);
+  EXPECT_TRUE(
+      contains(search.out.str(), "the search ended early because a reference trial's verdict was"))
+      << search.out.str();
+  EXPECT_TRUE(contains(search.out.str(), ": stopped with the search"));
+  EXPECT_EQ(search.err.str(), "");
 }
 
 TEST(ExploreRun, AWorkerWhoseExecFailedEndsTheSearchWithItsExitCodeAndSaysNothing) {

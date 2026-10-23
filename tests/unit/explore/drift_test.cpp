@@ -4,7 +4,13 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <random>
 #include <vector>
+
+#include "explore/estimate.hpp"
 
 namespace loadforge::explore {
 namespace {
@@ -41,10 +47,15 @@ TEST(BaselineAt, TwoReadingsAtOneTimeNeverDivideByZero) {
   EXPECT_EQ(baseline_at(same, 101), 12.0);
 }
 
-TEST(BaselineAt, AReadingOutOfOrderIsPassedOver) {
+// The points must be in time order (a search's reference readings are: each trial is
+// later than the one before). Nothing reorders or skips a reading that is not, which
+// the test once claimed ("passed over"): with {300, 100} the scan holds the first
+// value up to 300 and the last element after it. Review verdicts 2026-10-23, finding
+// 12d.
+TEST(BaselineAt, AReadingOutOfOrderIsNotReorderedOrSkippedItIsReadAsItLies) {
   const std::vector<ReferencePoint> points = {{300, 5.0}, {100, 9.0}};
-  EXPECT_EQ(baseline_at(points, 200), 5.0);
-  EXPECT_EQ(baseline_at(points, 400), 9.0);
+  EXPECT_EQ(baseline_at(points, 200), 5.0) << "held at the first element up to its time";
+  EXPECT_EQ(baseline_at(points, 400), 9.0) << "the last element, not the latest reading";
 }
 
 TEST(BracketAt, NamesTheNeighboursAndThePlaceBetweenThem) {
@@ -133,6 +144,77 @@ TEST(Corrected, TakesOutTheDriftSinceTheAnchor) {
   EXPECT_DOUBLE_EQ(corrected(75.0, 60.0, 50.0), 65.0);
   EXPECT_DOUBLE_EQ(corrected(75.0, 50.0, 50.0), 75.0);
   EXPECT_DOUBLE_EQ(corrected(75.0, 45.0, 50.0), 80.0);
+}
+
+// The degrees of freedom credited to the reference's noise estimate. The code had
+// used readings - 1; the effective degrees of freedom of reference_variance() are
+// 1.0, 1.4, 1.9, 2.3 and 3.4 for 3, 4, 5, 6 and 8 readings (review verdicts
+// 2026-10-23, finding 8), so a t interval on n - 1 was too narrow.
+TEST(ReferenceDegrees, AreWhatTheDerivationSaysAndNeverBelowOne) {
+  const std::size_t expected[] = {1, 1, 1, 1, 1, 2, 2, 3, 3, 4, 49};
+  const std::size_t readings[] = {0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 100};
+  for (std::size_t i = 0; i < std::size(readings); ++i) {
+    EXPECT_EQ(reference_degrees(readings[i]), expected[i]) << readings[i] << " readings";
+  }
+}
+
+// Satterthwaite: the degrees of freedom of the chi-square that has the estimator's mean
+// and variance, measured over standard normal readings spaced equally in time.
+TEST(ReferenceDegrees, DoNotExceedTheEffectiveDegreesOfFreedomOfTheEstimate) {
+  std::mt19937_64 rng(88);
+  std::normal_distribution<double> noise(0.0, 1.0);
+  constexpr int kDraws = 100'000;
+  for (std::size_t n = 3; n <= 8; ++n) {
+    double sum = 0.0;
+    double squares = 0.0;
+    for (int draw = 0; draw < kDraws; ++draw) {
+      std::vector<ReferencePoint> points;
+      for (std::size_t i = 0; i < n; ++i) {
+        points.push_back({static_cast<std::int64_t>(i) * 1000, noise(rng)});
+      }
+      const double variance = reference_variance(points);
+      sum += variance;
+      squares += variance * variance;
+    }
+    const double mean = sum / kDraws;
+    const double effective = 2.0 * mean * mean / (squares / kDraws - mean * mean);
+    EXPECT_NEAR(mean, 1.0, 0.02) << "the estimate is unbiased, n=" << n;
+    EXPECT_LE(static_cast<double>(reference_degrees(n)), effective + 0.1)
+        << "n=" << n << " effective df " << effective;
+  }
+}
+
+// Candidate scores that are constant leave the reference's noise as the only error, so
+// the interval of the corrected mean must cover the true value (0) at its stated
+// level, which it did not with readings - 1 degrees (86% at three readings).
+TEST(ReferenceDegrees, AnIntervalOnTheReferencesNoiseCoversAtItsStatedLevel) {
+  std::mt19937_64 rng(808);
+  std::normal_distribution<double> noise(0.0, 1.0);
+  constexpr int kDraws = 40'000;
+  constexpr std::size_t kAnchors = 2;
+  for (const std::size_t readings : {3U, 5U}) {
+    int covered = 0;
+    for (int draw = 0; draw < kDraws; ++draw) {
+      std::vector<ReferencePoint> points;
+      for (std::size_t i = 0; i < readings; ++i) {
+        points.push_back({static_cast<std::int64_t>(i) * 1000, noise(rng)});
+      }
+      const double anchor = (points[0].value + points[1].value) / kAnchors;
+      std::vector<std::int64_t> times;
+      std::vector<double> samples;
+      for (int k = 0; k < 10; ++k) {
+        const std::int64_t at = 1500 + (static_cast<std::int64_t>(readings) - 2) * 50 * k;
+        times.push_back(at);
+        samples.push_back(corrected(0.0, baseline_at(points, at), anchor));
+      }
+      Correction correction;
+      correction.variance = correction_gain(points, times, kAnchors) * reference_variance(points);
+      correction.max_degrees = reference_degrees(points.size());
+      const Estimate estimate_of_samples = estimate(samples, correction);
+      covered += std::abs(estimate_of_samples.mean) <= *estimate_of_samples.half_width ? 1 : 0;
+    }
+    EXPECT_GE(static_cast<double>(covered) / kDraws, 0.94) << readings << " readings";
+  }
 }
 
 }  // namespace

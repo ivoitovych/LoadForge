@@ -60,10 +60,38 @@ Moments moments(std::span<const double> samples) noexcept {
   return out;
 }
 
+// The degrees of freedom of the sum of two variance estimates, the replicates'
+// variance of the mean (n - 1 degrees) and the reference correction's (its own),
+// by Welch and Satterthwaite: each counts in proportion to its share of the sum,
+// so the result lies between the smaller of the two and their total; it is capped at
+// the replicates' n - 1 below. The smaller
+// alone let a reference that added almost nothing to the variance set the t value:
+// with the reference credited with the few degrees its estimate has (drift.cpp),
+// that made the interval about three times too wide and its coverage 99.8% where
+// the search claims 95% (the search property test).
+// The variance and the count it came from are named at the one call site.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+std::size_t combined_degrees(double sample_term, std::size_t n,
+                             const Correction& correction) noexcept {
+  if (correction.variance <= 0.0) {
+    return n - 1;
+  }
+  const auto sample_degrees = static_cast<double>(n - 1);
+  const auto reference_degrees = static_cast<double>(correction.max_degrees);
+  const double total = sample_term + correction.variance;
+  const double spread = (sample_term * sample_term / sample_degrees) +
+                        (correction.variance * correction.variance / reference_degrees);
+  // At most the replicates' own n - 1: their spread is estimated from that many and no
+  // more, so adding a reference never lends the interval a smaller t than the replicates
+  // alone would have.
+  const double degrees = std::min(sample_degrees, std::floor(total * total / spread));
+  return static_cast<std::size_t>(std::max(1.0, degrees));
+}
+
 double half_width_of(double stddev, std::size_t n, const Correction& correction) noexcept {
-  const double standard_error_squared =
-      stddev * stddev / static_cast<double>(n) + correction.variance;
-  return t_critical(std::min(n - 1, correction.max_degrees)) * std::sqrt(standard_error_squared);
+  const double sample_term = stddev * stddev / static_cast<double>(n);
+  return t_critical(combined_degrees(sample_term, n, correction)) *
+         std::sqrt(sample_term + correction.variance);
 }
 
 }  // namespace

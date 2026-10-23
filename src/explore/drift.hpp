@@ -30,8 +30,10 @@ struct ReferencePoint {
 };
 
 /// The reference at `at_ns`: linear between the neighbouring readings, held
-/// at the first before it and the last after it. `points` are in time order
-/// (a reading out of order is passed over); empty gives 0.
+/// at the first before it and the last after it. `points` must be in time order,
+/// as a search's reference readings always are; nothing reorders them, so for a
+/// reading out of order the answer is whatever the scan meets first (past the last
+/// reading in the array, that array's last value). Empty gives 0.
 [[nodiscard]] double baseline_at(std::span<const ReferencePoint> points,
                                  std::int64_t at_ns) noexcept;
 
@@ -54,6 +56,13 @@ struct Bracket {
 /// place between the neighbours. With two readings the only evidence is their
 /// difference, d^2 / 2, which drift inflates and so errs high. Zero below two.
 [[nodiscard]] double reference_variance(std::span<const ReferencePoint> points) noexcept;
+
+/// The degrees of freedom to credit reference_variance() with when `readings`
+/// went into it: at least 1, and no more than the effective degrees of freedom
+/// of that estimate, so a t interval built on it errs wide. It is
+/// max(1, (readings - 2) / 2) in integer arithmetic; drift.cpp has the derivation
+/// and the measured values.
+[[nodiscard]] std::size_t reference_degrees(std::size_t readings) noexcept;
 
 /// How much of the reference's noise the mean of the corrected scores of
 /// trials at `trial_times` carries: the sum of squared weights of the

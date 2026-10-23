@@ -4,10 +4,13 @@
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <utility>
 #include <variant>
@@ -106,40 +109,46 @@ std::optional<TrialError> check_candidate(const Candidate& candidate,
     const Settle& settle = *candidate.settle;
     const bool formed = settle.window_ns > 0 && settle.window_ns <= kLongestNs &&
                         settle.max_ns > 0 && settle.max_ns <= kLongestNs &&
-                        settle.max_slope_per_second >= 0.0;
+                        settle.max_slope_per_second >= 0.0 && settle.window_ns <= settle.max_ns;
     if (!formed) {
       return refuse(TrialFault::kCandidate,
                     "candidate " + name +
                         ": the settle phase needs a window and a maximum "
-                        "above 0 (at most 30 days) and a slope bound of 0 or more");
+                        "above 0 (at most 30 days), the window no longer than the "
+                        "maximum, and a slope bound of 0 or more");
     }
   }
   return std::nullopt;
 }
 
-/// Why the settle metric cannot be measured, or nothing: a gauge of that name
-/// must be present in the report, in some scope.
+/// Why the settle metric cannot be measured, or nothing: the first series of that
+/// name in the report must be a gauge this machine can read. The first, in every
+/// place that names one: the search's own check (search.cpp, settle_problem) and the
+/// slope below take the same series, so a scope that happens to be readable behind an
+/// unreadable first one is never settled on in silence. Review verdicts 2026-10-23,
+/// finding 12b.
 std::optional<TrialError> check_settle_metric(const Settle& settle,
                                               const telemetry::CapabilityReport& report) {
-  std::optional<std::string> why;
+  std::string detail = "settle metric " + quoted(settle.metric);
   for (const telemetry::SourceStatus& source : report.sources) {
     for (const telemetry::MetricStatus& status : source.metrics) {
-      if (status.metric.name != settle.metric || status.metric.kind != telemetry::Kind::kGauge) {
+      if (status.metric.name != settle.metric) {
         continue;
       }
-      if (!status.unavailable.has_value()) {
-        return std::nullopt;
+      if (status.unavailable.has_value()) {
+        detail += " is not readable on this machine: " + status.unavailable->detail + "; " +
+                  status.unavailable->remediation;
+        return refuse(TrialFault::kMetricUnavailable, std::move(detail));
       }
-      why = status.unavailable->detail + "; " + status.unavailable->remediation;
+      if (status.metric.kind != telemetry::Kind::kGauge) {
+        return refuse(TrialFault::kMetricUnavailable,
+                      std::move(detail) + " is not a gauge in the capability report");
+      }
+      return std::nullopt;
     }
   }
-  std::string detail = "settle metric " + quoted(settle.metric);
-  if (why.has_value()) {
-    detail += " is not readable on this machine: " + *why;
-  } else {
-    detail += " is not a gauge in the capability report";
-  }
-  return refuse(TrialFault::kMetricUnavailable, std::move(detail));
+  return refuse(TrialFault::kMetricUnavailable,
+                std::move(detail) + " is not a gauge in the capability report");
 }
 
 /// The settle metric's slope per second over `window`, if the timeline has it.
@@ -154,9 +163,11 @@ std::optional<double> slope_of(const statistics::Summarizer& summarizer,
     if (summary.metric.name != metric) {
       continue;
     }
+    // The first series of that name, as the capability check took it.
     if (const auto* gauge = std::get_if<statistics::GaugeSummary>(&summary.value)) {
       return gauge->slope_per_second;
     }
+    return std::nullopt;
   }
   return std::nullopt;
 }
@@ -191,6 +202,44 @@ std::int64_t deadline_of(const telemetry::TimelineView& timeline,
     return stop->start_ns;
   }
   return report.sampling.last_round_ns;
+}
+
+/// The time of the last round taken before `start_ns`: the reading that opens the
+/// first interval of the window, which no reading inside the window can.
+std::optional<std::int64_t> reading_before(const telemetry::TimelineView& timeline,
+                                           std::int64_t start_ns) {
+  std::optional<std::int64_t> latest;
+  for (std::size_t index = 0; index < timeline.series_count(); ++index) {
+    const std::span<const telemetry::Point> all =
+        timeline.points(static_cast<telemetry::SeriesId>(index));
+    const auto first = std::ranges::lower_bound(all, start_ns, {}, &telemetry::Point::timestamp_ns);
+    if (first != all.begin()) {
+      const std::int64_t at_ns = std::prev(first)->timestamp_ns;
+      latest = std::max(latest.value_or(at_ns), at_ns);
+    }
+  }
+  return latest;
+}
+
+/// A counter's advance over the whole window. The summarizer counts only the pairs
+/// of readings that are both in the window, so the advance from the last reading
+/// before the window to the first one in it, up to a sample interval of the load,
+/// is not in `delta`, and a delta over a 3 s window sampled each second read 2 s of
+/// it. `widened` is the summary of a window that opens at that earlier reading;
+/// its delta replaces the window's own (the rate does not change: it divides by the
+/// span it counted). Review verdicts 2026-10-23, finding 5.
+void take_whole_window_deltas(statistics::LoadSignature& signature,
+                              const statistics::LoadSignature& widened) {
+  // Both summaries are of one timeline, so their metrics line up; a summary that does
+  // not is not read past its end, and its series are not taken for the window's.
+  const std::size_t common = std::min(signature.metrics.size(), widened.metrics.size());
+  for (std::size_t index = 0; index < common; ++index) {
+    auto* counter = std::get_if<statistics::CounterSummary>(&signature.metrics[index].value);
+    const auto* wider = std::get_if<statistics::CounterSummary>(&widened.metrics[index].value);
+    if (counter != nullptr && wider != nullptr) {
+      counter->delta = wider->delta;
+    }
+  }
 }
 
 std::string describe_statistics(const statistics::StatisticsError& error) {
@@ -396,6 +445,15 @@ core::Result<TrialOutcome, TrialError> ControllerTrialRunner::run(const Candidat
                   "cannot summarise the load window: " + describe_statistics(signature.error()));
   }
   outcome.signature = std::move(signature).value();
+  if (const auto before = reading_before(rig->timeline(), end_ns - candidate.duration_ns)) {
+    auto widened = summarizer.summarize(rig->timeline(), statistics::Window{*before, end_ns});
+    if (!widened.has_value()) {
+      return refuse(TrialFault::kRun,
+                    "cannot summarise the load window from its opening reading: " +
+                        describe_statistics(widened.error()));
+    }
+    take_whole_window_deltas(outcome.signature, widened.value());
+  }
   log << "trial " << candidate.id << ": " << results::describe(outcome.verdict)
       << (outcome.settled ? ", settled" : ", not settled") << " after " << outcome.settle_ns
       << " ns\n";

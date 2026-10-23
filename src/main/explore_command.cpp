@@ -42,6 +42,9 @@ constexpr int kUsageError = 2;
 constexpr int kTrialFailed = 3;
 
 constexpr std::int64_t kNanosecondsPerMillisecond = 1'000'000;
+/// The largest elimination factor: a factor above the number of candidates keeps one,
+/// so a thousand is far beyond any search, and the arithmetic stays far from wrapping.
+constexpr std::uint64_t kMostElimination = 1024;
 /// Thirty days, as the trial runner's bound on a load.
 constexpr std::int64_t kLongestMilliseconds = std::int64_t{30} * 24 * 3600 * 1000;
 
@@ -298,6 +301,9 @@ std::optional<std::string> take_elimination(const Written& option, Parsing& out)
   if (!count.has_value()) {
     return count.error();
   }
+  if (count.value() > kMostElimination) {
+    return refused(option.key, "must be at most " + std::to_string(kMostElimination));
+  }
   out.args.elimination_factor = static_cast<std::size_t>(count.value());
   return std::nullopt;
 }
@@ -433,7 +439,44 @@ core::Result<std::optional<explore::Settle>, std::string> settle_of(const Parsin
   settle.max_slope_per_second = parsing.settle_slope.value_or(settle.max_slope_per_second);
   settle.window_ns = parsing.settle_window_ns.value_or(settle.window_ns);
   settle.max_ns = parsing.settle_max_ns.value_or(settle.max_ns);
+  if (settle.window_ns > settle.max_ns) {
+    // The slope is judged only once a full window has been read, and the phase ends at
+    // its maximum: a window longer than the maximum can never settle.
+    return "--settle-window (" + std::to_string(settle.window_ns / kNanosecondsPerMillisecond) +
+           " ms) is longer than --settle-max (" +
+           std::to_string(settle.max_ns / kNanosecondsPerMillisecond) +
+           " ms): the settle phase could never settle";
+  }
   return std::optional<explore::Settle>{std::move(settle)};
+}
+
+/// Whether the statistic is not defined by fewer than two readings of the window: a
+/// spread, a slope, a rate (a span) and a delta (a pair).
+bool needs_two_readings(
+    const std::variant<explore::GaugeStatistic, explore::CounterStatistic>& statistic) {
+  if (const auto* gauge = std::get_if<explore::GaugeStatistic>(&statistic)) {
+    return *gauge == explore::GaugeStatistic::kStddev || *gauge == explore::GaugeStatistic::kSlope;
+  }
+  return true;
+}
+
+/// The refusal of a load too short for the objective, or nothing: a trial of a
+/// duration that cannot hold two readings at the sample interval ends the search
+/// with "no reading for the objective" after a whole trial, exit 6, for what is a
+/// mistake in the options. Two sample intervals always hold two rounds.
+std::optional<std::string> short_load_refusal(const ExploreArgs& args) {
+  if (!needs_two_readings(args.objective.statistic) ||
+      args.duration_ns >= 2 * args.sample_interval_ns) {
+    return std::nullopt;
+  }
+  const std::string statistic = std::visit(
+      [](auto each) { return std::string{explore::describe(each)}; }, args.objective.statistic);
+  return refused("--duration",
+                 "must be at least twice --sample-interval (" +
+                     std::to_string(args.sample_interval_ns / kNanosecondsPerMillisecond) +
+                     " ms): " + statistic +
+                     " needs two readings in the window, and the duration is " +
+                     std::to_string(args.duration_ns / kNanosecondsPerMillisecond) + " ms");
 }
 
 }  // namespace
@@ -477,6 +520,9 @@ core::Result<ExploreArgs, std::string> parse_explore_args(std::span<const std::s
     return settle.error();
   }
   parsing.args.settle = std::move(settle).value();
+  if (auto refusal = short_load_refusal(parsing.args); refusal.has_value()) {
+    return *refusal;
+  }
   return std::move(parsing.args);
 }
 
@@ -527,9 +573,104 @@ std::string estimate_text(const explore::Estimate& estimate) {
   return text;
 }
 
+/// The 1-based replicates (or readings) that `which` of their note is true of.
+std::string noted_list(const std::vector<explore::TrialNote>& notes,
+                       bool explore::TrialNote::*which) {
+  std::string text;
+  for (std::size_t i = 0; i < notes.size(); ++i) {
+    if (notes[i].*which) {
+      text += " " + std::to_string(i + 1);
+    }
+  }
+  return text;
+}
+
 std::string statistic_text(const explore::BoundObjective& objective) {
   return std::visit([](auto statistic) { return std::string{explore::describe(statistic)}; },
                     objective.statistic);
+}
+
+}  // namespace
+
+namespace {
+
+/// The worst case, the ranking and what the search says of all its trials.
+void render_summary(std::ostringstream& text, const explore::SearchReport& report) {
+  if (report.reference_stop.has_value()) {
+    text << "worst case: none; the search ended early because a reference trial's verdict was "
+         << results::describe(*report.reference_stop)
+         << ". What was measured before it follows; no candidate was ranked\n";
+  } else if (report.worst_case.has_value()) {
+    text << "worst case: " << explore::format(*report.worst_case) << "\n";
+  } else {
+    // Not "every candidate had findings": the survivor may have found something in its
+    // last trials while the others were only ranked out, with scores listed below.
+    text << "worst case: none; no candidate survived the search (each candidate's fate "
+            "follows)\n";
+  }
+  text << "ranking: " << explore::describe(report.ranking);
+  if (!report.rival.empty()) {
+    text << " (" << report.rival << ")";
+  }
+  text << "\n";
+  if (!report.uncompared.empty()) {
+    text << "  not compared by an interval (eliminated with fewer than two replicates):";
+    for (const std::string& id : report.uncompared) {
+      text << " " << id;
+    }
+    text << "\n";
+  }
+  if (report.unsettled_trials > 0) {
+    text << "settle: " << report.unsettled_trials << " of " << report.settle_trials
+         << " trial(s) did not settle before the settle maximum and started from an "
+            "uncontrolled state"
+         << (report.unsettled_trials == report.settle_trials
+                 ? "; no trial of this search started from a controlled state"
+                 : "")
+         << "\n";
+  }
+  if (report.corrected_error_trials > 0) {
+    text << "corrected hardware errors: " << report.corrected_error_trials
+         << " scored trial(s) had the hardware report an error it corrected; the scores stand, "
+            "the exit code is 5 as for stress\n";
+  }
+}
+
+/// One candidate's fate, estimates, replicates and the notes on its trials.
+void render_candidate(std::ostringstream& text, const explore::CandidateReport& candidate) {
+  text << "candidate " << candidate.id << ": " << explore::describe(candidate.fate)
+       << ", ranked in " << candidate.rounds << " round(s), " << candidate.samples.size()
+       << " replicate(s)\n";
+  if (!candidate.samples.empty()) {
+    // The survivor's estimates are from the replicates after the ones that chose it.
+    std::string basis;
+    if (candidate.selection_replicates > 0) {
+      basis = " of the " +
+              std::to_string(candidate.samples.size() - candidate.selection_replicates) +
+              " replicate(s) run after it was chosen";
+    }
+    text << "  corrected for drift" << basis << ": " << estimate_text(candidate.corrected) << "\n";
+    text << "  raw" << basis << ": " << estimate_text(candidate.raw) << "\n";
+    text << "  replicates:";
+    for (std::size_t i = 0; i < candidate.samples.size(); ++i) {
+      text << (i == candidate.selection_replicates && i > 0 ? " |" : "") << " "
+           << number(candidate.samples[i]);
+    }
+    text << "\n";
+    if (candidate.selection_replicates > 0) {
+      text << "  (the " << candidate.selection_replicates
+           << " replicate(s) before the bar chose this candidate and are not in its estimates)\n";
+    }
+    if (const std::string flagged =
+            noted_list(candidate.notes, &explore::TrialNote::corrected_errors);
+        !flagged.empty()) {
+      text << "  corrected hardware errors in replicate(s):" << flagged << "\n";
+    }
+    if (const std::string flagged = noted_list(candidate.notes, &explore::TrialNote::unsettled);
+        !flagged.empty()) {
+      text << "  replicate(s) that did not settle:" << flagged << "\n";
+    }
+  }
 }
 
 }  // namespace
@@ -542,26 +683,9 @@ std::string render_report(const explore::SearchReport& report) {
        << telemetry::describe(metric.unit) << "), " << explore::describe(report.objective.direction)
        << "\n"
        << "explore: " << report.trials << " trial(s) in " << report.rounds << " round(s)\n";
-  if (report.worst_case.has_value()) {
-    text << "worst case: " << explore::format(*report.worst_case) << "\n";
-  } else {
-    text << "worst case: none; every candidate left the search with findings or an "
-            "unfinished trial\n";
-  }
-  text << "ranking: " << explore::describe(report.ranking) << "\n";
+  render_summary(text, report);
   for (const explore::CandidateReport& candidate : report.candidates) {
-    text << "candidate " << candidate.id << ": " << explore::describe(candidate.fate)
-         << ", ranked in " << candidate.rounds << " round(s), " << candidate.samples.size()
-         << " replicate(s)\n";
-    if (!candidate.samples.empty()) {
-      text << "  corrected for drift: " << estimate_text(candidate.corrected) << "\n";
-      text << "  raw: " << estimate_text(candidate.raw) << "\n";
-      text << "  replicates:";
-      for (const double sample : candidate.samples) {
-        text << " " << number(sample);
-      }
-      text << "\n";
-    }
+    render_candidate(text, candidate);
   }
   text << "reference: anchor " << number(report.anchor) << ", drift " << number(report.drift)
        << " (the last reading less the anchor), " << estimate_text(report.reference) << "\n"
@@ -570,6 +694,16 @@ std::string render_report(const explore::SearchReport& report) {
     text << " (" << point.at_ns << ", " << number(point.value) << ")";
   }
   text << "\n";
+  if (const std::string flagged =
+          noted_list(report.reference_notes, &explore::TrialNote::corrected_errors);
+      !flagged.empty()) {
+    text << "  corrected hardware errors in reference reading(s):" << flagged << "\n";
+  }
+  if (const std::string flagged =
+          noted_list(report.reference_notes, &explore::TrialNote::unsettled);
+      !flagged.empty()) {
+    text << "  reference reading(s) that did not settle:" << flagged << "\n";
+  }
   return text.str();
 }
 
@@ -579,10 +713,11 @@ int exit_code_for(const explore::SearchReport& report) noexcept {
       return each.fate == fate;
     });
   };
-  if (fate_is(explore::Fate::kFindings)) {
+  const bool reference_found = report.reference_stop == results::Verdict::kFindings;
+  if (fate_is(explore::Fate::kFindings) || reference_found || report.corrected_error_trials > 0) {
     return kExitFault;
   }
-  if (fate_is(explore::Fate::kIncomplete)) {
+  if (fate_is(explore::Fate::kIncomplete) || report.reference_stop.has_value()) {
     return kExitNotVerified;
   }
   return kOk;

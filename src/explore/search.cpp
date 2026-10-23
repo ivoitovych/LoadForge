@@ -67,6 +67,12 @@ std::optional<ExploreError> settle_problem(const Candidate& candidate,
     return std::nullopt;
   }
   const std::string& name = candidate.settle->metric;
+  if (candidate.settle->window_ns > candidate.settle->max_ns) {
+    // The slope is judged once a full window has been read, and the phase ends at its
+    // maximum: such a phase can never settle.
+    return make_error(ExploreFault::kConfiguration,
+                      "settle window of " + candidate.id + " is longer than its settle maximum");
+  }
   for (const telemetry::SourceStatus& source : capabilities.sources) {
     for (const telemetry::MetricStatus& status : source.metrics) {
       if (status.metric.name != name) {
@@ -91,6 +97,7 @@ std::optional<ExploreError> settle_problem(const Candidate& candidate,
 
 struct Measured {
   Verdict verdict = Verdict::kIncomplete;
+  TrialNote note;
   std::int64_t at_ns = 0;
   double value = 0.0;
 };
@@ -98,6 +105,7 @@ struct Measured {
 struct Observation {
   std::int64_t at_ns = 0;
   double raw = 0.0;
+  TrialNote note;
 };
 
 struct State {
@@ -105,6 +113,8 @@ struct State {
   Fate fate = Fate::kSurvivor;
   std::size_t rounds = 0;
   std::vector<Observation> observations;
+  /// For the survivor: how many of its observations were taken before it was chosen.
+  std::size_t selection_observations = 0;
 };
 
 // One search in progress. Everything here is a plain sequence of trials on the
@@ -119,6 +129,20 @@ class Execution {
         states_(config_.candidates.size()) {}
 
   core::Result<SearchReport, ExploreError> run() {
+    auto done = execute();
+    if (!done) {
+      // A reference that found something is a finding, as a candidate's trial is: what
+      // was measured before it is still the answer to "what was found so far".
+      if (done.error().fault == ExploreFault::kReference) {
+        return report();
+      }
+      return done.error();
+    }
+    return report();
+  }
+
+ private:
+  core::Result<core::Ok, ExploreError> execute() {
     if (auto anchored = anchor(); !anchored) {
       return anchored.error();
     }
@@ -134,16 +158,15 @@ class Execution {
       target *= config_.elimination_factor;
       ++rounds_;
     }
-    if (auto ran = passes(config_.final_replicates); !ran) {
+    if (auto ran = fresh_replicates(); !ran) {
       return ran.error();
     }
     if (auto closed = close_reference(); !closed) {
       return closed.error();
     }
-    return report();
+    return core::Ok{};
   }
 
- private:
   core::Result<Measured, ExploreError> measure(const Candidate& candidate) {
     auto outcome = runner_->run(candidate);
     ++trials_;
@@ -154,9 +177,14 @@ class Execution {
       return error;
     }
     const TrialOutcome& trial = outcome.value();
+    const bool asked = candidate.settle.has_value();
+    settle_trials_ += static_cast<std::size_t>(asked);
+    unsettled_trials_ += static_cast<std::size_t>(asked && !trial.settled);
     const statistics::Window window = trial.signature.window;
     Measured measured;
     measured.verdict = trial.verdict;
+    measured.note.corrected_errors = trial.verdict == Verdict::kCorrectedErrors;
+    measured.note.unsettled = asked && !trial.settled;
     measured.at_ns = window.start_ns + (window.end_ns - window.start_ns) / 2;
     if (unscored(trial.verdict)) {
       return measured;
@@ -175,11 +203,13 @@ class Execution {
       return measured.error();
     }
     if (unscored(measured.value().verdict)) {
+      reference_stop_ = measured.value().verdict;
       return make_error(ExploreFault::kReference,
                         "the reference " + config_.reference.id + " ended " +
                             std::string(results::describe(measured.value().verdict)));
     }
     references_.push_back({measured.value().at_ns, measured.value().value});
+    reference_notes_.push_back(measured.value().note);
     since_reference_ = 0;
     return core::Ok{};
   }
@@ -196,6 +226,7 @@ class Execution {
       values.push_back(point.value);
     }
     anchor_ = estimate(values).mean;
+    anchored_ = true;
     return core::Ok{};
   }
 
@@ -218,7 +249,7 @@ class Execution {
       state.fate = result.verdict == Verdict::kFindings ? Fate::kFindings : Fate::kIncomplete;
       return core::Ok{};
     }
-    state.observations.push_back({result.at_ns, result.value});
+    state.observations.push_back({result.at_ns, result.value, result.note});
     ++since_reference_;
     if (since_reference_ >= config_.interleave_every) {
       return reference_trial();
@@ -242,15 +273,39 @@ class Execution {
     return core::Ok{};
   }
 
+  // The survivor, chosen on the replicates it has, is run final_replicates more times.
+  // A mean and an interval from the replicates that chose it would be biased towards
+  // the worst (the best of several noisy candidates is high by chance), so the
+  // reported claim comes from these fresh ones alone. With one candidate nothing
+  // chose it and they are all its replicates.
+  core::Result<core::Ok, ExploreError> fresh_replicates() {
+    const auto survivor =
+        std::ranges::find_if(states_, [](const State& state) { return state.alive; });
+    if (survivor == states_.end()) {
+      return core::Ok{};
+    }
+    survivor->selection_observations = survivor->observations.size();
+    const auto which = static_cast<std::size_t>(survivor - states_.begin());
+    for (std::size_t fresh = 0; fresh < config_.final_replicates && survivor->alive; ++fresh) {
+      if (auto ran = candidate_trial(which); !ran) {
+        return ran.error();
+      }
+    }
+    return core::Ok{};
+  }
+
   [[nodiscard]] std::size_t alive_count() const {
     return static_cast<std::size_t>(
         std::count_if(states_.begin(), states_.end(), [](const State& s) { return s.alive; }));
   }
 
-  [[nodiscard]] std::vector<double> corrected_samples(const State& state) const {
+  // The observations from index `from` on, drift-corrected.
+  [[nodiscard]] std::vector<double> corrected_samples(const State& state,
+                                                      std::size_t from = 0) const {
     std::vector<double> out;
-    out.reserve(state.observations.size());
-    for (const Observation& observation : state.observations) {
+    out.reserve(state.observations.size() - from);
+    for (std::size_t i = from; i < state.observations.size(); ++i) {
+      const Observation& observation = state.observations[i];
       out.push_back(
           corrected(observation.raw, baseline_at(references_, observation.at_ns), anchor_));
     }
@@ -259,16 +314,19 @@ class Execution {
 
   // What the reference's noise adds to the uncertainty of this candidate's
   // mean (drift.hpp): zero when the reference showed none.
-  [[nodiscard]] Correction correction_of(const State& state) const {
+  [[nodiscard]] Correction correction_of(const State& state, std::size_t from = 0) const {
+    if (state.observations.size() <= from) {
+      return Correction{};  // Nothing to correct; an unfinished anchor could not be weighed.
+    }
     std::vector<std::int64_t> times;
-    times.reserve(state.observations.size());
-    for (const Observation& observation : state.observations) {
-      times.push_back(observation.at_ns);
+    times.reserve(state.observations.size() - from);
+    for (std::size_t i = from; i < state.observations.size(); ++i) {
+      times.push_back(state.observations[i].at_ns);
     }
     Correction out;
     out.variance = correction_gain(references_, times, config_.reference_replicates) *
                    reference_variance(references_);
-    out.max_degrees = references_.size() - 1;
+    out.max_degrees = reference_degrees(references_.size());
     return out;
   }
 
@@ -286,8 +344,11 @@ class Execution {
     }
     std::stable_sort(ranked.begin(), ranked.end(),
                      [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
+    // ceil(n / factor), written so that no sum can wrap: with a factor near the largest
+    // size the usual (n + factor - 1) / factor came to 0 and eliminated everyone.
     const std::size_t keep =
-        (ranked.size() + config_.elimination_factor - 1) / config_.elimination_factor;
+        ranked.size() / config_.elimination_factor +
+        static_cast<std::size_t>(ranked.size() % config_.elimination_factor != 0);
     for (std::size_t rank = keep; rank < ranked.size(); ++rank) {
       State& out = states_[ranked[rank].second];
       out.alive = false;
@@ -299,8 +360,14 @@ class Execution {
     SearchReport out;
     out.objective = bound_;
     out.references = references_;
+    out.reference_notes = reference_notes_;
+    out.corrected_error_trials = static_cast<std::size_t>(
+        std::count_if(reference_notes_.begin(), reference_notes_.end(),
+                      [](const TrialNote& note) { return note.corrected_errors; }));
     out.anchor = anchor_;
     out.trials = trials_;
+    out.settle_trials = settle_trials_;
+    out.unsettled_trials = unsettled_trials_;
     out.rounds = rounds_;
     std::vector<double> reference_values;
     reference_values.reserve(references_.size());
@@ -308,30 +375,42 @@ class Execution {
       reference_values.push_back(point.value);
     }
     out.reference = estimate(reference_values);
-    out.drift = references_.back().value - anchor_;
+    out.reference_stop = reference_stop_;
+    out.drift = anchored_ ? references_.back().value - anchor_ : 0.0;
     std::optional<std::size_t> winner;
     for (std::size_t which = 0; which < states_.size(); ++which) {
       const State& state = states_[which];
       CandidateReport entry;
       entry.id = config_.candidates[which].id;
-      entry.fate = state.fate;
+      entry.fate = state.alive && reference_stop_.has_value() ? Fate::kStopped : state.fate;
       entry.rounds = state.rounds;
       entry.samples = corrected_samples(state);
+      // The survivor's estimates are from the replicates that did not choose it.
+      const std::size_t from = state.alive ? state.selection_observations : 0;
+      entry.selection_replicates = from;
       std::vector<double> raw;
       raw.reserve(state.observations.size());
-      for (const Observation& observation : state.observations) {
-        raw.push_back(observation.raw);
+      for (std::size_t i = 0; i < state.observations.size(); ++i) {
+        const Observation& observation = state.observations[i];
+        if (i >= from) {
+          raw.push_back(observation.raw);
+        }
+        entry.notes.push_back(observation.note);
+        out.corrected_error_trials += static_cast<std::size_t>(observation.note.corrected_errors);
       }
       entry.raw = estimate(raw);
-      entry.corrected = estimate(entry.samples, correction_of(state));
-      if (state.alive) {
+      entry.corrected = estimate(corrected_samples(state, from), correction_of(state, from));
+      if (state.alive && !reference_stop_.has_value()) {
         winner = which;
       }
       out.candidates.push_back(std::move(entry));
     }
     if (winner.has_value()) {
       const CandidateReport& best = out.candidates[*winner];
-      out.worst_case = worst_case_of(best.id, best.samples, correction_of(states_[*winner]));
+      const State& chosen = states_[*winner];
+      out.worst_case =
+          worst_case_of(best.id, corrected_samples(chosen, chosen.selection_observations),
+                        correction_of(chosen, chosen.selection_observations));
       out.ranking = rank_against_rivals(out, *winner);
     }
     return out;
@@ -339,12 +418,15 @@ class Execution {
 
   // The best eliminated rival -- worst by corrected mean, earlier on a tie --
   // against the winner, at the evidence each has.
-  [[nodiscard]] Ranking rank_against_rivals(const SearchReport& built, std::size_t winner) const {
+  [[nodiscard]] Ranking rank_against_rivals(SearchReport& built, std::size_t winner) const {
     const double direction = sign_of(bound_.direction);
     const CandidateReport* rival = nullptr;
     for (const CandidateReport& entry : built.candidates) {
       if (entry.fate != Fate::kEliminated) {
         continue;
+      }
+      if (entry.samples.size() < 2) {
+        built.uncompared.push_back(entry.id);
       }
       if (rival == nullptr ||
           direction * entry.corrected.mean > direction * rival->corrected.mean) {
@@ -354,6 +436,7 @@ class Execution {
     if (rival == nullptr) {
       return Ranking::kSole;
     }
+    built.rival = rival->id;
     const Estimate& best = built.candidates[winner].corrected;
     const Estimate& other = rival->corrected;
     const double best_width = best.half_width.value_or(0.0);
@@ -369,10 +452,15 @@ class Execution {
   TrialRunner* runner_;
   std::vector<State> states_;
   std::vector<ReferencePoint> references_;
+  std::vector<TrialNote> reference_notes_;
   double anchor_ = 0.0;
+  bool anchored_ = false;
+  std::optional<Verdict> reference_stop_;
   std::size_t pass_ = 0;
   std::size_t since_reference_ = 0;
   std::size_t trials_ = 0;
+  std::size_t settle_trials_ = 0;
+  std::size_t unsettled_trials_ = 0;
   std::size_t rounds_ = 0;
 };
 

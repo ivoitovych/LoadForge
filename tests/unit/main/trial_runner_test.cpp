@@ -9,9 +9,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -90,6 +92,66 @@ std::vector<std::unique_ptr<telemetry::Source>> blind_level(platform::Syscalls& 
   return sources;
 }
 
+/// A counter that advances by 100 on every reading.
+class TickSource final : public telemetry::Source {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override { return "tick"; }
+  std::vector<telemetry::MetricStatus> probe() override {
+    return {{telemetry::Metric{"tick.count", telemetry::Unit::kCount, telemetry::Kind::kCounter,
+                               telemetry::Scope::kMachine, 0, std::nullopt, "test"},
+             std::nullopt}};
+  }
+  void sample(std::vector<telemetry::Reading>& out) override {
+    raw_ += 100;
+    out.emplace_back(telemetry::Counter{raw_});
+  }
+
+ private:
+  std::uint64_t raw_ = 0;
+};
+
+std::vector<std::unique_ptr<telemetry::Source>> ticks(platform::Syscalls& /*s*/,
+                                                      platform::FileSystem& /*f*/,
+                                                      const MachineRoots& /*r*/) {
+  std::vector<std::unique_ptr<telemetry::Source>> sources;
+  sources.push_back(std::make_unique<TickSource>());
+  return sources;
+}
+
+/// One metric in two scopes, the first unreadable: what a machine with a dead sensor
+/// on its first package and a live one on its second looks like.
+class TwoScopeSource final : public telemetry::Source {
+ public:
+  [[nodiscard]] std::string_view name() const noexcept override { return "two"; }
+  std::vector<telemetry::MetricStatus> probe() override {
+    telemetry::Metric first{"level.reading",
+                            telemetry::Unit::kCelsius,
+                            telemetry::Kind::kGauge,
+                            telemetry::Scope::kPackage,
+                            0,
+                            std::nullopt,
+                            "test"};
+    telemetry::Metric second = first;
+    second.scope_index = 1;
+    return {{first, telemetry::Unavailable{topology::Availability::kUnreadable, "/sys/a", "dead",
+                                           "replace it"}},
+            {second, std::nullopt}};
+  }
+  void sample(std::vector<telemetry::Reading>& out) override {
+    out.emplace_back(telemetry::Unavailable{topology::Availability::kUnreadable, "/sys/a", "dead",
+                                            "replace it"});
+    out.emplace_back(telemetry::Gauge{40.0});
+  }
+};
+
+std::vector<std::unique_ptr<telemetry::Source>> two_scopes(platform::Syscalls& /*s*/,
+                                                           platform::FileSystem& /*f*/,
+                                                           const MachineRoots& /*r*/) {
+  std::vector<std::unique_ptr<telemetry::Source>> sources;
+  sources.push_back(std::make_unique<TwoScopeSource>());
+  return sources;
+}
+
 /// More series than a timeline sized for a machine can take a few rounds of: with a
 /// sample interval of a thousand seconds it is built for eight rounds of 72 series, and
 /// a run takes three rounds of these 300.
@@ -161,6 +223,30 @@ class FailingSummarizer final : public statistics::Summarizer {
  private:
   int failing_call_;
   mutable int calls_ = 0;
+  statistics::CompensatedSummarizer real_;
+};
+
+/// The real summarizer, with `alter` applied to what it returns for the windows `when`
+/// chooses.
+class AlteringSummarizer final : public statistics::Summarizer {
+ public:
+  AlteringSummarizer(std::function<bool(const statistics::Window&)> when,
+                     std::function<void(statistics::LoadSignature&)> alter)
+      : when_(std::move(when)), alter_(std::move(alter)) {}
+  [[nodiscard]] core::Result<statistics::LoadSignature, statistics::StatisticsError> summarize(
+      const telemetry::TimelineView& view, const statistics::Window& window) const override {
+    auto made = real_.summarize(view, window);
+    if (!made.has_value() || !when_(window)) {
+      return made;
+    }
+    statistics::LoadSignature signature = std::move(made).value();
+    alter_(signature);
+    return signature;
+  }
+
+ private:
+  std::function<bool(const statistics::Window&)> when_;
+  std::function<void(statistics::LoadSignature&)> alter_;
   statistics::CompensatedSummarizer real_;
 };
 
@@ -273,6 +359,8 @@ TEST(TrialRunnerCandidate, EachWayACandidateCannotRunIsRefusedByName) {
                            std::int64_t{31} * 24 * 3600 * 1'000'000'000};
        },
        "settle phase needs a window"},
+      {[](Candidate& c) { c.settle = Settle{"memory.available", 0.05, 30 * kMs, 20 * kMs}; },
+       "the window no longer than the maximum"},
       {[](Candidate& c) { c.settle = Settle{"memory.available", -1.0, 10 * kMs, 10 * kMs}; },
        "settle phase needs a window"},
       {[](Candidate& c) {
@@ -291,6 +379,24 @@ TEST(TrialRunnerCandidate, EachWayACandidateCannotRunIsRefusedByName) {
   }
   EXPECT_EQ(machine.syscalls.fork_count(), 0) << "nothing was started for any of them";
   EXPECT_EQ(runner->trials_started(), 0U);
+}
+
+// The search takes the first series of the settle metric's name (search.cpp,
+// settle_problem) and refuses if it cannot be read; the runner accepted any readable
+// scope and then read the slope of the first. Both now take the first, so what the
+// search accepts is what the runner runs and the reverse. Review verdicts 2026-10-23,
+// finding 12b.
+TEST(TrialRunnerCandidate, TheSettleMetricIsTheFirstSeriesOfItsNameAsTheSearchTakesIt) {
+  Machine machine;
+  machine.options.sources = two_scopes;
+  auto runner = machine.runner();
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 10 * kMs, 100 * kMs};
+  const auto outcome = runner->run(candidate);
+  ASSERT_FALSE(outcome.has_value()) << "the second scope is readable, the first is not";
+  EXPECT_EQ(outcome.error().fault, TrialFault::kMetricUnavailable);
+  EXPECT_TRUE(contains(outcome.error().detail, "'level.reading' is not readable on this machine"));
+  EXPECT_TRUE(contains(outcome.error().detail, "replace it"));
 }
 
 TEST(TrialRunnerCandidate, ASettleMetricThatCannotBeReadIsRefusedWithTheSourcesOwnRemedy) {
@@ -347,6 +453,68 @@ TEST(TrialRunnerRun, AnUnfinishedRunStillHasTheWindowItsDurationAsksFor) {
   EXPECT_EQ(outcome.value().settle_ns, 0);
   EXPECT_EQ(runner->trials_started(), 1U);
   EXPECT_EQ(machine.syscalls.fork_count(), 1);
+}
+
+// A counter's advance is the difference of two readings, and the summarizer counts
+// only pairs that are both in the window, so the pair that opens the window (the
+// reading before it and the first one in it) was lost: a delta over a 3 s window
+// sampled each second read 2 s of it. The delta of a trial is the advance from the
+// last reading before the window to its end. Review verdicts 2026-10-23, finding 5.
+TEST(TrialRunnerRun, ACountersDeltaIncludesTheAdvanceFromTheReadingBeforeTheWindow) {
+  Machine machine;
+  machine.options.sources = ticks;
+  machine.workers_that_exit_at_once(1);
+  Candidate candidate = a_candidate();
+  candidate.duration_ns = 1'000'000;  // the window holds the last round alone
+  auto runner = machine.runner();
+  const auto outcome = runner->run(candidate);
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  const auto& summary = outcome.value().signature.metrics.at(0);
+  ASSERT_EQ(summary.metric.name, "tick.count");
+  const auto& counter = std::get<statistics::CounterSummary>(summary.value);
+  EXPECT_EQ(counter.samples, 1U) << "one reading is in the window";
+  EXPECT_FALSE(counter.rate_per_second.has_value()) << "so no pair of its own: no rate";
+  EXPECT_EQ(counter.delta, 100U) << "and the advance from the reading before it is counted";
+}
+
+TEST(TrialRunnerRun, AWiderSummaryThatDoesNotLineUpLeavesTheWindowsOwnDelta) {
+  Machine machine;
+  machine.options.sources = ticks;
+  machine.workers_that_exit_at_once(1);
+  // The summary of the window widened to the reading before it (the only one wider
+  // than the trial's millisecond) comes back with gauges where the window has counters,
+  // and is not read as their advance.
+  const AlteringSummarizer regauged(
+      [](const statistics::Window& window) { return window.end_ns - window.start_ns > kMs; },
+      [](statistics::LoadSignature& signature) {
+        for (statistics::MetricSummary& summary : signature.metrics) {
+          summary.value = statistics::GaugeSummary{};
+        }
+      });
+  machine.options.summarizer = &regauged;
+  Candidate candidate = a_candidate();
+  candidate.duration_ns = 1'000'000;  // the window holds the last round alone
+  auto runner = machine.runner();
+  const auto outcome = runner->run(candidate);
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  const auto& counter =
+      std::get<statistics::CounterSummary>(outcome.value().signature.metrics.at(0).value);
+  EXPECT_EQ(counter.delta, 0U) << "one reading, no pair of its own, and no wider delta taken";
+}
+
+TEST(TrialRunnerRun, ADeltaOfAWindowThatOpensBeforeEveryReadingIsTheWindowsOwn) {
+  Machine machine;
+  machine.options.sources = ticks;
+  machine.workers_that_exit_at_once(1);
+  Candidate candidate = a_candidate();
+  candidate.duration_ns = 10'000 * kMs;  // longer than the run: nothing precedes the window
+  auto runner = machine.runner();
+  const auto outcome = runner->run(candidate);
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  const auto& counter =
+      std::get<statistics::CounterSummary>(outcome.value().signature.metrics.at(0).value);
+  ASSERT_GE(counter.samples, 2U);
+  EXPECT_EQ(counter.delta, 100U * (counter.samples - 1)) << "every pair is in the window";
 }
 
 TEST(TrialRunnerRun, ADurationOfPartOfAMillisecondIsTheWindowsWidthExactly) {
@@ -467,6 +635,21 @@ TEST(TrialRunnerRun, AResultThatCannotBeComputedIsAKRunAndSoIsAWindowThatCannotB
         << outcome.error().detail;
   }
   {
+    // The third window asked about opens at the reading before the load window.
+    Machine machine;
+    machine.workers_that_exit_at_once(1);
+    const FailingSummarizer failing(3);
+    machine.options.summarizer = &failing;
+    auto runner = machine.runner();
+    Candidate candidate = a_candidate();
+    candidate.duration_ns = 1'000'000;
+    const auto outcome = runner->run(candidate);
+    ASSERT_FALSE(outcome.has_value());
+    EXPECT_EQ(outcome.error().fault, TrialFault::kRun);
+    EXPECT_TRUE(contains(outcome.error().detail, "from its opening reading"))
+        << outcome.error().detail;
+  }
+  {
     Machine machine;
     machine.workers_that_exit_at_once(1);
     const FailingSummarizer failing(2);
@@ -534,6 +717,22 @@ TEST(TrialRunnerSettle, ASensorThatDroppedOutCannotSettleAndIsNotCalledSettled) 
   ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
   EXPECT_FALSE(outcome.value().settled);
   EXPECT_EQ(outcome.value().settle_ns, 100 * kMs);
+}
+
+TEST(TrialRunnerSettle, ASettleWindowWhoseSummaryLacksTheMetricIsNotSettled) {
+  Machine machine;
+  machine.options.sources = flat_level;
+  machine.workers_that_exit_at_once(1);
+  const AlteringSummarizer stripped(
+      [](const statistics::Window& /*window*/) { return true; },
+      [](statistics::LoadSignature& signature) { signature.metrics.clear(); });
+  machine.options.summarizer = &stripped;
+  Candidate candidate = a_candidate();
+  candidate.settle = Settle{"level.reading", 0.05, 30 * kMs, 100 * kMs};
+  auto runner = machine.runner();
+  const auto outcome = runner->run(candidate);
+  ASSERT_TRUE(outcome.has_value()) << outcome.error().detail;
+  EXPECT_FALSE(outcome.value().settled) << "no slope of the metric, so no settling on it";
 }
 
 TEST(TrialRunnerSettle, ASettleWindowTheSummarizerRefusesIsNotSettled) {
@@ -613,13 +812,17 @@ TEST(TrialRunnerSettle, TheWaitIsAQuarterOfTheWindowBetweenAMillisecondAndTheSam
     std::int64_t window_ns;
     std::int64_t max_ns;
     int first_wait_ms;
+    int last_wait_ms;  // a wait of this length is among the polls; 0: not asserted
     const char* why;
   };
   for (const Case& each :
-       {Case{2 * kMs, 400 * kMs, 1, "a quarter is under the floor of a millisecond"},
-        Case{6 * kMs, 400 * kMs, 2, "1.5 ms is rounded up to a whole millisecond"},
-        Case{400 * kMs, 4000 * kMs, 30, "never longer than the sample interval"},
-        Case{400 * kMs, 15 * kMs, 5, "never past the end of the phase"}}) {
+       {Case{2 * kMs, 400 * kMs, 1, 0, "a quarter is under the floor of a millisecond"},
+        Case{6 * kMs, 400 * kMs, 2, 0, "1.5 ms is rounded up to a whole millisecond"},
+        Case{400 * kMs, 4000 * kMs, 30, 0, "never longer than the sample interval"},
+        // A quarter of 45 ms is 11.25 ms, so 12 ms; the clock moves 10 ms a read, so the
+        // last wait is what is left of the phase at 40 ms. The window is never above the
+        // maximum (it is refused), so the first wait is never the short one.
+        Case{45 * kMs, 45 * kMs, 12, 5, "never past the end of the phase"}}) {
     Machine machine;
     machine.options.sources = rising_level;
     machine.workers_that_exit_at_once(1);
@@ -630,6 +833,9 @@ TEST(TrialRunnerSettle, TheWaitIsAQuarterOfTheWindowBetweenAMillisecondAndTheSam
     const auto& waits = machine.syscalls.poll_timeouts();
     ASSERT_FALSE(waits.empty()) << each.why;
     EXPECT_EQ(waits.front(), each.first_wait_ms) << each.why;
+    if (each.last_wait_ms != 0) {
+      EXPECT_NE(std::ranges::find(waits, each.last_wait_ms), waits.end()) << each.why;
+    }
   }
 }
 

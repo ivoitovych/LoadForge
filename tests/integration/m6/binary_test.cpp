@@ -161,7 +161,10 @@ void expect_a_complete_report(const Outcome& ran) {
   EXPECT_TRUE(contains(ran.console, "  replicates: ")) << "every replicate is recorded";
   EXPECT_TRUE(contains(ran.console, "reference: anchor ")) << ran.console;
   EXPECT_TRUE(contains(ran.console, "readings (midpoint of the load window in ns, value):"));
-  EXPECT_TRUE(contains(ran.console, "explore: 8 trial(s) in 1 round(s)")) << ran.console;
+  // One replicate each to choose (2), three fresh ones for the one chosen, run after
+  // the choice and not counted in it (3); two opening reference readings, one after
+  // every two candidate trials and one closing (5).
+  EXPECT_TRUE(contains(ran.console, "explore: 10 trial(s) in 1 round(s)")) << ran.console;
 }
 
 TEST(M6Binary, ASearchOverRealWorkersReportsItsWorstCaseWithReplicatesSpreadAndInterval) {
@@ -176,8 +179,7 @@ TEST(M6Binary, ASearchOnAQuantityNoCandidateChangesRanksNothingAndSaysSo) {
   const Scratch scratch;
   const Outcome ran = loadforge(scratch, search_over("memory.total:max:higher"));
   expect_a_complete_report(ran);
-  EXPECT_TRUE(contains(ran.console, "ranking: not distinguishable from the best rival"))
-      << ran.console;
+  EXPECT_TRUE(contains(ran.console, "ranking: not distinguishable from the rival")) << ran.console;
   EXPECT_TRUE(contains(ran.console, "sd 0")) << "no spread at all: " << ran.console;
 }
 

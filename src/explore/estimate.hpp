@@ -25,7 +25,8 @@ inline constexpr double kConfidenceLevel = 0.95;
 ///
 ///   variance     of the mean's error from the reference's noise.
 ///   max_degrees  the reference readings' own degrees of freedom: the t value
-///                is looked up at the smaller of this and n - 1.
+///                is looked up at the Welch-Satterthwaite combination of this
+///                and the replicates' n - 1, weighted by the two variances.
 struct Correction {
   double variance = 0.0;
   std::size_t max_degrees = std::numeric_limits<std::size_t>::max();
