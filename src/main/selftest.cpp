@@ -65,7 +65,9 @@ std::uint64_t fnv1a(std::string_view text, std::uint64_t basis) noexcept {
   return hash;
 }
 
-std::uint64_t core_digest() {
+std::uint64_t core_digest() { return workloads_digest(corpus_digest()); }
+
+std::uint64_t corpus_digest() {
   std::uint64_t hash = kFnvOffsetBasis;
   for (const std::string_view input : kCorpus) {
     hash = fnv1a(input, hash);
@@ -87,7 +89,7 @@ std::uint64_t core_digest() {
       hash = fnv1a(core::describe(size.error()), hash);
     }
   }
-  return workloads_digest(hash);
+  return hash;
 }
 
 std::uint64_t workloads_digest(std::uint64_t basis) {

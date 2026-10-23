@@ -279,7 +279,7 @@ answer, every report gets dismissed.
 
 Required, not optional:
 
-- **`loadforge selftest`** — reference vectors checked before any long run begins. *(Status, 2026-10-22 23:42 UTC: not built; a 1.0 item, roadmap 34e, to be built from the golden digest and one short verified unit per workload with its oracle. The self-checks that exist are `loadforge --selftest-digest` and `packaging/validate-machine.sh`; see CONTRIBUTING.)*
+- **`loadforge selftest`** — reference vectors checked before any long run begins. *(Status, 2026-10-23 UTC: built, roadmap 34e. It checks the golden digest against the value this tree expects and runs four units of every workload on the path this CPU would use, and on scalar, each checked by its oracle; exit 0 passed, 8 a check failed, 1 refused, 2 usage. See `docs/verification.md` §9. `loadforge --selftest-digest` and `packaging/validate-machine.sh` remain as further evidence.)*
 - **Fault isolation on failure.** Re-run the failing unit of work (a) on the same core,
   (b) on a different core, (c) single-threaded. The reproduction pattern *is* the
   diagnosis: core-local, thread-count-dependent, or fully reproducible are three very
@@ -1138,7 +1138,7 @@ exactly what that distinction is worth.
   wrongly showed it inside the worker.)
 ```
 
-*(Status, 2026-10-23 00:15 UTC: the commands that exist are `stress`, `explore`, `journal` and the switches `--check-config`, `--rerun`, `--selftest-digest` and `--version`. `selftest` is a 1.0 item, roadmap 34e, and is not built; `benchmark` is not built and not in 1.0.)*
+*(Status, 2026-10-23 00:15 UTC: the commands that exist are `stress`, `explore`, `journal`, `selftest` (built since, roadmap 34e) and the switches `--check-config`, `--rerun`, `--selftest-digest` and `--version`. `benchmark` is not built and not in 1.0.)*
 
 **Topology is a shared, immutable snapshot** — not worker-owned. The controller needs it
 just as much as the worker does: to attribute telemetry to cores, to describe affinity in
@@ -1476,7 +1476,7 @@ important inbound report is "my machine failed your test", and such a report is 
 without provenance. The template must require:
 
 - Did `loadforge selftest` pass? *(This is the first triage question — it separates a
-  broken build or unsupported machine from a genuine finding.)* *(Status, 2026-10-22 23:42 UTC: not built; a 1.0 item, roadmap 34e, to be built from the golden digest and one short verified unit per workload with its oracle. The self-checks that exist are `loadforge --selftest-digest` and `packaging/validate-machine.sh`; see CONTRIBUTING.)*
+  broken build or unsupported machine from a genuine finding.)* *(Status, 2026-10-23 UTC: built, roadmap 34e; `--selftest-digest` and `packaging/validate-machine.sh` are the further evidence the template asks for.)*
 - `run.json` (carries version, fingerprint, capability set — F12)
 - The error records with full provenance: core, NUMA node, offset, XOR delta (F2)
 - Fault-isolation output: did it reproduce on another core? single-threaded?

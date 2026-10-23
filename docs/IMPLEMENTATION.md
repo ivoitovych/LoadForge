@@ -41,7 +41,7 @@ machine, run it for five hours, and act on what it says.** Concretely:
 | 7 | Evidence that survives the machine — crash journal | M5 |
 | 8 | Static and dynamic release artifacts, validated on real hardware on both architectures | M0, M7 |
 | 9 | **Every execution path covered to the standard in §2**, with the gates in §6 enforcing it | all |
-| 10 | `loadforge selftest`: a command that runs the golden digest and one short verified unit per workload with its oracle, and says whether this build and this machine can be trusted before a long run (PLAN F2; `verification.md` §9). Not built as of 2026-10-23 00:30 UTC | roadmap 34e |
+| 10 | `loadforge selftest`: a command that runs the golden digest and one short verified unit per workload with its oracle, and says whether this build and this machine can be trusted before a long run (PLAN F2; `verification.md` §9). Built (roadmap 34e, 2026-10-23 UTC): `src/main/selftest_command.cpp` | roadmap 34e |
 
 **Explicitly not in 1.0:** benchmark mode (PLAN §4.4, F17, F18: settling to a defined idle band, repeats with variance, oracle work outside measurement windows; the configuration parses `mode = "benchmark"` and `stress --config` refuses it; decided 2026-10-23 00:30 UTC), SSD and discrete-GPU testing, generic PCIe saturation, SVE
 (runtime-variable vector length is a separate problem), Windows or macOS, and any
@@ -254,7 +254,7 @@ those, so a blank there means a real exemption and never an oversight.
 | Module | M | Path classes | Tiers owed | Notes |
 |---|---|---|---|---|
 | `core/` | M0 ✅ | P1, P3 | T1 | Result, units, duration, byte size — done, 100% |
-| `main/` | M0 ✅ | P1, P3 | T1, T8 | CLI dispatch, selftest digest |
+| `main/` | M0 ✅ | P1, P3 | T1, T8 | CLI dispatch, selftest digest, `selftest` command (34e) |
 | `config/` | M1 ✅ | P1, P3 | T1, T8 | **Shipped.** TOML parse, schema validation, resolution. Corrected against what was built: the failing open is not behind the seam (PLAN §4.2), so it is reached by real files at T8 rather than injected at T2, and the row no longer claims P2 |
 | `platform` (seam, `fs`) | M1 ✅ | P1, P2, P3 | T1, T2, T8 | **Shipped.** The substitutable `Syscalls` and the reader above it. Corrected against what was built: the row previously claimed P7 and omitted P3 and T8. `fs` itself has no capability states — a source being present, absent or forbidden is a property of the *telemetry sources* that use it, and those arrive at M3 |
 | `platform/clock` | M1 ✅ | P1, P2, P3 | T1, T2, T8 | **Shipped** (JOURNAL §1.11, §1.12). Corrected against what was built: three clocks, not one (`CLOCK_MONOTONIC_RAW` for durations, `CLOCK_MONOTONIC` for timestamps, `CLOCK_BOOTTIME` for suspend detection); P2 because every `clock_gettime` failure is injected; T8 against the real clocks. One directory with `fs`, `process`, `affinity` and `memory`: the ledger row is `src/platform` |
@@ -780,7 +780,7 @@ These are risks to *building it*, distinct from the product risks in `PLAN.md` �
 M6 #99, with the contract corrections #92 and #95). M1's last condition, a first mutation
 sweep that reports clean, has not run yet. M6's thermal half and the whole of M7's hardware
 validation wait for the owner's machines (`docs/hardware-validation.md`); M7's remaining
-software items are 34a to 34e in `docs/ROADMAP.md`.**
+software items are 34a to 34e in `docs/ROADMAP.md` (34e, `selftest`, is built).**
 
 The paragraphs below were written while M1 was finishing and are kept as its record.
 

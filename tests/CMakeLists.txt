@@ -10,6 +10,7 @@ add_executable(loadforge_unit_tests
   unit/core/crc32_test.cpp
   unit/main/cli_test.cpp
   unit/main/selftest_test.cpp
+  unit/main/selftest_command_test.cpp
   unit/main/outcome_test.cpp
   unit/main/result_files_test.cpp
   unit/main/telemetry_rig_test.cpp

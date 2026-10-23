@@ -93,7 +93,9 @@ echo "exit $?"
 
 The script prints one `PASS` or `FAIL` line per step and ends with the path of the results
 file. It takes about 20 minutes at 60 s per workload. Its steps: the version, `--help`,
-the self-test digest, the two exit codes of a usage error, a configuration check and a
+`loadforge selftest` (the first check of the machine: the golden digest and a few units of
+every workload against their oracles; if it fails, the environment cannot give a hardware
+verdict and the rest is not evidence about the hardware), the self-test digest, the two exit codes of a usage error, a configuration check and a
 configuration-driven run, the capability report, each of the eleven workloads for the
 given time, `mixed` and `cycling` for three times that, the crash journal, a result
 directory that is not there, a small `explore`, an `explore` refused for a metric nobody
@@ -139,7 +141,9 @@ tar -xzf loadforge-VERSION-linux-ARCH-dynamic.tar.gz
 
 ### 4.4 Compare the two architectures
 
-The self-test digest (`loadforge --selftest-digest`) is a hash over a fixed corpus,
+Run `loadforge selftest` first, by hand, on any machine you are about to trust with a long
+run: it exits 0 when it passed and 8 when a check failed (`docs/verification.md` §9). The
+self-test digest (`loadforge --selftest-digest`) is a hash over a fixed corpus,
 including the scalar paths of the compression and dense-linear workloads. **For one
 version it must be identical on x86-64 and on ARM64**
 (`docs/determinism.md`). It is in every results file; compare them across all machines. A

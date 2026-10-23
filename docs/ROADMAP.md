@@ -170,4 +170,4 @@ Found by stream 34's preparation (`docs/journal/34-release-1-0.md`); each lands 
 | 34b | SIGINT and SIGTERM stop the run gracefully: workers stopped, the report and the journal written, exit code stated | stream 34 finding 2 | done, this change |
 | 34c | Documents that disagree with the tree: the hardware-failure issue template's `loadforge selftest`, `benchmark`/`selftest` in PLAN and verification.md, ShellCheck over `packaging/`, IMPLEMENTATION §10's M1 state | stream 34 finding 3 | done, this change |
 | 34d | The hardware half of M7: the checklist run on the owner's machines, both architectures, live media | stream 34 brief | waits for the owner |
-| 34e | loadforge selftest: the golden digest and one short verified unit per workload with its oracle, a triage command | PLAN F2; reviews/reaction-plan-2026-10-23-0030-UTC.md | after 34b |
+| 34e | loadforge selftest: the golden digest and one short verified unit per workload with its oracle, a triage command | PLAN F2; reviews/reaction-plan-2026-10-23-0030-UTC.md | done, this change |

@@ -30,6 +30,7 @@
 #include "main/run_result.hpp"
 #include "main/schedules.hpp"
 #include "main/selftest.hpp"
+#include "main/selftest_command.hpp"
 #include "platform/affinity.hpp"
 #include "platform/fpenv/real_control.hpp"
 #include "platform/fs.hpp"
@@ -149,6 +150,13 @@ void print_usage(std::ostream& out) {
          "cannot\n"
       << "                                  read is refused before anything runs\n"
       << "  loadforge journal FILE          print a crash journal and say how it ended\n"
+      << "  loadforge selftest [--isa PATH] [--footprint SIZE] [--seed N] [--verbose]\n"
+      << "                                  check this build on this machine before a long run:\n"
+      << "                                  the golden digest, then a few units of every\n"
+      << "                                  workload on the path this CPU would use (and scalar)\n"
+      << "                                  each checked by its oracle; one line per check and a\n"
+      << "                                  verdict, in seconds\n"
+      << "  loadforge --selftest-digest     print the golden digest alone\n"
       << "\n"
       << "With --journal, a run writes a crash journal to FILE (an entry every few seconds,\n"
       << "each synced to disk) and, at the next start, says how the previous one ended and\n"
@@ -169,6 +177,9 @@ void print_usage(std::ostream& out) {
       << "signal). When several apply the first of 5, 7, 4, 130 or 143, 3, 6 is the code.\n"
       << "A second signal while the workers are stopping kills them at once. A ceiling\n"
       << "that cannot be read before the run starts is a refusal, 1.\n"
+      << "selftest: 0 every check passed; 8 a check failed, so this environment is not\n"
+      << "trustworthy for a hardware verdict (the machine, the build or the platform);\n"
+      << "1 an --isa this CPU or build cannot run; 2 usage.\n"
       << "explore: 0 every candidate scored; 1 refused before the first trial; 3 a trial\n"
       << "could not be run, or the ceiling ended it; 5 a candidate's or the reference's\n"
       << "trial found a fault, or the hardware reported a corrected error in a scored\n"
@@ -1149,6 +1160,9 @@ int run(std::span<const std::string_view> args, std::ostream& out, std::ostream&
     }
     return stress(parsed.value().config_path, "/proc/self/exe", topology::kDefaultSysfsRoot,
                   parsed.value().options, out, err);
+  }
+  if (command == "selftest") {
+    return selftest_command(args.subspan(1), out, err);
   }
   if (command == "explore") {
     return explore_command(args.subspan(1), "/proc/self/exe", topology::kDefaultSysfsRoot,

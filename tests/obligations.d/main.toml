@@ -117,4 +117,16 @@ search that ends names its worst case with replicates, spread and interval, and 
 the same one when repeated. T11: repeatable worst-case discovery on real hardware \
 with variance reported is recorded in docs/journal/33-explore-integration.md, which \
 describes the machine it was run on (a virtual machine without a temperature sensor) \
-and says what still needs real hardware."""
+and says what still needs real hardware. \
+\
+Since 34e: `loadforge selftest` (selftest_command.hpp). P1: the arguments, each refused by \
+name; the golden digest in two halves, each compared with its committed expected value (a \
+mismatch of either named and failing, tests/unit/main/selftest_command_test.cpp); the paths a \
+workload is checked on over every combination of requested, supported, compiled and offered. \
+P2: the workload that cannot be set up, the registry that will not describe a name, the runner \
+that refuses a slice and the one that refuses to finish, each through the worker's services \
+seam (worker/services.hpp). P3: the footprint below 1 MiB and the footprint that is a share \
+of memory are usage errors, and not a failed environment. P7: a workload whose result is \
+wrong (the oracle finds it, the command exits 8 and names the first finding) and an --isa this \
+CPU cannot run (refused, 1, before any check). T8: the shipped binary passes on this machine, \
+refuses an --isa it cannot run and a bad argument (tests/integration/selftest)."""

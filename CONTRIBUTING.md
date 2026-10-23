@@ -257,14 +257,14 @@ If LoadForge says your machine computed something wrong, that is exactly the rep
 project wants — but it is only actionable with provenance. Please use the
 **hardware failure** issue template, and note the first question it asks:
 
-> **Did the self-test pass?**
+> **Did `loadforge selftest` pass?**
 
-There is no `loadforge selftest` command yet. The answer comes from two things you can
-run: `loadforge --selftest-digest` (a hash over a fixed corpus; for one version it must be
-the same on x86-64 and ARM64), and
+Run `loadforge selftest` first: it takes seconds and exits 0 when it passed, 8 when a check
+failed (`--verbose` says more). The further evidence is `loadforge --selftest-digest` (a
+hash over a fixed corpus; for one version it must be the same on x86-64 and ARM64), and
 `validate-machine.sh` from the release tarball
-([`docs/hardware-validation.md`](docs/hardware-validation.md) §4), whose results file is
-the best report you can attach. That separates a broken build or an unsupported machine
+([`docs/hardware-validation.md`](docs/hardware-validation.md) §4), which runs `selftest`
+first and whose results file is the best report you can attach. That separates a broken build or an unsupported machine
 from a genuine hardware finding, and it is the first thing triage looks at.
 
 ## Reporting missing or wrong telemetry
