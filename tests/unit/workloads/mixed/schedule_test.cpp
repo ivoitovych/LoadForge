@@ -123,6 +123,24 @@ TEST(ScheduleProblem, EachWayAScheduleFailsToFitTheRunIsNamed) {
   }
   {
     Schedule schedule = a_schedule();
+    schedule.start[1].workload = "";
+    EXPECT_EQ(problem(schedule, 2).value(),
+              "the start of worker 1 names no workload of a valid name or no footprint");
+    schedule = a_schedule();
+    schedule.start[0].workload = "Not A Name";
+    EXPECT_NE(problem(schedule, 2).value().find("the start of worker 0"), std::string::npos);
+    schedule = a_schedule();
+    schedule.start[0].footprint_bytes = 0;
+    EXPECT_NE(problem(schedule, 2).value().find("the start of worker 0"), std::string::npos);
+  }
+  {
+    Schedule schedule = a_schedule();
+    schedule.steps[1].phase = schedule.steps[0].phase;
+    EXPECT_EQ(problem(schedule, 2).value(),
+              "the step \"r1 compute-heavy\" repeats the label of an earlier step");
+  }
+  {
+    Schedule schedule = a_schedule();
     schedule.steps[1].at_ns = 500;
     EXPECT_EQ(problem(schedule, 2).value(), "the step \"r2 move\" is not after the one before it");
     schedule.steps[1].at_ns = 1000;

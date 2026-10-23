@@ -25,7 +25,7 @@
 // A change the workload DECLARED -- its version moved, as workload.hpp
 // requires whenever its bits change -- is reported as such (kDeclaredChange):
 // the vector is stale, and regenerating it is a deliberate, reviewed act
-// (tools/gen-golden/, the integration stream's). Bits that changed under the
+// (the per-fixture make_golden.py scripts under tests/fixtures/). Bits that changed under the
 // same version are kChanged: a regression, or a version someone forgot.
 //
 // THE FILE, FORMAT 1

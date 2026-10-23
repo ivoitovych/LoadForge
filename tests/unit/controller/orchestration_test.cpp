@@ -1268,6 +1268,30 @@ TEST(ControllerTest, ACorruptFrameAndATruncatedStreamAreEachReportedAsSuch) {
   EXPECT_TRUE(rig.syscalls.all_descriptors_closed());
 }
 
+TEST(ControllerTest, RecordsThatCameWholeBeforeACorruptFrameInOneReadAreIngested) {
+  Rig rig;
+  rig.config.run.duration = core::Duration{1000};
+  rig.reporter.on_starting = [&rig] { rig.hold_worker_ends(); };
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      std::string corrupt = frame_text(ipc::RecordType::kError, "never read");
+      corrupt[4] = '\x02';  // version 2
+      rig.syscalls.deliver_to_pipe(
+          kRecordRead0, frame_text(ipc::RecordType::kStarted, "before the fault") + corrupt);
+      rig.worker_exits(0, 0);
+      rig.worker_exits(1, 0);
+    }
+  };
+  auto result = rig.run();
+  ASSERT_TRUE(result.has_value()) << describe(result.error());
+  EXPECT_EQ(result.value().workers[0].fate, WorkerFate::kChannelCorrupt);
+  ASSERT_EQ(result.value().workers[0].records.size(), 2U);
+  EXPECT_EQ(result.value().workers[0].records[0], "started: before the fault");
+  EXPECT_EQ(result.value().workers[0].records[1],
+            "record channel: the frame is of a version this build does not read: version 2, "
+            "expected 1");
+}
+
 TEST(ControllerTest, AChannelHeldOpenAfterTheWorkerDiedIsTruncatedNotWaitedForForever) {
   Rig rig;
   rig.config.run.duration = core::Duration{1000};

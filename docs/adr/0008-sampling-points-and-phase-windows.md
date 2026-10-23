@@ -1,13 +1,15 @@
-# ADR (proposed) 21 — The run is sampled at four fixed points, and a phase's window includes the round on its boundary
+# ADR 0008 — The run is sampled at four fixed points, and a phase's window includes the round on its boundary
 
-**Status:** proposed (stream 21; the manager numbers it when it lands)
+**Status:** accepted
 **Date:** 2026-10-20 21:40 UTC
+**Accepted:** 2026-10-21 10:17 UTC, with the merge of pull request #87 (stream 21, the M3 integration)
 
-> **Outcome, 2026-10-21:** decision 3 (the window of a phase ends one nanosecond past the
-> next mark) is now stated in `statistics/signature.hpp` and built by
-> `statistics::phase_window()` and `run_window()`; `src/main`'s own `phase_windows()` is to
-> be replaced by them (recorded follow-up in
-> `docs/journal/m3-contract-corrections-*.md`). The rest of this ADR is unchanged.
+> **Outcome, 2026-10-21 14:02 UTC:** decision 3 (the window of a phase ends one nanosecond past the
+> next mark) is stated in `statistics/signature.hpp` and built by
+> `statistics::phase_window()` and `run_window()`. The recorded follow-up is done:
+> `src/main/run_result.cpp` builds each window with them, and `phase_windows()` remains only
+> as the labelling wrapper (`docs/journal/m3-contract-corrections-2026-10-21-1145-UTC.md`).
+> The rest of this ADR is unchanged.
 
 ## Context
 

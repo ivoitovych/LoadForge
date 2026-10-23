@@ -1,14 +1,15 @@
-# ADR (proposed) 21 — A disagreement between two components is a test that is expected to fail
+# ADR 0009 — A disagreement between two components is a test that is expected to fail
 
-**Status:** proposed (stream 21; the manager numbers it when it lands)
+**Status:** accepted
 **Date:** 2026-10-20 21:41 UTC
+**Accepted:** 2026-10-21 10:17 UTC, with the merge of pull request #87 (stream 21, the M3 integration)
 
-> **Outcome, 2026-10-21 (branch `fix/m3-contract-disagreements`):** all seven disagreements
+> **Outcome, 2026-10-21 14:02 UTC (branch `fix/m3-contract-disagreements`, merged 15:24 UTC as #92):** all seven disagreements
 > were corrected by a contract change (`docs/journal/m3-contract-corrections-*.md`), the
 > `WILL_FAIL` executable was removed, and its tests now pass in
 > `tests/integration/m3/corrections_test.cpp`. The mechanism worked as designed: each test
 > stayed red-by-design until its contract was fixed, and then moved. Nothing is registered
-> `WILL_FAIL` now.
+> `WILL_FAIL` now: the mechanism is available and currently unused.
 
 ## Context
 

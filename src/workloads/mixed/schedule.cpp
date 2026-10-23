@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -13,6 +15,7 @@
 #include "controller/journal/journal.hpp"
 #include "core/crc32.hpp"
 #include "worker/control.hpp"
+#include "workloads/workload.hpp"
 
 namespace loadforge::mixed {
 namespace {
@@ -82,6 +85,41 @@ void add_command(std::string& text, const worker::Command& command) {
 
 }  // namespace
 
+namespace {
+
+/// What is wrong with the starts: each is a workload the worker is launched
+/// with, held to the rules of the Switch that would make the same change.
+std::optional<std::string> start_problem(const Schedule& schedule) {
+  for (std::size_t slot = 0; slot < schedule.start.size(); ++slot) {
+    const Start& start = schedule.start[slot];
+    if (!workloads::is_valid_name(start.workload) || start.footprint_bytes == 0) {
+      return "the start of worker " + std::to_string(slot) +
+             " names no workload of a valid name or no footprint";
+    }
+  }
+  return std::nullopt;
+}
+
+/// What is wrong with the commands of a step: a worker the run does not have,
+/// or a command that breaks the rules of its kind.
+std::optional<std::string> commands_problem(const Step& step, std::size_t workers) {
+  for (const WorkerCommands& each : step.workers) {
+    if (each.slot >= workers) {
+      return "the step \"" + step.phase + "\" names worker " + std::to_string(each.slot) + " of " +
+             std::to_string(workers);
+    }
+    for (const worker::Command& command : each.commands) {
+      if (!worker::is_valid(worker::ControlMessage{0, command})) {
+        return "the step \"" + step.phase + "\" sends worker " + std::to_string(each.slot) + " a " +
+               std::string{worker::command_name(command)} + " that breaks the rules of its command";
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
 std::optional<std::string> problem(const Schedule& schedule, std::size_t workers) {
   if (schedule.workers != workers) {
     return "the schedule is for " + std::to_string(schedule.workers) +
@@ -93,8 +131,15 @@ std::optional<std::string> problem(const Schedule& schedule, std::size_t workers
   if (schedule.phase.size() > kMaxLabelBytes || schedule.workload.size() > kMaxLabelBytes) {
     return std::string{"the schedule's first phase or workload label is past the journal's limit"};
   }
+  if (auto bad = start_problem(schedule); bad.has_value()) {
+    return bad;
+  }
+  std::set<std::string_view> seen;
   std::int64_t before = 0;
   for (const Step& step : schedule.steps) {
+    if (!seen.insert(step.phase).second) {
+      return "the step \"" + step.phase + "\" repeats the label of an earlier step";
+    }
     if (step.at_ns < before) {
       return "the step \"" + step.phase + "\" is not after the one before it";
     }
@@ -102,18 +147,8 @@ std::optional<std::string> problem(const Schedule& schedule, std::size_t workers
     if (step.phase.size() > kMaxLabelBytes || step.workload.size() > kMaxLabelBytes) {
       return "the step \"" + step.phase + "\" has a label past the journal's limit";
     }
-    for (const WorkerCommands& each : step.workers) {
-      if (each.slot >= workers) {
-        return "the step \"" + step.phase + "\" names worker " + std::to_string(each.slot) +
-               " of " + std::to_string(workers);
-      }
-      for (const worker::Command& command : each.commands) {
-        if (!worker::is_valid(worker::ControlMessage{0, command})) {
-          return "the step \"" + step.phase + "\" sends worker " + std::to_string(each.slot) +
-                 " a " + std::string{worker::command_name(command)} +
-                 " that breaks the rules of its command";
-        }
-      }
+    if (auto bad = commands_problem(step, workers); bad.has_value()) {
+      return bad;
     }
   }
   return std::nullopt;

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -110,6 +111,23 @@ TEST(SchedulerWordsTest, EveryReasonHasWordsAndTheLostTableIsExact) {
       << "a worker that can no longer be stopped leaves as from a lost controller";
 
   EXPECT_EQ(describe(WorkerError{"clock", "went backwards"}), "clock: went backwards");
+}
+
+TEST(SchedulerWordsTest, TheIntervalInMillisecondsIsAtLeastOneAndNeverWraps) {
+  EXPECT_EQ(interval_milliseconds(5'000'000), 5);
+  EXPECT_EQ(interval_milliseconds(1'999'999), 1);
+  EXPECT_EQ(interval_milliseconds(999'999), 1) << "a wait is never zero";
+  EXPECT_EQ(interval_milliseconds(0), 1);
+  EXPECT_EQ(interval_milliseconds(-5), 1);
+  constexpr std::int64_t kIntMax = std::numeric_limits<int>::max();
+  EXPECT_EQ(interval_milliseconds(kIntMax * 1'000'000), std::numeric_limits<int>::max());
+  // 2^31 ms and 2^32 ms wrapped to negative and to zero in the cast.
+  EXPECT_EQ(interval_milliseconds((std::int64_t{1} << 31U) * 1'000'000),
+            std::numeric_limits<int>::max());
+  EXPECT_EQ(interval_milliseconds((std::int64_t{1} << 32U) * 1'000'000),
+            std::numeric_limits<int>::max());
+  EXPECT_EQ(interval_milliseconds(std::numeric_limits<std::int64_t>::max()),
+            std::numeric_limits<int>::max());
 }
 
 TEST(SchedulerWordsTest, EqualityIsFieldByField) {

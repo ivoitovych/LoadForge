@@ -186,6 +186,18 @@ TEST(ControlChannelLook, APipeThatCarriesNothingLikeAMessageBreaksTheChannel) {
   }
 }
 
+TEST(ControlChannelLook, AStopThatArrivedWholeBeforeBadBytesInOneReadIsStillHandled) {
+  Rig rig;
+  rig.send({1, Stop{}});
+  rig.syscalls.deliver_to_pipe(rig.control.read_fd, std::string(32, '\xAA'));
+  auto looked = rig.channel.look(0);
+  ASSERT_TRUE(looked.has_value());
+  ASSERT_EQ(looked.value().messages.size(), 1U)
+      << "the Stop that came whole before the bad bytes was discarded";
+  EXPECT_EQ(looked.value().messages[0], (ControlMessage{1, Stop{}}));
+  EXPECT_EQ(looked.value().lost, StopReason::kControlChannelBroken);
+}
+
 TEST(ControlChannelLook, MessagesBeforeAnythingBrokenAreStillHandled) {
   Rig rig;
   rig.send({1, Pause{}});

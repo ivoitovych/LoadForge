@@ -121,10 +121,11 @@ TEST(RecordWordsTest, EqualityIsFieldByField) {
   EXPECT_NE(c, (ChannelError{FrameError{}, SyscallError{1, "a", "b"}}));
   EXPECT_NE(c, (ChannelError{std::nullopt, SyscallError{2, "a", "b"}}));
 
-  const Drained d{{a}, false};
-  EXPECT_EQ(d, (Drained{{a}, false}));
-  EXPECT_NE(d, (Drained{{a}, true}));
-  EXPECT_NE(d, (Drained{{}, false}));
+  const Drained d{{a}, false, std::nullopt};
+  EXPECT_EQ(d, (Drained{{a}, false, std::nullopt}));
+  EXPECT_NE(d, (Drained{{a}, true, std::nullopt}));
+  EXPECT_NE(d, (Drained{{}, false, std::nullopt}));
+  EXPECT_NE(d, (Drained{{a}, false, FrameError{}}));
 }
 
 // --- framing -----------------------------------------------------------------
@@ -569,12 +570,12 @@ TEST(RecordSourceTest, TheWriterClosingIsACleanEndAtAFrameBoundary) {
   EXPECT_FALSE(drained.value().end_of_stream) << "the end is seen by the read that returns 0";
   auto ended = source.drain();
   ASSERT_TRUE(ended.has_value());
-  EXPECT_EQ(ended.value(), (Drained{{}, true}));
+  EXPECT_EQ(ended.value(), (Drained{{}, true, std::nullopt}));
   EXPECT_TRUE(source.at_end());
   const int reads_before = syscalls.read_count();
   auto after = source.drain();
   ASSERT_TRUE(after.has_value());
-  EXPECT_EQ(after.value(), (Drained{{}, true}));
+  EXPECT_EQ(after.value(), (Drained{{}, true, std::nullopt}));
   EXPECT_EQ(syscalls.read_count(), reads_before) << "nothing is read past the end";
 }
 
@@ -590,17 +591,17 @@ TEST(RecordSourceTest, TheWriterDyingMidFrameIsTruncationAndTheEndIsStillReached
   ASSERT_TRUE(partial.has_value());
   EXPECT_TRUE(partial.value().records.empty());
   auto ended = source.drain();
-  ASSERT_FALSE(ended.has_value());
-  ASSERT_TRUE(ended.error().frame.has_value());
-  EXPECT_EQ(ended.error().frame->fault, FrameFault::kTruncated);
-  EXPECT_EQ(ended.error().frame->detail, "bytes left 10, expected 0");
+  ASSERT_TRUE(ended.has_value());
+  EXPECT_TRUE(ended.value().end_of_stream);
+  ASSERT_TRUE(ended.value().fault.has_value());
+  EXPECT_EQ(ended.value().fault->fault, FrameFault::kTruncated);
+  EXPECT_EQ(ended.value().fault->detail, "bytes left 10, expected 0");
   EXPECT_TRUE(source.at_end());
 }
 
-TEST(RecordSourceTest, ACorruptFrameIsReportedWithTheRecordsBeforeItLost) {
-  // The records drained in the same read as the corruption are not handed
-  // back: a drain either succeeds whole or reports the fault. The caller's
-  // answer to a corrupt channel does not depend on partial findings.
+TEST(RecordSourceTest, ACorruptFrameIsReportedWithTheRecordsBeforeItInTheSameRead) {
+  // The records that came whole before the corruption in one read are handed
+  // back with the fault: they are evidence, and dropping them hid findings.
   FakeSyscalls syscalls;
   const PipeEnds pipe = pipe_of(syscalls);
   RecordSource source(syscalls, pipe.read_fd);
@@ -610,16 +611,37 @@ TEST(RecordSourceTest, ACorruptFrameIsReportedWithTheRecordsBeforeItLost) {
   stream.insert(stream.end(), bad.begin(), bad.end());
   syscalls.deliver_to_pipe(pipe.read_fd, text_of(stream));
   auto drained = source.drain();
-  ASSERT_FALSE(drained.has_value());
-  ASSERT_TRUE(drained.error().frame.has_value());
-  EXPECT_EQ(drained.error().frame->fault, FrameFault::kBadVersion);
-  EXPECT_EQ(drained.error().frame->detail, "version 2305, expected 1");
+  ASSERT_TRUE(drained.has_value()) << describe(drained.error());
+  ASSERT_EQ(drained.value().records.size(), 1U);
+  EXPECT_EQ(text_of(drained.value().records[0].payload), "fine");
+  ASSERT_TRUE(drained.value().fault.has_value());
+  EXPECT_EQ(drained.value().fault->fault, FrameFault::kBadVersion);
+  EXPECT_EQ(drained.value().fault->detail, "version 2305, expected 1");
   const int reads_before = syscalls.read_count();
   auto again = source.drain();
-  ASSERT_FALSE(again.has_value()) << "the fault is final";
-  EXPECT_EQ(again.error(), drained.error());
+  ASSERT_TRUE(again.has_value());
+  EXPECT_TRUE(again.value().records.empty()) << "the records were handed back once";
+  EXPECT_EQ(again.value().fault, drained.value().fault) << "the fault is final";
   EXPECT_EQ(syscalls.read_count(), reads_before) << "nothing is read past a fault";
   EXPECT_FALSE(source.at_end()) << "faulted is not ended; the caller closes the channel";
+}
+
+TEST(RecordSourceTest, ManyGoodRecordsBeforeABadChecksumInOneReadAreAllKept) {
+  FakeSyscalls syscalls;
+  const PipeEnds pipe = pipe_of(syscalls);
+  RecordWriter writer(syscalls, pipe.write_fd);
+  RecordSource source(syscalls, pipe.read_fd);
+  for (std::uint16_t type = 7; type < 10; ++type) {
+    ASSERT_TRUE(writer.send(type, bytes_of("ab")).has_value());
+  }
+  std::string bad = text_of(frame_of(10, "ab"));
+  bad.back() = static_cast<char>(bad.back() ^ 0x55);
+  syscalls.deliver_to_pipe(pipe.read_fd, bad);
+  auto drained = source.drain();
+  ASSERT_TRUE(drained.has_value()) << describe(drained.error());
+  EXPECT_EQ(drained.value().records.size(), 3U);
+  ASSERT_TRUE(drained.value().fault.has_value());
+  EXPECT_EQ(drained.value().fault->fault, FrameFault::kBadChecksum);
 }
 
 TEST(RecordSourceTest, ReadFailuresAreReportedAndInterruptionsRetriedUpToTheBound) {
