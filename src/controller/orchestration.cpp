@@ -446,6 +446,12 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
     if (const auto bad = mixed::problem(*options_->schedule, workers_.size()); bad.has_value()) {
       return error_at("schedule", *bad);
     }
+    // The memory budget holds for the largest total any step of the schedule
+    // can hold, and the schedule is known now (review A3).
+    if (auto memory = check_memory(*config_, options_->budget, options_->schedule);
+        !memory.has_value()) {
+      return error_at("memory", memory.error());
+    }
   }
   begin_labels();
   journal_live_ = options_->journal != nullptr;
@@ -459,12 +465,6 @@ core::Result<core::Ok, ControllerError> Run::prepare() {
   duration_ns_ = config_->run.duration.count() * kNanosecondsPerMillisecond;
 
   auto region = ipc::HeartbeatRegion::create(*syscalls_, workers_.size());
-    // The memory budget holds for the largest total any step of the schedule
-    // can hold, and the schedule is known now (review A3).
-    if (auto memory = check_memory(*config_, options_->budget, options_->schedule);
-        !memory.has_value()) {
-      return error_at("memory", memory.error());
-    }
   if (!region.has_value()) {
     return error_at("heartbeat", describe(region.error()));
   }
@@ -827,6 +827,16 @@ void Run::write_journal(std::int64_t elapsed_ns, bool force) {
   last_journal_ns_ = elapsed_ns;
 }
 
+std::int64_t Run::replacement_extra_ns(const Tracked& worker, std::int64_t now_ns) const {
+  const bool replacing =
+      std::ranges::any_of(worker.unanswered, [&](const Tracked::Unanswered& each) {
+        const bool replaces = std::holds_alternative<worker::Switch>(each.command) ||
+                              std::holds_alternative<worker::Rebind>(each.command);
+        return replaces && now_ns - each.sent_ns <= options_->replacement_allowance_ns;
+      });
+  return replacing ? options_->replacement_allowance_ns : 0;
+}
+
 core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker,
                                                    const platform::TimePoint& now) {
   // The worker's beat: stale by timestamp is the hang; fresh but with no
@@ -840,21 +850,19 @@ core::Result<core::Ok, ControllerError> Run::watch(Tracked& worker,
   // worker in a 600 ms run. One look cannot tell the two apart; the allowance
   // can, so the slot is stale once nothing could be read from it for longer
   // than a beat may be old.
+  //
+  // A worker told to replace its runner (a Switch or a Rebind) beats nothing
+  // while it does (review A5; it frees the old footprint, then makes and
+  // touches the new one, in one call that cannot beat), so for as long as such
+  // a message is unanswered, and for no more than replacement_allowance_ns
+  // after it was written, both judgements allow that much more.
+  const std::int64_t stale_after_ns =
+      options_->stale_after_ns + replacement_extra_ns(worker, now.running_ns);
   bool stale = false;
   auto observed = region_->observe(ipc::worker_slot(worker.slot));
   if (!observed.has_value()) {
     stale = now.running_ns - worker.last_read_ns > stale_after_ns;
   } else {
-std::int64_t Run::replacement_extra_ns(const Tracked& worker, std::int64_t now_ns) const {
-  const bool replacing =
-      std::ranges::any_of(worker.unanswered, [&](const Tracked::Unanswered& each) {
-        const bool replaces = std::holds_alternative<worker::Switch>(each.command) ||
-                              std::holds_alternative<worker::Rebind>(each.command);
-        return replaces && now_ns - each.sent_ns <= options_->replacement_allowance_ns;
-      });
-  return replacing ? options_->replacement_allowance_ns : 0;
-}
-
     worker.last_read_ns = now.running_ns;
     const std::optional<ipc::Heartbeat> beat = observed.value();
     const ipc::Liveness liveness = ipc::liveness(beat, now.running_ns, stale_after_ns);
@@ -868,14 +876,6 @@ std::int64_t Run::replacement_extra_ns(const Tracked& worker, std::int64_t now_n
     if (worker.paused) {
       worker.progress_changed_ns = now.running_ns;
     }
-  //
-  // A worker told to replace its runner (a Switch or a Rebind) beats nothing
-  // while it does (review A5; it frees the old footprint, then makes and
-  // touches the new one, in one call that cannot beat), so for as long as such
-  // a message is unanswered, and for no more than replacement_allowance_ns
-  // after it was written, both judgements allow that much more.
-  const std::int64_t stale_after_ns =
-      options_->stale_after_ns + replacement_extra_ns(worker, now.running_ns);
     const bool stalled =
         now.running_ns - worker.progress_changed_ns > stale_after_ns + worker.idle_allowance_ns;
     if (liveness == ipc::Liveness::kStale) {

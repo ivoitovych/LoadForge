@@ -2045,21 +2045,6 @@ TEST(ControllerControl, AScheduleThatDoesNotFitTheRunIsRefusedBeforeTheFirstFork
   EXPECT_NE(invalid.detail.find("set duty"), std::string::npos) << invalid.detail;
 }
 
-TEST(ControllerControl, AcknowledgementsAreCountedAndARefusalIsToldWithTheWorkersReason) {
-  Rig rig;
-  const mixed::Schedule schedule =
-      schedule_of({step_of(0, "p0",
-                           {tell(0, {worker::Pause{}, worker::Rebind{{5}}, worker::Resume{}}),
-                            tell(1, {worker::Pause{}})})});
-  rig.options.schedule = &schedule;
-  complete_at_deadline(rig);
-  const auto before = rig.reporter.on_event;
-  rig.reporter.on_event = [&rig, before](const std::string& line) {
-    before(line);
-    if (starts_with(line, "phase p0")) {
-      answer(rig, 0, 1);
-      answer(rig, 0, 2, worker::AckStatus::kRefused, "CPU 5 is not in this cpuset");
-      answer(rig, 0, 3);
 TEST(ControllerControl, AScheduleThatOutgrowsTheMemoryBudgetIsRefusedBeforeTheFirstFork) {
   // Review A3: the start fits (two workers at 100 MiB in a ceiling of 250 MiB);
   // a later Switch makes one of them 160 MiB, which does not.
@@ -2083,6 +2068,21 @@ TEST(ControllerControl, AScheduleThatOutgrowsTheMemoryBudgetIsRefusedBeforeTheFi
   EXPECT_EQ(rig.syscalls.fork_count(), 0);
 }
 
+TEST(ControllerControl, AcknowledgementsAreCountedAndARefusalIsToldWithTheWorkersReason) {
+  Rig rig;
+  const mixed::Schedule schedule =
+      schedule_of({step_of(0, "p0",
+                           {tell(0, {worker::Pause{}, worker::Rebind{{5}}, worker::Resume{}}),
+                            tell(1, {worker::Pause{}})})});
+  rig.options.schedule = &schedule;
+  complete_at_deadline(rig);
+  const auto before = rig.reporter.on_event;
+  rig.reporter.on_event = [&rig, before](const std::string& line) {
+    before(line);
+    if (starts_with(line, "phase p0")) {
+      answer(rig, 0, 1);
+      answer(rig, 0, 2, worker::AckStatus::kRefused, "CPU 5 is not in this cpuset");
+      answer(rig, 0, 3);
       answer(rig, 1, 1);
     }
   };
@@ -2188,6 +2188,14 @@ TEST(ControllerControl, AFailureToWriteOnAControlPipeIsTheControllersAndAWorkerG
     ASSERT_TRUE(result.has_value()) << describe(result.error());
     EXPECT_EQ(result.value().workers[0].commands.sent, 0U);
     EXPECT_EQ(result.value().workers[1].commands.sent, 1U);
+    // Review A4: the last count of the line is what it says, the commands held back because
+    // the worker had too many unanswered; a command written to a pipe that was already
+    // closed is in no count, and the line does not call it "not sent".
+    const std::string line = describe(result.value().workers[0].commands);
+    EXPECT_EQ(line,
+              "control: 0 message(s) sent, 0 done, 0 refused, 0 unanswered, "
+              "0 dropped (too many unanswered)");
+    EXPECT_EQ(line.find("not sent"), std::string::npos);
   }
 }
 
@@ -2203,14 +2211,6 @@ TEST(ControllerControl, ACommandForAWorkerAlreadyReapedIsNotSent) {
       rig.deliver(0, ipc::RecordType::kFinished, "early");
       rig.worker_exits(0, 0);
     } else if (starts_with(line, "deadline")) {
-    // Review A4: the last count of the line is what it says, the commands held back because
-    // the worker had too many unanswered; a command written to a pipe that was already
-    // closed is in no count, and the line does not call it "not sent".
-    const std::string line = describe(result.value().workers[0].commands);
-    EXPECT_EQ(line,
-              "control: 0 message(s) sent, 0 done, 0 refused, 0 unanswered, "
-              "0 dropped (too many unanswered)");
-    EXPECT_EQ(line.find("not sent"), std::string::npos);
       rig.deliver(1, ipc::RecordType::kFinished, "done");
       rig.worker_exits(1, 0);
     }
@@ -2326,21 +2326,6 @@ TEST(ControllerControl, ADutyCycleExtendsTheStallAllowanceByTheIdlePartOfItsPeri
       << "30 ms and the 100 ms it was told to idle";
 }
 
-TEST(ControllerControl, ARefusedCommandChangesNothingAboutHowTheWorkerIsJudged) {
-  Rig rig;
-  spin_both(rig);
-  const mixed::Schedule schedule =
-      schedule_of({step_of(0, "paused", {tell(0, {worker::Pause{}})})});
-  rig.options.schedule = &schedule;
-  rig.reporter.on_event = [&rig](const std::string& line) {
-    if (starts_with(line, "spawned")) {
-      rig.beat(0, 7, 10'000 * kMs);
-      rig.beat(1, 7, 10'000 * kMs);
-    } else if (starts_with(line, "phase paused")) {
-      answer(rig, 0, 1, worker::AckStatus::kRefused, "the null workload runs no slices: pause");
-    } else if (line == "worker 1: sent signal 9 (heartbeat stale)") {
-      rig.worker_exits(0, SIGKILL);
-      rig.worker_exits(1, SIGKILL);
 // Review A5: the worker beats nothing while it replaces its runner, so the controller allows
 // that much longer, from the write of the Switch or Rebind until it is answered.
 class ReplacementAllowance : public ::testing::TestWithParam<worker::Command> {};
@@ -2411,6 +2396,21 @@ worker::Command a_switch() {
 INSTANTIATE_TEST_SUITE_P(Replacements, ReplacementAllowance,
                          ::testing::Values(a_switch(), worker::Command{worker::Rebind{{0}}}));
 
+TEST(ControllerControl, ARefusedCommandChangesNothingAboutHowTheWorkerIsJudged) {
+  Rig rig;
+  spin_both(rig);
+  const mixed::Schedule schedule =
+      schedule_of({step_of(0, "paused", {tell(0, {worker::Pause{}})})});
+  rig.options.schedule = &schedule;
+  rig.reporter.on_event = [&rig](const std::string& line) {
+    if (starts_with(line, "spawned")) {
+      rig.beat(0, 7, 10'000 * kMs);
+      rig.beat(1, 7, 10'000 * kMs);
+    } else if (starts_with(line, "phase paused")) {
+      answer(rig, 0, 1, worker::AckStatus::kRefused, "the null workload runs no slices: pause");
+    } else if (line == "worker 1: sent signal 9 (heartbeat stale)") {
+      rig.worker_exits(0, SIGKILL);
+      rig.worker_exits(1, SIGKILL);
     }
   };
   auto result = rig.run();
