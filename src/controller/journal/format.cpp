@@ -106,8 +106,7 @@ bool could_be_cut_short(std::span<const std::byte> seen, std::uint64_t length) {
     least += phase;
     most = least + kMaxLabelBytes;
     if (seen.size() > kPhaseSizeAt + 1 + phase) {
-      const std::uint64_t workload =
-          std::to_integer<std::uint64_t>(seen[kPhaseSizeAt + 1 + phase]);
+      const std::uint64_t workload = std::to_integer<std::uint64_t>(seen[kPhaseSizeAt + 1 + phase]);
       if (workload > kMaxLabelBytes) {
         return false;
       }

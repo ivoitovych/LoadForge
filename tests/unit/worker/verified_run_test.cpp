@@ -14,9 +14,9 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <ctime>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -667,7 +667,8 @@ TEST(VerifiedRunLoop, ALeaveBecauseTheControllerIsGoneReportsTheWorkDone) {
   auto outcome = rig.run();
   ASSERT_TRUE(outcome.has_value()) << describe(outcome.error());
   ASSERT_EQ(outcome.value().outcome.reason, StopReason::kControllerStale);
-  EXPECT_GT(outcome.value().outcome.progress, 0U) << "units were computed before the controller went";
+  EXPECT_GT(outcome.value().outcome.progress, 0U)
+      << "units were computed before the controller went";
   EXPECT_EQ(outcome.value().tally.units_computed, outcome.value().outcome.progress);
 }
 

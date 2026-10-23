@@ -97,8 +97,8 @@ void keep_true_statements(verification::SliceReport& report, const verification:
 std::uint64_t next_slice_units(std::uint64_t last_units, std::int64_t took_ns,
                                std::int64_t target_ns) noexcept {
   // Doubling is cut at the largest slice before it can wrap.
-  const std::uint64_t doubled = std::min(std::min(last_units, kMaxSliceUnits / 2) * 2,
-                                         kMaxSliceUnits);
+  const std::uint64_t doubled =
+      std::min(std::min(last_units, kMaxSliceUnits / 2) * 2, kMaxSliceUnits);
   if (took_ns <= 0) {
     return doubled;
   }
