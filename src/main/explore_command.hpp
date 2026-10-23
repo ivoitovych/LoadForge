@@ -25,12 +25,15 @@
 //   1  refused before the first trial: the objective, the search or a candidate
 //      cannot be run on this machine, or the machine cannot be described
 //   2  usage error
-//   3  a trial could not be run, or the reference could not be used; or the
+//   3  a trial could not be run; or the
 //      temperature ceiling (--max-temperature) ended a trial, which stops the search
-//   5  a candidate's trial produced findings: a finding, not a score; or a scored
+//   5  a candidate's or the reference's trial produced findings: a finding, not a
+//      score (a reference that does ends the search, and the report still holds
+//      what was measured before it); or a scored
 //      trial (a candidate's or the reference's) had the hardware report an error it
 //      corrected: scored and flagged in the report, and 5 as `stress` makes it
-//   6  a candidate's trial did not finish or compare everything, or a trial held no
+//   6  a candidate's or the reference's trial did not finish or compare everything (a
+//      reference that did not ends the search like a finding, with a report), or a trial held no
 //      reading of the objective: a check was not made
 // When several apply the first of 5, 6 is the code of a search that ended; a
 // search that did not end is 1, 3 or 6 by the fault that ended it.

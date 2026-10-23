@@ -472,6 +472,21 @@ TEST(ExploreReport, SaysTheSurvivorsEstimateIsFromTheReplicatesAfterItWasChosen)
   EXPECT_TRUE(contains(text, "the 1 replicate(s) before the bar chose this candidate"));
 }
 
+TEST(ExploreReport, ASearchEndedByTheReferenceSaysSoAndKeepsWhatWasMeasured) {
+  explore::SearchReport report = a_report();
+  report.worst_case.reset();
+  report.ranking = explore::Ranking::kNone;
+  report.reference_stop = results::Verdict::kFindings;
+  report.candidates[0].fate = Fate::kStopped;
+  const std::string text = render_report(report);
+  EXPECT_TRUE(contains(text,
+                       "worst case: none; the search ended early because a reference "
+                       "trial's verdict was findings"))
+      << text;
+  EXPECT_TRUE(contains(text, "candidate wide: stopped with the search"));
+  EXPECT_TRUE(contains(text, "replicates: 80.5 81 81.5")) << "what was measured is still listed";
+}
+
 TEST(ExploreReport, ACounterObjectiveNamesItsStatistic) {
   explore::SearchReport report = a_report();
   report.objective.statistic = CounterStatistic::kRate;
@@ -490,6 +505,17 @@ TEST(ExploreExit, AFindingOutranksAnUnfinishedTrialWhichOutranksASearchThatScore
   report.candidates[2].fate = Fate::kFindings;
   report.candidates[1].fate = Fate::kIncomplete;
   EXPECT_EQ(exit_code_for(report), 5) << "both: the finding";
+}
+
+TEST(ExploreExit, AReferenceThatFoundSomethingIsAFindingAndOneThatDidNotFinishIsUnread) {
+  explore::SearchReport report = a_report();
+  report.candidates[2].fate = Fate::kEliminated;
+  report.reference_stop = results::Verdict::kFindings;
+  EXPECT_EQ(exit_code_for(report), 5);
+  report.reference_stop = results::Verdict::kIncomplete;
+  EXPECT_EQ(exit_code_for(report), 6);
+  report.candidates[2].fate = Fate::kFindings;
+  EXPECT_EQ(exit_code_for(report), 5) << "a finding outranks";
 }
 
 TEST(ExploreExit, CorrectedHardwareErrorsExitFiveAsStressDoes) {
@@ -583,12 +609,16 @@ TEST(ExploreRun, AnUnrunnableTrialEndsTheSearchNamingTheCandidateAndWhy) {
   EXPECT_EQ(search.syscalls.fork_count(), 0);
 }
 
-TEST(ExploreRun, AReferenceThatDidNotFinishCannotMeasureDriftAndEndsTheSearch) {
+TEST(ExploreRun, AReferenceThatDidNotFinishCannotMeasureDriftAndEndsTheSearchWithAReport) {
   Searching search;
   search.syscalls.script_forks({{1001, 0}});
   search.syscalls.script_nonblocking_reaps({{platform::Reaped{1001, 0}, 0}});
-  EXPECT_EQ(search.run(Searching::config("memory.available:min:lower")), 3);
-  EXPECT_TRUE(contains(search.err.str(), "reference unusable")) << search.err.str();
+  EXPECT_EQ(search.run(Searching::config("memory.available:min:lower")), 6);
+  EXPECT_TRUE(
+      contains(search.out.str(), "the search ended early because a reference trial's verdict was"))
+      << search.out.str();
+  EXPECT_TRUE(contains(search.out.str(), ": stopped with the search"));
+  EXPECT_EQ(search.err.str(), "");
 }
 
 TEST(ExploreRun, AWorkerWhoseExecFailedEndsTheSearchWithItsExitCodeAndSaysNothing) {

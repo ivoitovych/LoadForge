@@ -60,6 +60,7 @@ TEST(Describe, FatesAndRankingsHaveWords) {
   EXPECT_EQ(describe(Fate::kEliminated), "eliminated");
   EXPECT_EQ(describe(Fate::kFindings), "findings");
   EXPECT_EQ(describe(Fate::kIncomplete), "incomplete");
+  EXPECT_EQ(describe(Fate::kStopped), "stopped with the search");
   EXPECT_EQ(describe(static_cast<Fate>(200)), "unrecognised fate");
   EXPECT_EQ(describe(Ranking::kNone), "no worst case");
   EXPECT_EQ(describe(Ranking::kSole), "sole candidate");
@@ -738,7 +739,10 @@ TEST(Run, ARunnerFaultOnTheFinalClosingReferenceStopsTheSearch) {
   EXPECT_EQ(result.error().fault, ExploreFault::kTrial);
 }
 
-TEST(Run, AReferenceThatFindsSomethingOrDoesNotFinishEndsTheSearch) {
+// A reference that finds something is a finding, as a candidate's trial is (README: 5
+// "for the same things" as stress): it ends the search, and the report still holds
+// everything measured before it. Review verdicts 2026-10-23, finding 10.
+TEST(Run, AReferenceThatFindsSomethingOrDoesNotFinishEndsTheSearchWithAReport) {
   for (const Verdict verdict : {Verdict::kFindings, Verdict::kIncomplete}) {
     Lab lab;
     lab.script["a"] = {50.0};
@@ -746,14 +750,36 @@ TEST(Run, AReferenceThatFindsSomethingOrDoesNotFinishEndsTheSearch) {
       return c.id == "ref" ? verdict : Verdict::kClean;
     };
     const auto result = explore(lab.runner, config_for({"a"}));
-    ASSERT_FALSE(result.has_value());
-    EXPECT_EQ(result.error().fault, ExploreFault::kReference);
-    EXPECT_NE(result.error().detail.find(std::string(results::describe(verdict))),
-              std::string::npos);
+    ASSERT_TRUE(result.has_value()) << result.error().detail;
+    const SearchReport& report = result.value();
+    EXPECT_EQ(report.reference_stop, verdict);
+    EXPECT_EQ(report.trials, 1U) << "the first reference trial ended it";
+    EXPECT_FALSE(report.worst_case.has_value());
+    EXPECT_EQ(report.ranking, Ranking::kNone);
+    EXPECT_TRUE(report.references.empty());
+    EXPECT_DOUBLE_EQ(report.drift, 0.0);
+    EXPECT_EQ(find(report, "a").fate, Fate::kStopped);
+    EXPECT_TRUE(find(report, "a").samples.empty());
   }
 }
 
-TEST(Run, AReferenceReadingLostPartWayStillEndsTheSearch) {
+TEST(Run, AReferenceThatFailsAfterAPartOfTheAnchorLeavesTheAnchorUnsaid) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  SearchConfig config = config_for({"a"});
+  config.reference_replicates = 2;
+  lab.runner.verdict = [](const Candidate& c, std::size_t call) {
+    return c.id == "ref" && call == 1 ? Verdict::kFindings : Verdict::kClean;
+  };
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().references.size(), 1U);
+  EXPECT_EQ(result.value().reference_stop, Verdict::kFindings);
+  EXPECT_DOUBLE_EQ(result.value().drift, 0.0) << "no anchor was completed to drift from";
+  EXPECT_EQ(find(result.value(), "a").fate, Fate::kStopped);
+}
+
+TEST(Run, AReferenceThatFindsSomethingPartWayKeepsWhatWasMeasured) {
   Lab lab;
   lab.script["a"] = {50.0};
   lab.script["b"] = {60.0};
@@ -763,8 +789,34 @@ TEST(Run, AReferenceReadingLostPartWayStillEndsTheSearch) {
     return c.id == "ref" && call > 3 ? Verdict::kFindings : Verdict::kClean;
   };
   const auto result = explore(lab.runner, config);
-  ASSERT_FALSE(result.has_value());
-  EXPECT_EQ(result.error().fault, ExploreFault::kReference);
+  ASSERT_TRUE(result.has_value());
+  const SearchReport& report = result.value();
+  EXPECT_EQ(report.reference_stop, Verdict::kFindings);
+  EXPECT_EQ(find(report, "a").samples, std::vector<double>{50.0});
+  EXPECT_EQ(find(report, "b").samples, std::vector<double>{60.0});
+  EXPECT_EQ(find(report, "a").fate, Fate::kStopped);
+  EXPECT_EQ(find(report, "b").fate, Fate::kStopped);
+  EXPECT_FALSE(report.worst_case.has_value());
+  EXPECT_EQ(report.references.size(), 3U);
+}
+
+TEST(Run, ACandidateThatFoundSomethingBeforeTheReferenceDidKeepsItsFate) {
+  Lab lab;
+  lab.script["a"] = {50.0};
+  lab.script["b"] = {60.0};
+  SearchConfig config = config_for({"a", "b"});
+  config.interleave_every = 1;
+  lab.runner.verdict = [](const Candidate& c, std::size_t call) {
+    if (c.id == "a") {
+      return Verdict::kFindings;
+    }
+    return c.id == "ref" && call > 4 ? Verdict::kIncomplete : Verdict::kClean;
+  };
+  const auto result = explore(lab.runner, config);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(find(result.value(), "a").fate, Fate::kFindings);
+  EXPECT_EQ(find(result.value(), "b").fate, Fate::kStopped);
+  EXPECT_EQ(result.value().reference_stop, Verdict::kIncomplete);
 }
 
 TEST(Run, ACandidateWithNoReadingOfTheObjectiveEndsTheSearchRatherThanScoreZero) {

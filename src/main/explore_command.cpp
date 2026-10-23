@@ -562,7 +562,11 @@ std::string render_report(const explore::SearchReport& report) {
        << telemetry::describe(metric.unit) << "), " << explore::describe(report.objective.direction)
        << "\n"
        << "explore: " << report.trials << " trial(s) in " << report.rounds << " round(s)\n";
-  if (report.worst_case.has_value()) {
+  if (report.reference_stop.has_value()) {
+    text << "worst case: none; the search ended early because a reference trial's verdict was "
+         << results::describe(*report.reference_stop)
+         << ". What was measured before it follows; no candidate was ranked\n";
+  } else if (report.worst_case.has_value()) {
     text << "worst case: " << explore::format(*report.worst_case) << "\n";
   } else {
     text << "worst case: none; every candidate left the search with findings or an "
@@ -656,10 +660,11 @@ int exit_code_for(const explore::SearchReport& report) noexcept {
       return each.fate == fate;
     });
   };
-  if (fate_is(explore::Fate::kFindings) || report.corrected_error_trials > 0) {
+  const bool reference_found = report.reference_stop == results::Verdict::kFindings;
+  if (fate_is(explore::Fate::kFindings) || reference_found || report.corrected_error_trials > 0) {
     return kExitFault;
   }
-  if (fate_is(explore::Fate::kIncomplete)) {
+  if (fate_is(explore::Fate::kIncomplete) || report.reference_stop.has_value()) {
     return kExitNotVerified;
   }
   return kOk;

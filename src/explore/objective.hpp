@@ -102,8 +102,9 @@ struct Objective {
 ///   kConfiguration      the search is not well formed; the detail says how.
 ///   kDutyCycle          candidates do not all verify at one duty cycle (F17).
 ///   kTrial              a trial could not be run; `trial` says which fault.
-///   kReference          the reference candidate produced no usable reading, so
-///                       drift cannot be measured.
+///   kReference          a reference trial found something or did not finish.
+///                       Search turns it into a report (SearchReport::reference_stop)
+///                       and does not return it from explore().
 enum class ExploreFault : std::uint8_t {
   kUnknownMetric,
   kMetricUnavailable,

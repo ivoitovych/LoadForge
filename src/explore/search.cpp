@@ -129,6 +129,20 @@ class Execution {
         states_(config_.candidates.size()) {}
 
   core::Result<SearchReport, ExploreError> run() {
+    auto done = execute();
+    if (!done) {
+      // A reference that found something is a finding, as a candidate's trial is: what
+      // was measured before it is still the answer to "what was found so far".
+      if (done.error().fault == ExploreFault::kReference) {
+        return report();
+      }
+      return done.error();
+    }
+    return report();
+  }
+
+ private:
+  core::Result<core::Ok, ExploreError> execute() {
     if (auto anchored = anchor(); !anchored) {
       return anchored.error();
     }
@@ -150,10 +164,9 @@ class Execution {
     if (auto closed = close_reference(); !closed) {
       return closed.error();
     }
-    return report();
+    return core::Ok{};
   }
 
- private:
   core::Result<Measured, ExploreError> measure(const Candidate& candidate) {
     auto outcome = runner_->run(candidate);
     ++trials_;
@@ -190,6 +203,7 @@ class Execution {
       return measured.error();
     }
     if (unscored(measured.value().verdict)) {
+      reference_stop_ = measured.value().verdict;
       return make_error(ExploreFault::kReference,
                         "the reference " + config_.reference.id + " ended " +
                             std::string(results::describe(measured.value().verdict)));
@@ -212,6 +226,7 @@ class Execution {
       values.push_back(point.value);
     }
     anchor_ = estimate(values).mean;
+    anchored_ = true;
     return core::Ok{};
   }
 
@@ -300,6 +315,9 @@ class Execution {
   // What the reference's noise adds to the uncertainty of this candidate's
   // mean (drift.hpp): zero when the reference showed none.
   [[nodiscard]] Correction correction_of(const State& state, std::size_t from = 0) const {
+    if (state.observations.size() <= from) {
+      return Correction{};  // Nothing to correct; an unfinished anchor could not be weighed.
+    }
     std::vector<std::int64_t> times;
     times.reserve(state.observations.size() - from);
     for (std::size_t i = from; i < state.observations.size(); ++i) {
@@ -354,13 +372,14 @@ class Execution {
       reference_values.push_back(point.value);
     }
     out.reference = estimate(reference_values);
-    out.drift = references_.back().value - anchor_;
+    out.reference_stop = reference_stop_;
+    out.drift = anchored_ ? references_.back().value - anchor_ : 0.0;
     std::optional<std::size_t> winner;
     for (std::size_t which = 0; which < states_.size(); ++which) {
       const State& state = states_[which];
       CandidateReport entry;
       entry.id = config_.candidates[which].id;
-      entry.fate = state.fate;
+      entry.fate = state.alive && reference_stop_.has_value() ? Fate::kStopped : state.fate;
       entry.rounds = state.rounds;
       entry.samples = corrected_samples(state);
       // The survivor's estimates are from the replicates that did not choose it.
@@ -378,7 +397,7 @@ class Execution {
       }
       entry.raw = estimate(raw);
       entry.corrected = estimate(corrected_samples(state, from), correction_of(state, from));
-      if (state.alive) {
+      if (state.alive && !reference_stop_.has_value()) {
         winner = which;
       }
       out.candidates.push_back(std::move(entry));
@@ -432,6 +451,8 @@ class Execution {
   std::vector<ReferencePoint> references_;
   std::vector<TrialNote> reference_notes_;
   double anchor_ = 0.0;
+  bool anchored_ = false;
+  std::optional<Verdict> reference_stop_;
   std::size_t pass_ = 0;
   std::size_t since_reference_ = 0;
   std::size_t trials_ = 0;

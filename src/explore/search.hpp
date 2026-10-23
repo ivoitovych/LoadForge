@@ -83,7 +83,10 @@ struct SearchConfig {
 ///   kEliminated  ranked out in a round.
 ///   kFindings    a trial of it produced findings (verdict kFindings).
 ///   kIncomplete  a trial of it did not finish (verdict kIncomplete).
-enum class Fate : std::uint8_t { kSurvivor, kEliminated, kFindings, kIncomplete };
+///   kStopped     the search ended at a reference trial that found something or
+///                did not finish, while this candidate was still in it: it was
+///                neither ranked out nor chosen.
+enum class Fate : std::uint8_t { kSurvivor, kEliminated, kFindings, kIncomplete, kStopped };
 
 [[nodiscard]] constexpr std::string_view describe(Fate fate) noexcept {
   switch (fate) {
@@ -95,6 +98,8 @@ enum class Fate : std::uint8_t { kSurvivor, kEliminated, kFindings, kIncomplete 
       return "findings";
     case Fate::kIncomplete:
       return "incomplete";
+    case Fate::kStopped:
+      return "stopped with the search";
   }
   return "unrecognised fate";
 }
@@ -174,6 +179,11 @@ struct SearchReport {
   /// Eliminated candidates with fewer than two replicates: no interval, so none of
   /// them was compared by one.
   std::vector<std::string> uncompared;
+  /// Set when the search ended at a reference trial whose verdict was kFindings or
+  /// kIncomplete: the report then holds what had been measured so far, has no worst
+  /// case, and the candidates still in the search are kStopped. The reference is
+  /// held to what a candidate is held to: a finding is exit 5, an unfinished trial 6.
+  std::optional<results::Verdict> reference_stop;
   std::vector<ReferencePoint> references;
   std::vector<TrialNote> reference_notes;  ///< One for each reference reading.
   double anchor = 0.0;                     ///< The reference as it was at the start.
