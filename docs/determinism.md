@@ -68,6 +68,8 @@ distance array is a property of the graph and is `BitExact`; a BFS *tree* (which
 each vertex was reached from) depends on frontier ordering and is not. Checksum the
 former, never the latter.
 
+*(As built, 2026-10-23 00:55 UTC: the graph workload is declared `BitExactFixedDecomposition` as a whole, the weaker of the two classes its outputs would take, not split by output. Its PageRank is computed in pinned arithmetic and its oracle compares exactly.)*
+
 ### `BitExactFixedDecomposition`
 
 Identical bits across thread counts and repeat runs **for a given decomposition**
@@ -165,6 +167,8 @@ AVX-512   8 doubles/vector  →  8 partial sums  →  horizontal combine
 scalar    1 accumulator     →  no combine
 ```
 
+*(Status, 2026-10-23 00:55 UTC: the dispatch seam names an AVX-512 path, but no workload has an AVX-512 kernel and the path is refused when requested. The built paths are scalar, AVX2 and NEON.)*
+
 Four different accumulation trees, therefore four different bit patterns — from the same
 input, on flawless hardware, with identical IEEE 754 semantics and identical FMA
 behaviour. Explicit FMA does not rescue this; it is orthogonal to it.
@@ -187,7 +191,7 @@ arithmetic rather than being imposed:
 - **`BitExact` workloads are integer or discrete.** Integer arithmetic is exact and
   associative, so a vectorized radix sort, a scalar radix sort, and an ARM one all
   produce the same sorted array; a compression round-trip is exact everywhere; a hash is
-  a hash. These *are* identical across ISA paths and architectures, and CI asserts it.
+  a hash. These *are* identical across ISA paths and architectures. CI asserts part of it (see below: the digest covers the core corpus and two workloads' scalar paths, not every `BitExact` workload).
 - **`BitExactFixedDecomposition` workloads are floating-point.** They are identical
   within an ISA path and only bounded across paths.
 
@@ -195,7 +199,10 @@ arithmetic rather than being imposed:
 `BoundedResidual`** — it has no lane structure to differ. This is a real, valuable and
 cheap guarantee: the `LOADFORGE_SIMD=scalar` CI job builds on both architectures, so
 comparing its outputs turns the portability job into a **cross-architecture determinism
-check** at no extra cost.
+check** at no extra cost. *(As built, 2026-10-23 00:55 UTC: what CI compares is `loadforge --selftest-digest`, a digest
+over the core corpus and the scalar paths of compression and dense linear. Sort and the other
+workloads are not in the cross-architecture comparison; extending the digest to every workload is
+open.)*
 
 **It holds over a defined numerical domain, not universally.** "Pure IEEE 754" is not
 quite enough on its own, and the exceptions are specific:
